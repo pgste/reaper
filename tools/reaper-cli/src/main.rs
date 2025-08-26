@@ -1,7 +1,3 @@
-//! # Reaper CLI
-//!
-//! Command-line interface for Reaper management
-
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]

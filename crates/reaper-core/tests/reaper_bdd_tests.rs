@@ -1,5 +1,3 @@
-//! BDD Tests for Reaper Core
-
 use cucumber::{given, then, when, World};
 use reaper_core::*;
 

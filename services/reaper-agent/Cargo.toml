@@ -10,6 +10,7 @@ policy-engine = { path = "../../crates/policy-engine" }
 message-queue = { path = "../../crates/message-queue" }
 metrics = { path = "../../crates/metrics" }
 axum = { workspace = true }
+anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -22,6 +23,10 @@ uuid = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 hyper = { workspace = true }
+
+[[bench]]
+name = "agent_bench"
+harness = false
 
 [[test]]
 name = "agent_bdd_tests"

@@ -19,6 +19,10 @@ anyhow = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 
+[[bench]]
+name = "cli_bench"
+harness = false
+
 [[test]]
 name = "cli_bdd_tests"
 harness = false
