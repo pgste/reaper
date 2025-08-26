@@ -16,6 +16,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 
