@@ -1,0 +1,34 @@
+[package]
+name = "reaper-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core types and traits for Reaper policy enforcement"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourorg/reaper"
+keywords = ["reaper", "policy", "enforcement", "agent"]
+categories = ["algorithms", "data-structures"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+criterion = { workspace = true }
+proptest = { workspace = true }
+cucumber = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[[bench]]
+name = "reaper_bench"
+harness = false
+
+[[test]]
+name = "reaper_bdd_tests"
+harness = false

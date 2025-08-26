@@ -1,0 +1,24 @@
+[package]
+name = "reaper-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Reaper CLI - Command-line interface for management"
+
+[dependencies]
+reaper-core = { path = "../../crates/reaper-core" }
+policy-engine = { path = "../../crates/policy-engine" }
+message-queue = { path = "../../crates/message-queue" }
+metrics = { path = "../../crates/metrics" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+cucumber = { workspace = true }
+async-trait = { workspace = true }
+
+[[test]]
+name = "cli_bdd_tests"
+harness = false
