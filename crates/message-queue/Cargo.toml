@@ -19,6 +19,10 @@ tokio-test = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 
+[[bench]]
+name = "message_queue_bench"
+harness = false
+
 [[test]]
 name = "message_queue_bdd_tests"
 harness = false
