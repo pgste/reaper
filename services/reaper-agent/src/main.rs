@@ -1,7 +1,3 @@
-//! # Reaper Agent
-//!
-//! High-performance policy enforcement service
-
 use axum::{
     extract::State,
     http::StatusCode,
@@ -9,20 +5,20 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use reaper_core::{endpoints, BUILD_INFO};
+use reaper_core::{endpoints, BUILD_INFO, VERSION};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{info, instrument};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct AgentState {
     // Agent state will be added here
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::init();
+    tracing_subscriber::fmt::init();
 
     info!("Starting Reaper Agent {}", BUILD_INFO);
 
@@ -47,7 +43,7 @@ async fn health_check() -> Result<Json<Value>, StatusCode> {
     Ok(Json(json!({
         "status": "healthy",
         "service": "reaper-agent",
-        "version": reaper_core::VERSION
+        "version": VERSION
     })))
 }
 

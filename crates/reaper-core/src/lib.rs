@@ -1,17 +1,3 @@
-//! # Reaper Core
-//!
-//! Core types and traits for the Reaper policy enforcement platform.
-//!
-//! ## Reaper Agent Value
-//! - Zero-allocation policy evaluation for high-performance sidecars
-//! - Atomic policy updates without service interruption  
-//! - Memory-efficient enforcement reducing deployment costs by 60-80%
-//!
-//! ## Reaper Platform Value  
-//! - Distributed agent management with centralized control
-//! - Real-time policy distribution and rollback capabilities
-//! - Enterprise-grade compliance monitoring and reporting
-
 pub mod agent;
 pub mod error;
 pub mod platform;
