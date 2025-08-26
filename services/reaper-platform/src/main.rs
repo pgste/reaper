@@ -1,7 +1,3 @@
-//! # Reaper Platform
-//!
-//! Distributed agent management service
-
 use axum::{
     extract::State,
     http::StatusCode,
@@ -9,20 +5,20 @@ use axum::{
     routing::{get, post, put},
     Router,
 };
-use reaper_core::{endpoints, BUILD_INFO};
+use reaper_core::{endpoints, BUILD_INFO, VERSION};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{info, instrument};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct PlatformState {
     // Platform state will be added here
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::init();
+    tracing_subscriber::fmt::init();
 
     info!("Starting Reaper Platform {}", BUILD_INFO);
 
@@ -53,7 +49,7 @@ async fn health_check() -> Result<Json<Value>, StatusCode> {
     Ok(Json(json!({
         "status": "healthy",
         "service": "reaper-platform",
-        "version": reaper_core::VERSION
+        "version": VERSION
     })))
 }
 
