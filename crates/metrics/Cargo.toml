@@ -1,0 +1,23 @@
+[package]
+name = "metrics"
+version = "0.1.0"
+edition = "2021"
+description = "Performance and compliance monitoring for Reaper"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+reaper-core = { path = "../reaper-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+cucumber = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+
+[[test]]
+name = "metrics_bdd_tests"
+harness = false

@@ -1,0 +1,26 @@
+[package]
+name = "reaper-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Reaper Platform - Distributed agent management"
+
+[dependencies]
+reaper-core = { path = "../../crates/reaper-core" }
+policy-engine = { path = "../../crates/policy-engine" }
+message-queue = { path = "../../crates/message-queue" }
+metrics = { path = "../../crates/metrics" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+cucumber = { workspace = true }
+async-trait = { workspace = true }
+
+[[test]]
+name = "platform_bdd_tests"
+harness = false

@@ -1,0 +1,28 @@
+[package]
+name = "reaper-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Reaper Agent - High-performance policy enforcement"
+
+[dependencies]
+reaper-core = { path = "../../crates/reaper-core" }
+policy-engine = { path = "../../crates/policy-engine" }
+message-queue = { path = "../../crates/message-queue" }
+metrics = { path = "../../crates/metrics" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tower = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+cucumber = { workspace = true }
+async-trait = { workspace = true }
+hyper = { workspace = true }
+
+[[test]]
+name = "agent_bdd_tests"
+harness = false
