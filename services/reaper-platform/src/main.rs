@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::Json,
-    routing::{get, post, put},
+    routing::{get, put},
     Router,
 };
 use reaper_core::{endpoints, BUILD_INFO, VERSION};
