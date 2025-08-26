@@ -16,6 +16,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 

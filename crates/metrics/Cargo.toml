@@ -14,9 +14,14 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+
+[[bench]]
+name = "metrics_bench"
+harness = false
 
 [[test]]
 name = "metrics_bdd_tests"

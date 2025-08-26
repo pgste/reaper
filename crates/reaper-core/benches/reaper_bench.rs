@@ -1,6 +1,5 @@
-//! Performance benchmarks for Reaper
-
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 
 fn benchmark_policy_evaluation(c: &mut Criterion) {
     let mut group = c.benchmark_group("reaper_policy_evaluation");
