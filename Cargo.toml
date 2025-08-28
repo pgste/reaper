@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/reaper-core",
-    "crates/policy-engine", 
+    "crates/policy-engine",
     "crates/message-queue",
     "crates/metrics",
     "services/reaper-agent",
@@ -40,6 +40,7 @@ proptest = "1.0"
 # BDD Testing
 cucumber = "0.21.1"
 async-trait = "0.1"
+reqwest = "0.12.23"
 
 # Web framework for API services
 axum = { version = "0.8.4", features = ["json", "tokio"] }

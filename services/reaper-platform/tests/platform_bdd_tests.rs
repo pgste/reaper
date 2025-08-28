@@ -1,9 +1,6 @@
 use cucumber::{given, then, when, World};
 use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRule};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::time::Duration;
-use tokio::time::timeout;
 use uuid::Uuid;
 
 #[derive(Debug, World)]
