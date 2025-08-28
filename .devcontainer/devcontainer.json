@@ -1,0 +1,14 @@
+{
+    "image": "mcr.microsoft.com/devcontainers/rust:latest",
+    "hostRequirements": {
+        "cpus": 2
+    },
+    "updateContentCommand": "rustup update",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer"
+            ]
+        }
+    }
+}
