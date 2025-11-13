@@ -1,10 +1,16 @@
 pub use reaper_core;
 
 mod engine;
+mod evaluators;
 
 pub use engine::{
-    EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyRequest,
-    PolicyRule, SimpleAction, SimpleRule,
+    EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats,
+    PolicyLanguage, PolicyRequest, PolicyRule, SimpleAction, SimpleRule,
+};
+
+pub use evaluators::{
+    CedarPolicyEvaluator, PolicyEvaluator, SimplePolicyEvaluator,
+    EvaluatorMetadata,
 };
 
 // Re-export core types for convenience
