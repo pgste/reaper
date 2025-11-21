@@ -27,6 +27,13 @@ criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["cors"] }
+reqwest = { workspace = true, features = ["json"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+anyhow = { workspace = true }
 
 [[bench]]
 name = "policy_evaluation_bench"
