@@ -31,5 +31,6 @@ cucumber-reports/
 *.feature.output
 */.DS_Store
 large-test-data.json
+huge-test-data.json
 rbac.rbb
 test-data.json
