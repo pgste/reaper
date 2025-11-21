@@ -14,6 +14,9 @@ pub use evaluators::{
     EvaluatorMetadata,
 };
 
+// Re-export reaper_dsl module for examples
+pub use evaluators::reaper_dsl;
+
 pub use data::{
     DataStore, DataLoader, DataFormat,
     Entity, EntityId, EntityType, AttributeValue, Attributes,

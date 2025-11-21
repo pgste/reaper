@@ -41,7 +41,7 @@ pub enum IndexStrategy {
 /// - Type lookup: ~100-200 ns
 /// - Attribute lookup: ~100-300 ns (indexed)
 /// - Update: ~1-2 µs (atomic)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DataStore {
     /// String interner shared across all data
     interner: Arc<StringInterner>,
