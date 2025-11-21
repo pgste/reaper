@@ -29,4 +29,4 @@ coverage/
 benchmarks/results/
 cucumber-reports/
 *.feature.output
-*/.DS_Store
+*/.DS_Storelarge-test-data.json
