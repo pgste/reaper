@@ -2,7 +2,17 @@ use clap::{Parser, Subcommand};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Instant;
+use std::fs;
+use std::path::Path;
+use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
+
+// Reap policy imports
+use policy_engine::{
+    ReaperPolicy, PolicyBundle, DataStore, DataLoader,
+    PolicyRequest, PolicyEvaluator, PolicyAction as EngineAction,
+};
 
 #[derive(Parser)]
 #[command(name = "reaper")]
@@ -23,7 +33,67 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Policy management commands
+    /// Evaluate a .reap policy file locally
+    Eval {
+        /// Path to .reap policy file
+        #[arg(short, long)]
+        policy: String,
+
+        /// Path to JSON data file
+        #[arg(short, long)]
+        data: String,
+
+        /// Principal (user) ID
+        #[arg(long)]
+        principal: String,
+
+        /// Action to evaluate
+        #[arg(short, long)]
+        action: String,
+
+        /// Resource ID
+        #[arg(short, long)]
+        resource: String,
+
+        /// Show detailed timing information
+        #[arg(long)]
+        timing: bool,
+    },
+
+    /// Compile .reap policy to binary bundle (.rbb)
+    Compile {
+        /// Input .reap policy file(s)
+        #[arg(required = true)]
+        input: Vec<String>,
+
+        /// Output bundle file (.rbb)
+        #[arg(short, long)]
+        output: String,
+
+        /// Enable optimizations
+        #[arg(long)]
+        optimize: bool,
+
+        /// Show bundle metadata
+        #[arg(long)]
+        info: bool,
+    },
+
+    /// Validate .reap policy syntax
+    Validate {
+        /// Path to .reap policy file
+        policy: String,
+
+        /// Path to JSON data file for validation
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Show detailed parse tree
+        #[arg(long)]
+        verbose: bool,
+    },
+
+    /// Policy management commands (platform/agent)
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
@@ -102,12 +172,387 @@ enum AgentAction {
     Metrics,
 }
 
+// ============================================================================
+// .reap File Command Handlers
+// ============================================================================
+
+/// Handle: reaper eval
+fn handle_eval(
+    policy_path: &str,
+    data_path: &str,
+    principal: &str,
+    action: &str,
+    resource: &str,
+    show_timing: bool,
+) -> anyhow::Result<()> {
+    println!("🔍 Evaluating Reaper Policy\n");
+
+    // Validate inputs
+    if !Path::new(policy_path).exists() {
+        anyhow::bail!("❌ Error: Policy file not found: {}", policy_path);
+    }
+    if !Path::new(data_path).exists() {
+        anyhow::bail!("❌ Error: Data file not found: {}", data_path);
+    }
+
+    // Load and parse policy
+    println!("1️⃣  Loading policy: {}", policy_path);
+    let load_start = Instant::now();
+    let policy = ReaperPolicy::from_file(policy_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your .reap syntax", e)
+    })?;
+    let load_time = load_start.elapsed();
+
+    println!("   ✓ Parsed policy: {}", policy.name());
+    if let Some(version) = policy.version() {
+        println!("   ✓ Version: {}", version);
+    }
+    if show_timing {
+        println!("   ⏱  Parse time: {:?}", load_time);
+    }
+    println!();
+
+    // Load data
+    println!("2️⃣  Loading data: {}", data_path);
+    let data_content = fs::read_to_string(data_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to read data file: {}", e)
+    })?;
+
+    let store = DataStore::new();
+    let loader = DataLoader::new(store.clone());
+
+    let entity_count = loader.load_json(&data_content).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to load data: {:?}\n\nCheck your JSON format", e)
+    })?;
+
+    println!("   ✓ Loaded {} entities", entity_count);
+    println!();
+
+    // Build evaluator
+    println!("3️⃣  Building evaluator...");
+    let build_start = Instant::now();
+    let store = Arc::new(store);
+    let evaluator = policy.build(store.clone()).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to build evaluator: {:?}", e)
+    })?;
+    let build_time = build_start.elapsed();
+
+    println!("   ✓ Evaluator ready");
+    if show_timing {
+        println!("   ⏱  Build time: {:?}", build_time);
+    }
+    println!();
+
+    // Validate entities exist
+    println!("4️⃣  Validating request...");
+    let interner = store.interner();
+    let principal_id = interner.intern(principal);
+    let resource_id = interner.intern(resource);
+
+    if store.get(principal_id).is_none() {
+        anyhow::bail!(
+            "❌ Error: Principal '{}' not found in data\n   Available entities: Use --verbose to list",
+            principal
+        );
+    }
+
+    if store.get(resource_id).is_none() {
+        anyhow::bail!(
+            "❌ Error: Resource '{}' not found in data\n   Available entities: Use --verbose to list",
+            resource
+        );
+    }
+
+    println!("   ✓ Principal: {}", principal);
+    println!("   ✓ Action: {}", action);
+    println!("   ✓ Resource: {}", resource);
+    println!();
+
+    // Evaluate policy
+    println!("5️⃣  Evaluating policy...");
+    let mut context = HashMap::new();
+    context.insert("principal".to_string(), principal.to_string());
+
+    let request = PolicyRequest {
+        resource: resource.to_string(),
+        action: action.to_string(),
+        context,
+    };
+
+    let eval_start = Instant::now();
+    let decision = evaluator.evaluate(&request).map_err(|e| {
+        anyhow::anyhow!("❌ Evaluation failed: {:?}", e)
+    })?;
+    let eval_time = eval_start.elapsed();
+
+    // Display result
+    println!();
+    println!("═══════════════════════════════════════════════════════");
+    println!("                    📊 RESULT                          ");
+    println!("═══════════════════════════════════════════════════════");
+
+    let (symbol, decision_text) = match decision {
+        EngineAction::Allow => ("✅", "ALLOW"),
+        EngineAction::Deny => ("❌", "DENY"),
+        EngineAction::Log => ("📝", "LOG"),
+    };
+
+    println!(" {} Decision: {}", symbol, decision_text);
+    println!();
+
+    if show_timing {
+        println!("⏱  Performance:");
+        println!("   • Parse policy: {:?}", load_time);
+        println!("   • Build evaluator: {:?}", build_time);
+        println!("   • Evaluate: {:?} ({:.0} ns)", eval_time, eval_time.as_nanos());
+        println!();
+    } else {
+        println!("⏱  Evaluation time: {:?} ({:.0} ns)", eval_time, eval_time.as_nanos());
+        println!();
+    }
+
+    println!("═══════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+/// Handle: reaper compile
+fn handle_compile(
+    input_files: &[String],
+    output_path: &str,
+    _optimize: bool,
+    show_info: bool,
+) -> anyhow::Result<()> {
+    println!("🔨 Compiling Reaper Policy Bundle\n");
+
+    if input_files.is_empty() {
+        anyhow::bail!("❌ Error: No input files specified");
+    }
+
+    // For now, support single file compilation
+    // TODO: Support multiple files and merging
+    if input_files.len() > 1 {
+        println!("⚠️  Warning: Multiple files specified, only first will be compiled");
+        println!("   Multi-file bundling coming soon!");
+        println!();
+    }
+
+    let input_path = &input_files[0];
+
+    // Validate input
+    if !Path::new(input_path).exists() {
+        anyhow::bail!("❌ Error: Input file not found: {}", input_path);
+    }
+
+    // Load and parse policy
+    println!("1️⃣  Parsing policy: {}", input_path);
+    let policy = ReaperPolicy::from_file(input_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your .reap syntax", e)
+    })?;
+
+    println!("   ✓ Parsed: {}", policy.name());
+    if let Some(version) = policy.version() {
+        println!("   ✓ Version: {}", version);
+    }
+    println!();
+
+    // Compile to bundle
+    println!("2️⃣  Compiling to binary bundle...");
+    let compile_start = Instant::now();
+    let bundle_bytes = policy.compile_to_bundle().map_err(|e| {
+        anyhow::anyhow!("❌ Compilation failed: {:?}", e)
+    })?;
+    let compile_time = compile_start.elapsed();
+
+    println!("   ✓ Compiled successfully");
+    println!("   ⏱  Compilation time: {:?}", compile_time);
+    println!();
+
+    // Write bundle
+    println!("3️⃣  Writing bundle: {}", output_path);
+    fs::write(output_path, &bundle_bytes).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to write bundle: {}", e)
+    })?;
+
+    println!("   ✓ Bundle written");
+    println!("   📦 Size: {} bytes", bundle_bytes.len());
+    println!();
+
+    // Show bundle info
+    if show_info {
+        println!("4️⃣  Bundle Information:");
+        match PolicyBundle::from_bytes(&bundle_bytes) {
+            Ok(bundle) => {
+                println!("   • Policy: {}", bundle.metadata.policy_name);
+                if let Some(v) = &bundle.metadata.policy_version {
+                    println!("   • Version: {}", v);
+                }
+                println!("   • Format version: {}", bundle.metadata.version);
+                println!("   • Compiled at: {}", bundle.metadata.compiled_at);
+                println!("   • Checksum: {:x}", bundle.metadata.source_checksum);
+                println!("   • Rules: {}", bundle.policy.rules.len());
+            }
+            Err(e) => {
+                println!("   ⚠️  Could not read bundle metadata: {:?}", e);
+            }
+        }
+        println!();
+    }
+
+    println!("✅ Success! Bundle ready for production deployment");
+    println!();
+    println!("Load with:");
+    println!("   let bundle = fs::read(\"{}\").unwrap();", output_path);
+    println!("   let evaluator = ReaperPolicy::from_bundle(&bundle, store)?;");
+
+    Ok(())
+}
+
+/// Handle: reaper validate
+fn handle_validate(
+    policy_path: &str,
+    data_path: Option<&str>,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    println!("✅ Validating Reaper Policy\n");
+
+    // Validate file exists
+    if !Path::new(policy_path).exists() {
+        anyhow::bail!("❌ Error: Policy file not found: {}", policy_path);
+    }
+
+    // Parse policy
+    println!("1️⃣  Parsing policy: {}", policy_path);
+    let parse_start = Instant::now();
+
+    let policy = match ReaperPolicy::from_file(policy_path) {
+        Ok(p) => p,
+        Err(e) => {
+            println!();
+            println!("❌ SYNTAX ERROR");
+            println!("══════════════════════════════════════════════════════");
+            println!("{:?}", e);
+            println!("══════════════════════════════════════════════════════");
+            println!();
+            println!("💡 Common issues:");
+            println!("   • Missing 'default: allow' or 'default: deny'");
+            println!("   • Unmatched curly braces {{ }}");
+            println!("   • Missing quotes around strings");
+            println!("   • Invalid operators (use ==, !=, >, <, >=, <=)");
+            println!();
+            anyhow::bail!("Validation failed");
+        }
+    };
+
+    let parse_time = parse_start.elapsed();
+
+    println!("   ✅ Syntax valid");
+    println!("   ⏱  Parse time: {:?}", parse_time);
+    println!();
+
+    // Show policy info
+    println!("2️⃣  Policy Information:");
+    println!("   • Name: {}", policy.name());
+    if let Some(version) = policy.version() {
+        println!("   • Version: {}", version);
+    }
+    println!();
+
+    // Validate with data if provided
+    if let Some(data_path) = data_path {
+        println!("3️⃣  Validating with data: {}", data_path);
+
+        if !Path::new(data_path).exists() {
+            anyhow::bail!("❌ Error: Data file not found: {}", data_path);
+        }
+
+        let data_content = fs::read_to_string(data_path).map_err(|e| {
+            anyhow::anyhow!("❌ Failed to read data file: {}", e)
+        })?;
+
+        let store = DataStore::new();
+        let loader = DataLoader::new(store.clone());
+
+        let entity_count = match loader.load_json(&data_content) {
+            Ok(count) => count,
+            Err(e) => {
+                println!();
+                println!("❌ DATA ERROR");
+                println!("══════════════════════════════════════════════════════");
+                println!("{:?}", e);
+                println!("══════════════════════════════════════════════════════");
+                println!();
+                anyhow::bail!("Invalid data format");
+            }
+        };
+
+        println!("   ✅ Data valid");
+        println!("   • Entities loaded: {}", entity_count);
+        println!();
+
+        // Try to build evaluator
+        println!("4️⃣  Building evaluator...");
+        let store = Arc::new(store);
+        if let Err(e) = policy.build(store) {
+            println!();
+            println!("❌ BUILD ERROR");
+            println!("══════════════════════════════════════════════════════");
+            println!("{:?}", e);
+            println!("══════════════════════════════════════════════════════");
+            anyhow::bail!("Failed to build evaluator");
+        }
+
+        println!("   ✅ Evaluator builds successfully");
+        println!();
+    }
+
+    println!("══════════════════════════════════════════════════════");
+    println!("✅ VALIDATION PASSED");
+    println!("══════════════════════════════════════════════════════");
+
+    if verbose {
+        println!();
+        println!("Policy file: {}", policy_path);
+        if let Some(dp) = data_path {
+            println!("Data file: {}", dp);
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Platform/Agent Command Handlers
+// ============================================================================
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let client = Client::new();
 
     match cli.command {
+        Commands::Eval {
+            ref policy,
+            ref data,
+            ref principal,
+            ref action,
+            ref resource,
+            timing,
+        } => handle_eval(policy, data, principal, action, resource, timing)?,
+
+        Commands::Compile {
+            ref input,
+            ref output,
+            optimize,
+            info,
+        } => handle_compile(input, output, optimize, info)?,
+
+        Commands::Validate {
+            ref policy,
+            ref data,
+            verbose,
+        } => handle_validate(policy, data.as_deref(), verbose)?,
+
         Commands::Policy { ref action } => handle_policy_action(action, &cli, &client).await?,
         Commands::Agent { ref action } => handle_agent_action(action, &cli, &client).await?,
         Commands::Status => handle_status(&cli, &client).await?,

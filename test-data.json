@@ -1,0 +1,76 @@
+{
+  "entities": [
+    {
+      "id": "alice",
+      "type": "User",
+      "attributes": {
+        "id": "alice",
+        "role": "admin",
+        "department": "engineering",
+        "clearance": 5,
+        "status": "active",
+        "suspended": false
+      }
+    },
+    {
+      "id": "bob",
+      "type": "User",
+      "attributes": {
+        "id": "bob",
+        "role": "user",
+        "department": "engineering",
+        "clearance": 2,
+        "status": "active",
+        "suspended": false
+      }
+    },
+    {
+      "id": "charlie",
+      "type": "User",
+      "attributes": {
+        "id": "charlie",
+        "role": "guest",
+        "department": "marketing",
+        "clearance": 1,
+        "status": "active",
+        "suspended": false
+      }
+    },
+    {
+      "id": "doc1",
+      "type": "Document",
+      "attributes": {
+        "type": "report",
+        "owner_id": "bob",
+        "department": "engineering",
+        "clearance_required": 2,
+        "classification": "internal",
+        "archived": false
+      }
+    },
+    {
+      "id": "doc2",
+      "type": "Document",
+      "attributes": {
+        "type": "document",
+        "owner_id": "alice",
+        "department": "engineering",
+        "clearance_required": 5,
+        "classification": "secret",
+        "archived": false
+      }
+    },
+    {
+      "id": "doc3",
+      "type": "Document",
+      "attributes": {
+        "type": "report",
+        "owner_id": "charlie",
+        "department": "marketing",
+        "clearance_required": 1,
+        "classification": "public",
+        "archived": false
+      }
+    }
+  ]
+}
