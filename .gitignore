@@ -8,4 +8,7 @@ coverage/
 benchmarks/results/
 cucumber-reports/
 *.feature.output
-*/.DS_Storelarge-test-data.json
+*/.DS_Store
+large-test-data.json
+rbac.rbb
+test-data.json
