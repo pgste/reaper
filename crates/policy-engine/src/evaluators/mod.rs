@@ -10,9 +10,11 @@ use std::fmt::Debug;
 
 pub mod simple;
 pub mod cedar;
+pub mod cedar_integration;
 
 pub use simple::SimplePolicyEvaluator;
 pub use cedar::CedarPolicyEvaluator;
+pub use cedar_integration::datastore_to_cedar_entities;
 
 /// Core trait for policy evaluation across different languages
 ///
