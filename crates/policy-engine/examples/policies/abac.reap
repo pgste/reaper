@@ -1,0 +1,39 @@
+// Attribute-Based Access Control (ABAC) Policy
+// Demonstrates clearance levels and department-based access
+
+policy abac_clearance {
+    version: "2.0.0",
+    description: "Clearance-based document access with ABAC",
+
+    default: deny,
+
+    // Deny suspended users immediately (evaluated first)
+    rule deny_suspended_users {
+        deny if user.suspended == true
+    }
+
+    // Allow if user has sufficient clearance and same department
+    rule clearance_and_department {
+        allow if {
+            user.clearance >= resource.clearance_required &&
+            user.department == resource.department &&
+            resource.archived != true
+        }
+    }
+
+    // Document owners can always access (unless suspended)
+    rule owner_access {
+        allow if {
+            user.id == resource.owner_id &&
+            user.status == "active"
+        }
+    }
+
+    // Executive override with high clearance
+    rule executive_override {
+        allow if {
+            user.role == "executive" &&
+            user.clearance >= 5
+        }
+    }
+}

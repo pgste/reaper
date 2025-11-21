@@ -3,6 +3,7 @@ pub use reaper_core;
 mod engine;
 mod evaluators;
 pub mod data;
+pub mod reap;
 
 pub use engine::{
     EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats,
@@ -16,6 +17,9 @@ pub use evaluators::{
 
 // Re-export reaper_dsl module for examples
 pub use evaluators::reaper_dsl;
+
+// Re-export reap parser and bundle format
+pub use reap::{ReaperPolicy, PolicyBundle, BundleFormat};
 
 pub use data::{
     DataStore, DataLoader, DataFormat,

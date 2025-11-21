@@ -1,0 +1,28 @@
+// Simple Role-Based Access Control (RBAC) Policy
+// Demonstrates basic role checks and ownership rules
+
+policy rbac_simple {
+    version: "1.0.0",
+    description: "Simple role-based access control with ownership",
+
+    // Default to deny - secure by default
+    default: deny,
+
+    // Admins can do anything
+    rule admin_full_access {
+        allow if user.role == "admin"
+    }
+
+    // Managers can read reports
+    rule manager_reports {
+        allow if {
+            user.role == "manager" &&
+            resource.type == "report"
+        }
+    }
+
+    // Users can access their own resources
+    rule user_own_resources {
+        allow if user.id == resource.owner_id
+    }
+}
