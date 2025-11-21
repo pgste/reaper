@@ -1,0 +1,115 @@
+// Reaper Policy Language Grammar
+// Clean, Rust-like syntax for sub-microsecond policy evaluation
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+// Top-level policy
+policy = { SOI ~ "policy" ~ ident ~ "{" ~ policy_body ~ "}" ~ EOI }
+
+policy_body = {
+    policy_item*
+}
+
+policy_item = _{
+    default_field |
+    rule |
+    metadata_field
+}
+
+// Metadata fields (version, description, etc.)
+metadata_field = {
+    ident ~ ":" ~ string ~ ","?
+}
+
+// Default decision
+default_field = {
+    "default" ~ ":" ~ decision ~ ","?
+}
+
+// Decision types
+decision = { "allow" | "deny" }
+
+// Rule definition
+rule = {
+    "rule" ~ ident ~ "{" ~ decision ~ "if" ~ condition ~ "}"
+}
+
+// Conditions
+condition = {
+    condition_block |
+    condition_expr
+}
+
+condition_block = {
+    "{" ~ condition_expr ~ "}"
+}
+
+condition_expr = {
+    or_expr
+}
+
+or_expr = {
+    and_expr ~ ("||" ~ and_expr)*
+}
+
+and_expr = {
+    not_expr ~ ("&&" ~ not_expr)*
+}
+
+not_expr = {
+    "!" ~ not_expr |
+    primary_expr
+}
+
+primary_expr = {
+    "(" ~ condition_expr ~ ")" |
+    comparison |
+    boolean_literal
+}
+
+// Comparisons
+comparison = {
+    entity_attr ~ op ~ value |
+    entity_attr ~ op ~ entity_attr
+}
+
+entity_attr = {
+    entity ~ "." ~ ident
+}
+
+entity = { "user" | "resource" | "context" }
+
+// Operators
+op = {
+    "==" | "!=" | ">=" | "<=" | ">" | "<"
+}
+
+// Values
+value = {
+    string |
+    float |
+    integer |
+    boolean_literal |
+    null_literal
+}
+
+// Literals
+string = @{ "\"" ~ string_inner ~ "\"" }
+string_inner = @{ (!"\"" ~ ("\\" ~ ANY | ANY))* }
+
+float = @{
+    "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+
+}
+
+integer = @{
+    "-"? ~ ASCII_DIGIT+
+}
+
+boolean_literal = { "true" | "false" }
+null_literal = { "null" }
+
+// Identifiers
+ident = @{
+    ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*
+}
