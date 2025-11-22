@@ -272,6 +272,89 @@ cargo run --example test_rebac_10k --release
   - 100% group membership
 - 3,000 total entities
 
+### Multilayer (RBAC + ABAC + ReBAC Combined)
+
+**Description**: Realistic enterprise policy combining all three models with multiple authorization layers.
+
+**Policy Location**: `crates/policy-engine/examples/policies/multilayer.reap`
+
+**Key Features**:
+- 9 distinct rules across all authorization models
+- RBAC: Admin override, suspended user blocking, role checks
+- ABAC: Clearance levels, departments, classifications, archived status
+- ReBAC: Ownership, teams, sharing, collaboration, hierarchy
+- Combined checks: Role + clearance, team + department, ownership + clearance
+- Multiple deny rules for security (suspended users, intern restrictions)
+
+**Performance Results**:
+
+```
+⏱️  Latency Statistics:
+   Total time:     16.65 ms
+   Iterations:     10,000
+   Mean latency:   1,665 ns
+   Median latency: 1,576 ns
+   P95 latency:    2,980 ns
+   P99 latency:    3,672 ns
+
+🚀 Throughput:     600,360 ops/sec
+
+✅ Decision Distribution:
+   ALLOW:          5,270 (52.7%)
+   DENY:           4,729 (47.3%)
+
+📊 Overhead Analysis:
+   vs RBAC:        2.58x
+   vs ABAC:        1.73x
+   vs ReBAC:       2.97x
+```
+
+**Scenario Breakdown** (Mean Latency):
+- Admin Override (RBAC): 855 ns
+- Suspended User Deny (RBAC): 1,613 ns
+- Owner + Clearance (ReBAC + ABAC): 2,096 ns
+- Team Lead Access (ReBAC + RBAC): 1,252 ns
+- Department + Clearance (ABAC + ReBAC): 1,706 ns
+- Shared Resource (ReBAC): 1,415 ns
+- Executive Access (RBAC + ABAC): 1,654 ns
+- Public Resources (ABAC): 2,454 ns
+- Mixed Random (All Layers): 1,941 ns
+
+**Key Insights**:
+- Still sub-2µs mean despite checking 9 different rule combinations
+- P99 of 3.7µs is only 2-3x individual policies despite 3x complexity
+- Realistic allow/deny split (52.7% / 47.3%) unlike simple test scenarios
+- Different scenarios have different performance characteristics based on rule matching
+- Admin override fastest (855ns) due to early rule matching
+- Public resource checks slowest (2,454ns) due to rule evaluation order
+
+### Multilayer Test Data
+
+- 1,000 users with ALL attributes (RBAC + ABAC + ReBAC)
+- 2,000 resources with ALL attributes
+- Roles: admin (14%), executive (14%), manager (14%), staff (43%), intern (14%)
+- 5% suspended users
+- Clearance levels: 1-10 (role-based)
+- 5 departments
+- 4 classification levels
+- 10% archived resources
+- 100% team membership
+- ~33% shared resources
+- ~25% collaborations
+- ~20% hierarchical relationships
+- 3,000 total entities
+
+## Comprehensive Performance Comparison
+
+| Policy Type | Mean Latency | P99 Latency | Throughput | Rules | Complexity |
+|-------------|--------------|-------------|------------|-------|------------|
+| **RBAC**    | 646 ns       | 1,728 ns    | 1.09M ops/s | 3 | Simple |
+| **ABAC**    | 964 ns       | 2,286 ns    | 804k ops/s  | 5 | Medium |
+| **ReBAC**   | 560 ns       | 1,141 ns    | 1.11M ops/s | 7 | Complex |
+| **Multilayer** | **1,665 ns** | **3,672 ns** | **600k ops/s** | **9** | **Enterprise** |
+
+**Multilayer Overhead**: Only 2-3x individual policies despite checking all three models simultaneously!
+
 ## Architecture Highlights
 
 ### Why Reaper is Fast
@@ -304,11 +387,15 @@ Traditional engines spend 5-50ms in this pipeline because they:
 
 Reaper demonstrates that **high-performance authorization doesn't require compromise**:
 
-✅ **All Policy Models Supported**: RBAC, ABAC, ReBAC all work
-✅ **Sub-Microsecond Performance**: Mean latency under 1µs for all types
-✅ **Consistent at Scale**: P99 latency remains under 2.3µs
-✅ **Million Ops/Second**: 800k-1.1M operations per second
+✅ **All Policy Models Supported**: RBAC, ABAC, ReBAC, and Multilayer all work
+✅ **Sub-Microsecond Individual Policies**: Mean latency under 1µs for RBAC, ABAC, ReBAC
+✅ **Sub-2µs Multilayer**: Only 1.665µs mean for enterprise-grade composite policies
+✅ **Consistent at Scale**: P99 latency under 4µs even for multilayer
+✅ **High Throughput**: 600k-1.1M operations per second
 ✅ **Low Memory**: 250 MB for 100k entities (vs 2-5 GB for OPA)
-✅ **Production Ready**: All three tested with 10k iterations
+✅ **Production Ready**: All four policy types tested with 10k iterations
+✅ **Minimal Overhead**: Multilayer adds only 2-3x overhead despite 3x complexity
+
+**Key Achievement**: Combining RBAC + ABAC + ReBAC in a single realistic enterprise policy maintains sub-2µs mean latency with 600k ops/sec throughput. This proves that comprehensive multi-layer authorization can be incredibly fast.
 
 **Authorization should be <1% of request time, not 50-60%!** 🚀
