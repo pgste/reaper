@@ -1,9 +1,9 @@
 // Attribute-Based Access Control (ABAC) Policy
-// Demonstrates clearance levels and department-based access
+// Demonstrates attribute matching and department-based access
 
 policy abac_clearance {
     version: "2.0.0",
-    description: "Clearance-based document access with ABAC",
+    description: "Attribute-based document access with ABAC",
 
     default: deny,
 
@@ -12,12 +12,21 @@ policy abac_clearance {
         deny if user.suspended == true
     }
 
-    // Allow if user has sufficient clearance and same department
+    // Allow same department with matching clearance level
     rule clearance_and_department {
         allow if {
-            user.clearance >= resource.clearance_required &&
+            user.clearance_match == true &&
             user.department == resource.department &&
             resource.archived != true
+        }
+    }
+
+    // High clearance users can access confidential docs in their dept
+    rule high_clearance_access {
+        allow if {
+            user.high_clearance == true &&
+            user.department == resource.department &&
+            resource.classification != "secret"
         }
     }
 
@@ -29,11 +38,11 @@ policy abac_clearance {
         }
     }
 
-    // Executive override with high clearance
-    rule executive_override {
+    // Executive full access (except archived)
+    rule executive_access {
         allow if {
             user.role == "executive" &&
-            user.clearance >= 5
+            resource.archived != true
         }
     }
 }
