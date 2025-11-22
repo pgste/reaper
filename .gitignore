@@ -34,3 +34,6 @@ large-test-data.json
 huge-test-data.json
 rbac.rbb
 test-data.json
+rbac-test-data.json
+abac-test-data.json
+rebac-test-data.json
