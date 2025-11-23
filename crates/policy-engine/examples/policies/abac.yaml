@@ -1,0 +1,116 @@
+# Attribute-Based Access Control (ABAC) Policy
+# Demonstrates attribute matching and department-based access
+
+name: abac_clearance
+version: "2.0.0"
+description: "Attribute-based document access with ABAC"
+
+default_decision: deny
+
+rules:
+  # Deny suspended users immediately (evaluated first)
+  - name: deny_suspended_users
+    description: "Block all suspended users"
+    decision: deny
+    condition:
+      operator: equal
+      left:
+        entity: user
+        attribute: suspended
+      right:
+        value: true
+
+  # Allow same department with matching clearance level
+  - name: clearance_and_department
+    description: "Users with clearance match in same department"
+    decision: allow
+    condition:
+      operator: and
+      conditions:
+        - operator: equal
+          left:
+            entity: user
+            attribute: clearance_match
+          right:
+            value: true
+        - operator: equal
+          left:
+            entity: user
+            attribute: department
+          right:
+            entity: resource
+            attribute: department
+        - operator: not_equal
+          left:
+            entity: resource
+            attribute: archived
+          right:
+            value: true
+
+  # High clearance users can access confidential docs in their dept
+  - name: high_clearance_access
+    description: "High clearance users can access non-secret docs"
+    decision: allow
+    condition:
+      operator: and
+      conditions:
+        - operator: equal
+          left:
+            entity: user
+            attribute: high_clearance
+          right:
+            value: true
+        - operator: equal
+          left:
+            entity: user
+            attribute: department
+          right:
+            entity: resource
+            attribute: department
+        - operator: not_equal
+          left:
+            entity: resource
+            attribute: classification
+          right:
+            value: "secret"
+
+  # Document owners can always access (unless suspended)
+  - name: owner_access
+    description: "Owners can access their documents if active"
+    decision: allow
+    condition:
+      operator: and
+      conditions:
+        - operator: equal
+          left:
+            entity: user
+            attribute: id
+          right:
+            entity: resource
+            attribute: owner_id
+        - operator: equal
+          left:
+            entity: user
+            attribute: status
+          right:
+            value: "active"
+
+  # Executive full access (except archived)
+  - name: executive_access
+    description: "Executives have access to non-archived documents"
+    decision: allow
+    condition:
+      operator: and
+      conditions:
+        - operator: equal
+          left:
+            entity: user
+            attribute: role
+          right:
+            value: "executive"
+        - operator: not_equal
+          left:
+            entity: resource
+            attribute: archived
+          right:
+            value: true
