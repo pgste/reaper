@@ -6,11 +6,13 @@ mod parser;
 mod ast;
 mod compiler;
 mod bundle;
+mod yaml_parser;
 
 pub use parser::ReapParser;
 pub use ast::{Policy, Rule as ReapRule, Condition as ReapCondition, Decision, Value as ReapValue};
 pub use compiler::compile_policy;
 pub use bundle::{PolicyBundle, BundleFormat};
+pub use yaml_parser::YamlPolicy;
 
 use reaper_core::ReaperError;
 use crate::evaluators::reaper_dsl::ReaperDSLEvaluator;
@@ -39,6 +41,64 @@ impl ReaperPolicy {
             }
         })?;
         Self::from_str(&content)
+    }
+
+    /// Parse a policy from YAML string
+    pub fn from_yaml_str(input: &str) -> Result<Self, ReaperError> {
+        let yaml_policy = YamlPolicy::from_yaml(input)?;
+        let ast = yaml_policy.to_ast()?;
+        Ok(Self { ast })
+    }
+
+    /// Load a YAML policy file from disk
+    pub fn from_yaml_file<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
+        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
+            ReaperError::InvalidPolicy {
+                reason: format!("Failed to read YAML policy file: {}", e),
+            }
+        })?;
+        Self::from_yaml_str(&content)
+    }
+
+    /// Parse a policy from JSON string
+    pub fn from_json_str(input: &str) -> Result<Self, ReaperError> {
+        let yaml_policy = YamlPolicy::from_json(input)?;
+        let ast = yaml_policy.to_ast()?;
+        Ok(Self { ast })
+    }
+
+    /// Load a JSON policy file from disk
+    pub fn from_json_file<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
+        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
+            ReaperError::InvalidPolicy {
+                reason: format!("Failed to read JSON policy file: {}", e),
+            }
+        })?;
+        Self::from_json_str(&content)
+    }
+
+    /// Auto-detect format and load from file based on extension
+    /// Supports .reap, .yaml, .yml, .json
+    pub fn from_file_auto<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
+        let path_ref = path.as_ref();
+        let extension = path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| ReaperError::InvalidPolicy {
+                reason: "File has no extension. Use .reap, .yaml, .yml, or .json".to_string(),
+            })?;
+
+        match extension.to_lowercase().as_str() {
+            "reap" => Self::from_file(path_ref),
+            "yaml" | "yml" => Self::from_yaml_file(path_ref),
+            "json" => Self::from_json_file(path_ref),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Unsupported file extension '.{}'. Use .reap, .yaml, .yml, or .json",
+                    extension
+                ),
+            }),
+        }
     }
 
     /// Build a ReaperDSLEvaluator from this policy

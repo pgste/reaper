@@ -33,9 +33,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Evaluate a .reap policy file locally
+    /// Evaluate a policy file locally (.reap, .yaml, .yml, .json)
     Eval {
-        /// Path to .reap policy file
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
         #[arg(short, long)]
         policy: String,
 
@@ -60,9 +60,9 @@ enum Commands {
         timing: bool,
     },
 
-    /// Compile .reap policy to binary bundle (.rbb)
+    /// Compile policy to binary bundle (.rbb)
     Compile {
-        /// Input .reap policy file(s)
+        /// Input policy file(s) (.reap, .yaml, .yml, or .json)
         #[arg(required = true)]
         input: Vec<String>,
 
@@ -79,9 +79,9 @@ enum Commands {
         info: bool,
     },
 
-    /// Validate .reap policy syntax
+    /// Validate policy syntax
     Validate {
-        /// Path to .reap policy file
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
         policy: String,
 
         /// Path to JSON data file for validation
@@ -195,11 +195,11 @@ fn handle_eval(
         anyhow::bail!("❌ Error: Data file not found: {}", data_path);
     }
 
-    // Load and parse policy
+    // Load and parse policy (auto-detect format)
     println!("1️⃣  Loading policy: {}", policy_path);
     let load_start = Instant::now();
-    let policy = ReaperPolicy::from_file(policy_path).map_err(|e| {
-        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your .reap syntax", e)
+    let policy = ReaperPolicy::from_file_auto(policy_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your policy syntax (.reap, .yaml, .yml, or .json)", e)
     })?;
     let load_time = load_start.elapsed();
 
@@ -344,10 +344,10 @@ fn handle_compile(
         anyhow::bail!("❌ Error: Input file not found: {}", input_path);
     }
 
-    // Load and parse policy
+    // Load and parse policy (auto-detect format)
     println!("1️⃣  Parsing policy: {}", input_path);
-    let policy = ReaperPolicy::from_file(input_path).map_err(|e| {
-        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your .reap syntax", e)
+    let policy = ReaperPolicy::from_file_auto(input_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your policy syntax (.reap, .yaml, .yml, or .json)", e)
     })?;
 
     println!("   ✓ Parsed: {}", policy.name());
@@ -421,11 +421,11 @@ fn handle_validate(
         anyhow::bail!("❌ Error: Policy file not found: {}", policy_path);
     }
 
-    // Parse policy
+    // Parse policy (auto-detect format)
     println!("1️⃣  Parsing policy: {}", policy_path);
     let parse_start = Instant::now();
 
-    let policy = match ReaperPolicy::from_file(policy_path) {
+    let policy = match ReaperPolicy::from_file_auto(policy_path) {
         Ok(p) => p,
         Err(e) => {
             println!();
@@ -435,10 +435,11 @@ fn handle_validate(
             println!("══════════════════════════════════════════════════════");
             println!();
             println!("💡 Common issues:");
-            println!("   • Missing 'default: allow' or 'default: deny'");
-            println!("   • Unmatched curly braces {{ }}");
+            println!("   • Missing 'default_decision' field (YAML/JSON) or 'default' (Reap)");
+            println!("   • Unmatched curly braces or incorrect YAML/JSON syntax");
             println!("   • Missing quotes around strings");
-            println!("   • Invalid operators (use ==, !=, >, <, >=, <=)");
+            println!("   • Invalid operators (use equal, not_equal, gt, lt, gte, lte)");
+            println!("   • Unsupported file extension (use .reap, .yaml, .yml, or .json)");
             println!();
             anyhow::bail!("Validation failed");
         }
