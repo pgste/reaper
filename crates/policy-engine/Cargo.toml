@@ -43,3 +43,7 @@ harness = false
 [[test]]
 name = "policy_bdd_tests"
 harness = false
+
+[[test]]
+name = "gherkin_tests"
+harness = false
