@@ -30,17 +30,33 @@ make cli
 
 ## 🏗️ Architecture
 
-### Core Products
+### Core Components
 
-- **Reaper Agent** - High-performance policy enforcement service
-- **Reaper Platform** - Distributed agent management and monitoring
-- **Reaper CLI** - Command-line interface for policy and agent management
+- **Policy Engine** (Library) - Standalone Rust crate, embeddable anywhere
+- **Reaper Agent** - Independent policy enforcement service
+- **Reaper Sync Client** (Future) - Optional integration with management server
+- **Management Server** (Future) - Centralized policy management and orchestration
 
-### Components
+### Supporting Components
 
-- **Policy Engine** - Sub-microsecond decision evaluation with hot-swapping
 - **Message Queue** - Reliable async communication between components
 - **Metrics** - Performance monitoring and compliance reporting
+- **Reaper CLI** - Command-line interface for policy management
+
+### Architecture Documentation
+
+- **[Architecture Overview](ARCHITECTURE_SUMMARY.md)** - Executive summary and quick start
+- **[Detailed Architecture](ARCHITECTURE.md)** - In-depth technical reference
+- **[Client Separation Design](REAPER_CLIENT_SEPARATION.md)** - Separation between engine and sync client
+- **[Deployment Patterns](DEPLOYMENT_PATTERNS.md)** - Standalone, Integrated, and Embedded patterns
+- **[Implementation Plan](IMPLEMENTATION_PLAN.md)** - Roadmap for sync client and server
+
+### Key Architectural Principles
+
+1. **Reaper is fully independent** - Works standalone without external services
+2. **Web Client is optional** - Enables centralized management when needed
+3. **Multiple deployment patterns** - Choose the pattern that fits your needs
+4. **Zero-downtime updates** - Atomic hot-swapping for all deployment modes
 
 ## 📊 API Endpoints
 
