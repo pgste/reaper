@@ -4,6 +4,7 @@ mod engine;
 mod evaluators;
 pub mod data;
 pub mod reap;
+pub mod gherkin;
 
 pub use engine::{
     EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats,
