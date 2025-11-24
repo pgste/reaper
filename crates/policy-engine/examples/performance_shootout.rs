@@ -9,14 +9,14 @@
 //!
 //! Run with: cargo run --example performance_shootout --release
 
+use policy_engine::reaper_dsl::{Condition, ReaperDSLEvaluator, Rule};
 use policy_engine::{
-    DataStore, DataLoader, PolicyEvaluator,
-    PolicyEngine, EnhancedPolicy, PolicyLanguage, PolicyRequest, PolicyRule, PolicyAction,
+    DataLoader, DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator,
+    PolicyLanguage, PolicyRequest, PolicyRule,
 };
-use policy_engine::reaper_dsl::{ReaperDSLEvaluator, Rule, Condition};
 use std::collections::HashMap;
-use std::time::Instant;
 use std::sync::Arc;
+use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Reaper Policy Engine Performance Shootout ===\n");
@@ -88,7 +88,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(store);
 
     println!("✓ Loaded {} entities", entity_count);
-    println!("✓ Memory usage: {} bytes", store.stats().estimated_memory_bytes);
+    println!(
+        "✓ Memory usage: {} bytes",
+        store.stats().estimated_memory_bytes
+    );
 
     // ==========================================
     // Test 1: Simple Policy
@@ -97,13 +100,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Test 1: Simple Policy (Wildcard Matching)");
     println!("{}", "-".repeat(70));
 
-    let simple_rules = vec![
-        PolicyRule {
-            action: PolicyAction::Allow,
-            resource: "*".to_string(),
-            conditions: vec![],
-        },
-    ];
+    let simple_rules = vec![PolicyRule {
+        action: PolicyAction::Allow,
+        resource: "*".to_string(),
+        conditions: vec![],
+    }];
 
     let simple_policy = EnhancedPolicy::new(
         "simple-policy".to_string(),
@@ -142,7 +143,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Policy Type: Simple wildcard matching");
     println!("Iterations: {}", iterations);
     println!("Total Time: {:?}", simple_duration);
-    println!("Average: {} ns ({:.3} µs)", simple_avg_ns, simple_avg_ns as f64 / 1000.0);
+    println!(
+        "Average: {} ns ({:.3} µs)",
+        simple_avg_ns,
+        simple_avg_ns as f64 / 1000.0
+    );
     println!("Throughput: {:.0} ops/sec", simple_throughput);
 
     // ==========================================
@@ -184,7 +189,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Policy Type: Cedar ABAC with role check");
     println!("Iterations: {}", iterations);
     println!("Total Time: {:?}", cedar_duration);
-    println!("Average: {} ns ({:.3} µs)", cedar_avg_ns, cedar_avg_ns as f64 / 1000.0);
+    println!(
+        "Average: {} ns ({:.3} µs)",
+        cedar_avg_ns,
+        cedar_avg_ns as f64 / 1000.0
+    );
     println!("Throughput: {:.0} ops/sec", cedar_throughput);
 
     // ==========================================
@@ -203,11 +212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         decision: PolicyAction::Allow,
     }];
 
-    let reaper_evaluator = ReaperDSLEvaluator::new(
-        store.clone(),
-        reaper_rules,
-        PolicyAction::Deny,
-    );
+    let reaper_evaluator = ReaperDSLEvaluator::new(store.clone(), reaper_rules, PolicyAction::Deny);
 
     // Warmup
     for _ in 0..100 {
@@ -226,7 +231,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Policy Type: Reaper DSL with DataStore integration");
     println!("Iterations: {}", iterations);
     println!("Total Time: {:?}", reaper_duration);
-    println!("Average: {} ns ({:.3} µs)", reaper_avg_ns, reaper_avg_ns as f64 / 1000.0);
+    println!(
+        "Average: {} ns ({:.3} µs)",
+        reaper_avg_ns,
+        reaper_avg_ns as f64 / 1000.0
+    );
     println!("Throughput: {:.0} ops/sec", reaper_throughput);
 
     // ==========================================
@@ -269,11 +278,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    let complex_evaluator = ReaperDSLEvaluator::new(
-        store.clone(),
-        complex_rules,
-        PolicyAction::Deny,
-    );
+    let complex_evaluator =
+        ReaperDSLEvaluator::new(store.clone(), complex_rules, PolicyAction::Deny);
 
     // Warmup
     for _ in 0..100 {
@@ -292,7 +298,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Policy Type: Complex ABAC (3 rules, dept + clearance)");
     println!("Iterations: {}", iterations);
     println!("Total Time: {:?}", complex_duration);
-    println!("Average: {} ns ({:.3} µs)", complex_avg_ns, complex_avg_ns as f64 / 1000.0);
+    println!(
+        "Average: {} ns ({:.3} µs)",
+        complex_avg_ns,
+        complex_avg_ns as f64 / 1000.0
+    );
     println!("Throughput: {:.0} ops/sec", complex_throughput);
 
     // ==========================================
@@ -302,31 +312,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Performance Summary");
     println!("{}", "=".repeat(70));
 
-    println!("\n{:<25} {:>15} {:>15} {:>15}", "Policy Type", "Avg Latency", "Throughput", "vs Cedar");
+    println!(
+        "\n{:<25} {:>15} {:>15} {:>15}",
+        "Policy Type", "Avg Latency", "Throughput", "vs Cedar"
+    );
     println!("{}", "-".repeat(70));
 
-    println!("{:<25} {:>12} ns {:>12.0} op/s {:>14}x",
+    println!(
+        "{:<25} {:>12} ns {:>12.0} op/s {:>14}x",
         "Simple",
         simple_avg_ns,
         simple_throughput,
         cedar_avg_ns as f64 / simple_avg_ns as f64
     );
 
-    println!("{:<25} {:>12} ns {:>12.0} op/s {:>14}",
-        "Cedar (baseline)",
-        cedar_avg_ns,
-        cedar_throughput,
-        "1.0x"
+    println!(
+        "{:<25} {:>12} ns {:>12.0} op/s {:>14}",
+        "Cedar (baseline)", cedar_avg_ns, cedar_throughput, "1.0x"
     );
 
-    println!("{:<25} {:>12} ns {:>12.0} op/s {:>14}x",
+    println!(
+        "{:<25} {:>12} ns {:>12.0} op/s {:>14}x",
         "Reaper DSL (simple)",
         reaper_avg_ns,
         reaper_throughput,
         cedar_avg_ns as f64 / reaper_avg_ns as f64
     );
 
-    println!("{:<25} {:>12} ns {:>12.0} op/s {:>14}x",
+    println!(
+        "{:<25} {:>12} ns {:>12.0} op/s {:>14}x",
         "Reaper DSL (complex)",
         complex_avg_ns,
         complex_throughput,
@@ -335,14 +349,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n{}", "-".repeat(70));
     println!("🏆 Winner: Reaper DSL");
-    println!("   • {:.0}x faster than Cedar (simple rule)", cedar_avg_ns as f64 / reaper_avg_ns as f64);
-    println!("   • {:.0}x faster than Cedar (complex ABAC)", cedar_avg_ns as f64 / complex_avg_ns as f64);
-    println!("   • Comparable to Simple (~{:.1}x)", simple_avg_ns as f64 / reaper_avg_ns as f64);
+    println!(
+        "   • {:.0}x faster than Cedar (simple rule)",
+        cedar_avg_ns as f64 / reaper_avg_ns as f64
+    );
+    println!(
+        "   • {:.0}x faster than Cedar (complex ABAC)",
+        cedar_avg_ns as f64 / complex_avg_ns as f64
+    );
+    println!(
+        "   • Comparable to Simple (~{:.1}x)",
+        simple_avg_ns as f64 / reaper_avg_ns as f64
+    );
     println!("   • But with Cedar-level expressiveness!");
 
     println!("\n💡 Key Insights:");
     println!("   • Simple: Fast but limited expressiveness");
-    println!("   • Cedar: Expressive but slow (~{}ms)", cedar_avg_ns / 1_000_000);
+    println!(
+        "   • Cedar: Expressive but slow (~{}ms)",
+        cedar_avg_ns / 1_000_000
+    );
     println!("   • Reaper DSL: Best of both worlds");
     println!("     - Cedar-level expressiveness");
     println!("     - Simple-level performance");

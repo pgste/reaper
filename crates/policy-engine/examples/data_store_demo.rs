@@ -9,8 +9,8 @@
 //! Run with: cargo run --example data_store_demo
 
 use policy_engine::{
-    DataStore, DataLoader, QueryBuilder,
-    PolicyEngine, EnhancedPolicy, PolicyAction, PolicyRequest, PolicyRule,
+    DataLoader, DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRequest, PolicyRule,
+    QueryBuilder,
 };
 use std::collections::HashMap;
 
@@ -28,10 +28,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Pre-warm common strings for better performance
     interner.prewarm(&[
-        "User", "Resource", "Department",
-        "admin", "user", "manager", "viewer",
-        "engineering", "sales", "marketing",
-        "role", "department", "active", "owner",
+        "User",
+        "Resource",
+        "Department",
+        "admin",
+        "user",
+        "manager",
+        "viewer",
+        "engineering",
+        "sales",
+        "marketing",
+        "role",
+        "department",
+        "active",
+        "owner",
     ]);
 
     println!("✓ Created data store with pre-warmed strings\n");
@@ -112,7 +122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let alice_id = interner.intern("alice");
     let alice = store.get(alice_id).unwrap();
     println!("Query 1 - Get by ID:");
-    println!("  Entity: {} (type: {})",
+    println!(
+        "  Entity: {} (type: {})",
         interner.resolve_str(alice.id).unwrap(),
         interner.resolve_str(alice.entity_type).unwrap()
     );
@@ -269,8 +280,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Reaper Data Store:");
     println!("  Total Time: {:?}", duration);
-    println!("  Average: {:.2} ns per lookup", duration.as_nanos() as f64 / iterations as f64);
-    println!("  Throughput: {:.0} ops/sec", iterations as f64 / duration.as_secs_f64());
+    println!(
+        "  Average: {:.2} ns per lookup",
+        duration.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "  Throughput: {:.0} ops/sec",
+        iterations as f64 / duration.as_secs_f64()
+    );
 
     println!("\nOPA Equivalent (estimated):");
     println!("  Average: ~500-1000 ns per lookup");
@@ -284,7 +301,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ==========================================
     println!("\n{}", "=".repeat(60));
     println!("=== Summary ===");
-    println!("✓ Loaded {} entities with {:.0}% memory savings",
+    println!(
+        "✓ Loaded {} entities with {:.0}% memory savings",
         stats.total_entities,
         ((1.0 - memory_per_entity as f64 / 400.0) * 100.0)
     );

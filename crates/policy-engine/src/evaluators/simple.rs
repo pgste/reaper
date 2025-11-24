@@ -4,10 +4,10 @@
 //! It uses simple wildcard matching for sub-microsecond evaluation.
 //! Perfect for hot paths where performance is critical.
 
+use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::{PolicyAction, PolicyRequest, PolicyRule};
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
-use super::{PolicyEvaluator, EvaluatorMetadata};
 
 /// Simple rule-based evaluator for high-performance authorization
 ///
@@ -52,7 +52,10 @@ impl SimplePolicyEvaluator {
     ///
     /// This is useful for debugging and audit purposes.
     /// Returns (PolicyAction, Option<matched_rule_index>)
-    pub fn evaluate_with_details(&self, request: &PolicyRequest) -> Result<(PolicyAction, Option<usize>), ReaperError> {
+    pub fn evaluate_with_details(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<(PolicyAction, Option<usize>), ReaperError> {
         // First-match-wins evaluation
         for (index, rule) in self.rules.iter().enumerate() {
             if self.matches_rule(rule, request) {
@@ -124,13 +127,11 @@ mod tests {
 
     #[test]
     fn test_simple_evaluator_allow() {
-        let evaluator = SimplePolicyEvaluator::new(vec![
-            PolicyRule {
-                action: PolicyAction::Allow,
-                resource: "test-resource".to_string(),
-                conditions: vec![],
-            },
-        ]);
+        let evaluator = SimplePolicyEvaluator::new(vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "test-resource".to_string(),
+            conditions: vec![],
+        }]);
 
         let request = PolicyRequest {
             resource: "test-resource".to_string(),
@@ -144,13 +145,11 @@ mod tests {
 
     #[test]
     fn test_simple_evaluator_wildcard() {
-        let evaluator = SimplePolicyEvaluator::new(vec![
-            PolicyRule {
-                action: PolicyAction::Allow,
-                resource: "*".to_string(),
-                conditions: vec![],
-            },
-        ]);
+        let evaluator = SimplePolicyEvaluator::new(vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "*".to_string(),
+            conditions: vec![],
+        }]);
 
         let request = PolicyRequest {
             resource: "any-resource".to_string(),
@@ -164,13 +163,11 @@ mod tests {
 
     #[test]
     fn test_simple_evaluator_deny_by_default() {
-        let evaluator = SimplePolicyEvaluator::new(vec![
-            PolicyRule {
-                action: PolicyAction::Allow,
-                resource: "specific-resource".to_string(),
-                conditions: vec![],
-            },
-        ]);
+        let evaluator = SimplePolicyEvaluator::new(vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "specific-resource".to_string(),
+            conditions: vec![],
+        }]);
 
         let request = PolicyRequest {
             resource: "other-resource".to_string(),
@@ -215,25 +212,21 @@ mod tests {
 
     #[test]
     fn test_validation_empty_resource() {
-        let evaluator = SimplePolicyEvaluator::new(vec![
-            PolicyRule {
-                action: PolicyAction::Allow,
-                resource: "".to_string(),
-                conditions: vec![],
-            },
-        ]);
+        let evaluator = SimplePolicyEvaluator::new(vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "".to_string(),
+            conditions: vec![],
+        }]);
         assert!(evaluator.validate().is_err());
     }
 
     #[test]
     fn test_metadata() {
-        let evaluator = SimplePolicyEvaluator::new(vec![
-            PolicyRule {
-                action: PolicyAction::Allow,
-                resource: "*".to_string(),
-                conditions: vec![],
-            },
-        ]);
+        let evaluator = SimplePolicyEvaluator::new(vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "*".to_string(),
+            conditions: vec![],
+        }]);
 
         let metadata = evaluator.metadata().unwrap();
         assert_eq!(metadata.rule_count, 1);

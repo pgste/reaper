@@ -79,11 +79,10 @@ impl PolicyBundle {
         }
 
         // Deserialize
-        let bundle: Self = bincode::deserialize(&bytes[4..]).map_err(|e| {
-            ReaperError::InvalidPolicy {
+        let bundle: Self =
+            bincode::deserialize(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to deserialize bundle: {}", e),
-            }
-        })?;
+            })?;
 
         // Version check
         if bundle.metadata.version > Self::FORMAT_VERSION {
@@ -130,8 +129,8 @@ fn calculate_checksum(policy: &Policy) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ast::*;
+    use super::*;
     use std::collections::HashMap;
 
     #[test]

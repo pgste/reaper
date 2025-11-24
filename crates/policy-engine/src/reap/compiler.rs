@@ -3,13 +3,18 @@
 //! Transforms parsed .reap AST into optimized ReaperDSLEvaluator for sub-microsecond evaluation.
 
 use super::ast::*;
-use crate::evaluators::reaper_dsl::{ReaperDSLEvaluator, Rule as DslRule, Condition as DslCondition};
-use crate::{PolicyAction, data::DataStore};
+use crate::evaluators::reaper_dsl::{
+    Condition as DslCondition, ReaperDSLEvaluator, Rule as DslRule,
+};
+use crate::{data::DataStore, PolicyAction};
 use reaper_core::ReaperError;
 use std::sync::Arc;
 
 /// Compile a parsed policy AST into a ReaperDSLEvaluator
-pub fn compile_policy(policy: Policy, store: Arc<DataStore>) -> Result<ReaperDSLEvaluator, ReaperError> {
+pub fn compile_policy(
+    policy: Policy,
+    store: Arc<DataStore>,
+) -> Result<ReaperDSLEvaluator, ReaperError> {
     // Convert default decision
     let default_decision = match policy.default_decision {
         Decision::Allow => PolicyAction::Allow,
@@ -51,9 +56,7 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
             Ok(DslCondition::Not(Box::new(DslCondition::Always)))
         }
 
-        Condition::Comparison { left, op, right } => {
-            compile_comparison(left, op, right)
-        }
+        Condition::Comparison { left, op, right } => compile_comparison(left, op, right),
 
         Condition::And(conditions) => {
             let mut compiled = Vec::new();
@@ -85,12 +88,8 @@ fn compile_comparison(
     right: ComparisonRight,
 ) -> Result<DslCondition, ReaperError> {
     match right {
-        ComparisonRight::Value(value) => {
-            compile_value_comparison(left, op, value)
-        }
-        ComparisonRight::EntityAttr(right_attr) => {
-            compile_attr_comparison(left, op, right_attr)
-        }
+        ComparisonRight::Value(value) => compile_value_comparison(left, op, value),
+        ComparisonRight::EntityAttr(right_attr) => compile_attr_comparison(left, op, right_attr),
     }
 }
 
@@ -111,12 +110,10 @@ fn compile_value_comparison(
 
     match (left.entity, op) {
         // User attribute comparisons
-        (Entity::User, Operator::Equal) => {
-            Ok(DslCondition::UserEquals {
-                attribute: left.attribute,
-                value: value_str,
-            })
-        }
+        (Entity::User, Operator::Equal) => Ok(DslCondition::UserEquals {
+            attribute: left.attribute,
+            value: value_str,
+        }),
 
         (Entity::User, Operator::NotEqual) => {
             Ok(DslCondition::Not(Box::new(DslCondition::UserEquals {
@@ -126,12 +123,10 @@ fn compile_value_comparison(
         }
 
         // Resource attribute comparisons
-        (Entity::Resource, Operator::Equal) => {
-            Ok(DslCondition::ResourceEquals {
-                attribute: left.attribute,
-                value: value_str,
-            })
-        }
+        (Entity::Resource, Operator::Equal) => Ok(DslCondition::ResourceEquals {
+            attribute: left.attribute,
+            value: value_str,
+        }),
 
         (Entity::Resource, Operator::NotEqual) => {
             Ok(DslCondition::Not(Box::new(DslCondition::ResourceEquals {
@@ -141,21 +136,17 @@ fn compile_value_comparison(
         }
 
         // Context not yet supported
-        (Entity::Context, _) => {
-            Err(ReaperError::InvalidPolicy {
-                reason: "Context entity not yet supported".to_string(),
-            })
-        }
+        (Entity::Context, _) => Err(ReaperError::InvalidPolicy {
+            reason: "Context entity not yet supported".to_string(),
+        }),
 
         // Unsupported operators for value comparisons
-        _ => {
-            Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "Operator {:?} not supported for literal value comparisons. Use == or != instead.",
-                    op
-                ),
-            })
-        }
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Operator {:?} not supported for literal value comparisons. Use == or != instead.",
+                op
+            ),
+        }),
     }
 }
 
@@ -167,12 +158,10 @@ fn compile_attr_comparison(
 ) -> Result<DslCondition, ReaperError> {
     match (left.entity, right.entity, op) {
         // User == Resource (same attribute)
-        (Entity::User, Entity::Resource, Operator::Equal) => {
-            Ok(DslCondition::UserEqualsResource {
-                user_attr: left.attribute,
-                resource_attr: right.attribute,
-            })
-        }
+        (Entity::User, Entity::Resource, Operator::Equal) => Ok(DslCondition::UserEqualsResource {
+            user_attr: left.attribute,
+            resource_attr: right.attribute,
+        }),
 
         // User > Resource (int comparison)
         (Entity::User, Entity::Resource, Operator::GreaterThan) => {
@@ -183,18 +172,16 @@ fn compile_attr_comparison(
         }
 
         // User >= Resource (user > resource || user == resource)
-        (Entity::User, Entity::Resource, Operator::GreaterEqual) => {
-            Ok(DslCondition::Or(vec![
-                DslCondition::UserIntGreater {
-                    user_attr: left.attribute.clone(),
-                    resource_attr: right.attribute.clone(),
-                },
-                DslCondition::UserEqualsResource {
-                    user_attr: left.attribute,
-                    resource_attr: right.attribute,
-                },
-            ]))
-        }
+        (Entity::User, Entity::Resource, Operator::GreaterEqual) => Ok(DslCondition::Or(vec![
+            DslCondition::UserIntGreater {
+                user_attr: left.attribute.clone(),
+                resource_attr: right.attribute.clone(),
+            },
+            DslCondition::UserEqualsResource {
+                user_attr: left.attribute,
+                resource_attr: right.attribute,
+            },
+        ])),
 
         // Resource > User
         (Entity::Resource, Entity::User, Operator::GreaterThan) => {
@@ -205,18 +192,16 @@ fn compile_attr_comparison(
         }
 
         // Resource >= User
-        (Entity::Resource, Entity::User, Operator::GreaterEqual) => {
-            Ok(DslCondition::Or(vec![
-                DslCondition::ResourceIntGreater {
-                    resource_attr: left.attribute.clone(),
-                    user_attr: right.attribute.clone(),
-                },
-                DslCondition::UserEqualsResource {
-                    user_attr: right.attribute,
-                    resource_attr: left.attribute,
-                },
-            ]))
-        }
+        (Entity::Resource, Entity::User, Operator::GreaterEqual) => Ok(DslCondition::Or(vec![
+            DslCondition::ResourceIntGreater {
+                resource_attr: left.attribute.clone(),
+                user_attr: right.attribute.clone(),
+            },
+            DslCondition::UserEqualsResource {
+                user_attr: right.attribute,
+                resource_attr: left.attribute,
+            },
+        ])),
 
         // User < Resource = Resource > User
         (Entity::User, Entity::Resource, Operator::LessThan) => {
@@ -227,45 +212,41 @@ fn compile_attr_comparison(
         }
 
         // User <= Resource = Resource >= User
-        (Entity::User, Entity::Resource, Operator::LessEqual) => {
-            Ok(DslCondition::Or(vec![
-                DslCondition::ResourceIntGreater {
-                    resource_attr: right.attribute.clone(),
-                    user_attr: left.attribute.clone(),
-                },
-                DslCondition::UserEqualsResource {
-                    user_attr: left.attribute,
-                    resource_attr: right.attribute,
-                },
-            ]))
-        }
-
-        // User != Resource
-        (Entity::User, Entity::Resource, Operator::NotEqual) => {
-            Ok(DslCondition::Not(Box::new(DslCondition::UserEqualsResource {
+        (Entity::User, Entity::Resource, Operator::LessEqual) => Ok(DslCondition::Or(vec![
+            DslCondition::ResourceIntGreater {
+                resource_attr: right.attribute.clone(),
+                user_attr: left.attribute.clone(),
+            },
+            DslCondition::UserEqualsResource {
                 user_attr: left.attribute,
                 resource_attr: right.attribute,
-            })))
-        }
+            },
+        ])),
+
+        // User != Resource
+        (Entity::User, Entity::Resource, Operator::NotEqual) => Ok(DslCondition::Not(Box::new(
+            DslCondition::UserEqualsResource {
+                user_attr: left.attribute,
+                resource_attr: right.attribute,
+            },
+        ))),
 
         // Unsupported combinations
-        _ => {
-            Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "Unsupported comparison: {:?}.{} {:?} {:?}.{}",
-                    left.entity, left.attribute, op, right.entity, right.attribute
-                ),
-            })
-        }
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Unsupported comparison: {:?}.{} {:?} {:?}.{}",
+                left.entity, left.attribute, op, right.entity, right.attribute
+            ),
+        }),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntityBuilder, data::DataStore};
-    use crate::PolicyRequest;
     use crate::evaluators::PolicyEvaluator;
+    use crate::PolicyRequest;
+    use crate::{data::DataStore, EntityBuilder};
     use std::collections::HashMap;
 
     #[test]

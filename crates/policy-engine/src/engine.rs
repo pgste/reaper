@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use crate::evaluators::{PolicyEvaluator, SimplePolicyEvaluator, CedarPolicyEvaluator};
+use crate::evaluators::{CedarPolicyEvaluator, PolicyEvaluator, SimplePolicyEvaluator};
 
 /// Policy action types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,7 +88,8 @@ impl EnhancedPolicy {
         let content = serde_json::to_string(&rules).unwrap_or_default();
         let now = chrono::Utc::now();
 
-        let evaluator = Arc::new(SimplePolicyEvaluator::new(rules.clone())) as Arc<dyn PolicyEvaluator>;
+        let evaluator =
+            Arc::new(SimplePolicyEvaluator::new(rules.clone())) as Arc<dyn PolicyEvaluator>;
 
         Self {
             id: Uuid::new_v4(),
@@ -136,10 +137,11 @@ impl EnhancedPolicy {
     fn build_evaluator(&mut self) -> Result<()> {
         let evaluator: Arc<dyn PolicyEvaluator> = match &self.language {
             PolicyLanguage::Simple => {
-                let rules: Vec<PolicyRule> = serde_json::from_str(&self.content)
-                    .map_err(|e| ReaperError::InvalidPolicy {
+                let rules: Vec<PolicyRule> = serde_json::from_str(&self.content).map_err(|e| {
+                    ReaperError::InvalidPolicy {
                         reason: format!("Failed to parse simple policy rules: {}", e),
-                    })?;
+                    }
+                })?;
 
                 // Update rules for backward compatibility
                 self.rules = rules.clone();
@@ -170,9 +172,11 @@ impl EnhancedPolicy {
             self.build_evaluator()?;
         }
 
-        self.evaluator.clone().ok_or_else(|| ReaperError::EvaluationError {
-            reason: "Failed to build evaluator".to_string(),
-        })
+        self.evaluator
+            .clone()
+            .ok_or_else(|| ReaperError::EvaluationError {
+                reason: "Failed to build evaluator".to_string(),
+            })
     }
 
     /// Update policy rules (for Simple language - backward compatible)

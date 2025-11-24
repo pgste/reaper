@@ -2,7 +2,7 @@
 ///
 /// Tests a realistic enterprise policy combining all three models
 /// Tracks which layers/rules are triggered and performance impact
-use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -38,22 +38,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenarios = vec![
         TestScenario {
             name: "Admin Override (RBAC)",
-            user_pattern: |_| "user_0".to_string(),  // admin
+            user_pattern: |_| "user_0".to_string(), // admin
             resource_pattern: |i| format!("resource_{}", i % 2000),
         },
         TestScenario {
             name: "Suspended User (RBAC Deny)",
-            user_pattern: |_| "user_20".to_string(),  // suspended
+            user_pattern: |_| "user_20".to_string(), // suspended
             resource_pattern: |i| format!("resource_{}", i % 2000),
         },
         TestScenario {
             name: "Owner with Clearance (ReBAC + ABAC)",
             user_pattern: |i| format!("user_{}", i % 1000),
-            resource_pattern: |i| format!("resource_{}", i % 2000),  // some match ownership
+            resource_pattern: |i| format!("resource_{}", i % 2000), // some match ownership
         },
         TestScenario {
             name: "Team Lead Access (ReBAC + RBAC)",
-            user_pattern: |i| format!("user_{}", i * 10 % 1000),  // team leads every 10th
+            user_pattern: |i| format!("user_{}", i * 10 % 1000), // team leads every 10th
             resource_pattern: |i| format!("resource_{}", i % 2000),
         },
         TestScenario {
@@ -69,19 +69,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if res_id % 3 == 0 {
                     format!("resource_{}", res_id)
                 } else {
-                    format!("resource_{}", (res_id / 3) * 3)  // Force shared match
+                    format!("resource_{}", (res_id / 3) * 3) // Force shared match
                 }
             },
         },
         TestScenario {
             name: "Executive Access (RBAC + ABAC)",
-            user_pattern: |i| format!("user_{}", 1 + (i % 142)),  // executives
+            user_pattern: |i| format!("user_{}", 1 + (i % 142)), // executives
             resource_pattern: |i| format!("resource_{}", i % 2000),
         },
         TestScenario {
             name: "Public Resources (ABAC)",
             user_pattern: |i| format!("user_{}", i % 1000),
-            resource_pattern: |i| format!("resource_{}", (i % 500) * 4),  // public classification
+            resource_pattern: |i| format!("resource_{}", (i % 500) * 4), // public classification
         },
         TestScenario {
             name: "Mixed Random (All Layers)",
@@ -90,7 +90,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    println!("\n🚀 Running {} policy evaluations across {} scenarios...\n", 10000, scenarios.len());
+    println!(
+        "\n🚀 Running {} policy evaluations across {} scenarios...\n",
+        10000,
+        scenarios.len()
+    );
 
     let mut total_latencies = Vec::with_capacity(10000);
     let mut total_allow = 0;
@@ -181,8 +185,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Std deviation:  {:.2} ns", std_dev);
 
     println!("\n✅ Overall Decision Distribution:");
-    println!("   ALLOW:          {} ({:.1}%)", total_allow, (total_allow as f64 / total_iters as f64) * 100.0);
-    println!("   DENY:           {} ({:.1}%)", total_deny, (total_deny as f64 / total_iters as f64) * 100.0);
+    println!(
+        "   ALLOW:          {} ({:.1}%)",
+        total_allow,
+        (total_allow as f64 / total_iters as f64) * 100.0
+    );
+    println!(
+        "   DENY:           {} ({:.1}%)",
+        total_deny,
+        (total_deny as f64 / total_iters as f64) * 100.0
+    );
 
     // Latency distribution
     let mut buckets = vec![
@@ -204,12 +216,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📈 Overall Latency Distribution:");
-    println!("   < 500 ns:       {} ({:.1}%)", buckets[0].1, (buckets[0].1 as f64 / total_iters as f64) * 100.0);
-    println!("   < 1 µs:         {} ({:.1}%)", buckets[1].1, (buckets[1].1 as f64 / total_iters as f64) * 100.0);
-    println!("   < 2 µs:         {} ({:.1}%)", buckets[2].1, (buckets[2].1 as f64 / total_iters as f64) * 100.0);
-    println!("   < 5 µs:         {} ({:.1}%)", buckets[3].1, (buckets[3].1 as f64 / total_iters as f64) * 100.0);
-    println!("   < 10 µs:        {} ({:.1}%)", buckets[4].1, (buckets[4].1 as f64 / total_iters as f64) * 100.0);
-    println!("   >= 10 µs:       {} ({:.1}%)", buckets[5].1, (buckets[5].1 as f64 / total_iters as f64) * 100.0);
+    println!(
+        "   < 500 ns:       {} ({:.1}%)",
+        buckets[0].1,
+        (buckets[0].1 as f64 / total_iters as f64) * 100.0
+    );
+    println!(
+        "   < 1 µs:         {} ({:.1}%)",
+        buckets[1].1,
+        (buckets[1].1 as f64 / total_iters as f64) * 100.0
+    );
+    println!(
+        "   < 2 µs:         {} ({:.1}%)",
+        buckets[2].1,
+        (buckets[2].1 as f64 / total_iters as f64) * 100.0
+    );
+    println!(
+        "   < 5 µs:         {} ({:.1}%)",
+        buckets[3].1,
+        (buckets[3].1 as f64 / total_iters as f64) * 100.0
+    );
+    println!(
+        "   < 10 µs:        {} ({:.1}%)",
+        buckets[4].1,
+        (buckets[4].1 as f64 / total_iters as f64) * 100.0
+    );
+    println!(
+        "   >= 10 µs:       {} ({:.1}%)",
+        buckets[5].1,
+        (buckets[5].1 as f64 / total_iters as f64) * 100.0
+    );
 
     // Per-scenario breakdown
     println!("\n{}", "=".repeat(70));
@@ -227,8 +263,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let allow_pct = (*allow_count as f64 / total as f64) * 100.0;
 
         println!("\n{}", name);
-        println!("   Mean: {}ns | Median: {}ns | P99: {}ns", scenario_mean, scenario_median, scenario_p99);
-        println!("   Allow: {} ({:.1}%) | Deny: {} ({:.1}%)", allow_count, allow_pct, deny_count, 100.0 - allow_pct);
+        println!(
+            "   Mean: {}ns | Median: {}ns | P99: {}ns",
+            scenario_mean, scenario_median, scenario_p99
+        );
+        println!(
+            "   Allow: {} ({:.1}%) | Deny: {} ({:.1}%)",
+            allow_count,
+            allow_pct,
+            deny_count,
+            100.0 - allow_pct
+        );
     }
 
     // Comparison with individual policy types

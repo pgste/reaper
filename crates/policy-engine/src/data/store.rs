@@ -3,12 +3,12 @@
 //! The DataStore provides fast entity lookups optimized for policy evaluation.
 //! Multiple index strategies enable sub-microsecond queries.
 
-use super::entity::{Entity, EntityId, EntityType, AttributeValue};
+use super::entity::{AttributeValue, Entity, EntityId, EntityType};
 use super::interning::{InternedString, StringInterner};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Index strategy for optimizing different query patterns
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,9 +18,7 @@ pub enum IndexStrategy {
     /// Index by entity type (e.g., all Users, all Resources)
     ByType,
     /// Index by specific attribute (e.g., all entities with role=admin)
-    ByAttribute {
-        attribute_key: InternedString,
-    },
+    ByAttribute { attribute_key: InternedString },
     /// Composite index (e.g., type=User AND role=admin)
     Composite {
         entity_type: EntityType,
@@ -253,15 +251,15 @@ impl DataStore {
 
     /// Estimate total memory usage
     fn estimate_memory(&self) -> usize {
-        let entity_memory: usize = self.entities
+        let entity_memory: usize = self
+            .entities
             .iter()
             .map(|entry| entry.value().memory_size())
             .sum();
 
-        let index_overhead =
-            (self.type_index.len() * 64) +
-            (self.attribute_index.len() * 64) +
-            (self.composite_index.len() * 64);
+        let index_overhead = (self.type_index.len() * 64)
+            + (self.attribute_index.len() * 64)
+            + (self.composite_index.len() * 64);
 
         entity_memory + index_overhead + self.interner.stats().estimated_memory_bytes
     }
@@ -308,11 +306,7 @@ impl<'a> QueryBuilder<'a> {
     }
 
     /// Add an attribute filter
-    pub fn with_attribute(
-        mut self,
-        key: InternedString,
-        value: InternedString,
-    ) -> Self {
+    pub fn with_attribute(mut self, key: InternedString, value: InternedString) -> Self {
         self.attribute_filters.push((key, value));
         self
     }
@@ -324,18 +318,25 @@ impl<'a> QueryBuilder<'a> {
             (self.entity_type, self.attribute_filters.first())
         {
             // Use composite index if available
-            let mut results = self.store.get_by_type_and_attribute(
-                entity_type,
-                *key,
-                *value,
-            );
+            let mut results = self
+                .store
+                .get_by_type_and_attribute(entity_type, *key, *value);
 
             // Apply remaining filters
             for (filter_key, filter_value) in self.attribute_filters.iter().skip(1) {
                 results.retain(|entity| {
-                    entity.get_attribute(*filter_key)
+                    entity
+                        .get_attribute(*filter_key)
                         .and_then(|v| v.as_string(self.store.interner()))
-                        .map(|s| s.as_ref() == self.store.interner().resolve(*filter_value).unwrap().as_ref())
+                        .map(|s| {
+                            s.as_ref()
+                                == self
+                                    .store
+                                    .interner()
+                                    .resolve(*filter_value)
+                                    .unwrap()
+                                    .as_ref()
+                        })
                         .unwrap_or(false)
                 });
             }
@@ -348,9 +349,12 @@ impl<'a> QueryBuilder<'a> {
             // Apply attribute filters
             for (key, value) in self.attribute_filters {
                 results.retain(|entity| {
-                    entity.get_attribute(key)
+                    entity
+                        .get_attribute(key)
                         .and_then(|v| v.as_string(self.store.interner()))
-                        .map(|s| s.as_ref() == self.store.interner().resolve(value).unwrap().as_ref())
+                        .map(|s| {
+                            s.as_ref() == self.store.interner().resolve(value).unwrap().as_ref()
+                        })
                         .unwrap_or(false)
                 });
             }
@@ -417,12 +421,12 @@ mod tests {
         store.insert(
             EntityBuilder::new(alice_id, user_type)
                 .with_string(role_key, admin_value)
-                .build()
+                .build(),
         );
         store.insert(
             EntityBuilder::new(bob_id, user_type)
                 .with_string(role_key, user_value)
-                .build()
+                .build(),
         );
 
         let admins = store.get_by_attribute(role_key, admin_value);
@@ -445,20 +449,16 @@ mod tests {
         store.insert(
             EntityBuilder::new(alice_id, user_type)
                 .with_string(role_key, admin_value)
-                .build()
+                .build(),
         );
         store.insert(
             EntityBuilder::new(doc_id, resource_type)
                 .with_string(role_key, admin_value)
-                .build()
+                .build(),
         );
 
         // Should only get Users with role=admin
-        let admin_users = store.get_by_type_and_attribute(
-            user_type,
-            role_key,
-            admin_value,
-        );
+        let admin_users = store.get_by_type_and_attribute(user_type, role_key, admin_value);
         assert_eq!(admin_users.len(), 1);
         assert_eq!(admin_users[0].id, alice_id);
     }
@@ -479,7 +479,7 @@ mod tests {
             EntityBuilder::new(alice_id, user_type)
                 .with_string(role_key, admin_value)
                 .with_string(dept_key, eng_value)
-                .build()
+                .build(),
         );
 
         let results = QueryBuilder::new(&store)
@@ -513,7 +513,7 @@ mod tests {
                 EntityBuilder::new(user_id, user_type)
                     .with_string(role_key, admin_value)
                     .with_string(department_key, engineering_value)
-                    .build()
+                    .build(),
             );
         }
 

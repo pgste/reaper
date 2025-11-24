@@ -11,12 +11,12 @@
 //! - **Hot-Swappable**: Update data without stopping evaluations
 //! - **Memory Efficient**: 60-80% less memory than equivalent Go structures
 
-pub mod interning;
 pub mod entity;
-pub mod store;
+pub mod interning;
 pub mod loader;
+pub mod store;
 
+pub use entity::{AttributeValue, Attributes, Entity, EntityId, EntityType};
 pub use interning::{InternedString, StringInterner};
-pub use entity::{Entity, EntityId, EntityType, AttributeValue, Attributes};
+pub use loader::{DataFormat, DataLoader};
 pub use store::{DataStore, IndexStrategy, QueryBuilder};
-pub use loader::{DataLoader, DataFormat};

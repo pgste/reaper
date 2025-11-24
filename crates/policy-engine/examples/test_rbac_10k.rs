@@ -2,7 +2,7 @@
 ///
 /// Tests the rbac.reap policy against rbac-test-data.json
 /// Measures performance and decision patterns
-use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -38,15 +38,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test different scenarios
     let test_cases = vec![
         // Admin accessing any resource (should allow)
-        ("user_0", "resource_100", "Expected: ALLOW (admin full access)"),
+        (
+            "user_0",
+            "resource_100",
+            "Expected: ALLOW (admin full access)",
+        ),
         // Manager accessing reports (should allow)
-        ("user_1", "resource_0", "Expected: ALLOW (manager accessing report)"),
+        (
+            "user_1",
+            "resource_0",
+            "Expected: ALLOW (manager accessing report)",
+        ),
         // User accessing own resource (should allow)
-        ("user_10", "resource_10", "Expected: ALLOW (user owns resource)"),
+        (
+            "user_10",
+            "resource_10",
+            "Expected: ALLOW (user owns resource)",
+        ),
         // User accessing other's non-report resource (should deny)
-        ("user_50", "resource_100", "Expected: DENY (no relationship)"),
+        (
+            "user_50",
+            "resource_100",
+            "Expected: DENY (no relationship)",
+        ),
         // Manager accessing non-report (should deny unless owner)
-        ("user_1", "resource_2", "Expected: DENY (manager, not report, not owner)"),
+        (
+            "user_1",
+            "resource_2",
+            "Expected: DENY (manager, not report, not owner)",
+        ),
     ];
 
     println!("📋 Sample Test Cases:");
@@ -65,7 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let elapsed = start.elapsed().as_nanos();
 
         let decision_str = format!("{:?}", decision);
-        println!("   {} → {} ({}ns) - {}", principal, resource, elapsed, expected);
+        println!(
+            "   {} → {} ({}ns) - {}",
+            principal, resource, elapsed, expected
+        );
         println!("      Result: {}", decision_str);
     }
 
@@ -141,12 +164,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Std deviation:  {:.2} ns", std_dev);
 
     println!("\n🚀 Throughput:");
-    println!("   Ops/second:     {:.0}", iterations as f64 / total_time.as_secs_f64());
+    println!(
+        "   Ops/second:     {:.0}",
+        iterations as f64 / total_time.as_secs_f64()
+    );
     println!("   Avg per op:     {:.2} µs", mean as f64 / 1000.0);
 
     println!("\n✅ Decision Distribution:");
-    println!("   ALLOW:          {} ({:.1}%)", allow_count, (allow_count as f64 / iterations as f64) * 100.0);
-    println!("   DENY:           {} ({:.1}%)", deny_count, (deny_count as f64 / iterations as f64) * 100.0);
+    println!(
+        "   ALLOW:          {} ({:.1}%)",
+        allow_count,
+        (allow_count as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   DENY:           {} ({:.1}%)",
+        deny_count,
+        (deny_count as f64 / iterations as f64) * 100.0
+    );
 
     // Analyze performance buckets
     let mut buckets = vec![
@@ -168,12 +202,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📈 Latency Distribution:");
-    println!("   < 500 ns:       {} ({:.1}%)", buckets[0].1, (buckets[0].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 1 µs:         {} ({:.1}%)", buckets[1].1, (buckets[1].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 2 µs:         {} ({:.1}%)", buckets[2].1, (buckets[2].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 5 µs:         {} ({:.1}%)", buckets[3].1, (buckets[3].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 10 µs:        {} ({:.1}%)", buckets[4].1, (buckets[4].1 as f64 / iterations as f64) * 100.0);
-    println!("   >= 10 µs:       {} ({:.1}%)", buckets[5].1, (buckets[5].1 as f64 / iterations as f64) * 100.0);
+    println!(
+        "   < 500 ns:       {} ({:.1}%)",
+        buckets[0].1,
+        (buckets[0].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 1 µs:         {} ({:.1}%)",
+        buckets[1].1,
+        (buckets[1].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 2 µs:         {} ({:.1}%)",
+        buckets[2].1,
+        (buckets[2].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 5 µs:         {} ({:.1}%)",
+        buckets[3].1,
+        (buckets[3].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 10 µs:        {} ({:.1}%)",
+        buckets[4].1,
+        (buckets[4].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   >= 10 µs:       {} ({:.1}%)",
+        buckets[5].1,
+        (buckets[5].1 as f64 / iterations as f64) * 100.0
+    );
 
     println!("\n{}", "=".repeat(70));
     println!("✅ RBAC Policy Test Complete!");

@@ -35,10 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Clearance based on role
         let clearance = match role {
-            "executive" => 8 + (i % 3),  // 8-10
-            "manager" => 5 + (i % 3),    // 5-7
-            "analyst" => 3 + (i % 3),    // 3-5
-            _ => 1 + (i % 3),            // 1-3
+            "executive" => 8 + (i % 3), // 8-10
+            "manager" => 5 + (i % 3),   // 5-7
+            "analyst" => 3 + (i % 3),   // 3-5
+            _ => 1 + (i % 3),           // 1-3
         };
 
         // 5% suspended users
@@ -70,7 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Generate resources with attribute requirements
-    println!("📄 Generating {} resources with attribute requirements...", num_resources);
+    println!(
+        "📄 Generating {} resources with attribute requirements...",
+        num_resources
+    );
     for i in 0..num_resources {
         let department = departments[i % departments.len()];
         let classification = classifications[i % classifications.len()];

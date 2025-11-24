@@ -2,8 +2,8 @@
 //
 // Runs BDD tests defined in .feature files
 
+use cucumber::{given, then, when, World};
 use policy_engine::gherkin::TestContext;
-use cucumber::{given, when, then, World};
 
 /// World struct for Cucumber tests
 #[derive(Debug, World, Default)]
@@ -26,15 +26,21 @@ impl PolicyWorld {
 
 #[given(expr = "the policy file {string}")]
 async fn load_policy_file(world: &mut PolicyWorld, path: String) {
-    world.context.load_policy(&path)
+    world
+        .context
+        .load_policy(&path)
         .expect("Failed to load policy file");
 }
 
 #[given(expr = "the data file {string}")]
 async fn load_data_file(world: &mut PolicyWorld, path: String) {
-    world.context.load_data(&path)
+    world
+        .context
+        .load_data(&path)
         .expect("Failed to load data file");
-    world.context.build_evaluator()
+    world
+        .context
+        .build_evaluator()
         .expect("Failed to build evaluator");
 }
 
@@ -52,8 +58,7 @@ async fn perform_action(world: &mut PolicyWorld, action: String, resource: Strin
     world.context.action = Some(action);
     world.context.resource = Some(resource);
 
-    world.context.evaluate()
-        .expect("Evaluation failed");
+    world.context.evaluate().expect("Evaluation failed");
 }
 
 #[when(expr = "they perform {int} evaluations on random resources")]
@@ -64,8 +69,7 @@ async fn perform_multiple_evaluations(world: &mut PolicyWorld, count: usize) {
         world.context.action = Some(action.clone());
         world.context.resource = Some(format!("resource_{}", i % 2000));
 
-        world.context.evaluate()
-            .expect("Evaluation failed");
+        world.context.evaluate().expect("Evaluation failed");
     }
 }
 
@@ -75,8 +79,7 @@ async fn perform_multiple_evaluations(world: &mut PolicyWorld, count: usize) {
 
 #[then(expr = "the decision should be {string}")]
 async fn check_decision(world: &mut PolicyWorld, expected: String) {
-    let decision = world.context.get_decision()
-        .expect("No decision recorded");
+    let decision = world.context.get_decision().expect("No decision recorded");
 
     let expected_upper = expected.to_uppercase();
     assert!(

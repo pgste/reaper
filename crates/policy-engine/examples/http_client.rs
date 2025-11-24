@@ -1,3 +1,4 @@
+use futures_util::{SinkExt, StreamExt};
 /// HTTP client demonstrating connection pooling and persistent connections
 ///
 /// This client shows best practices for minimizing HTTP overhead:
@@ -19,7 +20,6 @@ use reqwest::ClientBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use futures_util::{StreamExt, SinkExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EvaluateRequest {
@@ -54,9 +54,9 @@ async fn test_single_requests(iterations: usize) -> anyhow::Result<()> {
     // Create client with connection pooling
     // This client will maintain a pool of persistent connections
     let client = ClientBuilder::new()
-        .pool_max_idle_per_host(10)           // Keep 10 idle connections
-        .pool_idle_timeout(Duration::from_secs(90))  // Keep alive for 90s
-        .http2_prior_knowledge()              // Use HTTP/2
+        .pool_max_idle_per_host(10) // Keep 10 idle connections
+        .pool_idle_timeout(Duration::from_secs(90)) // Keep alive for 90s
+        .http2_prior_knowledge() // Use HTTP/2
         .tcp_keepalive(Duration::from_secs(60))
         .build()?;
 
@@ -76,10 +76,7 @@ async fn test_single_requests(iterations: usize) -> anyhow::Result<()> {
 
         let start = Instant::now();
 
-        let response = client.post(url)
-            .json(&req)
-            .send()
-            .await?;
+        let response = client.post(url).json(&req).send().await?;
 
         let _result: EvaluateResponse = response.json().await?;
 
@@ -111,14 +108,20 @@ async fn test_single_requests(iterations: usize) -> anyhow::Result<()> {
     println!("   P99 latency:    {} µs", p99);
     println!("   Min latency:    {} µs", min);
     println!("   Max latency:    {} µs", max);
-    println!("   Throughput:     {:.2} req/sec", iterations as f64 / total_time.as_secs_f64());
+    println!(
+        "   Throughput:     {:.2} req/sec",
+        iterations as f64 / total_time.as_secs_f64()
+    );
 
     Ok(())
 }
 
 /// Demonstrates batch requests (amortize connection overhead)
 async fn test_batch_requests(total_requests: usize, batch_size: usize) -> anyhow::Result<()> {
-    println!("📦 Testing batch requests (batch size: {})...\n", batch_size);
+    println!(
+        "📦 Testing batch requests (batch size: {})...\n",
+        batch_size
+    );
 
     let client = ClientBuilder::new()
         .pool_max_idle_per_host(10)
@@ -131,7 +134,10 @@ async fn test_batch_requests(total_requests: usize, batch_size: usize) -> anyhow
     let mut total_time = Duration::ZERO;
     let mut batch_latencies = Vec::new();
 
-    println!("Running {} batches of {} requests...", num_batches, batch_size);
+    println!(
+        "Running {} batches of {} requests...",
+        num_batches, batch_size
+    );
 
     for i in 0..num_batches {
         let requests: Vec<EvaluateRequest> = (0..batch_size)
@@ -146,10 +152,7 @@ async fn test_batch_requests(total_requests: usize, batch_size: usize) -> anyhow
 
         let start = Instant::now();
 
-        let response = client.post(url)
-            .json(&batch_req)
-            .send()
-            .await?;
+        let response = client.post(url).json(&batch_req).send().await?;
 
         let _result: BatchEvaluateResponse = response.json().await?;
 
@@ -173,7 +176,10 @@ async fn test_batch_requests(total_requests: usize, batch_size: usize) -> anyhow
     println!("   Total time:            {:?}", total_time);
     println!("   Mean batch latency:    {} µs", mean_batch);
     println!("   Amortized per request: {} µs", amortized_per_request);
-    println!("   Throughput:            {:.2} req/sec", total_requests as f64 / total_time.as_secs_f64());
+    println!(
+        "   Throughput:            {:.2} req/sec",
+        total_requests as f64 / total_time.as_secs_f64()
+    );
 
     Ok(())
 }
@@ -240,7 +246,10 @@ async fn test_websocket(iterations: usize) -> anyhow::Result<()> {
     println!("   Median latency: {} µs", median);
     println!("   P95 latency:    {} µs", p95);
     println!("   P99 latency:    {} µs", p99);
-    println!("   Throughput:     {:.2} req/sec", iterations as f64 / total_time.as_secs_f64());
+    println!(
+        "   Throughput:     {:.2} req/sec",
+        iterations as f64 / total_time.as_secs_f64()
+    );
 
     Ok(())
 }

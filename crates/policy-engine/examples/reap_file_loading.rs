@@ -8,11 +8,10 @@
 //! - Compiling to binary bundles
 
 use policy_engine::{
-    DataStore, DataLoader, PolicyRequest, PolicyAction,
-    ReaperPolicy, PolicyEvaluator,
+    DataLoader, DataStore, PolicyAction, PolicyEvaluator, PolicyRequest, ReaperPolicy,
 };
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Reaper .reap File Loading Demo ===\n");

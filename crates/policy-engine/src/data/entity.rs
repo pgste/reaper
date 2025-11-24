@@ -125,11 +125,7 @@ pub struct Entity {
 
 impl Entity {
     /// Create a new entity
-    pub fn new(
-        id: EntityId,
-        entity_type: EntityType,
-        attributes: Attributes,
-    ) -> Self {
+    pub fn new(id: EntityId, entity_type: EntityType, attributes: Attributes) -> Self {
         Self {
             id,
             entity_type,
@@ -185,9 +181,12 @@ impl Entity {
     /// Estimate memory usage of this entity
     pub fn memory_size(&self) -> usize {
         // Entity ID + Type + HashMap overhead + attributes
-        8 + 48 + self.attributes.values()
-            .map(|v| 8 + v.memory_size())
-            .sum::<usize>()
+        8 + 48
+            + self
+                .attributes
+                .values()
+                .map(|v| 8 + v.memory_size())
+                .sum::<usize>()
     }
 }
 

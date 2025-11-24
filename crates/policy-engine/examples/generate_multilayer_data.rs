@@ -18,11 +18,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let departments = ["engineering", "sales", "hr", "finance", "operations"];
     let teams = ["alpha", "beta", "gamma", "delta", "epsilon"];
-    let roles = ["admin", "executive", "manager", "senior", "analyst", "staff", "intern"];
+    let roles = [
+        "admin",
+        "executive",
+        "manager",
+        "senior",
+        "analyst",
+        "staff",
+        "intern",
+    ];
     let classifications = ["public", "internal", "confidential", "secret"];
 
     // Generate users with all attributes (RBAC + ABAC + ReBAC)
-    println!("👥 Generating {} users with multilayer attributes...", num_users);
+    println!(
+        "👥 Generating {} users with multilayer attributes...",
+        num_users
+    );
     for i in 0..num_users {
         let department = departments[i % departments.len()];
         let team_id = format!("team_{}", teams[i % teams.len()]);
@@ -43,11 +54,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ABAC attributes - clearance based on role
         let clearance = match role {
             "admin" => 10,
-            "executive" => 8 + (i % 3),  // 8-10
-            "manager" => 5 + (i % 3),    // 5-7
-            "senior" => 4 + (i % 2),     // 4-5
-            "analyst" => 3 + (i % 2),    // 3-4
-            "staff" => 1 + (i % 3),      // 1-3
+            "executive" => 8 + (i % 3), // 8-10
+            "manager" => 5 + (i % 3),   // 5-7
+            "senior" => 4 + (i % 2),    // 4-5
+            "analyst" => 3 + (i % 2),   // 3-4
+            "staff" => 1 + (i % 3),     // 1-3
             "intern" => 1,
             _ => 2,
         };
@@ -60,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let manager_level = match role {
             "admin" => 5,
             "executive" => 5,
-            "manager" => 3 + (i % 3),  // 3-5
+            "manager" => 3 + (i % 3), // 3-5
             "senior" => 2,
             _ => 1,
         };
@@ -102,7 +113,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Generate resources with all attributes
-    println!("📄 Generating {} resources with multilayer attributes...", num_resources);
+    println!(
+        "📄 Generating {} resources with multilayer attributes...",
+        num_resources
+    );
     for i in 0..num_resources {
         let department = departments[i % departments.len()];
         let team_id = format!("team_{}", teams[i % teams.len()]);
@@ -121,8 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let owner_id = format!("user_{}", i % num_users);
 
         // Status flags
-        let archived = i % 10 == 0;  // 10% archived
-        let public_in_dept = i % 3 == 0;  // 33% public within department
+        let archived = i % 10 == 0; // 10% archived
+        let public_in_dept = i % 3 == 0; // 33% public within department
 
         // Sharing relationships (ReBAC) - 33% shared
         let shared_with_user = if i % 3 == 0 {
@@ -208,10 +222,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n📊 RBAC Distribution:");
     let admin_count = num_users / roles.len();
-    println!("   Admins:      {} ({:.1}%)", admin_count, (admin_count as f64 / num_users as f64) * 100.0);
-    println!("   Executives:  {} ({:.1}%)", admin_count, (admin_count as f64 / num_users as f64) * 100.0);
-    println!("   Managers:    {} ({:.1}%)", admin_count, (admin_count as f64 / num_users as f64) * 100.0);
-    println!("   Staff:       {} ({:.1}%)", admin_count * 3, (admin_count as f64 * 3.0 / num_users as f64) * 100.0);
+    println!(
+        "   Admins:      {} ({:.1}%)",
+        admin_count,
+        (admin_count as f64 / num_users as f64) * 100.0
+    );
+    println!(
+        "   Executives:  {} ({:.1}%)",
+        admin_count,
+        (admin_count as f64 / num_users as f64) * 100.0
+    );
+    println!(
+        "   Managers:    {} ({:.1}%)",
+        admin_count,
+        (admin_count as f64 / num_users as f64) * 100.0
+    );
+    println!(
+        "   Staff:       {} ({:.1}%)",
+        admin_count * 3,
+        (admin_count as f64 * 3.0 / num_users as f64) * 100.0
+    );
     println!("   Suspended:   {} (5%)", num_users / 20);
 
     println!("\n🔐 ABAC Distribution:");

@@ -1,17 +1,17 @@
 use clap::{Parser, Subcommand};
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::time::Instant;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use uuid::Uuid;
 
 // Reap policy imports
 use policy_engine::{
-    ReaperPolicy, PolicyBundle, DataStore, DataLoader,
-    PolicyRequest, PolicyEvaluator, PolicyAction as EngineAction,
+    DataLoader, DataStore, PolicyAction as EngineAction, PolicyBundle, PolicyEvaluator,
+    PolicyRequest, ReaperPolicy,
 };
 
 #[derive(Parser)]
@@ -214,9 +214,8 @@ fn handle_eval(
 
     // Load data
     println!("2️⃣  Loading data: {}", data_path);
-    let data_content = fs::read_to_string(data_path).map_err(|e| {
-        anyhow::anyhow!("❌ Failed to read data file: {}", e)
-    })?;
+    let data_content = fs::read_to_string(data_path)
+        .map_err(|e| anyhow::anyhow!("❌ Failed to read data file: {}", e))?;
 
     let store = DataStore::new();
     let loader = DataLoader::new(store.clone());
@@ -232,9 +231,9 @@ fn handle_eval(
     println!("3️⃣  Building evaluator...");
     let build_start = Instant::now();
     let store = Arc::new(store);
-    let evaluator = policy.build(store.clone()).map_err(|e| {
-        anyhow::anyhow!("❌ Failed to build evaluator: {:?}", e)
-    })?;
+    let evaluator = policy
+        .build(store.clone())
+        .map_err(|e| anyhow::anyhow!("❌ Failed to build evaluator: {:?}", e))?;
     let build_time = build_start.elapsed();
 
     println!("   ✓ Evaluator ready");
@@ -280,9 +279,9 @@ fn handle_eval(
     };
 
     let eval_start = Instant::now();
-    let decision = evaluator.evaluate(&request).map_err(|e| {
-        anyhow::anyhow!("❌ Evaluation failed: {:?}", e)
-    })?;
+    let decision = evaluator
+        .evaluate(&request)
+        .map_err(|e| anyhow::anyhow!("❌ Evaluation failed: {:?}", e))?;
     let eval_time = eval_start.elapsed();
 
     // Display result
@@ -304,10 +303,18 @@ fn handle_eval(
         println!("⏱  Performance:");
         println!("   • Parse policy: {:?}", load_time);
         println!("   • Build evaluator: {:?}", build_time);
-        println!("   • Evaluate: {:?} ({:.0} ns)", eval_time, eval_time.as_nanos());
+        println!(
+            "   • Evaluate: {:?} ({:.0} ns)",
+            eval_time,
+            eval_time.as_nanos()
+        );
         println!();
     } else {
-        println!("⏱  Evaluation time: {:?} ({:.0} ns)", eval_time, eval_time.as_nanos());
+        println!(
+            "⏱  Evaluation time: {:?} ({:.0} ns)",
+            eval_time,
+            eval_time.as_nanos()
+        );
         println!();
     }
 
@@ -359,9 +366,9 @@ fn handle_compile(
     // Compile to bundle
     println!("2️⃣  Compiling to binary bundle...");
     let compile_start = Instant::now();
-    let bundle_bytes = policy.compile_to_bundle().map_err(|e| {
-        anyhow::anyhow!("❌ Compilation failed: {:?}", e)
-    })?;
+    let bundle_bytes = policy
+        .compile_to_bundle()
+        .map_err(|e| anyhow::anyhow!("❌ Compilation failed: {:?}", e))?;
     let compile_time = compile_start.elapsed();
 
     println!("   ✓ Compiled successfully");
@@ -370,9 +377,8 @@ fn handle_compile(
 
     // Write bundle
     println!("3️⃣  Writing bundle: {}", output_path);
-    fs::write(output_path, &bundle_bytes).map_err(|e| {
-        anyhow::anyhow!("❌ Failed to write bundle: {}", e)
-    })?;
+    fs::write(output_path, &bundle_bytes)
+        .map_err(|e| anyhow::anyhow!("❌ Failed to write bundle: {}", e))?;
 
     println!("   ✓ Bundle written");
     println!("   📦 Size: {} bytes", bundle_bytes.len());
@@ -467,9 +473,8 @@ fn handle_validate(
             anyhow::bail!("❌ Error: Data file not found: {}", data_path);
         }
 
-        let data_content = fs::read_to_string(data_path).map_err(|e| {
-            anyhow::anyhow!("❌ Failed to read data file: {}", e)
-        })?;
+        let data_content = fs::read_to_string(data_path)
+            .map_err(|e| anyhow::anyhow!("❌ Failed to read data file: {}", e))?;
 
         let store = DataStore::new();
         let loader = DataLoader::new(store.clone());
@@ -974,11 +979,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
     // Check Agent
     print!("🎯 Agent ({})... ", cli.agent_url);
-    match client
-        .get(format!("{}/health", cli.agent_url))
-        .send()
-        .await
-    {
+    match client.get(format!("{}/health", cli.agent_url)).send().await {
         Ok(response) if response.status().is_success() => {
             println!("✅ Healthy");
 
@@ -1019,10 +1020,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
     // Step 2: Create a demo policy
     println!("2️⃣  Creating demo policy...");
-    let policy_name = format!(
-        "demo-policy-{}",
-        &Uuid::new_v4().to_string()[..8]
-    );
+    let policy_name = format!("demo-policy-{}", &Uuid::new_v4().to_string()[..8]);
 
     let create_request = json!({
         "name": policy_name,

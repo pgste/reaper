@@ -3,12 +3,12 @@
 //! A Rust-native policy language optimized for sub-microsecond evaluation.
 //! Leverages DataStore directly for zero-copy, interned-string-based policies.
 
+use super::{EvaluatorMetadata, PolicyEvaluator};
+use crate::data::{AttributeValue, DataStore, Entity};
 use crate::{PolicyAction, PolicyRequest};
-use crate::data::{DataStore, Entity, AttributeValue};
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use super::{PolicyEvaluator, EvaluatorMetadata};
 
 /// Reaper DSL Policy Evaluator
 ///
@@ -46,15 +46,9 @@ pub enum Condition {
     /// Always true
     Always,
     /// Compare user attribute to literal value
-    UserEquals {
-        attribute: String,
-        value: String,
-    },
+    UserEquals { attribute: String, value: String },
     /// Compare resource attribute to literal value
-    ResourceEquals {
-        attribute: String,
-        value: String,
-    },
+    ResourceEquals { attribute: String, value: String },
     /// Compare user attribute to resource attribute
     UserEqualsResource {
         user_attr: String,
@@ -80,11 +74,7 @@ pub enum Condition {
 
 impl ReaperDSLEvaluator {
     /// Create a new Reaper DSL evaluator
-    pub fn new(
-        store: Arc<DataStore>,
-        rules: Vec<Rule>,
-        default_decision: PolicyAction,
-    ) -> Self {
+    pub fn new(store: Arc<DataStore>, rules: Vec<Rule>, default_decision: PolicyAction) -> Self {
         Self {
             store,
             rules,
@@ -132,43 +122,61 @@ impl ReaperDSLEvaluator {
                 }
             }
 
-            Condition::UserEqualsResource { user_attr, resource_attr } => {
+            Condition::UserEqualsResource {
+                user_attr,
+                resource_attr,
+            } => {
                 let user_key = interner.intern(user_attr);
                 let resource_key = interner.intern(resource_attr);
 
-                match (user.get_attribute(user_key), resource.get_attribute(resource_key)) {
+                match (
+                    user.get_attribute(user_key),
+                    resource.get_attribute(resource_key),
+                ) {
                     (Some(AttributeValue::String(u)), Some(AttributeValue::String(r))) => u == r,
                     _ => false,
                 }
             }
 
-            Condition::UserIntGreater { user_attr, resource_attr } => {
+            Condition::UserIntGreater {
+                user_attr,
+                resource_attr,
+            } => {
                 let user_key = interner.intern(user_attr);
                 let resource_key = interner.intern(resource_attr);
 
-                match (user.get_attribute(user_key), resource.get_attribute(resource_key)) {
+                match (
+                    user.get_attribute(user_key),
+                    resource.get_attribute(resource_key),
+                ) {
                     (Some(AttributeValue::Int(u)), Some(AttributeValue::Int(r))) => u > r,
                     _ => false,
                 }
             }
 
-            Condition::ResourceIntGreater { resource_attr, user_attr } => {
+            Condition::ResourceIntGreater {
+                resource_attr,
+                user_attr,
+            } => {
                 let user_key = interner.intern(user_attr);
                 let resource_key = interner.intern(resource_attr);
 
-                match (resource.get_attribute(resource_key), user.get_attribute(user_key)) {
+                match (
+                    resource.get_attribute(resource_key),
+                    user.get_attribute(user_key),
+                ) {
                     (Some(AttributeValue::Int(r)), Some(AttributeValue::Int(u))) => r > u,
                     _ => false,
                 }
             }
 
-            Condition::And(conditions) => {
-                conditions.iter().all(|c| self.evaluate_condition(c, user, resource, _context))
-            }
+            Condition::And(conditions) => conditions
+                .iter()
+                .all(|c| self.evaluate_condition(c, user, resource, _context)),
 
-            Condition::Or(conditions) => {
-                conditions.iter().any(|c| self.evaluate_condition(c, user, resource, _context))
-            }
+            Condition::Or(conditions) => conditions
+                .iter()
+                .any(|c| self.evaluate_condition(c, user, resource, _context)),
 
             Condition::Not(condition) => {
                 !self.evaluate_condition(condition, user, resource, _context)
@@ -192,15 +200,19 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         let resource_id = interner.intern(&request.resource);
 
         // Fast DataStore lookups (~20-50ns each)
-        let user = self.store.get(user_id).ok_or_else(|| ReaperError::EvaluationError {
-            reason: format!("User entity not found: {:?}", user_id),
-        })?;
+        let user = self
+            .store
+            .get(user_id)
+            .ok_or_else(|| ReaperError::EvaluationError {
+                reason: format!("User entity not found: {:?}", user_id),
+            })?;
 
-        let resource = self.store.get(resource_id).ok_or_else(|| {
-            ReaperError::EvaluationError {
+        let resource = self
+            .store
+            .get(resource_id)
+            .ok_or_else(|| ReaperError::EvaluationError {
                 reason: format!("Resource entity not found: {:?}", resource_id),
-            }
-        })?;
+            })?;
 
         // Evaluate rules in order (first match wins)
         // Each condition evaluation: ~5-50ns depending on complexity
