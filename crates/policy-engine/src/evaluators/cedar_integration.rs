@@ -3,13 +3,18 @@
 //! This module bridges Reaper's DataStore with Cedar's entity model,
 //! enabling Cedar policies to query entity attributes from the DataStore.
 
+#[cfg(test)]
 use crate::data::{DataStore, Entity, AttributeValue};
+#[cfg(test)]
 use cedar_policy::{
     Entities, Entity as CedarEntity, EntityId as CedarEntityId,
     EntityTypeName, EntityUid, RestrictedExpression,
 };
+#[cfg(test)]
 use reaper_core::ReaperError;
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::str::FromStr;
 
 /// Convert Reaper DataStore to Cedar Entities
@@ -24,6 +29,7 @@ use std::str::FromStr;
 /// let cedar_entities = datastore_to_cedar_entities(&store)?;
 /// // Use cedar_entities in Cedar policy evaluation
 /// ```
+#[cfg(test)]
 pub fn datastore_to_cedar_entities(store: &DataStore) -> Result<Entities, ReaperError> {
     let interner = store.interner();
     let all_entities = store.all();
@@ -45,6 +51,7 @@ pub fn datastore_to_cedar_entities(store: &DataStore) -> Result<Entities, Reaper
 }
 
 /// Create a Cedar EntityUid from a Reaper Entity
+#[cfg(test)]
 fn create_entity_uid(
     entity: &Entity,
     interner: &crate::data::StringInterner,
@@ -77,6 +84,7 @@ fn create_entity_uid(
 }
 
 /// Convert a Reaper Entity to a Cedar Entity
+#[cfg(test)]
 fn convert_entity(
     entity: &Entity,
     interner: &crate::data::StringInterner,
@@ -121,6 +129,7 @@ fn convert_entity(
 }
 
 /// Convert a Reaper AttributeValue to Cedar RestrictedExpression
+#[cfg(test)]
 fn convert_attribute_value(
     value: &AttributeValue,
     interner: &crate::data::StringInterner,

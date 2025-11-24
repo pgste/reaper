@@ -2,7 +2,6 @@
 ///
 /// Tests the rebac.reap policy against rebac-test-data.json
 /// Measures performance with complex relationship checking
-
 use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
 use std::collections::HashMap;
 use std::fs;

@@ -7,7 +7,7 @@
 //! - Memory usage patterns
 
 use policy_engine::{
-    DataStore, DataLoader, PolicyRequest, PolicyAction,
+    DataStore, DataLoader, PolicyRequest,
     ReaperPolicy, PolicyEvaluator,
 };
 use std::sync::Arc;
@@ -157,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     "#;
 
-    let policy = ReaperPolicy::from_str(policy_text)?;
+    let policy: ReaperPolicy = policy_text.parse()?;
     let evaluator = policy.build(store.clone())?;
     println!("   ✓ Policy compiled");
     println!();

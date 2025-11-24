@@ -104,8 +104,7 @@ impl TestContext {
     }
 
     pub fn get_decision(&self) -> Result<&str, String> {
-        self.last_decision.as_ref()
-            .map(|s| s.as_str())
+        self.last_decision.as_deref()
             .ok_or("No decision recorded".to_string())
     }
 

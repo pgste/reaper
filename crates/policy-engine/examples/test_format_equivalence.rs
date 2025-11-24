@@ -1,7 +1,6 @@
 /// Test Format Equivalence
 ///
 /// Verifies that .reap, YAML, and JSON policies produce identical evaluation results
-
 use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -41,7 +41,7 @@ impl AttributeValue {
     }
 
     /// Get the value as a string (if it's a string)
-    pub fn as_string<'a>(&self, interner: &'a StringInterner) -> Option<Arc<str>> {
+    pub fn as_string(&self, interner: &StringInterner) -> Option<Arc<str>> {
         match self {
             AttributeValue::String(id) => interner.resolve(*id),
             _ => None,
@@ -185,8 +185,8 @@ impl Entity {
     /// Estimate memory usage of this entity
     pub fn memory_size(&self) -> usize {
         // Entity ID + Type + HashMap overhead + attributes
-        8 + 48 + self.attributes.iter()
-            .map(|(k, v)| 8 + v.memory_size())
+        8 + 48 + self.attributes.values()
+            .map(|v| 8 + v.memory_size())
             .sum::<usize>()
     }
 }
@@ -323,7 +323,7 @@ mod tests {
         let team_type = interner.intern("Team");
         let user_type = interner.intern("User");
 
-        let parent = EntityBuilder::new(parent_id, team_type).build();
+        let _parent = EntityBuilder::new(parent_id, team_type).build();
         let child = EntityBuilder::new(child_id, user_type)
             .with_parent(parent_id)
             .build();

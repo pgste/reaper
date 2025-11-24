@@ -71,7 +71,7 @@ impl DataLoader {
 
             for (key, value) in entity_doc.attributes {
                 let key_id = interner.intern(&key);
-                let attr_value = self.json_value_to_attribute(value, interner)?;
+                let attr_value = json_value_to_attribute(value, interner)?;
                 builder = builder.with_attribute(key_id, attr_value);
             }
 
@@ -88,48 +88,47 @@ impl DataLoader {
         Ok(count)
     }
 
-    /// Convert JSON value to AttributeValue
-    fn json_value_to_attribute(
-        &self,
-        value: JsonValue,
-        interner: &super::interning::StringInterner,
-    ) -> Result<AttributeValue, ReaperError> {
-        match value {
-            JsonValue::String(s) => {
-                let id = interner.intern(&s);
-                Ok(AttributeValue::String(id))
-            }
-            JsonValue::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(AttributeValue::Int(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(AttributeValue::Float(f))
-                } else {
-                    Err(ReaperError::InvalidPolicy {
-                        reason: "Invalid number format".to_string(),
-                    })
-                }
-            }
-            JsonValue::Bool(b) => Ok(AttributeValue::Bool(b)),
-            JsonValue::Null => Ok(AttributeValue::Null),
-            JsonValue::Array(arr) => {
-                let items: Result<Vec<_>, _> = arr
-                    .into_iter()
-                    .map(|v| self.json_value_to_attribute(v, interner))
-                    .collect();
-                Ok(AttributeValue::List(items?))
-            }
-            JsonValue::Object(_) => {
-                Err(ReaperError::InvalidPolicy {
-                    reason: "Nested objects not supported as attribute values".to_string(),
-                })
-            }
-        }
-    }
-
     /// Get the underlying data store
     pub fn store(&self) -> &DataStore {
         &self.store
+    }
+}
+
+/// Convert JSON value to AttributeValue
+fn json_value_to_attribute(
+    value: JsonValue,
+    interner: &super::interning::StringInterner,
+) -> Result<AttributeValue, ReaperError> {
+    match value {
+        JsonValue::String(s) => {
+            let id = interner.intern(&s);
+            Ok(AttributeValue::String(id))
+        }
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(AttributeValue::Int(i))
+            } else if let Some(f) = n.as_f64() {
+                Ok(AttributeValue::Float(f))
+            } else {
+                Err(ReaperError::InvalidPolicy {
+                    reason: "Invalid number format".to_string(),
+                })
+            }
+        }
+        JsonValue::Bool(b) => Ok(AttributeValue::Bool(b)),
+        JsonValue::Null => Ok(AttributeValue::Null),
+        JsonValue::Array(arr) => {
+            let items: Result<Vec<_>, _> = arr
+                .into_iter()
+                .map(|v| json_value_to_attribute(v, interner))
+                .collect();
+            Ok(AttributeValue::List(items?))
+        }
+        JsonValue::Object(_) => {
+            Err(ReaperError::InvalidPolicy {
+                reason: "Nested objects not supported as attribute values".to_string(),
+            })
+        }
     }
 }
 

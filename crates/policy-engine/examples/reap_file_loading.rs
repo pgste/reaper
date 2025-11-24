@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     "#;
 
-    let rbac_policy = ReaperPolicy::from_str(rbac_policy_text)?;
+    let rbac_policy = rbac_policy_text.parse::<ReaperPolicy>()?;
     println!("   ✓ Parsed policy: {}", rbac_policy.name());
     println!("   ✓ Version: {}", rbac_policy.version().unwrap_or("N/A"));
     println!();
@@ -187,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     "#;
 
-    let abac_policy = ReaperPolicy::from_str(abac_policy_text)?;
+    let abac_policy = abac_policy_text.parse::<ReaperPolicy>()?;
     let abac_evaluator = abac_policy.build(store.clone())?;
     println!("   ✓ ABAC evaluator ready\n");
 
@@ -231,7 +231,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 7: Bundle compilation
     println!("7️⃣  Compiling policy to binary bundle...");
-    let policy = ReaperPolicy::from_str(abac_policy_text)?;
+    let policy = abac_policy_text.parse::<ReaperPolicy>()?;
     let bundle_bytes = policy.compile_to_bundle()?;
     println!("   ✓ Bundle size: {} bytes", bundle_bytes.len());
 

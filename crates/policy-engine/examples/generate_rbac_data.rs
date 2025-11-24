@@ -13,7 +13,7 @@
 /// - project
 /// - file
 
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
