@@ -342,11 +342,29 @@ impl PolicyEngine {
         // Get the policy as mutable to access evaluator
         let policy_mut = Arc::make_mut(&mut policy);
 
-        // Get or build the evaluator
-        let evaluator = policy_mut.get_evaluator()?;
-
         // Evaluate using the language-specific evaluator
-        let decision = evaluator.evaluate(request)?;
+        // For Simple policies, find the matched rule index
+        let (decision, matched_rule) = if policy_mut.language == PolicyLanguage::Simple {
+            // For simple policies, manually find which rule matches
+            let mut matched_index = None;
+            for (index, rule) in policy_mut.rules.iter().enumerate() {
+                // Check if rule matches (same logic as SimplePolicyEvaluator)
+                if rule.resource == "*" || rule.resource == request.resource {
+                    matched_index = Some(index);
+                    break;
+                }
+            }
+
+            // Get or build the evaluator
+            let evaluator = policy_mut.get_evaluator()?;
+            let decision = evaluator.evaluate(request)?;
+            (decision, matched_index)
+        } else {
+            // Get or build the evaluator
+            let evaluator = policy_mut.get_evaluator()?;
+            let decision = evaluator.evaluate(request)?;
+            (decision, None)
+        };
 
         let evaluation_time_ns = start_time.elapsed().as_nanos() as u64;
 
@@ -355,7 +373,7 @@ impl PolicyEngine {
             policy_id: policy_mut.id,
             policy_version: policy_mut.version,
             evaluation_time_ns,
-            matched_rule: None, // Matched rule index only available for Simple policies
+            matched_rule,
         })
     }
 

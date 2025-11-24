@@ -499,24 +499,45 @@ mod tests {
 
         let user_type = interner.intern("User");
         let role_key = interner.intern("role");
+        let department_key = interner.intern("department");
         let admin_value = interner.intern("admin");
+        let engineering_value = interner.intern("engineering");
 
-        // Insert 1000 users all with role=admin
+        // Insert 1000 users, all with:
+        // - type: "User" (used 1000x, stored 1x)
+        // - role: "admin" (used 1000x, stored 1x)
+        // - department: "engineering" (used 1000x, stored 1x)
         for i in 0..1000 {
             let user_id = interner.intern(&format!("user{}", i));
             store.insert(
                 EntityBuilder::new(user_id, user_type)
                     .with_string(role_key, admin_value)
+                    .with_string(department_key, engineering_value)
                     .build()
             );
         }
 
         let stats = store.stats();
 
-        // "User", "role", and "admin" should only be stored once
-        assert!(stats.interner_stats.unique_strings < 10);
+        // Memory efficiency verification:
+        // The key benefit of string interning is that repeated strings are stored only ONCE:
+        // - "User" is used 1000 times (entity type) but stored 1x
+        // - "role" is used 1000 times (attribute key) but stored 1x
+        // - "department" is used 1000 times (attribute key) but stored 1x
+        // - "admin" is used 1000 times (attribute value) but stored 1x
+        // - "engineering" is used 1000 times (attribute value) but stored 1x
+        //
+        // We also have 1000 unique user IDs ("user0" through "user999")
+        //
+        // Total unique strings = 1000 user IDs + 5 shared strings = 1005
+        assert_eq!(stats.interner_stats.unique_strings, 1005);
 
         // Should have 1000 entities
         assert_eq!(stats.total_entities, 1000);
+
+        // Memory is ~80KB with Arc overhead and DashMap entries
+        // This is still efficient: each entity references shared strings via 4-byte IDs
+        // instead of storing full String copies
+        assert!(stats.interner_stats.estimated_memory_bytes < 100000);
     }
 }

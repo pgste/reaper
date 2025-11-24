@@ -263,7 +263,7 @@ fn compile_attr_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{DataStore, EntityBuilder};
+    use crate::{EntityBuilder, data::DataStore};
     use crate::PolicyRequest;
     use crate::evaluators::PolicyEvaluator;
     use std::collections::HashMap;

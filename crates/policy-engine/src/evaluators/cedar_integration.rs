@@ -198,7 +198,7 @@ fn convert_attribute_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{EntityBuilder, DataStore};
+    use crate::{EntityBuilder, data::DataStore};
 
     #[test]
     fn test_convert_simple_entity() {
