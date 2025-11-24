@@ -106,7 +106,7 @@ impl DataStore {
         // Update type index
         self.type_index
             .entry(entity_type)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(entity_id);
 
         // Update attribute indexes for string attributes
@@ -115,13 +115,13 @@ impl DataStore {
                 // Update attribute index
                 self.attribute_index
                     .entry((*attr_key, *value_id))
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(entity_id);
 
                 // Update composite index
                 self.composite_index
                     .entry((entity_type, *attr_key, *value_id))
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(entity_id);
             }
         }

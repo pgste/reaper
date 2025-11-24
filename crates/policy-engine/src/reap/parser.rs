@@ -25,35 +25,32 @@ impl ReapParser {
         let mut rules = Vec::new();
 
         for pair in pairs {
-            match pair.as_rule() {
-                Rule::policy => {
-                    for inner_pair in pair.into_inner() {
-                        match inner_pair.as_rule() {
-                            Rule::ident => {
-                                policy_name = inner_pair.as_str().to_string();
-                            }
-                            Rule::policy_body => {
-                                for item in inner_pair.into_inner() {
-                                    match item.as_rule() {
-                                        Rule::metadata_field => {
-                                            let (key, value) = parse_metadata_field(item)?;
-                                            metadata.insert(key, value);
-                                        }
-                                        Rule::default_field => {
-                                            default_decision = Some(parse_default_field(item)?);
-                                        }
-                                        Rule::rule => {
-                                            rules.push(parse_rule(item)?);
-                                        }
-                                        _ => {}
+            if pair.as_rule() == Rule::policy {
+                for inner_pair in pair.into_inner() {
+                    match inner_pair.as_rule() {
+                        Rule::ident => {
+                            policy_name = inner_pair.as_str().to_string();
+                        }
+                        Rule::policy_body => {
+                            for item in inner_pair.into_inner() {
+                                match item.as_rule() {
+                                    Rule::metadata_field => {
+                                        let (key, value) = parse_metadata_field(item)?;
+                                        metadata.insert(key, value);
                                     }
+                                    Rule::default_field => {
+                                        default_decision = Some(parse_default_field(item)?);
+                                    }
+                                    Rule::rule => {
+                                        rules.push(parse_rule(item)?);
+                                    }
+                                    _ => {}
                                 }
                             }
-                            _ => {}
                         }
+                        _ => {}
                     }
                 }
-                _ => {}
             }
         }
 

@@ -166,7 +166,7 @@ fn run_test(data_path: &str, entity_count: usize, iterations: usize) -> Result<T
         }
     "#;
 
-    let policy = ReaperPolicy::from_str(policy_text)?;
+    let policy = policy_text.parse::<ReaperPolicy>()?;
     let evaluator = policy.build(store.clone())?;
     println!("   ✓ Policy compiled");
 

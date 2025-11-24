@@ -4,7 +4,7 @@
 //! Leverages DataStore directly for zero-copy, interned-string-based policies.
 
 use crate::{PolicyAction, PolicyRequest};
-use crate::data::{DataStore, Entity, AttributeValue, InternedString};
+use crate::data::{DataStore, Entity, AttributeValue};
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -27,19 +27,6 @@ pub struct ReaperDSLEvaluator {
     rules: Vec<Rule>,
     /// Default decision if no rules match
     default_decision: PolicyAction,
-    /// Pre-interned common attribute keys for performance
-    cached_keys: CachedKeys,
-}
-
-/// Pre-interned attribute keys for fast lookups
-#[derive(Debug, Clone)]
-struct CachedKeys {
-    role: InternedString,
-    department: InternedString,
-    clearance: InternedString,
-    owner: InternedString,
-    classification: InternedString,
-    clearance_required: InternedString,
 }
 
 /// A single policy rule
@@ -98,23 +85,10 @@ impl ReaperDSLEvaluator {
         rules: Vec<Rule>,
         default_decision: PolicyAction,
     ) -> Self {
-        let interner = store.interner();
-
-        // Pre-intern common attribute keys
-        let cached_keys = CachedKeys {
-            role: interner.intern("role"),
-            department: interner.intern("department"),
-            clearance: interner.intern("clearance"),
-            owner: interner.intern("owner"),
-            classification: interner.intern("classification"),
-            clearance_required: interner.intern("clearance_required"),
-        };
-
         Self {
             store,
             rules,
             default_decision,
-            cached_keys,
         }
     }
 
@@ -283,7 +257,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntityBuilder, data::DataLoader};
+    use crate::EntityBuilder;
     use std::collections::HashMap;
 
     #[test]

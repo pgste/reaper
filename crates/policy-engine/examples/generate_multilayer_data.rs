@@ -6,8 +6,7 @@
 /// - ReBAC: ownership, teams, sharing, collaboration
 ///
 /// Generates varied scenarios to test different rule combinations
-
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

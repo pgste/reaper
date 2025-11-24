@@ -573,7 +573,7 @@ async fn handle_policy_action(
         PolicyAction::List => {
             println!("📋 Listing policies from Platform...");
             let response = client
-                .get(&format!("{}/api/v1/policies", cli.platform_url))
+                .get(format!("{}/api/v1/policies", cli.platform_url))
                 .send()
                 .await?;
 
@@ -618,7 +618,7 @@ async fn handle_policy_action(
 
             let request_body = json!({
                 "name": name,
-                "description": description.clone().unwrap_or_else(|| format!("Policy created via CLI")),
+                "description": description.clone().unwrap_or_else(|| "Policy created via CLI".to_string()),
                 "rules": [{
                     "action": action,
                     "resource": resource,
@@ -627,7 +627,7 @@ async fn handle_policy_action(
             });
 
             let response = client
-                .post(&format!("{}/api/v1/policies", cli.platform_url))
+                .post(format!("{}/api/v1/policies", cli.platform_url))
                 .json(&request_body)
                 .send()
                 .await?;
@@ -670,7 +670,7 @@ async fn handle_policy_action(
             }
 
             let response = client
-                .put(&format!("{}/api/v1/policies/{}", cli.platform_url, id))
+                .put(format!("{}/api/v1/policies/{}", cli.platform_url, id))
                 .json(&update_body)
                 .send()
                 .await?;
@@ -691,7 +691,7 @@ async fn handle_policy_action(
             println!("🗑️  Deleting policy: {}", id);
 
             let response = client
-                .delete(&format!("{}/api/v1/policies/{}", cli.platform_url, id))
+                .delete(format!("{}/api/v1/policies/{}", cli.platform_url, id))
                 .send()
                 .await?;
 
@@ -707,7 +707,7 @@ async fn handle_policy_action(
 
             // First, get the policy from platform
             let policy_response = client
-                .get(&format!("{}/api/v1/policies/{}", cli.platform_url, id))
+                .get(format!("{}/api/v1/policies/{}", cli.platform_url, id))
                 .send()
                 .await?;
 
@@ -721,7 +721,7 @@ async fn handle_policy_action(
                 });
 
                 let deploy_response = client
-                    .post(&format!("{}/api/v1/policies/deploy", cli.agent_url))
+                    .post(format!("{}/api/v1/policies/deploy", cli.agent_url))
                     .json(&deploy_request)
                     .send()
                     .await?;
@@ -737,7 +737,7 @@ async fn handle_policy_action(
 
                         // Check agent has the policy
                         let agent_policies = client
-                            .get(&format!("{}/api/v1/policies", cli.agent_url))
+                            .get(format!("{}/api/v1/policies", cli.agent_url))
                             .send()
                             .await?;
 
@@ -746,7 +746,7 @@ async fn handle_policy_action(
                             agent_data.get("policies").and_then(|p| p.as_array())
                         {
                             let found = policies.iter().any(|p| {
-                                p.get("id").and_then(|id_val| id_val.as_str()) == Some(&id)
+                                p.get("id").and_then(|id_val| id_val.as_str()) == Some(id)
                             });
 
                             if found {
@@ -785,7 +785,7 @@ async fn handle_policy_action(
 
             let start_time = Instant::now();
             let response = client
-                .post(&format!("{}/api/v1/messages", cli.agent_url))
+                .post(format!("{}/api/v1/messages", cli.agent_url))
                 .json(&eval_request)
                 .send()
                 .await?;
@@ -830,7 +830,7 @@ async fn handle_agent_action(
         AgentAction::List => {
             println!("🤖 Listing agents from Platform...");
             let response = client
-                .get(&format!("{}/api/v1/agents", cli.platform_url))
+                .get(format!("{}/api/v1/agents", cli.platform_url))
                 .send()
                 .await?;
 
@@ -847,7 +847,7 @@ async fn handle_agent_action(
         AgentAction::Health => {
             println!("🏥 Checking agent health...");
             let response = client
-                .get(&format!("{}/health", cli.agent_url))
+                .get(format!("{}/health", cli.agent_url))
                 .send()
                 .await?;
 
@@ -879,7 +879,7 @@ async fn handle_agent_action(
         AgentAction::Metrics => {
             println!("📊 Fetching agent metrics...");
             let response = client
-                .get(&format!("{}/metrics", cli.agent_url))
+                .get(format!("{}/metrics", cli.agent_url))
                 .send()
                 .await?;
 
@@ -937,7 +937,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     // Check Platform
     print!("🎯 Platform ({})... ", cli.platform_url);
     match client
-        .get(&format!("{}/health", cli.platform_url))
+        .get(format!("{}/health", cli.platform_url))
         .send()
         .await
     {
@@ -946,7 +946,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
             // Get platform metrics
             if let Ok(metrics_response) = client
-                .get(&format!("{}/metrics", cli.platform_url))
+                .get(format!("{}/metrics", cli.platform_url))
                 .send()
                 .await
             {
@@ -975,7 +975,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     // Check Agent
     print!("🎯 Agent ({})... ", cli.agent_url);
     match client
-        .get(&format!("{}/health", cli.agent_url))
+        .get(format!("{}/health", cli.agent_url))
         .send()
         .await
     {
@@ -984,7 +984,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
             // Get agent metrics
             if let Ok(metrics_response) = client
-                .get(&format!("{}/metrics", cli.agent_url))
+                .get(format!("{}/metrics", cli.agent_url))
                 .send()
                 .await
             {
@@ -1021,7 +1021,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     println!("2️⃣  Creating demo policy...");
     let policy_name = format!(
         "demo-policy-{}",
-        Uuid::new_v4().to_string()[..8].to_string()
+        &Uuid::new_v4().to_string()[..8]
     );
 
     let create_request = json!({
@@ -1035,7 +1035,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     });
 
     let create_response = client
-        .post(&format!("{}/api/v1/policies", cli.platform_url))
+        .post(format!("{}/api/v1/policies", cli.platform_url))
         .json(&create_request)
         .send()
         .await?;
@@ -1065,7 +1065,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     });
 
     let _deploy_response = client
-        .post(&format!("{}/api/v1/policies/deploy", cli.agent_url))
+        .post(format!("{}/api/v1/policies/deploy", cli.agent_url))
         .json(&deploy_request)
         .send()
         .await?;
@@ -1088,7 +1088,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     for i in 1..=iterations {
         let start = Instant::now();
         let eval_response = client
-            .post(&format!("{}/api/v1/messages", cli.agent_url))
+            .post(format!("{}/api/v1/messages", cli.agent_url))
             .json(&eval_request)
             .send()
             .await?;
@@ -1130,7 +1130,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     });
 
     let _update_response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/policies/{}",
             cli.platform_url, policy_id
         ))
@@ -1145,7 +1145,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     // Step 6: Clean up
     println!("6️⃣  Cleaning up demo policy...");
     let _delete_response = client
-        .delete(&format!(
+        .delete(format!(
             "{}/api/v1/policies/{}",
             cli.platform_url, policy_id
         ))
@@ -1184,7 +1184,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
     });
 
     let policy_response = client
-        .post(&format!("{}/api/v1/policies", cli.platform_url))
+        .post(format!("{}/api/v1/policies", cli.platform_url))
         .json(&policy_request)
         .send()
         .await?;
@@ -1212,7 +1212,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
     });
 
     let _deploy_response = client
-        .post(&format!("{}/api/v1/policies/deploy", cli.agent_url))
+        .post(format!("{}/api/v1/policies/deploy", cli.agent_url))
         .json(&deploy_request)
         .send()
         .await?;
@@ -1235,7 +1235,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
     for i in 0..requests {
         let _eval_start = Instant::now();
         let response = client
-            .post(&format!("{}/api/v1/messages", cli.agent_url))
+            .post(format!("{}/api/v1/messages", cli.agent_url))
             .json(&eval_request)
             .send()
             .await?;
@@ -1293,7 +1293,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
 
     // Clean up
     let _cleanup = client
-        .delete(&format!(
+        .delete(format!(
             "{}/api/v1/policies/{}",
             cli.platform_url, policy_id
         ))

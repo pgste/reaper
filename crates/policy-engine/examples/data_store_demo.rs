@@ -9,7 +9,7 @@
 //! Run with: cargo run --example data_store_demo
 
 use policy_engine::{
-    DataStore, DataLoader, EntityBuilder, QueryBuilder,
+    DataStore, DataLoader, QueryBuilder,
     PolicyEngine, EnhancedPolicy, PolicyAction, PolicyRequest, PolicyRule,
 };
 use std::collections::HashMap;

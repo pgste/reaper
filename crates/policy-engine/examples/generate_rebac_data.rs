@@ -10,8 +10,7 @@
 /// - Organization hierarchy (manager_level, department)
 /// - Collaboration (collaborator_id)
 /// - Group membership (group_id)
-
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -15,8 +15,8 @@ pub mod reaper_dsl;
 
 pub use simple::SimplePolicyEvaluator;
 pub use cedar::CedarPolicyEvaluator;
-pub use cedar_integration::datastore_to_cedar_entities;
-pub use reaper_dsl::ReaperDSLEvaluator;
+// Note: datastore_to_cedar_entities and ReaperDSLEvaluator are not yet used
+// but kept as internal implementations for future features
 
 /// Core trait for policy evaluation across different languages
 ///

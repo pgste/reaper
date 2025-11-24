@@ -1,4 +1,5 @@
 use cucumber::{given, then, when, World};
+use reaper_core::*;
 
 #[derive(Debug, World)]
 #[world(init = Self::new)]

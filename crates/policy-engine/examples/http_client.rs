@@ -15,8 +15,7 @@
 ///   cargo run --example http_client --release -- --mode batch
 ///   cargo run --example http_client --release -- --mode websocket
 ///   cargo run --example http_client --release -- --mode benchmark
-
-use reqwest::{Client, ClientBuilder};
+use reqwest::ClientBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};

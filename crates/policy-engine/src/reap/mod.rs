@@ -20,6 +20,7 @@ use crate::data::DataStore;
 use std::sync::Arc;
 use std::path::Path;
 use std::fs;
+use std::str::FromStr;
 
 /// Main entry point for loading .reap policies
 pub struct ReaperPolicy {
@@ -27,12 +28,6 @@ pub struct ReaperPolicy {
 }
 
 impl ReaperPolicy {
-    /// Parse a .reap file from a string
-    pub fn from_str(input: &str) -> Result<Self, ReaperError> {
-        let ast = ReapParser::parse(input)?;
-        Ok(Self { ast })
-    }
-
     /// Load a .reap file from disk
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
         let content = fs::read_to_string(path.as_ref()).map_err(|e| {
@@ -40,7 +35,7 @@ impl ReaperPolicy {
                 reason: format!("Failed to read policy file: {}", e),
             }
         })?;
-        Self::from_str(&content)
+        content.parse()
     }
 
     /// Parse a policy from YAML string
@@ -125,6 +120,15 @@ impl ReaperPolicy {
     pub fn from_bundle(bytes: &[u8], store: Arc<DataStore>) -> Result<ReaperDSLEvaluator, ReaperError> {
         let policy = bundle::load_from_bundle(bytes)?;
         compiler::compile_policy(policy, store)
+    }
+}
+
+impl FromStr for ReaperPolicy {
+    type Err = ReaperError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let ast = ReapParser::parse(s)?;
+        Ok(Self { ast })
     }
 }
 

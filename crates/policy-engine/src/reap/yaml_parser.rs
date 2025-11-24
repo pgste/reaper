@@ -101,7 +101,7 @@ impl YamlPolicy {
         // Convert rules
         let mut rules = Vec::new();
         for yaml_rule in self.rules {
-            rules.push(yaml_rule.to_ast()?);
+            rules.push(yaml_rule.into_ast()?);
         }
 
         Ok(Policy {
@@ -115,9 +115,9 @@ impl YamlPolicy {
 
 impl YamlRule {
     /// Convert to AST Rule
-    pub fn to_ast(self) -> Result<Rule, ReaperError> {
+    pub fn into_ast(self) -> Result<Rule, ReaperError> {
         let decision = parse_decision(&self.decision)?;
-        let condition = self.condition.to_ast()?;
+        let condition = self.condition.into_ast()?;
 
         Ok(Rule {
             name: self.name,
@@ -129,12 +129,12 @@ impl YamlRule {
 
 impl YamlCondition {
     /// Convert to AST Condition
-    pub fn to_ast(self) -> Result<Condition, ReaperError> {
+    pub fn into_ast(self) -> Result<Condition, ReaperError> {
         match self {
             YamlCondition::Comparison { operator, left, right } => {
                 let op = parse_operator(&operator)?;
-                let left_attr = left.to_ast()?;
-                let right_value = right.to_ast()?;
+                let left_attr = left.into_ast()?;
+                let right_value = right.into_ast()?;
 
                 Ok(Condition::Comparison {
                     left: left_attr,
@@ -145,7 +145,7 @@ impl YamlCondition {
             YamlCondition::Logical { operator, conditions } => {
                 let conds: Result<Vec<_>, _> = conditions
                     .into_iter()
-                    .map(|c| c.to_ast())
+                    .map(|c| c.into_ast())
                     .collect();
                 let conds = conds?;
 
@@ -166,7 +166,7 @@ impl YamlCondition {
 
 impl YamlEntityAttr {
     /// Convert to AST EntityAttr
-    pub fn to_ast(self) -> Result<EntityAttr, ReaperError> {
+    pub fn into_ast(self) -> Result<EntityAttr, ReaperError> {
         let entity = parse_entity(&self.entity)?;
         Ok(EntityAttr {
             entity,
@@ -177,7 +177,7 @@ impl YamlEntityAttr {
 
 impl YamlComparisonRight {
     /// Convert to AST ComparisonRight
-    pub fn to_ast(self) -> Result<ComparisonRight, ReaperError> {
+    pub fn into_ast(self) -> Result<ComparisonRight, ReaperError> {
         match self {
             YamlComparisonRight::Value { value } => {
                 let v = json_value_to_ast_value(value)?;
