@@ -2,7 +2,6 @@
 ///
 /// Tests a realistic enterprise policy combining all three models
 /// Tracks which layers/rules are triggered and performance impact
-
 use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
 use std::collections::HashMap;
 use std::fs;
@@ -14,7 +13,6 @@ struct TestScenario {
     name: &'static str,
     user_pattern: fn(usize) -> String,
     resource_pattern: fn(usize) -> String,
-    expected_layer: &'static str,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,31 +40,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             name: "Admin Override (RBAC)",
             user_pattern: |_| "user_0".to_string(),  // admin
             resource_pattern: |i| format!("resource_{}", i % 2000),
-            expected_layer: "RBAC - Admin",
         },
         TestScenario {
             name: "Suspended User (RBAC Deny)",
             user_pattern: |_| "user_20".to_string(),  // suspended
             resource_pattern: |i| format!("resource_{}", i % 2000),
-            expected_layer: "RBAC - Deny",
         },
         TestScenario {
             name: "Owner with Clearance (ReBAC + ABAC)",
             user_pattern: |i| format!("user_{}", i % 1000),
             resource_pattern: |i| format!("resource_{}", i % 2000),  // some match ownership
-            expected_layer: "ReBAC + ABAC",
         },
         TestScenario {
             name: "Team Lead Access (ReBAC + RBAC)",
             user_pattern: |i| format!("user_{}", i * 10 % 1000),  // team leads every 10th
             resource_pattern: |i| format!("resource_{}", i % 2000),
-            expected_layer: "ReBAC + RBAC",
         },
         TestScenario {
             name: "Department + Clearance (ABAC + ReBAC)",
             user_pattern: |i| format!("user_{}", (i * 3) % 1000),
             resource_pattern: |i| format!("resource_{}", (i * 3) % 2000),
-            expected_layer: "ABAC + ReBAC",
         },
         TestScenario {
             name: "Shared Resource (ReBAC)",
@@ -79,25 +72,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("resource_{}", (res_id / 3) * 3)  // Force shared match
                 }
             },
-            expected_layer: "ReBAC - Sharing",
         },
         TestScenario {
             name: "Executive Access (RBAC + ABAC)",
             user_pattern: |i| format!("user_{}", 1 + (i % 142)),  // executives
             resource_pattern: |i| format!("resource_{}", i % 2000),
-            expected_layer: "RBAC + ABAC",
         },
         TestScenario {
             name: "Public Resources (ABAC)",
             user_pattern: |i| format!("user_{}", i % 1000),
             resource_pattern: |i| format!("resource_{}", (i % 500) * 4),  // public classification
-            expected_layer: "ABAC - Public",
         },
         TestScenario {
             name: "Mixed Random (All Layers)",
             user_pattern: |i| format!("user_{}", i % 1000),
             resource_pattern: |i| format!("resource_{}", (i * 7 + 13) % 2000),
-            expected_layer: "Mixed",
         },
     ];
 

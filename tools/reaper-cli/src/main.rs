@@ -1199,7 +1199,6 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
         .unwrap();
 
     // Deploy to agent
-    let policy_data = policy_result.get("policy").unwrap();
     let deploy_request = json!({
         "policy_id": policy_id,
         "name": "benchmark-policy",
