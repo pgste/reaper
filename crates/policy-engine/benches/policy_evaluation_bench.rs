@@ -75,16 +75,19 @@ fn benchmark_policy_evaluation(c: &mut Criterion) {
 /// Benchmark policy hot-swapping performance
 fn benchmark_policy_hot_swap(c: &mut Criterion) {
     let mut group = c.benchmark_group("policy_hot_swap");
+    // Aggressive limits to prevent OOM
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_secs(1));
+    group.measurement_time(std::time::Duration::from_secs(2));
 
     let engine = PolicyEngine::new();
 
     // Benchmark policy deployment (hot-swap)
+    // Note: We reuse the same policy name to avoid memory buildup from millions of policies
     group.bench_function("deploy_policy", |b| {
-        let mut counter = 0;
         b.iter(|| {
-            counter += 1;
             let policy = EnhancedPolicy::new(
-                format!("policy-{}", counter),
+                "benchmark-policy".to_string(),
                 "Test policy".to_string(),
                 vec![PolicyRule {
                     action: PolicyAction::Allow,
@@ -121,6 +124,10 @@ fn benchmark_policy_hot_swap(c: &mut Criterion) {
 fn benchmark_concurrent_access(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_access");
     group.throughput(Throughput::Elements(1000));
+    // Reduce sample size for thread-spawning benchmarks
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_secs(1));
+    group.measurement_time(std::time::Duration::from_secs(3));
 
     let engine = Arc::new(PolicyEngine::new());
 
@@ -174,9 +181,14 @@ fn benchmark_concurrent_access(c: &mut Criterion) {
 /// Benchmark memory efficiency
 fn benchmark_memory_efficiency(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_efficiency");
+    // Reduce sample size for memory-intensive benchmarks
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_secs(1));
+    group.measurement_time(std::time::Duration::from_secs(3));
 
     // Test policy storage efficiency with large numbers of policies
-    for policy_count in [100, 1000, 10000].iter() {
+    // Reduced max count to avoid OOM issues
+    for policy_count in [100, 1000].iter() {
         group.bench_with_input(
             BenchmarkId::new("policy_storage", policy_count),
             policy_count,
@@ -210,7 +222,8 @@ fn benchmark_memory_efficiency(c: &mut Criterion) {
 /// Benchmark realistic workload scenarios
 fn benchmark_realistic_workloads(c: &mut Criterion) {
     let mut group = c.benchmark_group("realistic_workloads");
-    group.sample_size(1000);
+    // Reduced from 1000 to avoid excessive runtime
+    group.sample_size(100);
 
     let engine = PolicyEngine::new();
 
@@ -274,7 +287,8 @@ fn benchmark_realistic_workloads(c: &mut Criterion) {
 /// Performance regression test - ensure we stay under target latencies
 fn benchmark_latency_targets(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency_targets");
-    group.sample_size(10000);
+    // Reduced from 10000 to avoid excessive runtime while maintaining accuracy
+    group.sample_size(1000);
 
     let engine = PolicyEngine::new();
 

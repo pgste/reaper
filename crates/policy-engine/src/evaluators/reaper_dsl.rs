@@ -283,7 +283,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{EntityBuilder, DataLoader};
+    use crate::{EntityBuilder, data::DataLoader};
     use std::collections::HashMap;
 
     #[test]

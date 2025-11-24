@@ -1,4 +1,4 @@
-.PHONY: setup dev test bdd bench coverage clean release check agent platform cli
+.PHONY: setup dev test bdd bench bench-summary coverage clean release check agent platform cli
 
 # One-time setup
 setup:
@@ -24,6 +24,10 @@ bdd:
 # Performance benchmarks
 bench:
 	cargo bench --workspace
+
+# Performance benchmarks with summary report
+bench-summary:
+	@./scripts/bench-summary.sh
 
 # Test coverage report
 coverage:

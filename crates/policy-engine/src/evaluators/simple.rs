@@ -47,6 +47,22 @@ impl SimplePolicyEvaluator {
         // TODO: Add regex support for advanced patterns
         rule.resource == "*" || rule.resource == request.resource
     }
+
+    /// Evaluate with detailed information including matched rule index
+    ///
+    /// This is useful for debugging and audit purposes.
+    /// Returns (PolicyAction, Option<matched_rule_index>)
+    pub fn evaluate_with_details(&self, request: &PolicyRequest) -> Result<(PolicyAction, Option<usize>), ReaperError> {
+        // First-match-wins evaluation
+        for (index, rule) in self.rules.iter().enumerate() {
+            if self.matches_rule(rule, request) {
+                return Ok((rule.action.clone(), Some(index)));
+            }
+        }
+
+        // Default deny if no rules match
+        Ok((PolicyAction::Deny, None))
+    }
 }
 
 impl PolicyEvaluator for SimplePolicyEvaluator {

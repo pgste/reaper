@@ -73,12 +73,15 @@ impl StringInterner {
             return *entry.value();
         }
 
-        // Slow path: intern new string
+        // Slow path: intern new string atomically using entry API
         let arc_str: Arc<str> = Arc::from(s);
-        let id = InternedString(self.next_id.fetch_add(1, Ordering::Relaxed));
 
-        self.string_to_id.insert(arc_str.clone(), id);
-        self.id_to_string.insert(id, arc_str);
+        // Use entry API to avoid race condition
+        let id = *self.string_to_id.entry(arc_str.clone()).or_insert_with(|| {
+            let new_id = InternedString(self.next_id.fetch_add(1, Ordering::Relaxed));
+            self.id_to_string.insert(new_id, arc_str.clone());
+            new_id
+        });
 
         id
     }

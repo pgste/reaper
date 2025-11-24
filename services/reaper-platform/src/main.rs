@@ -147,25 +147,25 @@ async fn main() -> anyhow::Result<()> {
             get(list_policies).post(create_policy),
         )
         .route(
-            "/api/v1/policies/:id",
+            "/api/v1/policies/{id}",
             get(get_policy).put(update_policy).delete(delete_policy),
         )
-        .route("/api/v1/policies/:id/deploy", post(deploy_policy_to_agents))
+        .route("/api/v1/policies/{id}/deploy", post(deploy_policy_to_agents))
         // Agent management (placeholder for now)
         .route(endpoints::API_V1_AGENTS, get(list_agents))
-        .route("/api/v1/agents/:id", get(get_agent))
+        .route("/api/v1/agents/{id}", get(get_agent))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:8081").await?;
     info!("🎯 Reaper Platform listening on {}", listener.local_addr()?);
     info!("");
     info!("📋 Policy Management API:");
-    info!("  GET    /api/v1/policies     - List all policies");
-    info!("  POST   /api/v1/policies     - Create new policy");
-    info!("  GET    /api/v1/policies/:id - Get policy details");
-    info!("  PUT    /api/v1/policies/:id - Update policy");
-    info!("  DELETE /api/v1/policies/:id - Delete policy");
-    info!("  POST   /api/v1/policies/:id/deploy - Deploy to agents");
+    info!("  GET    /api/v1/policies        - List all policies");
+    info!("  POST   /api/v1/policies        - Create new policy");
+    info!("  GET    /api/v1/policies/{{id}} - Get policy details");
+    info!("  PUT    /api/v1/policies/{{id}} - Update policy");
+    info!("  DELETE /api/v1/policies/{{id}} - Delete policy");
+    info!("  POST   /api/v1/policies/{{id}}/deploy - Deploy to agents");
     info!("");
 
     axum::serve(listener, app).await?;
