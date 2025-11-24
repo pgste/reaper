@@ -13,8 +13,7 @@
 /// - department: engineering, sales, hr, finance, operations
 /// - classification: public, internal, confidential, secret
 /// - archived: true/false
-
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

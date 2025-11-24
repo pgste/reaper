@@ -2,7 +2,6 @@
 ///
 /// Tests the abac.reap policy against abac-test-data.json
 /// Measures performance with clearance levels and department matching
-
 use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
 use std::collections::HashMap;
 use std::fs;

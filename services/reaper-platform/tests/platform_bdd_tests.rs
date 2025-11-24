@@ -250,10 +250,6 @@ async fn then_agent_has_policy_available(world: &mut PolicyWorld) {
 async fn then_zero_downtime_during_deployment(_world: &mut PolicyWorld) {
     // This is verified by the atomic operations in the policy engine
     // If we got here without errors, zero-downtime deployment worked
-    assert!(
-        true,
-        "Zero-downtime deployment verified through atomic operations"
-    );
 }
 
 // Policy evaluation steps
@@ -404,10 +400,6 @@ async fn then_updated_policy_available_immediately(world: &mut PolicyWorld) {
 async fn then_old_versions_replaced_atomically(_world: &mut PolicyWorld) {
     // This is verified by the atomic operations in the policy engine
     // The Arc<Policy> ensures that old versions are cleaned up when no longer referenced
-    assert!(
-        true,
-        "Atomic replacement verified through Rust's ownership model"
-    );
 }
 
 // Error handling steps

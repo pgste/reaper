@@ -12,7 +12,6 @@
 /// - document
 /// - project
 /// - file
-
 use serde_json::json;
 use std::fs;
 
