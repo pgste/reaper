@@ -10,8 +10,8 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 /// Interned string ID (4 bytes instead of 8-24 bytes for String)
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,7 +91,9 @@ impl StringInterner {
     /// # Performance
     /// - ~20 ns (hash lookup)
     pub fn resolve(&self, id: InternedString) -> Option<Arc<str>> {
-        self.id_to_string.get(&id).map(|entry| entry.value().clone())
+        self.id_to_string
+            .get(&id)
+            .map(|entry| entry.value().clone())
     }
 
     /// Get the string for an interned ID as &str

@@ -1,7 +1,7 @@
 /// Test Format Equivalence
 ///
 /// Verifies that .reap, YAML, and JSON policies produce identical evaluation results
-use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -24,10 +24,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let policy_reap = ReaperPolicy::from_file("crates/policy-engine/examples/policies/rbac.reap")?;
     println!("   ✓ Loaded rbac.reap");
 
-    let policy_yaml = ReaperPolicy::from_yaml_file("crates/policy-engine/examples/policies/rbac.yaml")?;
+    let policy_yaml =
+        ReaperPolicy::from_yaml_file("crates/policy-engine/examples/policies/rbac.yaml")?;
     println!("   ✓ Loaded rbac.yaml");
 
-    let policy_json = ReaperPolicy::from_json_file("crates/policy-engine/examples/policies/rbac.json")?;
+    let policy_json =
+        ReaperPolicy::from_json_file("crates/policy-engine/examples/policies/rbac.json")?;
     println!("   ✓ Loaded rbac.json");
 
     // Compile all three

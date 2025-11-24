@@ -2,25 +2,25 @@
 //!
 //! Parses .reap files into AST and compiles to ReaperDSLEvaluator for sub-microsecond evaluation.
 
-mod parser;
 mod ast;
-mod compiler;
 mod bundle;
+mod compiler;
+mod parser;
 mod yaml_parser;
 
-pub use parser::ReapParser;
-pub use ast::{Policy, Rule as ReapRule, Condition as ReapCondition, Decision, Value as ReapValue};
+pub use ast::{Condition as ReapCondition, Decision, Policy, Rule as ReapRule, Value as ReapValue};
+pub use bundle::{BundleFormat, PolicyBundle};
 pub use compiler::compile_policy;
-pub use bundle::{PolicyBundle, BundleFormat};
+pub use parser::ReapParser;
 pub use yaml_parser::YamlPolicy;
 
-use reaper_core::ReaperError;
-use crate::evaluators::reaper_dsl::ReaperDSLEvaluator;
 use crate::data::DataStore;
-use std::sync::Arc;
-use std::path::Path;
+use crate::evaluators::reaper_dsl::ReaperDSLEvaluator;
+use reaper_core::ReaperError;
 use std::fs;
+use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// Main entry point for loading .reap policies
 pub struct ReaperPolicy {
@@ -30,11 +30,10 @@ pub struct ReaperPolicy {
 impl ReaperPolicy {
     /// Load a .reap file from disk
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
-        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
-            ReaperError::InvalidPolicy {
+        let content =
+            fs::read_to_string(path.as_ref()).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to read policy file: {}", e),
-            }
-        })?;
+            })?;
         content.parse()
     }
 
@@ -47,11 +46,10 @@ impl ReaperPolicy {
 
     /// Load a YAML policy file from disk
     pub fn from_yaml_file<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
-        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
-            ReaperError::InvalidPolicy {
+        let content =
+            fs::read_to_string(path.as_ref()).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to read YAML policy file: {}", e),
-            }
-        })?;
+            })?;
         Self::from_yaml_str(&content)
     }
 
@@ -64,11 +62,10 @@ impl ReaperPolicy {
 
     /// Load a JSON policy file from disk
     pub fn from_json_file<P: AsRef<Path>>(path: P) -> Result<Self, ReaperError> {
-        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
-            ReaperError::InvalidPolicy {
+        let content =
+            fs::read_to_string(path.as_ref()).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to read JSON policy file: {}", e),
-            }
-        })?;
+            })?;
         Self::from_json_str(&content)
     }
 
@@ -117,7 +114,10 @@ impl ReaperPolicy {
     }
 
     /// Load from a binary bundle
-    pub fn from_bundle(bytes: &[u8], store: Arc<DataStore>) -> Result<ReaperDSLEvaluator, ReaperError> {
+    pub fn from_bundle(
+        bytes: &[u8],
+        store: Arc<DataStore>,
+    ) -> Result<ReaperDSLEvaluator, ReaperError> {
         let policy = bundle::load_from_bundle(bytes)?;
         compiler::compile_policy(policy, store)
     }

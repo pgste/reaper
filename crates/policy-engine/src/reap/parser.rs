@@ -1,9 +1,9 @@
 // ! Parser for .reap files using Pest
 
+use super::ast::*;
 use pest::Parser as PestParser;
 use pest_derive::Parser;
 use reaper_core::ReaperError;
-use super::ast::*;
 use std::collections::HashMap;
 
 #[derive(Parser)]
@@ -67,7 +67,9 @@ impl ReapParser {
     }
 }
 
-fn parse_metadata_field(pair: pest::iterators::Pair<Rule>) -> Result<(String, String), ReaperError> {
+fn parse_metadata_field(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<(String, String), ReaperError> {
     let mut inner = pair.into_inner();
     let key = inner.next().unwrap().as_str().to_string();
     let value_pair = inner.next().unwrap();
@@ -170,15 +172,13 @@ fn parse_primary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Re
     match inner.as_rule() {
         Rule::condition_expr => parse_condition_expr(inner),
         Rule::comparison => parse_comparison(inner),
-        Rule::boolean_literal => {
-            match inner.as_str() {
-                "true" => Ok(Condition::True),
-                "false" => Ok(Condition::False),
-                _ => Err(ReaperError::InvalidPolicy {
-                    reason: format!("Invalid boolean literal: {}", inner.as_str()),
-                }),
-            }
-        }
+        Rule::boolean_literal => match inner.as_str() {
+            "true" => Ok(Condition::True),
+            "false" => Ok(Condition::False),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: format!("Invalid boolean literal: {}", inner.as_str()),
+            }),
+        },
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!("Unexpected rule in primary_expr: {:?}", inner.as_rule()),
         }),
@@ -195,9 +195,11 @@ fn parse_comparison(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Reap
     let right = match right_pair.as_rule() {
         Rule::entity_attr => ComparisonRight::EntityAttr(parse_entity_attr(right_pair)?),
         Rule::value => ComparisonRight::Value(parse_value(right_pair)?),
-        _ => return Err(ReaperError::InvalidPolicy {
-            reason: format!("Unexpected right side: {:?}", right_pair.as_rule()),
-        }),
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!("Unexpected right side: {:?}", right_pair.as_rule()),
+            })
+        }
     };
 
     Ok(Condition::Comparison { left, op, right })
@@ -217,19 +219,21 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> Result<Value, ReaperError> 
     match inner.as_rule() {
         Rule::string => Ok(Value::String(parse_string_literal(inner)?)),
         Rule::integer => {
-            let val = inner.as_str().parse::<i64>().map_err(|e| {
-                ReaperError::InvalidPolicy {
+            let val = inner
+                .as_str()
+                .parse::<i64>()
+                .map_err(|e| ReaperError::InvalidPolicy {
                     reason: format!("Invalid integer: {}", e),
-                }
-            })?;
+                })?;
             Ok(Value::Integer(val))
         }
         Rule::float => {
-            let val = inner.as_str().parse::<f64>().map_err(|e| {
-                ReaperError::InvalidPolicy {
+            let val = inner
+                .as_str()
+                .parse::<f64>()
+                .map_err(|e| ReaperError::InvalidPolicy {
                     reason: format!("Invalid float: {}", e),
-                }
-            })?;
+                })?;
             Ok(Value::Float(val))
         }
         Rule::boolean_literal => {
@@ -247,7 +251,7 @@ fn parse_string_literal(pair: pest::iterators::Pair<Rule>) -> Result<String, Rea
     // String is atomic (@), so we get the full string with quotes
     let s = pair.as_str();
     // Remove surrounding quotes
-    let trimmed = &s[1..s.len()-1];
+    let trimmed = &s[1..s.len() - 1];
     // Unescape if needed (simple implementation)
     Ok(trimmed.replace("\\\"", "\"").replace("\\\\", "\\"))
 }

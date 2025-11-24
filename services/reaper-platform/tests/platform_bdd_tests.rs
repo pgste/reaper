@@ -37,12 +37,7 @@ impl PolicyWorld {
 
     async fn wait_for_service(&self, url: &str) -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..30 {
-            if let Ok(response) = self
-                .http_client
-                .get(format!("{}/health", url))
-                .send()
-                .await
-            {
+            if let Ok(response) = self.http_client.get(format!("{}/health", url)).send().await {
                 if response.status().is_success() {
                     return Ok(());
                 }
@@ -71,7 +66,9 @@ async fn given_running_agent(world: &mut PolicyWorld) {
 }
 
 // Policy creation steps
-#[when(regex = r#"^I create a policy named "([^"]*)" with action "([^"]*)" for resource "([^"]*)"$"#)]
+#[when(
+    regex = r#"^I create a policy named "([^"]*)" with action "([^"]*)" for resource "([^"]*)"$"#
+)]
 async fn when_create_policy(
     world: &mut PolicyWorld,
     name: String,

@@ -2,12 +2,12 @@
 //
 // Holds policy, data, and evaluation state across test steps
 
-use crate::data::{DataStore, DataLoader};
-use crate::reap::ReaperPolicy;
-use crate::evaluators::PolicyEvaluator;
+use crate::data::{DataLoader, DataStore};
 use crate::engine::PolicyRequest;
-use std::sync::Arc;
+use crate::evaluators::PolicyEvaluator;
+use crate::reap::ReaperPolicy;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Test context holding policy and data state
 pub struct TestContext {
@@ -49,7 +49,8 @@ impl TestContext {
         let store = DataStore::new();
         let loader = DataLoader::new(store.clone());
 
-        loader.load_json(&content)
+        loader
+            .load_json(&content)
             .map_err(|e| format!("Failed to load data: {:?}", e))?;
 
         let store_arc = Arc::new(store);
@@ -58,12 +59,11 @@ impl TestContext {
     }
 
     pub fn build_evaluator(&mut self) -> Result<(), String> {
-        let policy = self.policy.take()
-            .ok_or("No policy loaded")?;
-        let store = self.store.clone()
-            .ok_or("No data loaded")?;
+        let policy = self.policy.take().ok_or("No policy loaded")?;
+        let store = self.store.clone().ok_or("No data loaded")?;
 
-        let evaluator = policy.build(store)
+        let evaluator = policy
+            .build(store)
             .map_err(|e| format!("Failed to build evaluator: {:?}", e))?;
 
         self.evaluator = Some(Box::new(evaluator));
@@ -71,15 +71,11 @@ impl TestContext {
     }
 
     pub fn evaluate(&mut self) -> Result<String, String> {
-        let evaluator = self.evaluator.as_ref()
-            .ok_or("No evaluator built")?;
+        let evaluator = self.evaluator.as_ref().ok_or("No evaluator built")?;
 
-        let principal = self.principal.as_ref()
-            .ok_or("No principal set")?;
-        let action = self.action.as_ref()
-            .ok_or("No action set")?;
-        let resource = self.resource.as_ref()
-            .ok_or("No resource set")?;
+        let principal = self.principal.as_ref().ok_or("No principal set")?;
+        let action = self.action.as_ref().ok_or("No action set")?;
+        let resource = self.resource.as_ref().ok_or("No resource set")?;
 
         let mut context = HashMap::new();
         context.insert("principal".to_string(), principal.clone());
@@ -91,7 +87,8 @@ impl TestContext {
         };
 
         let start = std::time::Instant::now();
-        let decision = evaluator.evaluate(&request)
+        let decision = evaluator
+            .evaluate(&request)
             .map_err(|e| format!("Evaluation failed: {:?}", e))?;
         let elapsed = start.elapsed().as_nanos();
 
@@ -104,7 +101,8 @@ impl TestContext {
     }
 
     pub fn get_decision(&self) -> Result<&str, String> {
-        self.last_decision.as_deref()
+        self.last_decision
+            .as_deref()
             .ok_or("No decision recorded".to_string())
     }
 

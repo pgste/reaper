@@ -2,7 +2,7 @@
 ///
 /// Tests the abac.reap policy against abac-test-data.json
 /// Measures performance with clearance levels and department matching
-use policy_engine::{DataStore, DataLoader, ReaperPolicy, PolicyEvaluator, PolicyRequest};
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -38,17 +38,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test different scenarios
     let test_cases = vec![
         // Executive with high clearance (should allow most)
-        ("user_0", "doc_100", "Expected: ALLOW (executive, clearance 8)"),
+        (
+            "user_0",
+            "doc_100",
+            "Expected: ALLOW (executive, clearance 8)",
+        ),
         // Suspended user (should deny)
         ("user_20", "doc_0", "Expected: DENY (suspended user)"),
         // Same department, sufficient clearance (should allow)
-        ("user_10", "doc_10", "Expected: ALLOW (dept match, clearance OK)"),
+        (
+            "user_10",
+            "doc_10",
+            "Expected: ALLOW (dept match, clearance OK)",
+        ),
         // Different department (should deny)
         ("user_5", "doc_10", "Expected: DENY (different department)"),
         // Archived document (should deny)
         ("user_1", "doc_10", "Expected: DENY (archived document)"),
         // Owner access (should allow if active)
-        ("user_100", "doc_500", "Expected: ALLOW if owner (check data)"),
+        (
+            "user_100",
+            "doc_500",
+            "Expected: ALLOW if owner (check data)",
+        ),
     ];
 
     println!("📋 Sample Test Cases:");
@@ -67,7 +79,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let elapsed = start.elapsed().as_nanos();
 
         let decision_str = format!("{:?}", decision);
-        println!("   {} → {} ({}ns) - {}", principal, resource, elapsed, expected);
+        println!(
+            "   {} → {} ({}ns) - {}",
+            principal, resource, elapsed, expected
+        );
         println!("      Result: {}", decision_str);
     }
 
@@ -143,12 +158,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Std deviation:  {:.2} ns", std_dev);
 
     println!("\n🚀 Throughput:");
-    println!("   Ops/second:     {:.0}", iterations as f64 / total_time.as_secs_f64());
+    println!(
+        "   Ops/second:     {:.0}",
+        iterations as f64 / total_time.as_secs_f64()
+    );
     println!("   Avg per op:     {:.2} µs", mean as f64 / 1000.0);
 
     println!("\n✅ Decision Distribution:");
-    println!("   ALLOW:          {} ({:.1}%)", allow_count, (allow_count as f64 / iterations as f64) * 100.0);
-    println!("   DENY:           {} ({:.1}%)", deny_count, (deny_count as f64 / iterations as f64) * 100.0);
+    println!(
+        "   ALLOW:          {} ({:.1}%)",
+        allow_count,
+        (allow_count as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   DENY:           {} ({:.1}%)",
+        deny_count,
+        (deny_count as f64 / iterations as f64) * 100.0
+    );
 
     // Analyze performance buckets
     let mut buckets = vec![
@@ -170,12 +196,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📈 Latency Distribution:");
-    println!("   < 500 ns:       {} ({:.1}%)", buckets[0].1, (buckets[0].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 1 µs:         {} ({:.1}%)", buckets[1].1, (buckets[1].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 2 µs:         {} ({:.1}%)", buckets[2].1, (buckets[2].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 5 µs:         {} ({:.1}%)", buckets[3].1, (buckets[3].1 as f64 / iterations as f64) * 100.0);
-    println!("   < 10 µs:        {} ({:.1}%)", buckets[4].1, (buckets[4].1 as f64 / iterations as f64) * 100.0);
-    println!("   >= 10 µs:       {} ({:.1}%)", buckets[5].1, (buckets[5].1 as f64 / iterations as f64) * 100.0);
+    println!(
+        "   < 500 ns:       {} ({:.1}%)",
+        buckets[0].1,
+        (buckets[0].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 1 µs:         {} ({:.1}%)",
+        buckets[1].1,
+        (buckets[1].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 2 µs:         {} ({:.1}%)",
+        buckets[2].1,
+        (buckets[2].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 5 µs:         {} ({:.1}%)",
+        buckets[3].1,
+        (buckets[3].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   < 10 µs:        {} ({:.1}%)",
+        buckets[4].1,
+        (buckets[4].1 as f64 / iterations as f64) * 100.0
+    );
+    println!(
+        "   >= 10 µs:       {} ({:.1}%)",
+        buckets[5].1,
+        (buckets[5].1 as f64 / iterations as f64) * 100.0
+    );
 
     println!("\n💡 ABAC Characteristics:");
     println!("   This policy evaluates multiple attributes:");

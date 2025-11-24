@@ -6,14 +6,11 @@
 //! - Performance consistency analysis
 //! - Memory usage patterns
 
-use policy_engine::{
-    DataStore, DataLoader, PolicyRequest,
-    ReaperPolicy, PolicyEvaluator,
-};
-use std::sync::Arc;
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use std::collections::HashMap;
-use std::time::{Instant, Duration};
 use std::fs;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 struct PerformanceStats {
     min: Duration,
@@ -74,7 +71,10 @@ impl PerformanceStats {
 }
 
 fn analyze_buckets(samples: &[Duration], bucket_size: usize) {
-    println!("\n   📊 Performance over time (buckets of {}):", bucket_size);
+    println!(
+        "\n   📊 Performance over time (buckets of {}):",
+        bucket_size
+    );
     println!("   ┌─────────┬──────────────┬──────────────┬──────────────┐");
     println!("   │ Bucket  │ Mean (ns)    │ Min (ns)     │ Max (ns)     │");
     println!("   ├─────────┼──────────────┼──────────────┼──────────────┤");
@@ -180,11 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Step 4: Run volume tests
-    let test_sizes = vec![
-        (10_000, 1000),
-        (50_000, 5000),
-        (100_000, 10000),
-    ];
+    let test_sizes = vec![(10_000, 1000), (50_000, 5000), (100_000, 10000)];
 
     for (iterations, bucket_size) in test_sizes {
         println!("═══════════════════════════════════════════════════════════");
@@ -224,7 +220,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let stats = PerformanceStats::from_samples(samples.clone());
 
         println!("   ✓ Complete in {:?}", total_time);
-        println!("   🚀 Throughput: {:.0} ops/sec", iterations as f64 / total_time.as_secs_f64());
+        println!(
+            "   🚀 Throughput: {:.0} ops/sec",
+            iterations as f64 / total_time.as_secs_f64()
+        );
         println!();
 
         stats.print("Statistics:");
@@ -241,7 +240,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let last_mean = last_bucket / bucket_size as u32;
 
         let degradation_percent = ((last_mean.as_nanos() as f64 - first_mean.as_nanos() as f64)
-            / first_mean.as_nanos() as f64) * 100.0;
+            / first_mean.as_nanos() as f64)
+            * 100.0;
 
         println!();
         println!("   🔍 Degradation Analysis:");
@@ -252,9 +252,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if degradation_percent.abs() < 5.0 {
             println!("   ✅ Performance is STABLE (< 5% variation)");
         } else if degradation_percent.abs() < 10.0 {
-            println!("   ⚠️  Minor variation detected ({:.1}%)", degradation_percent);
+            println!(
+                "   ⚠️  Minor variation detected ({:.1}%)",
+                degradation_percent
+            );
         } else {
-            println!("   ❌ Significant degradation detected ({:.1}%)", degradation_percent);
+            println!(
+                "   ❌ Significant degradation detected ({:.1}%)",
+                degradation_percent
+            );
         }
 
         println!();
@@ -267,7 +273,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     let patterns = vec![
-        ("Same user/resource (cache test)", "user_100", "doc_100", 10000),
+        (
+            "Same user/resource (cache test)",
+            "user_100",
+            "doc_100",
+            10000,
+        ),
         ("Sequential users", "user_%", "doc_100", 10000),
         ("Random access", "user_%", "doc_%", 10000),
     ];
@@ -304,7 +315,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let stats = PerformanceStats::from_samples(samples);
-        println!("      Mean: {:.0} ns, P99: {:.0} ns", stats.mean.as_nanos(), stats.p99.as_nanos());
+        println!(
+            "      Mean: {:.0} ns, P99: {:.0} ns",
+            stats.mean.as_nanos(),
+            stats.p99.as_nanos()
+        );
     }
 
     println!();

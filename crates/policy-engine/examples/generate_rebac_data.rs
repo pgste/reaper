@@ -25,7 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let groups = ["public", "restricted", "team-only", "private"];
 
     // Generate users with relationship attributes
-    println!("👥 Generating {} users with relationship attributes...", num_users);
+    println!(
+        "👥 Generating {} users with relationship attributes...",
+        num_users
+    );
     for i in 0..num_users {
         let department = departments[i % departments.len()];
         let team_id = format!("team_{}", teams[i % teams.len()]);
@@ -47,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let manager_level = match role {
-            "manager" => 3 + (i % 3),  // 3-5
+            "manager" => 3 + (i % 3), // 3-5
             "senior" => 2,
             _ => 1,
         };
@@ -78,7 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Generate resources with relationship attributes
-    println!("📄 Generating {} resources with relationship attributes...", num_resources);
+    println!(
+        "📄 Generating {} resources with relationship attributes...",
+        num_resources
+    );
     for i in 0..num_resources {
         let owner_id = format!("user_{}", i % num_users);
         let team_id = format!("team_{}", teams[i % teams.len()]);
@@ -115,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Department and level of owner (for hierarchy checks)
         let owner_department = departments[(i / 2) % departments.len()];
-        let owner_level = 1 + (i % 3);  // 1-3
+        let owner_level = 1 + (i % 3); // 1-3
 
         entities.push(json!({
             "id": format!("resource_{}", i),

@@ -9,8 +9,7 @@
 //! Run with: cargo run --example cedar_with_data
 
 use policy_engine::{
-    DataStore, DataLoader,
-    PolicyEngine, EnhancedPolicy, PolicyLanguage, PolicyRequest,
+    DataLoader, DataStore, EnhancedPolicy, PolicyEngine, PolicyLanguage, PolicyRequest,
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -98,8 +97,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stats = store.stats();
     println!("    - Total Entities: {}", stats.total_entities);
     println!("    - Unique Types: {}", stats.unique_types);
-    println!("    - Unique Strings: {}", stats.interner_stats.unique_strings);
-    println!("    - Memory Usage: {} bytes\n", stats.estimated_memory_bytes);
+    println!(
+        "    - Unique Strings: {}",
+        stats.interner_stats.unique_strings
+    );
+    println!(
+        "    - Memory Usage: {} bytes\n",
+        stats.estimated_memory_bytes
+    );
 
     // ==========================================
     // Step 2: Define Cedar Policy
@@ -229,7 +234,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (description, principal, resource, action, expected) in test_cases {
         println!("\n{}", description);
-        println!("  Principal: {} | Resource: {} | Action: {}", principal, resource, action);
+        println!(
+            "  Principal: {} | Resource: {} | Action: {}",
+            principal, resource, action
+        );
 
         // Look up entities from store
         let interner = store.interner();
@@ -289,13 +297,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if pass {
                 passed += 1;
-                println!("  ✓ PASS: Decision = {} (expected {})", decision_str, expected);
+                println!(
+                    "  ✓ PASS: Decision = {} (expected {})",
+                    decision_str, expected
+                );
             } else {
                 failed += 1;
-                println!("  ✗ FAIL: Decision = {} (expected {})", decision_str, expected);
+                println!(
+                    "  ✗ FAIL: Decision = {} (expected {})",
+                    decision_str, expected
+                );
             }
 
-            println!("  Evaluation Time: {} ns ({:.2} µs)",
+            println!(
+                "  Evaluation Time: {} ns ({:.2} µs)",
                 decision.evaluation_time_ns,
                 decision.evaluation_time_ns as f64 / 1000.0
             );
@@ -324,24 +339,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Failed: {}/{}", failed, passed + failed);
 
     println!("\nPerformance Metrics:");
-    println!("  Data Load Time: {:?} ({} entities)", load_duration, entity_count);
+    println!(
+        "  Data Load Time: {:?} ({} entities)",
+        load_duration, entity_count
+    );
     println!("  Policy Load Time: {:?}", policy_load_duration);
     println!("  Policy Deploy Time: {:?}", deploy_duration);
-    println!("  Average Evaluation Time: {} ns ({:.2} µs)",
+    println!(
+        "  Average Evaluation Time: {} ns ({:.2} µs)",
         avg_eval_time,
         avg_eval_time as f64 / 1000.0
     );
-    println!("  Total Evaluation Time: {} ns ({:.2} ms)",
+    println!(
+        "  Total Evaluation Time: {} ns ({:.2} ms)",
         total_eval_time,
         total_eval_time as f64 / 1_000_000.0
     );
 
     println!("\nEnd-to-End Latency Breakdown:");
-    let total_e2e = load_duration.as_nanos() + policy_load_duration.as_nanos() + deploy_duration.as_nanos();
-    println!("  Data Loading: {:.1}%", (load_duration.as_nanos() as f64 / total_e2e as f64) * 100.0);
-    println!("  Policy Loading: {:.1}%", (policy_load_duration.as_nanos() as f64 / total_e2e as f64) * 100.0);
-    println!("  Policy Deployment: {:.1}%", (deploy_duration.as_nanos() as f64 / total_e2e as f64) * 100.0);
-    println!("  Total Setup Time: {:?}", load_duration + policy_load_duration + deploy_duration);
+    let total_e2e =
+        load_duration.as_nanos() + policy_load_duration.as_nanos() + deploy_duration.as_nanos();
+    println!(
+        "  Data Loading: {:.1}%",
+        (load_duration.as_nanos() as f64 / total_e2e as f64) * 100.0
+    );
+    println!(
+        "  Policy Loading: {:.1}%",
+        (policy_load_duration.as_nanos() as f64 / total_e2e as f64) * 100.0
+    );
+    println!(
+        "  Policy Deployment: {:.1}%",
+        (deploy_duration.as_nanos() as f64 / total_e2e as f64) * 100.0
+    );
+    println!(
+        "  Total Setup Time: {:?}",
+        load_duration + policy_load_duration + deploy_duration
+    );
 
     println!("\n{}", "=".repeat(60));
     println!("✅ Cedar + DataStore Integration Complete!");

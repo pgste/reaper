@@ -1,3 +1,14 @@
+use axum::{
+    extract::{
+        ws::{Message, WebSocket},
+        State, WebSocketUpgrade,
+    },
+    http::{Method, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use parking_lot::RwLock;
 /// High-performance HTTP/2 server for Reaper policy evaluation
 ///
 /// Optimizations implemented:
@@ -19,25 +30,15 @@
 ///   GET  /v1/metrics           - Performance metrics
 ///   WS   /v1/stream            - WebSocket streaming
 use policy_engine::{
-    DataStore, DataLoader, ReaperPolicy, PolicyEvaluator,
-    PolicyRequest, PolicyAction,
-};
-use std::collections::HashMap;
-use axum::{
-    Router,
-    extract::{State, WebSocketUpgrade, ws::{WebSocket, Message}},
-    response::{Response, IntoResponse},
-    http::{StatusCode, Method},
-    Json,
-    routing::{get, post},
+    DataLoader, DataStore, PolicyAction, PolicyEvaluator, PolicyRequest, ReaperPolicy,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
-use tower_http::cors::{CorsLayer, Any};
-use parking_lot::RwLock;
+use tower_http::cors::{Any, CorsLayer};
 
 // ============================================================================
 // Request/Response Types
@@ -143,7 +144,9 @@ async fn handle_evaluate(
     };
 
     // Evaluate
-    let decision = state.evaluator.evaluate(&policy_req)
+    let decision = state
+        .evaluator
+        .evaluate(&policy_req)
         .map_err(|e| AppError::EvaluationError(e.to_string()))?;
 
     let eval_time = start.elapsed().as_nanos();
@@ -193,7 +196,9 @@ async fn handle_batch_evaluate(
         };
 
         // Evaluate
-        let decision = state.evaluator.evaluate(&policy_req)
+        let decision = state
+            .evaluator
+            .evaluate(&policy_req)
             .map_err(|e| AppError::EvaluationError(e.to_string()))?;
 
         let eval_time = eval_start.elapsed().as_nanos();
@@ -230,9 +235,7 @@ async fn handle_batch_evaluate(
 
 /// Health check endpoint
 /// GET /v1/health
-async fn handle_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<HealthResponse> {
+async fn handle_health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let uptime = state.start_time.elapsed().as_secs();
     let entity_count = state.store.stats().total_entities;
 
@@ -245,9 +248,7 @@ async fn handle_health(
 
 /// Metrics endpoint
 /// GET /v1/metrics
-async fn handle_metrics(
-    State(state): State<Arc<AppState>>,
-) -> Json<MetricsResponse> {
+async fn handle_metrics(State(state): State<Arc<AppState>>) -> Json<MetricsResponse> {
     let metrics = state.metrics.read();
     let entity_count = state.store.stats().total_entities;
 
@@ -274,10 +275,7 @@ async fn handle_metrics(
 
 /// WebSocket streaming endpoint
 /// WS /v1/stream
-async fn handle_websocket(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> Response {
+async fn handle_websocket(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -464,10 +462,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/health", get(handle_health))
         .route("/v1/metrics", get(handle_metrics))
         .route("/v1/stream", get(handle_websocket))
-        .layer(
-            ServiceBuilder::new()
-                .layer(cors)
-        )
+        .layer(ServiceBuilder::new().layer(cors))
         .with_state(state);
 
     // Start server
@@ -476,11 +471,23 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n✅ Server running on http://{}", addr);
     println!("\n📡 Endpoints:");
-    println!("   POST   http://{}/v1/evaluate        - Single evaluation", addr);
-    println!("   POST   http://{}/v1/evaluate/batch  - Batch evaluations", addr);
-    println!("   GET    http://{}/v1/health          - Health check", addr);
+    println!(
+        "   POST   http://{}/v1/evaluate        - Single evaluation",
+        addr
+    );
+    println!(
+        "   POST   http://{}/v1/evaluate/batch  - Batch evaluations",
+        addr
+    );
+    println!(
+        "   GET    http://{}/v1/health          - Health check",
+        addr
+    );
     println!("   GET    http://{}/v1/metrics         - Metrics", addr);
-    println!("   WS     ws://{}/v1/stream          - WebSocket stream", addr);
+    println!(
+        "   WS     ws://{}/v1/stream          - WebSocket stream",
+        addr
+    );
     println!("\n🔧 Optimizations enabled:");
     println!("   ✓ HTTP/2 with persistent connections");
     println!("   ✓ Keep-Alive connection reuse");

@@ -16,7 +16,7 @@ pub struct YamlPolicy {
     pub version: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    pub default_decision: String,  // "allow" or "deny"
+    pub default_decision: String, // "allow" or "deny"
     pub rules: Vec<YamlRule>,
 }
 
@@ -26,7 +26,7 @@ pub struct YamlRule {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    pub decision: String,  // "allow" or "deny"
+    pub decision: String, // "allow" or "deny"
     pub condition: YamlCondition,
 }
 
@@ -50,7 +50,7 @@ pub enum YamlCondition {
 /// YAML/JSON entity attribute reference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YamlEntityAttr {
-    pub entity: String,    // "user", "resource", "context"
+    pub entity: String, // "user", "resource", "context"
     pub attribute: String,
 }
 
@@ -59,14 +59,9 @@ pub struct YamlEntityAttr {
 #[serde(untagged)]
 pub enum YamlComparisonRight {
     /// Literal value
-    Value {
-        value: serde_json::Value,
-    },
+    Value { value: serde_json::Value },
     /// Entity attribute
-    EntityAttr {
-        entity: String,
-        attribute: String,
-    },
+    EntityAttr { entity: String, attribute: String },
 }
 
 impl YamlPolicy {
@@ -131,7 +126,11 @@ impl YamlCondition {
     /// Convert to AST Condition
     pub fn into_ast(self) -> Result<Condition, ReaperError> {
         match self {
-            YamlCondition::Comparison { operator, left, right } => {
+            YamlCondition::Comparison {
+                operator,
+                left,
+                right,
+            } => {
                 let op = parse_operator(&operator)?;
                 let left_attr = left.into_ast()?;
                 let right_value = right.into_ast()?;
@@ -142,11 +141,12 @@ impl YamlCondition {
                     right: right_value,
                 })
             }
-            YamlCondition::Logical { operator, conditions } => {
-                let conds: Result<Vec<_>, _> = conditions
-                    .into_iter()
-                    .map(|c| c.into_ast())
-                    .collect();
+            YamlCondition::Logical {
+                operator,
+                conditions,
+            } => {
+                let conds: Result<Vec<_>, _> =
+                    conditions.into_iter().map(|c| c.into_ast()).collect();
                 let conds = conds?;
 
                 match operator.to_lowercase().as_str() {
@@ -201,10 +201,7 @@ fn parse_decision(s: &str) -> Result<Decision, ReaperError> {
         "allow" => Ok(Decision::Allow),
         "deny" => Ok(Decision::Deny),
         _ => Err(ReaperError::InvalidPolicy {
-            reason: format!(
-                "Invalid decision '{}'. Use 'allow' or 'deny'",
-                s
-            ),
+            reason: format!("Invalid decision '{}'. Use 'allow' or 'deny'", s),
         }),
     }
 }
@@ -257,7 +254,10 @@ fn json_value_to_ast_value(v: serde_json::Value) -> Result<Value, ReaperError> {
         serde_json::Value::Bool(b) => Ok(Value::Boolean(b)),
         serde_json::Value::Null => Ok(Value::Null),
         _ => Err(ReaperError::InvalidPolicy {
-            reason: format!("Invalid value type: {:?}. Use string, number, boolean, or null", v),
+            reason: format!(
+                "Invalid value type: {:?}. Use string, number, boolean, or null",
+                v
+            ),
         }),
     }
 }

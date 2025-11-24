@@ -150,7 +150,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/policies/{id}",
             get(get_policy).put(update_policy).delete(delete_policy),
         )
-        .route("/api/v1/policies/{id}/deploy", post(deploy_policy_to_agents))
+        .route(
+            "/api/v1/policies/{id}/deploy",
+            post(deploy_policy_to_agents),
+        )
         // Agent management (placeholder for now)
         .route(endpoints::API_V1_AGENTS, get(list_agents))
         .route("/api/v1/agents/{id}", get(get_agent))

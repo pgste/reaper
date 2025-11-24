@@ -5,6 +5,7 @@
 //!
 //! Learn more: https://www.cedarpolicy.com/
 
+use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::{PolicyAction, PolicyRequest};
 use cedar_policy::{
     Authorizer, Context, Decision, Entities, EntityTypeName, EntityUid, PolicySet, Request,
@@ -14,7 +15,6 @@ use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
-use super::{PolicyEvaluator, EvaluatorMetadata};
 
 /// Cedar policy evaluator providing AWS-compatible authorization
 ///
@@ -115,27 +115,35 @@ impl CedarPolicyEvaluator {
             EntityTypeName::from_str("User").map_err(|e| ReaperError::EvaluationError {
                 reason: format!("Invalid principal type: {}", e),
             })?,
-            principal_id.parse().map_err(|e| ReaperError::EvaluationError {
-                reason: format!("Invalid principal ID: {}", e),
-            })?,
+            principal_id
+                .parse()
+                .map_err(|e| ReaperError::EvaluationError {
+                    reason: format!("Invalid principal ID: {}", e),
+                })?,
         );
 
         let action = EntityUid::from_type_name_and_id(
             EntityTypeName::from_str("Action").map_err(|e| ReaperError::EvaluationError {
                 reason: format!("Invalid action type: {}", e),
             })?,
-            request.action.parse().map_err(|e| ReaperError::EvaluationError {
-                reason: format!("Invalid action ID: {}", e),
-            })?,
+            request
+                .action
+                .parse()
+                .map_err(|e| ReaperError::EvaluationError {
+                    reason: format!("Invalid action ID: {}", e),
+                })?,
         );
 
         let resource = EntityUid::from_type_name_and_id(
             EntityTypeName::from_str("Resource").map_err(|e| ReaperError::EvaluationError {
                 reason: format!("Invalid resource type: {}", e),
             })?,
-            request.resource.parse().map_err(|e| ReaperError::EvaluationError {
-                reason: format!("Invalid resource ID: {}", e),
-            })?,
+            request
+                .resource
+                .parse()
+                .map_err(|e| ReaperError::EvaluationError {
+                    reason: format!("Invalid resource ID: {}", e),
+                })?,
         );
 
         // Build context from request.context
@@ -146,24 +154,27 @@ impl CedarPolicyEvaluator {
                 // Convert string value to RestrictedExpression
                 // For now, we'll treat everything as strings
                 // In production, you'd want proper type conversion
-                let expr = RestrictedExpression::from_str(&format!("\"{}\"", value))
-                    .map_err(|e| ReaperError::EvaluationError {
-                        reason: format!("Failed to convert context value for {}: {}", key, e),
+                let expr =
+                    RestrictedExpression::from_str(&format!("\"{}\"", value)).map_err(|e| {
+                        ReaperError::EvaluationError {
+                            reason: format!("Failed to convert context value for {}: {}", key, e),
+                        }
                     })?;
                 context_map.insert(key.clone(), expr);
             }
         }
 
-        let context = Context::from_pairs(context_map)
-            .map_err(|e| ReaperError::EvaluationError {
+        let context =
+            Context::from_pairs(context_map).map_err(|e| ReaperError::EvaluationError {
                 reason: format!("Failed to build context: {}", e),
             })?;
 
         // Build the Cedar request
-        Request::new(principal, action, resource, context, None)
-            .map_err(|e| ReaperError::EvaluationError {
+        Request::new(principal, action, resource, context, None).map_err(|e| {
+            ReaperError::EvaluationError {
                 reason: format!("Failed to build Cedar request: {}", e),
-            })
+            }
+        })
     }
 
     /// Convert Cedar Decision to PolicyAction
@@ -224,7 +235,10 @@ impl PolicyEvaluator for CedarPolicyEvaluator {
 
             let mut extra = std::collections::HashMap::new();
             extra.insert("policy_count".to_string(), policy_count.to_string());
-            extra.insert("policy_length".to_string(), self.policy_text.len().to_string());
+            extra.insert(
+                "policy_length".to_string(),
+                self.policy_text.len().to_string(),
+            );
 
             Some(EvaluatorMetadata {
                 rule_count: policy_count,

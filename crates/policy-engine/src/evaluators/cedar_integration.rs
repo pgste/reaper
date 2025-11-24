@@ -4,11 +4,11 @@
 //! enabling Cedar policies to query entity attributes from the DataStore.
 
 #[cfg(test)]
-use crate::data::{DataStore, Entity, AttributeValue};
+use crate::data::{AttributeValue, DataStore, Entity};
 #[cfg(test)]
 use cedar_policy::{
-    Entities, Entity as CedarEntity, EntityId as CedarEntityId,
-    EntityTypeName, EntityUid, RestrictedExpression,
+    Entities, Entity as CedarEntity, EntityId as CedarEntityId, EntityTypeName, EntityUid,
+    RestrictedExpression,
 };
 #[cfg(test)]
 use reaper_core::ReaperError;
@@ -56,28 +56,27 @@ fn create_entity_uid(
     entity: &Entity,
     interner: &crate::data::StringInterner,
 ) -> Result<EntityUid, ReaperError> {
-    let entity_type = interner
-        .resolve_str(entity.entity_type)
-        .ok_or_else(|| ReaperError::EvaluationError {
-            reason: "Failed to resolve entity type".to_string(),
-        })?;
+    let entity_type =
+        interner
+            .resolve_str(entity.entity_type)
+            .ok_or_else(|| ReaperError::EvaluationError {
+                reason: "Failed to resolve entity type".to_string(),
+            })?;
 
-    let entity_id = interner
-        .resolve_str(entity.id)
-        .ok_or_else(|| ReaperError::EvaluationError {
-            reason: "Failed to resolve entity id".to_string(),
-        })?;
+    let entity_id =
+        interner
+            .resolve_str(entity.id)
+            .ok_or_else(|| ReaperError::EvaluationError {
+                reason: "Failed to resolve entity id".to_string(),
+            })?;
 
-    let type_name = EntityTypeName::from_str(&entity_type).map_err(|e| {
-        ReaperError::EvaluationError {
+    let type_name =
+        EntityTypeName::from_str(&entity_type).map_err(|e| ReaperError::EvaluationError {
             reason: format!("Invalid entity type name '{}': {}", entity_type, e),
-        }
-    })?;
+        })?;
 
-    let eid = CedarEntityId::from_str(&entity_id).map_err(|e| {
-        ReaperError::EvaluationError {
-            reason: format!("Invalid entity ID '{}': {}", entity_id, e),
-        }
+    let eid = CedarEntityId::from_str(&entity_id).map_err(|e| ReaperError::EvaluationError {
+        reason: format!("Invalid entity ID '{}': {}", entity_id, e),
     })?;
 
     Ok(EntityUid::from_type_name_and_id(type_name, eid))
@@ -94,11 +93,12 @@ fn convert_entity(
     // Convert attributes to Cedar format
     let mut cedar_attrs = HashMap::new();
     for (key_id, value) in &entity.attributes {
-        let key_str = interner
-            .resolve_str(*key_id)
-            .ok_or_else(|| ReaperError::EvaluationError {
-                reason: "Failed to resolve attribute key".to_string(),
-            })?;
+        let key_str =
+            interner
+                .resolve_str(*key_id)
+                .ok_or_else(|| ReaperError::EvaluationError {
+                    reason: "Failed to resolve attribute key".to_string(),
+                })?;
 
         let cedar_value = convert_attribute_value(value, interner)?;
         cedar_attrs.insert(key_str, cedar_value);
@@ -118,13 +118,10 @@ fn convert_entity(
         vec![]
     };
 
-    CedarEntity::new(
-        uid,
-        cedar_attrs,
-        parents.into_iter().collect(),
-    )
-    .map_err(|e| ReaperError::EvaluationError {
-        reason: format!("Failed to create Cedar entity: {}", e),
+    CedarEntity::new(uid, cedar_attrs, parents.into_iter().collect()).map_err(|e| {
+        ReaperError::EvaluationError {
+            reason: format!("Failed to create Cedar entity: {}", e),
+        }
     })
 }
 
@@ -187,18 +184,14 @@ fn convert_attribute_value(
                     .join(", ")
             );
 
-            RestrictedExpression::from_str(&set_str).map_err(|e| {
-                ReaperError::EvaluationError {
-                    reason: format!("Failed to create Cedar list: {}", e),
-                }
+            RestrictedExpression::from_str(&set_str).map_err(|e| ReaperError::EvaluationError {
+                reason: format!("Failed to create Cedar list: {}", e),
             })
         }
         AttributeValue::Null => {
             // Cedar doesn't have null - use empty string or skip
-            RestrictedExpression::from_str("\"\"").map_err(|e| {
-                ReaperError::EvaluationError {
-                    reason: format!("Failed to create Cedar null representation: {}", e),
-                }
+            RestrictedExpression::from_str("\"\"").map_err(|e| ReaperError::EvaluationError {
+                reason: format!("Failed to create Cedar null representation: {}", e),
             })
         }
     }
@@ -207,7 +200,7 @@ fn convert_attribute_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntityBuilder, data::DataStore};
+    use crate::{data::DataStore, EntityBuilder};
 
     #[test]
     fn test_convert_simple_entity() {

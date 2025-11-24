@@ -96,7 +96,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✅ Generated 1000 entities (500 users, 500 documents)");
     println!("   📄 File: large-test-data.json");
-    println!("   📦 Size: {} bytes", fs::metadata("large-test-data.json")?.len());
+    println!(
+        "   📦 Size: {} bytes",
+        fs::metadata("large-test-data.json")?.len()
+    );
 
     Ok(())
 }

@@ -26,9 +26,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("👥 Generating {} users with roles...", num_users);
     for i in 0..num_users {
         let role = match i % 10 {
-            0 => "admin",          // 10% admins
-            1..=2 => "manager",    // 20% managers
-            _ => "user",           // 70% regular users
+            0 => "admin",       // 10% admins
+            1..=2 => "manager", // 20% managers
+            _ => "user",        // 70% regular users
         };
 
         entities.push(json!({
@@ -45,7 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Generate resources with types and owners
-    println!("📄 Generating {} resources with types and ownership...", num_resources);
+    println!(
+        "📄 Generating {} resources with types and ownership...",
+        num_resources
+    );
     for i in 0..num_resources {
         let resource_type = match i % 4 {
             0 => "report",

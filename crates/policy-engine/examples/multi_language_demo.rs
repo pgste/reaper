@@ -130,7 +130,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Principal: alice");
     println!("  Resource: {}", cedar_request.resource);
     println!("  Decision: {:?}", cedar_decision.decision);
-    println!("  Evaluation Time: {} ns ({:.2} µs)",
+    println!(
+        "  Evaluation Time: {} ns ({:.2} µs)",
         cedar_decision.evaluation_time_ns,
         cedar_decision.evaluation_time_ns as f64 / 1000.0
     );
@@ -143,7 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     let iterations = 1000;
-    println!("Running {} evaluations for each policy type...\n", iterations);
+    println!(
+        "Running {} evaluations for each policy type...\n",
+        iterations
+    );
 
     // Benchmark Simple policy
     let start = std::time::Instant::now();
@@ -154,10 +158,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Simple Policy:");
     println!("  Total time: {:?}", simple_duration);
-    println!("  Average: {:.2} ns per evaluation",
+    println!(
+        "  Average: {:.2} ns per evaluation",
         simple_duration.as_nanos() as f64 / iterations as f64
     );
-    println!("  Throughput: {:.0} ops/sec",
+    println!(
+        "  Throughput: {:.0} ops/sec",
         iterations as f64 / simple_duration.as_secs_f64()
     );
 
@@ -170,10 +176,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\nCedar Policy:");
     println!("  Total time: {:?}", cedar_duration);
-    println!("  Average: {:.2} ns per evaluation",
+    println!(
+        "  Average: {:.2} ns per evaluation",
         cedar_duration.as_nanos() as f64 / iterations as f64
     );
-    println!("  Throughput: {:.0} ops/sec",
+    println!(
+        "  Throughput: {:.0} ops/sec",
         iterations as f64 / cedar_duration.as_secs_f64()
     );
 

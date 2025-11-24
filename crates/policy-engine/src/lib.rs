@@ -1,32 +1,29 @@
 pub use reaper_core;
 
+pub mod data;
 mod engine;
 mod evaluators;
-pub mod data;
-pub mod reap;
 pub mod gherkin;
+pub mod reap;
 
 pub use engine::{
-    EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats,
-    PolicyLanguage, PolicyRequest, PolicyRule, SimpleAction, SimpleRule,
+    EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage,
+    PolicyRequest, PolicyRule, SimpleAction, SimpleRule,
 };
 
 pub use evaluators::{
-    CedarPolicyEvaluator, PolicyEvaluator, SimplePolicyEvaluator,
-    EvaluatorMetadata,
+    CedarPolicyEvaluator, EvaluatorMetadata, PolicyEvaluator, SimplePolicyEvaluator,
 };
 
 // Re-export reaper_dsl module for examples
 pub use evaluators::reaper_dsl;
 
 // Re-export reap parser and bundle format
-pub use reap::{ReaperPolicy, PolicyBundle, BundleFormat};
+pub use reap::{BundleFormat, PolicyBundle, ReaperPolicy};
 
 pub use data::{
-    DataStore, DataLoader, DataFormat,
-    Entity, EntityId, EntityType, AttributeValue, Attributes,
-    InternedString, StringInterner,
-    IndexStrategy, QueryBuilder,
+    AttributeValue, Attributes, DataFormat, DataLoader, DataStore, Entity, EntityId, EntityType,
+    IndexStrategy, InternedString, QueryBuilder, StringInterner,
 };
 
 // Re-export entity builder for convenience

@@ -6,14 +6,11 @@
 //! - Validate string interning efficiency
 //! - Check for memory leaks
 
-use policy_engine::{
-    DataStore, DataLoader, PolicyRequest,
-    ReaperPolicy, PolicyEvaluator,
-};
-use std::sync::Arc;
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use std::collections::HashMap;
-use std::time::{Instant, Duration};
 use std::fs;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 fn get_memory_usage() -> Result<(usize, usize), Box<dyn std::error::Error>> {
@@ -24,12 +21,14 @@ fn get_memory_usage() -> Result<(usize, usize), Box<dyn std::error::Error>> {
 
     for line in status.lines() {
         if line.starts_with("VmRSS:") {
-            rss_kb = line.split_whitespace()
+            rss_kb = line
+                .split_whitespace()
                 .nth(1)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
         } else if line.starts_with("VmSize:") {
-            vm_size_kb = line.split_whitespace()
+            vm_size_kb = line
+                .split_whitespace()
                 .nth(1)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
@@ -61,7 +60,8 @@ impl MemorySnapshot {
     }
 
     fn print(&self) {
-        println!("   📊 {}: RSS={:.2} MB, VM={:.2} MB",
+        println!(
+            "   📊 {}: RSS={:.2} MB, VM={:.2} MB",
             self.label,
             self.rss_bytes as f64 / 1_048_576.0,
             self.vm_size_bytes as f64 / 1_048_576.0
@@ -90,7 +90,10 @@ struct TestResult {
 impl TestResult {
     fn print_summary(&self) {
         println!("\n   Summary for {} entities:", self.entity_count);
-        println!("   • Data file: {:.2} MB", self.data_file_size as f64 / 1_048_576.0);
+        println!(
+            "   • Data file: {:.2} MB",
+            self.data_file_size as f64 / 1_048_576.0
+        );
         println!("   • Load time: {:?}", self.load_time);
         println!("   • Mean eval: {:.0} ns", self.mean_eval_time.as_nanos());
         println!("   • P99 eval: {:.0} ns", self.p99_eval_time.as_nanos());
@@ -98,8 +101,14 @@ impl TestResult {
         let (rss_load, _) = self.memory_after_load.diff(&self.memory_baseline);
         let (rss_total, _) = self.memory_after_eval.diff(&self.memory_baseline);
 
-        println!("   • Memory (data load): +{:.2} MB", rss_load as f64 / 1_048_576.0);
-        println!("   • Memory (total): +{:.2} MB", rss_total as f64 / 1_048_576.0);
+        println!(
+            "   • Memory (data load): +{:.2} MB",
+            rss_load as f64 / 1_048_576.0
+        );
+        println!(
+            "   • Memory (total): +{:.2} MB",
+            rss_total as f64 / 1_048_576.0
+        );
 
         // Calculate memory per entity
         let memory_per_entity = rss_load as f64 / self.entity_count as f64;
@@ -107,11 +116,18 @@ impl TestResult {
 
         // Calculate data file compression ratio
         let compression = (self.data_file_size as f64) / (rss_load as f64);
-        println!("   • Compression ratio: {:.2}x (JSON → DataStore)", compression);
+        println!(
+            "   • Compression ratio: {:.2}x (JSON → DataStore)",
+            compression
+        );
     }
 }
 
-fn run_test(data_path: &str, entity_count: usize, iterations: usize) -> Result<TestResult, Box<dyn std::error::Error>> {
+fn run_test(
+    data_path: &str,
+    entity_count: usize,
+    iterations: usize,
+) -> Result<TestResult, Box<dyn std::error::Error>> {
     println!("\n═══════════════════════════════════════════════════════════");
     println!("  🔬 Testing {} Entities", entity_count);
     println!("═══════════════════════════════════════════════════════════\n");
@@ -139,7 +155,10 @@ fn run_test(data_path: &str, entity_count: usize, iterations: usize) -> Result<T
     mem_after_load.print();
 
     let (rss_increase, _) = mem_after_load.diff(&mem_baseline);
-    println!("   💾 Memory increase: +{:.2} MB", rss_increase as f64 / 1_048_576.0);
+    println!(
+        "   💾 Memory increase: +{:.2} MB",
+        rss_increase as f64 / 1_048_576.0
+    );
 
     // Load policy
     println!("\n2️⃣  Loading policy...");
@@ -173,7 +192,10 @@ fn run_test(data_path: &str, entity_count: usize, iterations: usize) -> Result<T
     // Warm up
     println!("\n3️⃣  Warming up (1000 iterations)...");
     let mut context = HashMap::new();
-    context.insert("principal".to_string(), format!("user_{}", entity_count / 4));
+    context.insert(
+        "principal".to_string(),
+        format!("user_{}", entity_count / 4),
+    );
     let request = PolicyRequest {
         resource: format!("doc_{}", entity_count / 4),
         action: "read".to_string(),
@@ -280,7 +302,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Data file size
         let file_ratio = large.data_file_size as f64 / small.data_file_size as f64;
-        println!("│ Data file size          │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
+        println!(
+            "│ Data file size          │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
             small.data_file_size as f64 / 1_048_576.0,
             large.data_file_size as f64 / 1_048_576.0,
             file_ratio
@@ -290,7 +313,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (small_mem, _) = small.memory_after_load.diff(&small.memory_baseline);
         let (large_mem, _) = large.memory_after_load.diff(&large.memory_baseline);
         let mem_ratio = large_mem as f64 / small_mem as f64;
-        println!("│ Memory usage            │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
+        println!(
+            "│ Memory usage            │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
             small_mem as f64 / 1_048_576.0,
             large_mem as f64 / 1_048_576.0,
             mem_ratio
@@ -299,7 +323,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Memory per entity
         let small_per_entity = small_mem as f64 / small.entity_count as f64;
         let large_per_entity = large_mem as f64 / large.entity_count as f64;
-        println!("│ Memory per entity       │ {:>8.0} B │ {:>8.0} B │ {:>6.2}x │",
+        println!(
+            "│ Memory per entity       │ {:>8.0} B │ {:>8.0} B │ {:>6.2}x │",
             small_per_entity,
             large_per_entity,
             large_per_entity / small_per_entity
@@ -307,23 +332,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Load time
         let load_ratio = large.load_time.as_secs_f64() / small.load_time.as_secs_f64();
-        println!("│ Load time               │ {:>7.2} ms │ {:>7.2} ms │ {:>6.1}x │",
+        println!(
+            "│ Load time               │ {:>7.2} ms │ {:>7.2} ms │ {:>6.1}x │",
             small.load_time.as_secs_f64() * 1000.0,
             large.load_time.as_secs_f64() * 1000.0,
             load_ratio
         );
 
         // Mean eval time
-        let eval_ratio = large.mean_eval_time.as_nanos() as f64 / small.mean_eval_time.as_nanos() as f64;
-        println!("│ Mean eval time          │ {:>8.0} ns │ {:>8.0} ns │ {:>6.2}x │",
+        let eval_ratio =
+            large.mean_eval_time.as_nanos() as f64 / small.mean_eval_time.as_nanos() as f64;
+        println!(
+            "│ Mean eval time          │ {:>8.0} ns │ {:>8.0} ns │ {:>6.2}x │",
             small.mean_eval_time.as_nanos(),
             large.mean_eval_time.as_nanos(),
             eval_ratio
         );
 
         // P99 eval time
-        let p99_ratio = large.p99_eval_time.as_nanos() as f64 / small.p99_eval_time.as_nanos() as f64;
-        println!("│ P99 eval time           │ {:>8.0} ns │ {:>8.0} ns │ {:>6.2}x │",
+        let p99_ratio =
+            large.p99_eval_time.as_nanos() as f64 / small.p99_eval_time.as_nanos() as f64;
+        println!(
+            "│ P99 eval time           │ {:>8.0} ns │ {:>8.0} ns │ {:>6.2}x │",
             small.p99_eval_time.as_nanos(),
             large.p99_eval_time.as_nanos(),
             p99_ratio
@@ -336,7 +366,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Memory efficiency
         println!("\n   Memory Efficiency:");
         if mem_ratio < 110.0 {
-            println!("   ✅ EXCELLENT: Memory scales linearly ({:.1}x for 100x data)", mem_ratio);
+            println!(
+                "   ✅ EXCELLENT: Memory scales linearly ({:.1}x for 100x data)",
+                mem_ratio
+            );
         } else {
             println!("   ⚠️  Memory scaling: {:.1}x (expected ~100x)", mem_ratio);
         }
@@ -345,16 +378,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let large_compression = large.data_file_size as f64 / large_mem as f64;
         println!("   • Compression (1k): {:.2}x", small_compression);
         println!("   • Compression (100k): {:.2}x", large_compression);
-        println!("   • String interning saves ~{}% memory",
-            ((1.0 - 1.0/large_compression) * 100.0) as i32);
+        println!(
+            "   • String interning saves ~{}% memory",
+            ((1.0 - 1.0 / large_compression) * 100.0) as i32
+        );
 
         // Performance scaling
         println!("\n   Performance Scaling:");
         if eval_ratio < 2.0 {
-            println!("   ✅ EXCELLENT: Evaluation time barely affected ({:.2}x)", eval_ratio);
+            println!(
+                "   ✅ EXCELLENT: Evaluation time barely affected ({:.2}x)",
+                eval_ratio
+            );
             println!("   String interning and indexing working perfectly!");
         } else if eval_ratio < 5.0 {
-            println!("   ✅ GOOD: Evaluation time scales well ({:.2}x)", eval_ratio);
+            println!(
+                "   ✅ GOOD: Evaluation time scales well ({:.2}x)",
+                eval_ratio
+            );
         } else {
             println!("   ⚠️  Evaluation time scaling: {:.2}x", eval_ratio);
         }
@@ -370,8 +411,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if small_eval_growth.abs() < 1_000_000 && large_eval_growth.abs() < 1_000_000 {
             println!("   ✅ NO LEAKS: Memory stable during evaluation");
-            println!("   • 1k: {:+.2} MB during 10k evals", small_eval_growth as f64 / 1_048_576.0);
-            println!("   • 100k: {:+.2} MB during 10k evals", large_eval_growth as f64 / 1_048_576.0);
+            println!(
+                "   • 1k: {:+.2} MB during 10k evals",
+                small_eval_growth as f64 / 1_048_576.0
+            );
+            println!(
+                "   • 100k: {:+.2} MB during 10k evals",
+                large_eval_growth as f64 / 1_048_576.0
+            );
         } else {
             println!("   ⚠️  Memory growth detected during evaluation");
         }

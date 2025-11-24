@@ -3,7 +3,7 @@
 //! Efficiently load entity data from JSON, YAML, or other formats
 //! into the DataStore with automatic string interning.
 
-use super::entity::{EntityBuilder, AttributeValue};
+use super::entity::{AttributeValue, EntityBuilder};
 use super::store::DataStore;
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
@@ -48,8 +48,8 @@ impl DataLoader {
     /// }
     /// ```
     pub fn load_json(&self, json: &str) -> Result<usize, ReaperError> {
-        let data: DataDocument = serde_json::from_str(json)
-            .map_err(|e| ReaperError::InvalidPolicy {
+        let data: DataDocument =
+            serde_json::from_str(json).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to parse JSON: {}", e),
             })?;
 
@@ -124,11 +124,9 @@ fn json_value_to_attribute(
                 .collect();
             Ok(AttributeValue::List(items?))
         }
-        JsonValue::Object(_) => {
-            Err(ReaperError::InvalidPolicy {
-                reason: "Nested objects not supported as attribute values".to_string(),
-            })
-        }
+        JsonValue::Object(_) => Err(ReaperError::InvalidPolicy {
+            reason: "Nested objects not supported as attribute values".to_string(),
+        }),
     }
 }
 
