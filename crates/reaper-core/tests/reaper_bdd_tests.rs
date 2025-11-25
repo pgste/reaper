@@ -26,7 +26,13 @@ async fn given_running_agent(_world: &mut ReaperWorld) {
 
 #[given(regex = r"^a policy that (\w+) all requests$")]
 async fn given_policy_that_action_all(world: &mut ReaperWorld, action: String) {
-    world.current_policy = Some(action);
+    // Convert "allows" to "allow", "denies" to "deny", etc.
+    let normalized_action = if action.ends_with('s') {
+        action[..action.len() - 1].to_string()
+    } else {
+        action
+    };
+    world.current_policy = Some(normalized_action);
 }
 
 #[when("I evaluate a request against the policy")]
@@ -53,9 +59,16 @@ async fn then_response_time_under_ms(_world: &mut ReaperWorld, _max_ms: u32) {
 
 #[then(regex = r#"^I should get a "([^"]*)" error$"#)]
 async fn then_should_get_error(world: &mut ReaperWorld, error_type: String) {
-    assert!(world.last_error.is_some());
+    assert!(world.last_error.is_some(), "Expected an error but got none");
     let error = world.last_error.as_ref().unwrap();
-    assert!(error.to_string().contains(&error_type.replace('_', " ")));
+    let error_msg = error.to_string().to_lowercase();
+    let expected_msg = error_type.replace('_', " ").to_lowercase();
+    assert!(
+        error_msg.contains(&expected_msg),
+        "Error message '{}' does not contain '{}'",
+        error,
+        expected_msg
+    );
 }
 
 #[then("the error should include the policy ID")]

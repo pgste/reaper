@@ -524,10 +524,7 @@ async fn then_decision_based_on_default_rules(world: &mut PolicyWorld) {
 }
 
 // Policy deletion steps
-#[given(regex = r#"^a policy named "([^"]*)" exists$"#)]
-async fn given_named_policy_exists(world: &mut PolicyWorld, name: String) {
-    when_create_policy(world, name, "allow".to_string(), "*".to_string()).await;
-}
+// Uses the existing given_policy_exists step from line 175
 
 #[when("I delete the policy")]
 async fn when_delete_policy(world: &mut PolicyWorld) {
@@ -615,5 +612,5 @@ async fn then_subsequent_requests_return_not_found(world: &mut PolicyWorld) {
 
 #[tokio::main]
 async fn main() {
-    PolicyWorld::run("tests/features/policy_management.feature").await;
+    PolicyWorld::run("tests/features/policy_definition.feature").await;
 }
