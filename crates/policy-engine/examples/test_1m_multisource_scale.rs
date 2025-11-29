@@ -516,7 +516,12 @@ policy enterprise_access {
     );
     println!(
         "   Indexes (4):        ~{:.2} MB",
-        estimate_index_memory_mb(&[role_stats.clone(), dept_stats.clone(), trust_stats.clone(), class_stats.clone()])
+        estimate_index_memory_mb(&[
+            role_stats.clone(),
+            dept_stats.clone(),
+            trust_stats.clone(),
+            class_stats.clone()
+        ])
     );
     println!(
         "   Total runtime:      ~{:.2} MB\n",

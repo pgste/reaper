@@ -626,7 +626,10 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         let mut extra = std::collections::HashMap::new();
         extra.insert("rule_count".to_string(), total_rules.to_string());
         extra.insert("deny_rules".to_string(), self.deny_rules.len().to_string());
-        extra.insert("allow_rules".to_string(), self.allow_rules.len().to_string());
+        extra.insert(
+            "allow_rules".to_string(),
+            self.allow_rules.len().to_string(),
+        );
         extra.insert(
             "default_decision".to_string(),
             format!("{:?}", self.default_decision),

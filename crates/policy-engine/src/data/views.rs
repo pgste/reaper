@@ -146,10 +146,7 @@ impl CompositeAttributeIndex {
         // Only index if we have all attributes
         if composite_key.len() == self.attribute_keys.len() {
             let mut index = self.index.write().unwrap();
-            index
-                .entry(composite_key)
-                .or_default()
-                .insert(entity_key);
+            index.entry(composite_key).or_default().insert(entity_key);
         }
     }
 
