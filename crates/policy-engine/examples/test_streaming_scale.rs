@@ -32,10 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╚═══════════════════════════════════════════════════════════╝\n");
     println!("Scale:       {} entities", scale);
     println!("Chunk size:  {} entities/chunk", chunk_size);
-    println!(
-        "Expected:    ~{} chunks\n",
-        scale.div_ceil(chunk_size)
-    );
+    println!("Expected:    ~{} chunks\n", scale.div_ceil(chunk_size));
 
     // ============================================================
     // PHASE 1: Generate NDJSON Test Data

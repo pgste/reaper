@@ -377,10 +377,7 @@ impl DecisionTreeBuilder {
                 _ => continue,
             };
 
-            partitions
-                .entry(value)
-                .or_default()
-                .push(rule.clone());
+            partitions.entry(value).or_default().push(rule.clone());
         }
 
         partitions
