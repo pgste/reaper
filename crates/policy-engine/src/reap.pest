@@ -64,25 +64,102 @@ not_expr = {
 
 primary_expr = {
     "(" ~ condition_expr ~ ")" |
+    assignment |
     comparison |
     boolean_literal
 }
 
+// Variable assignment: x := user.role
+assignment = {
+    ident ~ ":=" ~ assignment_value
+}
+
+assignment_value = {
+    comprehension |
+    entity_attr |
+    value |
+    ident  // Variable reference
+}
+
+// Comprehensions
+comprehension = {
+    set_comprehension |
+    array_comprehension |
+    object_comprehension
+}
+
+set_comprehension = {
+    "{" ~ comp_expr ~ "|" ~ comp_iterator ~ comp_filters ~ "}"
+}
+
+array_comprehension = {
+    "[" ~ comp_expr ~ "|" ~ comp_iterator ~ comp_filters ~ "]"
+}
+
+object_comprehension = {
+    "{" ~ comp_expr ~ ":" ~ comp_expr ~ "|" ~ comp_iterator ~ comp_filters ~ "}"
+}
+
+comp_iterator = {
+    ident ~ ":=" ~ entity_attr
+}
+
+comp_filters = {
+    (";" ~ condition)*
+}
+
+comp_expr = {
+    comp_indexed_access |
+    comp_attribute_access |
+    comp_variable |
+    value
+}
+
+comp_attribute_access = {
+    ident ~ "." ~ ident
+}
+
+comp_indexed_access = {
+    ident ~ "." ~ ident ~ bracket_index
+}
+
+comp_variable = {
+    ident
+}
+
 // Comparisons
 comparison = {
-    entity_attr ~ op ~ value |
-    entity_attr ~ op ~ entity_attr
+    value ~ "in" ~ entity_attr |
+    value ~ "in" ~ var_attr |
+    entity_attr ~ op ~ comparison_right |
+    var_attr ~ op ~ comparison_right |
+    ident ~ op ~ comparison_right
+}
+
+comparison_right = {
+    entity_attr |
+    var_attr |
+    value |
+    ident  // Variable reference
 }
 
 entity_attr = {
-    entity ~ "." ~ ident
+    entity ~ "." ~ ident ~ bracket_index?
 }
+
+// Variable attribute access: u.name, u.roles[0]
+var_attr = {
+    !entity ~ ident ~ "." ~ ident ~ bracket_index?
+}
+
+bracket_index = { "[" ~ bracket_index_value ~ "]" }
+bracket_index_value = { "_" | integer | string }
 
 entity = { "user" | "resource" | "context" }
 
 // Operators
 op = {
-    "==" | "!=" | ">=" | "<=" | ">" | "<"
+    "==" | "!=" | ">=" | "<=" | ">" | "<" | "in"
 }
 
 // Values
@@ -91,8 +168,21 @@ value = {
     float |
     integer |
     boolean_literal |
-    null_literal
+    null_literal |
+    array |
+    braced_expr
 }
+
+// Array: [1, 2, 3] or []
+array = { "[" ~ (value ~ ("," ~ value)* ~ ","?)? ~ "]" }
+
+// Braced expression: { ... } - can be object or set, disambiguated in parser
+// Object: {"key": value, "key2": value2}
+// Set: {value1, value2, value3}
+braced_expr = { "{" ~ braced_items? ~ "}" }
+braced_items = { braced_item ~ ("," ~ braced_item)* ~ ","? }
+braced_item = { object_pair | value }
+object_pair = { (string | ident) ~ ":" ~ value }
 
 // Literals
 string = @{ "\"" ~ string_inner ~ "\"" }

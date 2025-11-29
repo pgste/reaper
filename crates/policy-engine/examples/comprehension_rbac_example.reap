@@ -1,0 +1,91 @@
+// Real-World RBAC Example with Comprehensions
+// Demonstrates practical use of comprehensions with multiple filters for role-based access control
+
+policy senior_developer_access {
+    version: "1.0.0",
+    description: "Advanced RBAC example: Only senior developers can access production resources",
+    default: deny,
+
+    // Rule 1: Allow senior developers to access production resources
+    rule allow_senior_dev_production {
+        // Step 1: Collect emails of all senior developers
+        // Multiple filters connected with semicolons:
+        // - Must have "developer" role
+        // - Must have 5+ years of experience
+        // - Must be in active status
+        senior_dev_emails := [u.email |
+            u := user.employees[_];
+            "developer" in u.roles;
+            u.years_experience >= 5;
+            u.active == true
+        ]
+
+        // Step 2: Check if user is a senior developer AND resource is production
+        allow if {
+            user.email in senior_dev_emails &&
+            resource.environment == "production"
+        }
+    }
+
+    // Rule 2: Allow team leads to access their team's resources
+    rule allow_team_lead_access {
+        // Create mapping of team => lead_email
+        team_leads := {t.name: t.lead_email | t := user.teams[_]}
+
+        // Check if user is the team lead for the resource's team
+        allow if {
+            team_leads[resource.team] == user.email &&
+            resource.access_level != "confidential"
+        }
+    }
+
+    // Rule 3: Allow admins to access everything (simple comprehension)
+    rule allow_admin_all {
+        // Collect all admin user IDs into a set
+        admin_ids := {u.id | u := user.employees[_]; u.role == "admin"}
+
+        // Admins have unrestricted access
+        allow if user.id in admin_ids
+    }
+}
+
+// Expected data structure:
+// user.employees = [
+//   {id: "001", email: "alice@example.com", roles: ["developer", "architect"], years_experience: 8, active: true},
+//   {id: "002", email: "bob@example.com", roles: ["developer"], years_experience: 3, active: true},
+//   {id: "003", email: "charlie@example.com", roles: ["developer"], years_experience: 6, active: false},
+//   {id: "004", email: "diana@example.com", roles: ["admin"], role: "admin", years_experience: 10, active: true}
+// ]
+//
+// user.teams = [
+//   {name: "backend", lead_email: "alice@example.com"},
+//   {name: "frontend", lead_email: "eve@example.com"}
+// ]
+//
+// Test scenarios:
+//
+// 1. Alice (8 yrs experience, active developer) accessing production:
+//    - senior_dev_emails = ["alice@example.com"]
+//    - Result: ALLOW (senior dev + production resource)
+//
+// 2. Bob (3 yrs experience, active developer) accessing production:
+//    - senior_dev_emails = ["alice@example.com"] (Bob not included - only 3 years)
+//    - Result: DENY (not senior)
+//
+// 3. Charlie (6 yrs experience, inactive developer) accessing production:
+//    - senior_dev_emails = ["alice@example.com"] (Charlie not included - not active)
+//    - Result: DENY (not active)
+//
+// 4. Alice accessing backend team resource (non-confidential):
+//    - team_leads = {"backend": "alice@example.com", "frontend": "eve@example.com"}
+//    - Result: ALLOW (team lead for backend)
+//
+// 5. Diana (admin) accessing any resource:
+//    - admin_ids = {"004"}
+//    - Result: ALLOW (admin has unrestricted access)
+//
+// Key benefits of comprehensions in RBAC:
+// - Clean separation of data collection and policy logic
+// - Performance: Comprehension evaluated once, result reused
+// - Readability: Clear "who can do what" logic
+// - Maintainability: Easy to add/remove filters

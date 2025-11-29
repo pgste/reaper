@@ -1,0 +1,41 @@
+// Example Policy: Arrays, Sets, and Collections
+// Demonstrates new Rego-compatible data structures
+
+policy array_set_policy {
+    version: "1.0.0",
+    description: "Examples of array, set, and object operations",
+    default: deny,
+
+    // Rule 1: Check if user has admin role in their roles array
+    rule admin_by_array {
+        allow if "admin" in user.roles
+    }
+
+    // Rule 2: Check first role is admin using array indexing
+    rule first_role_admin {
+        allow if user.roles[0] == "admin"
+    }
+
+    // Rule 3: Check department using object/map access
+    rule engineering_access {
+        allow if user.metadata["department"] == "engineering"
+    }
+
+    // Rule 4: Check multiple permissions exist in set
+    rule permission_set_check {
+        allow if {
+            "read" in resource.allowed_actions &&
+            "write" in resource.allowed_actions
+        }
+    }
+
+    // Rule 5: Check last element of array (negative indexing)
+    rule last_role_check {
+        deny if user.roles[-1] == "guest"
+    }
+
+    // Rule 6: Nested object access
+    rule nested_metadata {
+        allow if user.profile["security"]["level"] == "high"
+    }
+}

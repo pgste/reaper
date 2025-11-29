@@ -78,18 +78,66 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
             let compiled = compile_condition(*cond)?;
             Ok(DslCondition::Not(Box::new(compiled)))
         }
+
+        Condition::Assignment { variable, value } => {
+            // Check if this is a comprehension assignment
+            if matches!(value, AssignmentValue::Comprehension(_)) {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Comprehensions are not yet supported in compiled policies. \
+                        Variable '{}' uses a comprehension which requires direct AST evaluation. \
+                        Full comprehension support coming in next release.",
+                        variable
+                    ),
+                });
+            }
+
+            // Regular assignments not yet supported in compiler
+            Err(ReaperError::InvalidPolicy {
+                reason: "Variable assignments (:=) are not yet supported in compiled policies. \
+                        Use .reap format with direct evaluation for variable support."
+                    .to_string(),
+            })
+        }
     }
 }
 
 /// Compile a comparison into the appropriate DslCondition variant
 fn compile_comparison(
-    left: EntityAttr,
+    left: ComparisonLeft,
     op: Operator,
     right: ComparisonRight,
 ) -> Result<DslCondition, ReaperError> {
+    // Extract EntityAttr from left - var attributes not supported in compiler
+    let left_attr = match left {
+        ComparisonLeft::EntityAttr(attr) => attr,
+        ComparisonLeft::VarAttr(var_attr) => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Variable attribute access '{}.{}' is not supported in compiled policies. \
+                    Variable attributes require direct AST evaluation. \
+                    Use .reap format with direct evaluation for comprehension filter support.",
+                    var_attr.variable, var_attr.attribute
+                ),
+            });
+        }
+    };
+
     match right {
-        ComparisonRight::Value(value) => compile_value_comparison(left, op, value),
-        ComparisonRight::EntityAttr(right_attr) => compile_attr_comparison(left, op, right_attr),
+        ComparisonRight::Value(value) => compile_value_comparison(left_attr, op, value),
+        ComparisonRight::EntityAttr(right_attr) => {
+            compile_attr_comparison(left_attr, op, right_attr)
+        }
+        ComparisonRight::VarAttr(var_attr) => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Variable attribute access '{}.{}' is not supported in compiled policies. \
+                    Variable attributes require direct AST evaluation.",
+                var_attr.variable, var_attr.attribute
+            ),
+        }),
+        ComparisonRight::Variable(_) => Err(ReaperError::InvalidPolicy {
+            reason: "Variable references are not yet supported in compiled policies".to_string(),
+        }),
     }
 }
 
@@ -106,6 +154,24 @@ fn compile_value_comparison(
         Value::Float(f) => f.to_string(),
         Value::Boolean(b) => b.to_string(),
         Value::Null => "null".to_string(),
+        Value::Array(arr) => {
+            // Serialize array to JSON string for comparison
+            serde_json::to_string(&arr).map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to serialize array: {}", e),
+            })?
+        }
+        Value::Object(obj) => {
+            // Serialize object to JSON string for comparison
+            serde_json::to_string(&obj).map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to serialize object: {}", e),
+            })?
+        }
+        Value::Set(set) => {
+            // Serialize set to JSON string for comparison
+            serde_json::to_string(&set).map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to serialize set: {}", e),
+            })?
+        }
     };
 
     match (left.entity, op) {
@@ -259,10 +325,11 @@ mod tests {
                 name: "admin".to_string(),
                 decision: Decision::Allow,
                 condition: Condition::Comparison {
-                    left: EntityAttr {
+                    left: ComparisonLeft::EntityAttr(EntityAttr {
                         entity: Entity::User,
                         attribute: "role".to_string(),
-                    },
+                        index: None,
+                    }),
                     op: Operator::Equal,
                     right: ComparisonRight::Value(Value::String("admin".to_string())),
                 },

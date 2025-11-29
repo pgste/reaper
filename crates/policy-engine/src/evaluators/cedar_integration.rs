@@ -194,6 +194,52 @@ fn convert_attribute_value(
                 reason: format!("Failed to create Cedar null representation: {}", e),
             })
         }
+        AttributeValue::Object(map) => {
+            // Convert object to Cedar record literal
+            // For now, simplified conversion - Cedar records are more structured
+            let pairs: Result<Vec<String>, ReaperError> =
+                map.iter()
+                    .map(|(k, v)| -> Result<String, ReaperError> {
+                        let key_str = interner.resolve_str(*k).ok_or_else(|| {
+                            ReaperError::EvaluationError {
+                                reason: "Failed to resolve object key".to_string(),
+                            }
+                        })?;
+                        let value_expr = convert_attribute_value(v, interner)?;
+                        Ok(format!("{}: {:?}", key_str, value_expr))
+                    })
+                    .collect();
+
+            let pairs_str = pairs?.join(", ");
+            let record_str = format!("{{{}}}", pairs_str);
+
+            RestrictedExpression::from_str(&record_str).map_err(|e| ReaperError::EvaluationError {
+                reason: format!("Failed to create Cedar record: {}", e),
+            })
+        }
+        AttributeValue::Set(items) => {
+            // Convert set to Cedar set literal
+            let converted: Result<Vec<_>, _> = items
+                .iter()
+                .map(|v| convert_attribute_value(v, interner))
+                .collect();
+
+            let values = converted?;
+
+            // Create a Cedar set expression
+            let set_str = format!(
+                "[{}]",
+                values
+                    .iter()
+                    .map(|v| format!("{:?}", v))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+
+            RestrictedExpression::from_str(&set_str).map_err(|e| ReaperError::EvaluationError {
+                reason: format!("Failed to create Cedar set: {}", e),
+            })
+        }
     }
 }
 

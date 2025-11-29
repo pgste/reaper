@@ -1,0 +1,25 @@
+// Set Comprehension Example
+// Demonstrates collecting unique values from a collection into a set
+
+policy admin_set_example {
+    version: "1.0.0",
+    description: "Example showing set comprehension for collecting admin usernames",
+    default: deny,
+
+    // Collect all admin usernames into a set (unique values only)
+    // Syntax: {output_expr | iterator; filters}
+    rule allow_admins {
+        // Step 1: Create a set of all admin user names
+        // This iterates over all users and collects names where role == "admin"
+        admin_names := {u.name | u := user.all_users[_]; u.role == "admin"}
+
+        // Step 2: Check if current user's name is in the admin set
+        allow if user.name in admin_names
+    }
+}
+
+// Expected behavior:
+// - If user.all_users contains [{name: "alice", role: "admin"}, {name: "bob", role: "user"}, {name: "charlie", role: "admin"}]
+// - Then admin_names will be {"alice", "charlie"}
+// - A user with name "alice" will be allowed
+// - A user with name "bob" will be denied (default)

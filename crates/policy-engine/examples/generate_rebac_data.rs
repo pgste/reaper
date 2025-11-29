@@ -151,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "entities": entities
     });
 
-    let filename = "rebac-test-data.json";
+    let filename = "test-data/rebac-test-data.json";
     fs::write(filename, serde_json::to_string_pretty(&output)?)?;
 
     println!("\n✅ Generated ReBAC test data:");

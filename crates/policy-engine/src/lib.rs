@@ -4,6 +4,7 @@ pub mod data;
 mod engine;
 mod evaluators;
 pub mod gherkin;
+pub mod optimizer;
 pub mod reap;
 
 pub use engine::{
@@ -20,6 +21,9 @@ pub use evaluators::reaper_dsl;
 
 // Re-export reap parser and bundle format
 pub use reap::{BundleFormat, PolicyBundle, ReaperPolicy};
+
+// Re-export optimizer types (Phase 5A: Decision Trees)
+pub use optimizer::{DecisionTree, DecisionTreeBuilder, TreeStats};
 
 pub use data::{
     AttributeValue, Attributes, DataFormat, DataLoader, DataStore, Entity, EntityId, EntityType,

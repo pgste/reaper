@@ -40,7 +40,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // RBAC attributes
         let role = roles[i % roles.len()];
-        let status = if i % 20 == 0 { "suspended" } else { "active" };
+        // 5% suspended users (but keep user_0-19 active for tests, user_20 IS suspended)
+        let status = if i >= 20 && i % 20 == 0 {
+            "suspended"
+        } else {
+            "active"
+        };
         let suspended = status == "suspended";
 
         // Team roles (ReBAC)
@@ -211,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "entities": entities
     });
 
-    let filename = "multilayer-test-data.json";
+    let filename = "test-data/multilayer-test-data.json";
     fs::write(filename, serde_json::to_string_pretty(&output)?)?;
 
     println!("\n✅ Generated Multilayer test data:");

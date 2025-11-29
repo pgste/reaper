@@ -1,0 +1,41 @@
+// Example Policy: Local Variables
+// Demonstrates variable assignment and reuse
+
+policy variable_policy {
+    version: "1.0.0",
+    description: "Examples of local variable assignments",
+    default: deny,
+
+    // Rule 1: Assign and compare
+    rule role_variable {
+        allow if {
+            role := user.role &&
+            role == "admin"
+        }
+    }
+
+    // Rule 2: Extract from array and compare
+    rule primary_role {
+        allow if {
+            primary := user.roles[0] &&
+            primary == "manager"
+        }
+    }
+
+    // Rule 3: Extract from object and use
+    rule department_match {
+        allow if {
+            user_dept := user.metadata["department"] &&
+            resource_dept := resource.metadata["department"] &&
+            user_dept == resource_dept
+        }
+    }
+
+    // Rule 4: Variable from nested access
+    rule security_level {
+        allow if {
+            level := user.profile["security"]["level"] &&
+            level == "high"
+        }
+    }
+}

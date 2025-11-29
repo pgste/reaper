@@ -82,8 +82,9 @@ async fn check_decision(world: &mut PolicyWorld, expected: String) {
     let decision = world.context.get_decision().expect("No decision recorded");
 
     let expected_upper = expected.to_uppercase();
+    let decision_upper = decision.to_uppercase();
     assert!(
-        decision.contains(&expected_upper),
+        decision_upper.contains(&expected_upper),
         "Expected decision '{}', but got '{}'",
         expected_upper,
         decision
