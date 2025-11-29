@@ -171,6 +171,7 @@ fn parse_primary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Re
 
     match inner.as_rule() {
         Rule::condition_expr => parse_condition_expr(inner),
+        Rule::assignment => parse_assignment(inner),
         Rule::comparison => parse_comparison(inner),
         Rule::boolean_literal => match inner.as_str() {
             "true" => Ok(Condition::True),
@@ -185,24 +186,123 @@ fn parse_primary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Re
     }
 }
 
+fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> Result<Condition, ReaperError> {
+    let mut inner = pair.into_inner();
+
+    let variable = inner.next().unwrap().as_str().to_string();
+    let value_pair = inner.next().unwrap();
+
+    let value = parse_assignment_value(value_pair)?;
+
+    Ok(Condition::Assignment { variable, value })
+}
+
+fn parse_assignment_value(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<AssignmentValue, ReaperError> {
+    // The pair is assignment_value, which contains comprehension, entity_attr, value, or ident
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Empty assignment value".to_string(),
+        })?;
+
+    match inner.as_rule() {
+        Rule::comprehension => Ok(AssignmentValue::Comprehension(parse_comprehension(inner)?)),
+        Rule::entity_attr => Ok(AssignmentValue::EntityAttr(parse_entity_attr(inner)?)),
+        Rule::value => Ok(AssignmentValue::Value(parse_value(inner)?)),
+        Rule::ident => Ok(AssignmentValue::Variable(inner.as_str().to_string())),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Unexpected assignment value type: {:?}", inner.as_rule()),
+        }),
+    }
+}
+
 fn parse_comparison(pair: pest::iterators::Pair<Rule>) -> Result<Condition, ReaperError> {
     let mut inner = pair.into_inner();
 
-    let left = parse_entity_attr(inner.next().unwrap())?;
-    let op = Operator::from(inner.next().unwrap().as_str());
+    let first_pair = inner.next().unwrap();
+
+    // Check if this is "value in entity_attr" or "value in var_attr" form
+    if first_pair.as_rule() == Rule::value {
+        // Format: value in attr
+        let value = parse_value(first_pair)?;
+        // The "in" keyword is implicit in the grammar, not captured
+        let next_pair = inner.next().unwrap();
+
+        let left = match next_pair.as_rule() {
+            Rule::entity_attr => ComparisonLeft::EntityAttr(parse_entity_attr(next_pair)?),
+            Rule::var_attr => ComparisonLeft::VarAttr(parse_var_attr(next_pair)?),
+            _ => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Unexpected attribute type after 'in': {:?}",
+                        next_pair.as_rule()
+                    ),
+                })
+            }
+        };
+
+        // "value in attr" is represented as: left=attr, op=In, right=value
+        return Ok(Condition::Comparison {
+            left,
+            op: Operator::In,
+            right: ComparisonRight::Value(value),
+        });
+    }
+
+    // Check if this is "variable op something", "entity_attr op something", or "var_attr op something"
+    let op_pair = inner.next().unwrap();
+    let op = Operator::from(op_pair.as_str());
     let right_pair = inner.next().unwrap();
 
-    let right = match right_pair.as_rule() {
-        Rule::entity_attr => ComparisonRight::EntityAttr(parse_entity_attr(right_pair)?),
-        Rule::value => ComparisonRight::Value(parse_value(right_pair)?),
+    // Parse the left side (entity_attr, var_attr, or simple ident)
+    let left = match first_pair.as_rule() {
+        Rule::entity_attr => ComparisonLeft::EntityAttr(parse_entity_attr(first_pair)?),
+        Rule::var_attr => ComparisonLeft::VarAttr(parse_var_attr(first_pair)?),
+        Rule::ident => {
+            // Simple variable on left side - not supported in comparisons (only in assignments)
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Variable '{}' cannot appear on left side of comparison (use entity.attribute or var.attribute instead)",
+                    first_pair.as_str()
+                ),
+            });
+        }
         _ => {
             return Err(ReaperError::InvalidPolicy {
-                reason: format!("Unexpected right side: {:?}", right_pair.as_rule()),
-            })
+                reason: format!("Unexpected left side: {:?}", first_pair.as_rule()),
+            });
         }
     };
 
+    // Parse the right side using parse_comparison_right
+    let right = parse_comparison_right(right_pair)?;
+
     Ok(Condition::Comparison { left, op, right })
+}
+
+fn parse_comparison_right(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<ComparisonRight, ReaperError> {
+    // The pair is comparison_right, which contains entity_attr, var_attr, value, or ident
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Empty comparison right".to_string(),
+        })?;
+
+    match inner.as_rule() {
+        Rule::entity_attr => Ok(ComparisonRight::EntityAttr(parse_entity_attr(inner)?)),
+        Rule::var_attr => Ok(ComparisonRight::VarAttr(parse_var_attr(inner)?)),
+        Rule::value => Ok(ComparisonRight::Value(parse_value(inner)?)),
+        Rule::ident => Ok(ComparisonRight::Variable(inner.as_str().to_string())),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Unexpected comparison right type: {:?}", inner.as_rule()),
+        }),
+    }
 }
 
 fn parse_entity_attr(pair: pest::iterators::Pair<Rule>) -> Result<EntityAttr, ReaperError> {
@@ -210,7 +310,81 @@ fn parse_entity_attr(pair: pest::iterators::Pair<Rule>) -> Result<EntityAttr, Re
     let entity = Entity::from(inner.next().unwrap().as_str());
     let attribute = inner.next().unwrap().as_str().to_string();
 
-    Ok(EntityAttr { entity, attribute })
+    // Check for optional bracket index
+    let index = if let Some(bracket_pair) = inner.next() {
+        if bracket_pair.as_rule() == Rule::bracket_index {
+            let index_value_pair = bracket_pair.into_inner().next().unwrap();
+            Some(parse_bracket_index(index_value_pair)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(EntityAttr {
+        entity,
+        attribute,
+        index,
+    })
+}
+
+fn parse_var_attr(pair: pest::iterators::Pair<Rule>) -> Result<VarAttr, ReaperError> {
+    let mut inner = pair.into_inner();
+    let variable = inner.next().unwrap().as_str().to_string();
+    let attribute = inner.next().unwrap().as_str().to_string();
+
+    // Check for optional bracket index
+    let index = if let Some(bracket_pair) = inner.next() {
+        if bracket_pair.as_rule() == Rule::bracket_index {
+            let index_value_pair = bracket_pair.into_inner().next().unwrap();
+            Some(parse_bracket_index(index_value_pair)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(VarAttr {
+        variable,
+        attribute,
+        index,
+    })
+}
+
+fn parse_bracket_index(pair: pest::iterators::Pair<Rule>) -> Result<Index, ReaperError> {
+    // The pair is bracket_index_value, which contains either "_", integer, or string
+    // Check for wildcard first (literal "_")
+    if pair.as_str() == "_" {
+        return Ok(Index::Wildcard);
+    }
+
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Empty bracket index".to_string(),
+        })?;
+
+    match inner.as_rule() {
+        Rule::integer => {
+            let val = inner
+                .as_str()
+                .parse::<i64>()
+                .map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Invalid integer index: {}", e),
+                })?;
+            Ok(Index::Number(val))
+        }
+        Rule::string => {
+            let s = parse_string_literal(inner)?;
+            Ok(Index::String(s))
+        }
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Unexpected bracket index type: {:?}", inner.as_rule()),
+        }),
+    }
 }
 
 fn parse_value(pair: pest::iterators::Pair<Rule>) -> Result<Value, ReaperError> {
@@ -241,9 +415,90 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> Result<Value, ReaperError> 
             Ok(Value::Boolean(val))
         }
         Rule::null_literal => Ok(Value::Null),
+        Rule::array => parse_array(inner),
+        Rule::braced_expr => parse_braced_expr(inner),
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!("Unexpected value type: {:?}", inner.as_rule()),
         }),
+    }
+}
+
+fn parse_array(pair: pest::iterators::Pair<Rule>) -> Result<Value, ReaperError> {
+    let mut values = Vec::new();
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::value {
+            values.push(parse_value(inner)?);
+        }
+    }
+
+    Ok(Value::Array(values))
+}
+
+fn parse_braced_expr(pair: pest::iterators::Pair<Rule>) -> Result<Value, ReaperError> {
+    let mut has_pairs = false;
+    let mut has_values = false;
+    let mut object_pairs = Vec::new();
+    let mut set_values = Vec::new();
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::braced_items {
+            for item in inner.into_inner() {
+                if item.as_rule() == Rule::braced_item {
+                    let content = item.into_inner().next().unwrap();
+
+                    match content.as_rule() {
+                        Rule::object_pair => {
+                            has_pairs = true;
+                            let mut pair_inner = content.into_inner();
+
+                            // First element is either string or ident
+                            let key_pair = pair_inner.next().unwrap();
+                            let key = match key_pair.as_rule() {
+                                Rule::string => parse_string_literal(key_pair)?,
+                                Rule::ident => key_pair.as_str().to_string(),
+                                _ => {
+                                    return Err(ReaperError::InvalidPolicy {
+                                        reason: format!(
+                                            "Unexpected key type: {:?}",
+                                            key_pair.as_rule()
+                                        ),
+                                    })
+                                }
+                            };
+
+                            // Second element is the value
+                            let value = parse_value(pair_inner.next().unwrap())?;
+                            object_pairs.push((key, value));
+                        }
+                        Rule::value => {
+                            has_values = true;
+                            set_values.push(parse_value(content)?);
+                        }
+                        _ => {
+                            return Err(ReaperError::InvalidPolicy {
+                                reason: format!("Unexpected braced item: {:?}", content.as_rule()),
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Validate: can't mix object pairs and values
+    if has_pairs && has_values {
+        return Err(ReaperError::InvalidPolicy {
+            reason: "Cannot mix object pairs (key: value) and set values in same braced expression"
+                .to_string(),
+        });
+    }
+
+    if has_pairs {
+        Ok(Value::Object(object_pairs))
+    } else {
+        // Empty {} or set
+        Ok(Value::Set(set_values))
     }
 }
 
@@ -254,6 +509,271 @@ fn parse_string_literal(pair: pest::iterators::Pair<Rule>) -> Result<String, Rea
     let trimmed = &s[1..s.len() - 1];
     // Unescape if needed (simple implementation)
     Ok(trimmed.replace("\\\"", "\"").replace("\\\\", "\\"))
+}
+
+/// Parse a comprehension expression
+/// Comprehensions collect and transform data from collections
+fn parse_comprehension(pair: pest::iterators::Pair<Rule>) -> Result<Comprehension, ReaperError> {
+    // Comprehension contains either set_comprehension, array_comprehension, or object_comprehension
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Empty comprehension".to_string(),
+        })?;
+
+    match inner.as_rule() {
+        Rule::set_comprehension => parse_set_comprehension(inner),
+        Rule::array_comprehension => parse_array_comprehension(inner),
+        Rule::object_comprehension => parse_object_comprehension(inner),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Unexpected comprehension type: {:?}", inner.as_rule()),
+        }),
+    }
+}
+
+/// Parse set comprehension: {expr | iteration; filters}
+fn parse_set_comprehension(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Comprehension, ReaperError> {
+    let mut output: Option<Box<Expr>> = None;
+    let mut iterator: Option<ComprehensionIterator> = None;
+    let mut filters: Vec<Condition> = Vec::new();
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::comp_expr => {
+                output = Some(Box::new(parse_comp_expr(inner)?));
+            }
+            Rule::comp_iterator => {
+                iterator = Some(parse_comp_iterator(inner)?);
+            }
+            Rule::comp_filters => {
+                filters = parse_comp_filters(inner)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Comprehension::Set {
+        output: output.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Set comprehension missing output expression".to_string(),
+        })?,
+        iterator: iterator.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Set comprehension missing iterator".to_string(),
+        })?,
+        filters,
+    })
+}
+
+/// Parse array comprehension: [expr | iteration; filters]
+fn parse_array_comprehension(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Comprehension, ReaperError> {
+    let mut output: Option<Box<Expr>> = None;
+    let mut iterator: Option<ComprehensionIterator> = None;
+    let mut filters: Vec<Condition> = Vec::new();
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::comp_expr => {
+                output = Some(Box::new(parse_comp_expr(inner)?));
+            }
+            Rule::comp_iterator => {
+                iterator = Some(parse_comp_iterator(inner)?);
+            }
+            Rule::comp_filters => {
+                filters = parse_comp_filters(inner)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Comprehension::Array {
+        output: output.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Array comprehension missing output expression".to_string(),
+        })?,
+        iterator: iterator.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Array comprehension missing iterator".to_string(),
+        })?,
+        filters,
+    })
+}
+
+/// Parse object comprehension: {key: value | iteration; filters}
+fn parse_object_comprehension(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Comprehension, ReaperError> {
+    let mut key: Option<Box<Expr>> = None;
+    let mut value: Option<Box<Expr>> = None;
+    let mut iterator: Option<ComprehensionIterator> = None;
+    let mut filters: Vec<Condition> = Vec::new();
+
+    let mut expr_count = 0;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::comp_expr => {
+                if expr_count == 0 {
+                    key = Some(Box::new(parse_comp_expr(inner)?));
+                } else if expr_count == 1 {
+                    value = Some(Box::new(parse_comp_expr(inner)?));
+                }
+                expr_count += 1;
+            }
+            Rule::comp_iterator => {
+                iterator = Some(parse_comp_iterator(inner)?);
+            }
+            Rule::comp_filters => {
+                filters = parse_comp_filters(inner)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Comprehension::Object {
+        key: key.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Object comprehension missing key expression".to_string(),
+        })?,
+        value: value.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Object comprehension missing value expression".to_string(),
+        })?,
+        iterator: iterator.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Object comprehension missing iterator".to_string(),
+        })?,
+        filters,
+    })
+}
+
+/// Parse comprehension iterator: u := users[_]
+fn parse_comp_iterator(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<ComprehensionIterator, ReaperError> {
+    let mut variable: Option<String> = None;
+    let mut collection: Option<EntityAttr> = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                variable = Some(inner.as_str().to_string());
+            }
+            Rule::entity_attr => {
+                collection = Some(parse_entity_attr(inner)?);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(ComprehensionIterator {
+        variable: variable.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Iterator missing variable name".to_string(),
+        })?,
+        collection: collection.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Iterator missing collection".to_string(),
+        })?,
+    })
+}
+
+/// Parse comprehension filters: ; condition ; condition ...
+fn parse_comp_filters(pair: pest::iterators::Pair<Rule>) -> Result<Vec<Condition>, ReaperError> {
+    let mut filters = Vec::new();
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::condition {
+            filters.push(parse_condition(inner)?);
+        }
+    }
+
+    Ok(filters)
+}
+
+/// Parse comprehension output expression
+fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Empty comprehension expression".to_string(),
+        })?;
+
+    match inner.as_rule() {
+        Rule::comp_attribute_access => parse_comp_attribute_access(inner),
+        Rule::comp_indexed_access => parse_comp_indexed_access(inner),
+        Rule::comp_variable => Ok(Expr::Variable(inner.as_str().to_string())),
+        Rule::value => Ok(Expr::Literal(parse_value(inner)?)),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Unexpected comprehension expression type: {:?}",
+                inner.as_rule()
+            ),
+        }),
+    }
+}
+
+/// Parse attribute access in comprehension: u.name
+fn parse_comp_attribute_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let mut parts: Vec<String> = Vec::new();
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::ident {
+            parts.push(inner.as_str().to_string());
+        }
+    }
+
+    if parts.len() != 2 {
+        return Err(ReaperError::InvalidPolicy {
+            reason: "Attribute access must have variable.attribute format".to_string(),
+        });
+    }
+
+    Ok(Expr::AttributeAccess {
+        variable: parts[0].clone(),
+        attribute: parts[1].clone(),
+    })
+}
+
+/// Parse indexed access in comprehension: u.roles[0]
+fn parse_comp_indexed_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let mut variable: Option<String> = None;
+    let mut attribute: Option<String> = None;
+    let mut index: Option<Index> = None;
+
+    let mut ident_count = 0;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                if ident_count == 0 {
+                    variable = Some(inner.as_str().to_string());
+                } else if ident_count == 1 {
+                    attribute = Some(inner.as_str().to_string());
+                }
+                ident_count += 1;
+            }
+            Rule::bracket_index => {
+                // bracket_index contains bracket_index_value
+                let idx_value =
+                    inner
+                        .into_inner()
+                        .next()
+                        .ok_or_else(|| ReaperError::InvalidPolicy {
+                            reason: "Empty bracket index".to_string(),
+                        })?;
+                index = Some(parse_bracket_index(idx_value)?);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Expr::IndexedAccess {
+        variable: variable.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Indexed access missing variable".to_string(),
+        })?,
+        attribute: attribute.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Indexed access missing attribute".to_string(),
+        })?,
+        index: index.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Indexed access missing index".to_string(),
+        })?,
+    })
 }
 
 #[cfg(test)]
@@ -306,5 +826,860 @@ mod tests {
 
         let policy = ReapParser::parse(input).unwrap();
         assert_eq!(policy.rules.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_array_values() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule array_test {
+                    allow if user.roles == [1, 2, 3]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        assert_eq!(policy.rules.len(), 1);
+
+        // Verify it's a comparison with an array value
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Array(arr)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(arr.len(), 3);
+        } else {
+            panic!("Expected array value");
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_array() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule empty_array { allow if user.items == [] }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Array(arr)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(arr.len(), 0);
+        } else {
+            panic!("Expected empty array");
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_array() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule nested { allow if user.matrix == [[1, 2], [3, 4]] }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Array(arr)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(arr.len(), 2);
+            if let Value::Array(inner) = &arr[0] {
+                assert_eq!(inner.len(), 2);
+            } else {
+                panic!("Expected nested array");
+            }
+        } else {
+            panic!("Expected array value");
+        }
+    }
+
+    #[test]
+    fn test_parse_object_values() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule object_test {
+                    allow if user.config == {"timeout": 30, "retries": 3}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Object(obj)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(obj.len(), 2);
+            assert_eq!(obj[0].0, "timeout");
+            if let Value::Integer(val) = obj[0].1 {
+                assert_eq!(val, 30);
+            } else {
+                panic!("Expected integer value");
+            }
+        } else {
+            panic!("Expected object value");
+        }
+    }
+
+    #[test]
+    fn test_parse_set_values() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule set_test {
+                    allow if user.permissions == {"read", "write", "delete"}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Set(set)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(set.len(), 3);
+        } else {
+            panic!("Expected set value");
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_set() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule empty_set { allow if user.tags == {} }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Set(set)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(set.len(), 0);
+        } else {
+            panic!("Expected empty set");
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_object() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule nested {
+                    allow if user.profile == {"name": "alice", "settings": {"theme": "dark"}}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Object(obj)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(obj.len(), 2);
+            if let Value::Object(inner) = &obj[1].1 {
+                assert_eq!(inner.len(), 1);
+                assert_eq!(inner[0].0, "theme");
+            } else {
+                panic!("Expected nested object");
+            }
+        } else {
+            panic!("Expected object value");
+        }
+    }
+
+    #[test]
+    fn test_parse_mixed_types_in_array() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule mixed {
+                    allow if user.data == [1, "hello", true, null, [2, 3]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison {
+            right: ComparisonRight::Value(Value::Array(arr)),
+            ..
+        } = &policy.rules[0].condition
+        {
+            assert_eq!(arr.len(), 5);
+            assert!(matches!(arr[0], Value::Integer(_)));
+            assert!(matches!(arr[1], Value::String(_)));
+            assert!(matches!(arr[2], Value::Boolean(_)));
+            assert!(matches!(arr[3], Value::Null));
+            assert!(matches!(arr[4], Value::Array(_)));
+        } else {
+            panic!("Expected array with mixed types");
+        }
+    }
+
+    #[test]
+    fn test_parse_bracket_notation_numeric() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule array_index {
+                    allow if user.roles[0] == "admin"
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison { left, .. } = &policy.rules[0].condition {
+            if let ComparisonLeft::EntityAttr(attr) = left {
+                assert_eq!(attr.attribute, "roles");
+                assert!(attr.index.is_some());
+                if let Some(Index::Number(n)) = &attr.index {
+                    assert_eq!(n, &0);
+                } else {
+                    panic!("Expected numeric index");
+                }
+            } else {
+                panic!("Expected entity attribute");
+            }
+        } else {
+            panic!("Expected comparison");
+        }
+    }
+
+    #[test]
+    fn test_parse_bracket_notation_string() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule object_key {
+                    allow if user.data["department"] == "engineering"
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison { left, .. } = &policy.rules[0].condition {
+            if let ComparisonLeft::EntityAttr(attr) = left {
+                assert_eq!(attr.attribute, "data");
+                assert!(attr.index.is_some());
+                if let Some(Index::String(s)) = &attr.index {
+                    assert_eq!(s, "department");
+                } else {
+                    panic!("Expected string index");
+                }
+            } else {
+                panic!("Expected entity attribute");
+            }
+        } else {
+            panic!("Expected comparison");
+        }
+    }
+
+    #[test]
+    fn test_parse_in_operator() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule membership {
+                    allow if "admin" in user.roles
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        // "admin" in user.roles is parsed as: left=user.roles, op=In, right="admin"
+        if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
+            assert_eq!(*op, Operator::In);
+            if let ComparisonLeft::EntityAttr(attr) = left {
+                assert_eq!(attr.entity, Entity::User);
+                assert_eq!(attr.attribute, "roles");
+            } else {
+                panic!("Expected entity attribute");
+            }
+            if let ComparisonRight::Value(Value::String(s)) = right {
+                assert_eq!(s, "admin");
+            } else {
+                panic!("Expected string value on right side");
+            }
+        } else {
+            panic!("Expected comparison");
+        }
+    }
+
+    #[test]
+    fn test_parse_in_operator_with_variable() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule check_permission {
+                    allow if context.action in resource.allowed_actions
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
+            assert_eq!(*op, Operator::In);
+            if let ComparisonLeft::EntityAttr(attr) = left {
+                assert_eq!(attr.entity, Entity::Context);
+                assert_eq!(attr.attribute, "action");
+            } else {
+                panic!("Expected entity attribute on left side");
+            }
+            if let ComparisonRight::EntityAttr(attr) = right {
+                assert_eq!(attr.entity, Entity::Resource);
+                assert_eq!(attr.attribute, "allowed_actions");
+            } else {
+                panic!("Expected entity attribute on right side");
+            }
+        } else {
+            panic!("Expected comparison");
+        }
+    }
+
+    #[test]
+    fn test_parse_variable_assignment() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule with_variable {
+                    allow if role := user.role
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        // The condition should be a simple assignment
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "role");
+            if let AssignmentValue::EntityAttr(attr) = value {
+                assert_eq!(attr.entity, Entity::User);
+                assert_eq!(attr.attribute, "role");
+            } else {
+                panic!("Expected entity attr in assignment");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_assignment_value_types() {
+        // Test assignment from literal value
+        let input = r#"
+            policy test {
+                default: deny,
+                rule literal_assign {
+                    allow if x := "admin"
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "x");
+            if let AssignmentValue::Value(Value::String(s)) = value {
+                assert_eq!(s, "admin");
+            } else {
+                panic!("Expected string value");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comparison_with_variable_right() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule compare_var {
+                    allow if user.role == role_var
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
+            if let ComparisonLeft::EntityAttr(attr) = left {
+                assert_eq!(attr.entity, Entity::User);
+                assert_eq!(attr.attribute, "role");
+            } else {
+                panic!("Expected entity attribute on left side");
+            }
+            assert_eq!(*op, Operator::Equal);
+            if let ComparisonRight::Variable(var) = right {
+                assert_eq!(var, "role_var");
+            } else {
+                panic!("Expected variable on right side");
+            }
+        } else {
+            panic!("Expected comparison");
+        }
+    }
+
+    // ========== COMPREHENSION PARSER TESTS ==========
+
+    #[test]
+    fn test_parse_set_comprehension_simple() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule collect_names {
+                    allow if admin_names := {u.name | u := user.team[_]}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "admin_names");
+            if let AssignmentValue::Comprehension(Comprehension::Set {
+                output,
+                iterator,
+                filters,
+            }) = value
+            {
+                // Check output expression: u.name
+                if let Expr::AttributeAccess {
+                    variable: var,
+                    attribute: attr,
+                } = output.as_ref()
+                {
+                    assert_eq!(var, "u");
+                    assert_eq!(attr, "name");
+                } else {
+                    panic!("Expected attribute access in output");
+                }
+
+                // Check iterator: u := user.team[_]
+                assert_eq!(iterator.variable, "u");
+                assert_eq!(iterator.collection.entity, Entity::User);
+                assert_eq!(iterator.collection.attribute, "team");
+                assert!(matches!(iterator.collection.index, Some(Index::Wildcard)));
+
+                // No filters
+                assert_eq!(filters.len(), 0);
+            } else {
+                panic!("Expected set comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_array_comprehension_simple() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule collect_emails {
+                    allow if all_emails := [u.email | u := user.contacts[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "all_emails");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator,
+                filters,
+            }) = value
+            {
+                // Check output expression: u.email
+                if let Expr::AttributeAccess {
+                    variable: var,
+                    attribute: attr,
+                } = output.as_ref()
+                {
+                    assert_eq!(var, "u");
+                    assert_eq!(attr, "email");
+                } else {
+                    panic!("Expected attribute access in output");
+                }
+
+                // Check iterator
+                assert_eq!(iterator.variable, "u");
+                assert_eq!(iterator.collection.entity, Entity::User);
+                assert_eq!(iterator.collection.attribute, "contacts");
+
+                // No filters
+                assert_eq!(filters.len(), 0);
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_object_comprehension_simple() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule create_user_map {
+                    allow if user_map := {u.id: u.name | u := user.all_users[_]}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "user_map");
+            if let AssignmentValue::Comprehension(Comprehension::Object {
+                key,
+                value: val,
+                iterator,
+                filters,
+            }) = value
+            {
+                // Check key expression: u.id
+                if let Expr::AttributeAccess {
+                    variable: var,
+                    attribute: attr,
+                } = key.as_ref()
+                {
+                    assert_eq!(var, "u");
+                    assert_eq!(attr, "id");
+                } else {
+                    panic!("Expected attribute access in key");
+                }
+
+                // Check value expression: u.name
+                if let Expr::AttributeAccess {
+                    variable: var,
+                    attribute: attr,
+                } = val.as_ref()
+                {
+                    assert_eq!(var, "u");
+                    assert_eq!(attr, "name");
+                } else {
+                    panic!("Expected attribute access in value");
+                }
+
+                // Check iterator
+                assert_eq!(iterator.variable, "u");
+                assert_eq!(iterator.collection.entity, Entity::User);
+
+                // No filters
+                assert_eq!(filters.len(), 0);
+            } else {
+                panic!("Expected object comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comprehension_with_single_filter() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule active_users {
+                    allow if active := {u.name | u := user.users[_]; u.active == true}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "active");
+            if let AssignmentValue::Comprehension(Comprehension::Set {
+                output: _,
+                iterator,
+                filters,
+            }) = value
+            {
+                assert_eq!(iterator.variable, "u");
+                assert_eq!(filters.len(), 1);
+
+                // Check filter: u.active == true
+                if let Condition::Comparison { left, op, right } = &filters[0] {
+                    if let ComparisonLeft::VarAttr(var_attr) = left {
+                        assert_eq!(var_attr.variable, "u");
+                        assert_eq!(var_attr.attribute, "active");
+                    } else {
+                        panic!("Expected var attribute in filter");
+                    }
+                    assert_eq!(*op, Operator::Equal);
+                    if let ComparisonRight::Value(Value::Boolean(b)) = right {
+                        assert!(*b);
+                    } else {
+                        panic!("Expected boolean value");
+                    }
+                } else {
+                    panic!("Expected comparison in filter");
+                }
+            } else {
+                panic!("Expected set comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comprehension_with_multiple_filters() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule senior_devs {
+                    allow if senior_dev_emails := [u.email |
+                        u := user.employees[_];
+                        u.role == "developer";
+                        u.years_experience >= 5
+                    ]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "senior_dev_emails");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator,
+                filters,
+            }) = value
+            {
+                // Check output: u.email
+                if let Expr::AttributeAccess {
+                    variable: var,
+                    attribute: attr,
+                } = output.as_ref()
+                {
+                    assert_eq!(var, "u");
+                    assert_eq!(attr, "email");
+                } else {
+                    panic!("Expected attribute access");
+                }
+
+                // Check iterator
+                assert_eq!(iterator.variable, "u");
+
+                // Check two filters
+                assert_eq!(filters.len(), 2);
+
+                // Filter 1: u.role == "developer"
+                if let Condition::Comparison { left, op, right } = &filters[0] {
+                    if let ComparisonLeft::VarAttr(var_attr) = left {
+                        assert_eq!(var_attr.variable, "u");
+                        assert_eq!(var_attr.attribute, "role");
+                    } else {
+                        panic!("Expected var attribute in first filter");
+                    }
+                    assert_eq!(*op, Operator::Equal);
+                    if let ComparisonRight::Value(Value::String(s)) = right {
+                        assert_eq!(s, "developer");
+                    } else {
+                        panic!("Expected string value");
+                    }
+                } else {
+                    panic!("Expected comparison in first filter");
+                }
+
+                // Filter 2: u.years_experience >= 5
+                if let Condition::Comparison { left, op, right } = &filters[1] {
+                    if let ComparisonLeft::VarAttr(var_attr) = left {
+                        assert_eq!(var_attr.variable, "u");
+                        assert_eq!(var_attr.attribute, "years_experience");
+                    } else {
+                        panic!("Expected var attribute in second filter");
+                    }
+                    assert_eq!(*op, Operator::GreaterEqual);
+                    if let ComparisonRight::Value(Value::Integer(i)) = right {
+                        assert_eq!(*i, 5);
+                    } else {
+                        panic!("Expected integer value");
+                    }
+                } else {
+                    panic!("Expected comparison in second filter");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comprehension_with_literal_output() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule count_users {
+                    allow if counts := [1 | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "counts");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                // Check output: literal 1
+                if let Expr::Literal(Value::Integer(i)) = output.as_ref() {
+                    assert_eq!(*i, 1);
+                } else {
+                    panic!("Expected literal integer in output");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comprehension_with_variable_output() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule collect_vars {
+                    allow if collected := {u | u := user.items[_]}
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "collected");
+            if let AssignmentValue::Comprehension(Comprehension::Set {
+                output,
+                iterator,
+                filters: _,
+            }) = value
+            {
+                // Check output: variable u
+                if let Expr::Variable(var) = output.as_ref() {
+                    assert_eq!(var, "u");
+                    assert_eq!(var, &iterator.variable); // Same as iterator variable
+                } else {
+                    panic!("Expected variable in output");
+                }
+            } else {
+                panic!("Expected set comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comprehension_with_indexed_output() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule first_roles {
+                    allow if first_roles := [u.roles[0] | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "first_roles");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                // Check output: u.roles[0]
+                if let Expr::IndexedAccess {
+                    variable: var,
+                    attribute: attr,
+                    index,
+                } = output.as_ref()
+                {
+                    assert_eq!(var, "u");
+                    assert_eq!(attr, "roles");
+                    assert!(matches!(index, Index::Number(0)));
+                } else {
+                    panic!("Expected indexed access in output");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_comprehension_in_and_condition() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule complex_check {
+                    allow if {
+                        admin_names := {u.name | u := user.admins[_]; u.active == true} &&
+                        user.name in admin_names
+                    }
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        // The condition should be an AND
+        if let Condition::And(conditions) = &policy.rules[0].condition {
+            assert_eq!(conditions.len(), 2);
+
+            // First condition: assignment with comprehension
+            if let Condition::Assignment { variable, value } = &conditions[0] {
+                assert_eq!(variable, "admin_names");
+                assert!(matches!(
+                    value,
+                    AssignmentValue::Comprehension(Comprehension::Set { .. })
+                ));
+            } else {
+                panic!("Expected assignment in first AND condition");
+            }
+
+            // Second condition: membership test
+            if let Condition::Comparison { left, op, right } = &conditions[1] {
+                if let ComparisonLeft::EntityAttr(attr) = left {
+                    assert_eq!(attr.entity, Entity::User);
+                    assert_eq!(attr.attribute, "name");
+                } else {
+                    panic!("Expected entity attribute in second condition");
+                }
+                assert_eq!(*op, Operator::In);
+                if let ComparisonRight::Variable(var) = right {
+                    assert_eq!(var, "admin_names");
+                } else {
+                    panic!("Expected variable reference");
+                }
+            } else {
+                panic!("Expected comparison in second AND condition");
+            }
+        } else {
+            panic!("Expected AND condition");
+        }
     }
 }

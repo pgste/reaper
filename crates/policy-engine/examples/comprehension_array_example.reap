@@ -1,0 +1,42 @@
+// Array Comprehension Example
+// Demonstrates collecting values from a collection into an ordered array (preserves order, allows duplicates)
+
+policy email_collection_example {
+    version: "1.0.0",
+    description: "Example showing array comprehension for collecting user emails",
+    default: deny,
+
+    // Collect all user emails into an array (preserves order and duplicates)
+    // Syntax: [output_expr | iterator; filters]
+    rule allow_registered_emails {
+        // Step 1: Create an array of all active user emails
+        // This iterates over all users and collects email addresses where active == true
+        active_emails := [u.email | u := user.all_users[_]; u.active == true]
+
+        // Step 2: Check if current user's email is in the active emails array
+        allow if user.email in active_emails
+    }
+
+    // Alternative: Collect ALL emails without filters
+    rule allow_any_registered {
+        // No filter - collects ALL user emails
+        all_emails := [u.email | u := user.all_users[_]]
+
+        allow if user.email in all_emails
+    }
+}
+
+// Expected behavior:
+// - If user.all_users contains [
+//     {email: "alice@example.com", active: true},
+//     {email: "bob@example.com", active: false},
+//     {email: "charlie@example.com", active: true}
+//   ]
+// - Then active_emails will be ["alice@example.com", "charlie@example.com"]
+// - A user with email "alice@example.com" will be allowed
+// - A user with email "bob@example.com" will be denied (not active)
+//
+// Key difference from sets:
+// - Arrays preserve insertion order
+// - Arrays allow duplicate values (e.g., if two users share an email)
+// - Arrays are better for ordered data like timestamps, rankings, etc.

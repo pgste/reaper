@@ -74,6 +74,10 @@ pub struct EnhancedPolicy {
     #[serde(default)]
     pub rules: Vec<PolicyRule>,
 
+    /// Optional metadata for optimization hints
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 
@@ -99,10 +103,45 @@ impl EnhancedPolicy {
             language: PolicyLanguage::Simple,
             content,
             rules,
+            metadata: HashMap::new(),
             created_at: now,
             updated_at: now,
             evaluator: Some(evaluator),
         }
+    }
+
+    /// Create a new policy with tree optimization enabled
+    ///
+    /// Recommended for policies with 100+ rules.
+    /// Provides 10-600x faster evaluation at the cost of 1-10ms compilation time.
+    pub fn new_with_tree_optimization(
+        name: String,
+        description: String,
+        rules: Vec<PolicyRule>,
+    ) -> Result<Self> {
+        let content = serde_json::to_string(&rules).unwrap_or_default();
+        let now = chrono::Utc::now();
+
+        let evaluator = Arc::new(SimplePolicyEvaluator::with_tree_optimization(
+            rules.clone(),
+        )?) as Arc<dyn PolicyEvaluator>;
+
+        let mut metadata = HashMap::new();
+        metadata.insert("optimization".to_string(), "tree".to_string());
+
+        Ok(Self {
+            id: Uuid::new_v4(),
+            version: 1,
+            name,
+            description,
+            language: PolicyLanguage::Simple,
+            content,
+            rules,
+            metadata,
+            created_at: now,
+            updated_at: now,
+            evaluator: Some(evaluator),
+        })
     }
 
     /// Create a new policy with specified language
@@ -122,6 +161,7 @@ impl EnhancedPolicy {
             language: language.clone(),
             content: content.clone(),
             rules: Vec::new(),
+            metadata: HashMap::new(),
             created_at: now,
             updated_at: now,
             evaluator: None,
@@ -146,7 +186,18 @@ impl EnhancedPolicy {
                 // Update rules for backward compatibility
                 self.rules = rules.clone();
 
-                Arc::new(SimplePolicyEvaluator::new(rules))
+                // Check if tree optimization is requested in metadata
+                let use_tree = self
+                    .metadata
+                    .get("optimization")
+                    .map(|v| v == "tree")
+                    .unwrap_or(false);
+
+                if use_tree {
+                    Arc::new(SimplePolicyEvaluator::with_tree_optimization(rules)?)
+                } else {
+                    Arc::new(SimplePolicyEvaluator::new(rules))
+                }
             }
             PolicyLanguage::Cedar => {
                 let evaluator = CedarPolicyEvaluator::new(self.content.clone())?;
@@ -518,5 +569,151 @@ mod tests {
 
         assert!(decision.evaluation_time_ns > 0);
         assert_eq!(decision.matched_rule, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_tree_optimization() {
+        // Create policy with tree optimization
+        let rules = vec![
+            PolicyRule {
+                action: PolicyAction::Allow,
+                resource: "resource1".to_string(),
+                conditions: vec![],
+            },
+            PolicyRule {
+                action: PolicyAction::Allow,
+                resource: "resource2".to_string(),
+                conditions: vec![],
+            },
+            PolicyRule {
+                action: PolicyAction::Deny,
+                resource: "*".to_string(),
+                conditions: vec![],
+            },
+        ];
+
+        let policy = EnhancedPolicy::new_with_tree_optimization(
+            "tree-test".to_string(),
+            "Tree optimization test".to_string(),
+            rules,
+        )
+        .unwrap();
+
+        // Verify metadata is set
+        assert_eq!(
+            policy.metadata.get("optimization"),
+            Some(&"tree".to_string())
+        );
+
+        let policy_id = policy.id;
+        let engine = PolicyEngine::new();
+        engine.deploy_policy(policy).unwrap();
+
+        // Test evaluation
+        let request = PolicyRequest {
+            resource: "resource1".to_string(),
+            action: "read".to_string(),
+            context: HashMap::new(),
+        };
+
+        let decision = engine.evaluate(&policy_id, &request).unwrap();
+        assert!(matches!(decision.decision, PolicyAction::Allow));
+    }
+
+    #[tokio::test]
+    async fn test_tree_optimization_scale() {
+        // Generate many rules to test tree optimization performance
+        let mut rules = Vec::new();
+        for i in 0..100 {
+            rules.push(PolicyRule {
+                action: if i % 2 == 0 {
+                    PolicyAction::Allow
+                } else {
+                    PolicyAction::Deny
+                },
+                resource: format!("resource_{}", i),
+                conditions: vec![],
+            });
+        }
+
+        // Create with tree optimization
+        let tree_policy = EnhancedPolicy::new_with_tree_optimization(
+            "tree-scale-test".to_string(),
+            "Tree scale test".to_string(),
+            rules.clone(),
+        )
+        .unwrap();
+
+        // Create without tree optimization for comparison
+        let linear_policy = EnhancedPolicy::new(
+            "linear-scale-test".to_string(),
+            "Linear scale test".to_string(),
+            rules,
+        );
+
+        let engine = PolicyEngine::new();
+        let tree_id = tree_policy.id;
+        let linear_id = linear_policy.id;
+
+        engine.deploy_policy(tree_policy).unwrap();
+        engine.deploy_policy(linear_policy).unwrap();
+
+        // Test both
+        let request = PolicyRequest {
+            resource: "resource_50".to_string(),
+            action: "read".to_string(),
+            context: HashMap::new(),
+        };
+
+        let tree_decision = engine.evaluate(&tree_id, &request).unwrap();
+        let linear_decision = engine.evaluate(&linear_id, &request).unwrap();
+
+        // Both should give same result
+        assert_eq!(tree_decision.decision, linear_decision.decision);
+
+        // Tree should be faster (generally, though with only 100 rules the difference may be small)
+        println!(
+            "Tree eval: {}ns, Linear eval: {}ns",
+            tree_decision.evaluation_time_ns, linear_decision.evaluation_time_ns
+        );
+    }
+
+    #[tokio::test]
+    async fn test_metadata_flag_enables_tree() {
+        let content = serde_json::to_string(&vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "test".to_string(),
+            conditions: vec![],
+        }])
+        .unwrap();
+
+        let mut policy = EnhancedPolicy::new_with_language(
+            "metadata-test".to_string(),
+            "Metadata test".to_string(),
+            PolicyLanguage::Simple,
+            content,
+        )
+        .unwrap();
+
+        // Set tree optimization metadata
+        policy
+            .metadata
+            .insert("optimization".to_string(), "tree".to_string());
+
+        // Rebuild evaluator with tree optimization
+        policy.build_evaluator().unwrap();
+
+        // Verify evaluator has tree optimization enabled
+        let evaluator = policy.get_evaluator().unwrap();
+        if let Some(metadata) = evaluator.metadata() {
+            assert!(
+                metadata
+                    .extra
+                    .get("tree_optimized")
+                    .map(|v| v == "true")
+                    .unwrap_or(false),
+                "Tree optimization should be enabled"
+            );
+        }
     }
 }

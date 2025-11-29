@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load test data
     println!("\n📊 Loading RBAC test data...");
-    let data_content = std::fs::read_to_string("rbac-test-data.json")?;
+    let data_content = std::fs::read_to_string("test-data/rbac-test-data.json")?;
     let store = DataStore::new();
     let loader = DataLoader::new(store.clone());
     let entity_count = loader.load_json(&data_content)?;

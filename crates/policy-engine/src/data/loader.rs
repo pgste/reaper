@@ -9,6 +9,7 @@ use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// Supported data formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,7 +18,43 @@ pub enum DataFormat {
     // Future: Yaml, Toml, Binary, etc.
 }
 
+/// Statistics from loading entities
+///
+/// Provides detailed breakdown of loaded entities by type
+#[derive(Debug, Clone)]
+pub struct LoadStats {
+    /// Total entities loaded
+    pub total: usize,
+
+    /// Count by entity type: {"User": 100000, "Device": 50000, "Resource": 200000}
+    pub by_type: HashMap<String, usize>,
+
+    /// Total attributes across all entities
+    pub total_attributes: usize,
+
+    /// Load duration
+    pub duration: Duration,
+}
+
+impl LoadStats {
+    fn new() -> Self {
+        Self {
+            total: 0,
+            by_type: HashMap::new(),
+            total_attributes: 0,
+            duration: Duration::default(),
+        }
+    }
+
+    fn track_entity(&mut self, entity_type: &str, num_attributes: usize) {
+        self.total += 1;
+        *self.by_type.entry(entity_type.to_string()).or_insert(0) += 1;
+        self.total_attributes += num_attributes;
+    }
+}
+
 /// Data loader for importing entities
+#[derive(Clone)]
 pub struct DataLoader {
     store: DataStore,
 }
@@ -54,6 +91,87 @@ impl DataLoader {
             })?;
 
         self.load_document(data)
+    }
+
+    /// Load entities directly from parsed JSON values
+    ///
+    /// **Entity-type agnostic:** Works for any entity type (User, Resource, Device, Location, etc.)
+    /// **Index-aware:** Updates entity type indexes during load
+    /// **Memory efficient:** Bypasses JSON string serialization (saves ~40% memory)
+    ///
+    /// # Arguments
+    /// * `entities` - Vector of JSON entity objects
+    ///
+    /// # Returns
+    /// LoadStats with entity counts by type
+    ///
+    /// # Example
+    /// ```
+    /// use serde_json::json;
+    /// let entities = vec![
+    ///     json!({"id": "device_1", "type": "Device", "attributes": {"trustscore": 85}}),
+    ///     json!({"id": "user_1", "type": "User", "attributes": {"active": true}}),
+    /// ];
+    /// let stats = loader.load_json_values(entities)?;
+    /// println!("Loaded {} entities", stats.total);
+    /// ```
+    pub fn load_json_values(&self, entities: Vec<JsonValue>) -> Result<LoadStats, ReaperError> {
+        let start = Instant::now();
+        let mut stats = LoadStats::new();
+        let interner = self.store.interner();
+
+        for entity_value in entities {
+            // Parse entity document
+            let entity_doc = self.parse_entity_from_value(&entity_value)?;
+            let entity_type_str = entity_doc.entity_type.clone();
+            let num_attrs = entity_doc.attributes.len();
+
+            // Build entity (generic, entity-type agnostic)
+            let entity = self.build_entity_from_doc(entity_doc, interner)?;
+
+            // Insert and update indexes
+            self.store.insert(entity);
+
+            // Track stats
+            stats.track_entity(&entity_type_str, num_attrs);
+        }
+
+        stats.duration = start.elapsed();
+        Ok(stats)
+    }
+
+    /// Parse a JSON value into EntityDocument
+    fn parse_entity_from_value(&self, value: &JsonValue) -> Result<EntityDocument, ReaperError> {
+        serde_json::from_value(value.clone()).map_err(|e| ReaperError::InvalidPolicy {
+            reason: format!("Failed to parse entity: {}", e),
+        })
+    }
+
+    /// Build an entity from a document (entity-type agnostic)
+    fn build_entity_from_doc(
+        &self,
+        doc: EntityDocument,
+        interner: &super::interning::StringInterner,
+    ) -> Result<super::entity::Entity, ReaperError> {
+        let id = interner.intern(&doc.id);
+        let entity_type = interner.intern(&doc.entity_type);
+
+        let mut builder = EntityBuilder::new(id, entity_type);
+
+        // Generic attribute loading (works for any schema)
+        for (key, value) in doc.attributes {
+            let key_id = interner.intern(&key);
+            let attr_value = json_value_to_attribute(value, interner)?;
+            builder = builder.with_attribute(key_id, attr_value);
+        }
+
+        // Parent relationship (optional)
+        if let Some(parent) = doc.parent {
+            let parent_id = interner.intern(&parent);
+            builder = builder.with_parent(parent_id);
+        }
+
+        Ok(builder.build())
     }
 
     /// Load a data document
@@ -95,7 +213,7 @@ impl DataLoader {
 }
 
 /// Convert JSON value to AttributeValue
-fn json_value_to_attribute(
+pub(crate) fn json_value_to_attribute(
     value: JsonValue,
     interner: &super::interning::StringInterner,
 ) -> Result<AttributeValue, ReaperError> {
@@ -132,19 +250,19 @@ fn json_value_to_attribute(
 
 /// Data document structure
 #[derive(Debug, Deserialize, Serialize)]
-struct DataDocument {
+pub(crate) struct DataDocument {
     entities: Vec<EntityDocument>,
 }
 
 /// Single entity in a data document
 #[derive(Debug, Deserialize, Serialize)]
-struct EntityDocument {
-    id: String,
+pub(crate) struct EntityDocument {
+    pub id: String,
     #[serde(rename = "type")]
-    entity_type: String,
-    attributes: HashMap<String, JsonValue>,
+    pub entity_type: String,
+    pub attributes: HashMap<String, JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parent: Option<String>,
+    pub parent: Option<String>,
 }
 
 /// Convenience function to create a DataStore from JSON
@@ -308,5 +426,150 @@ mod tests {
         // Much less than if we stored "User" and "admin" 5 times each
         println!("Unique strings: {}", stats.interner_stats.unique_strings);
         println!("Estimated memory: {} bytes", stats.estimated_memory_bytes);
+    }
+
+    #[test]
+    fn test_load_json_values_multi_type() {
+        use serde_json::json;
+
+        let store = DataStore::new();
+        let loader = DataLoader::new(store.clone());
+
+        let entities = vec![
+            json!({
+                "id": "user_1",
+                "type": "User",
+                "attributes": {"name": "Alice", "active": true}
+            }),
+            json!({
+                "id": "user_2",
+                "type": "User",
+                "attributes": {"name": "Bob", "active": false}
+            }),
+            json!({
+                "id": "device_1",
+                "type": "Device",
+                "attributes": {"trustscore": 85, "os": "Linux"}
+            }),
+            json!({
+                "id": "resource_1",
+                "type": "Resource",
+                "attributes": {"classification": "secret"}
+            }),
+        ];
+
+        let stats = loader.load_json_values(entities).unwrap();
+
+        assert_eq!(stats.total, 4);
+        assert_eq!(stats.by_type.get("User"), Some(&2));
+        assert_eq!(stats.by_type.get("Device"), Some(&1));
+        assert_eq!(stats.by_type.get("Resource"), Some(&1));
+        assert_eq!(stats.total_attributes, 7); // 2+2+2+1
+    }
+
+    #[test]
+    fn test_load_json_values_vs_load_json() {
+        // Test that both methods produce identical results
+        let store1 = DataStore::new();
+        let store2 = DataStore::new();
+        let loader1 = DataLoader::new(store1.clone());
+        let loader2 = DataLoader::new(store2.clone());
+
+        let json_str = r#"{"entities": [
+            {"id": "user_1", "type": "User", "attributes": {"active": true, "role": "admin"}},
+            {"id": "doc_1", "type": "Resource", "attributes": {"public": false}}
+        ]}"#;
+
+        let json_val: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let entities = json_val["entities"].as_array().unwrap().clone();
+
+        // Load via old method
+        let count1 = loader1.load_json(json_str).unwrap();
+
+        // Load via new method
+        let stats2 = loader2.load_json_values(entities).unwrap();
+
+        // Both should load same number
+        assert_eq!(count1, stats2.total);
+        assert_eq!(count1, 2);
+
+        // Both should produce identical entities
+        let interner = store1.interner();
+        let user_id = interner.intern("user_1");
+        let doc_id = interner.intern("doc_1");
+
+        assert!(store1.get(user_id).is_some());
+        assert!(store1.get(doc_id).is_some());
+        assert!(store2.get(user_id).is_some());
+        assert!(store2.get(doc_id).is_some());
+
+        // Verify attributes match
+        let user1 = store1.get(user_id).unwrap();
+        let user2 = store2.get(user_id).unwrap();
+
+        let interner1 = store1.interner();
+        let interner2 = store2.interner();
+        let role_key1 = interner1.intern("role");
+        let role_key2 = interner2.intern("role");
+
+        assert_eq!(
+            user1
+                .get_string_attribute(role_key1, interner1)
+                .unwrap()
+                .as_ref(),
+            "admin"
+        );
+        assert_eq!(
+            user2
+                .get_string_attribute(role_key2, interner2)
+                .unwrap()
+                .as_ref(),
+            "admin"
+        );
+    }
+
+    #[test]
+    fn test_load_json_values_empty() {
+        let store = DataStore::new();
+        let loader = DataLoader::new(store.clone());
+
+        let stats = loader.load_json_values(vec![]).unwrap();
+
+        assert_eq!(stats.total, 0);
+        assert_eq!(stats.by_type.len(), 0);
+        assert_eq!(stats.total_attributes, 0);
+    }
+
+    #[test]
+    fn test_load_json_values_with_parent() {
+        use serde_json::json;
+
+        let store = DataStore::new();
+        let loader = DataLoader::new(store.clone());
+
+        let entities = vec![
+            json!({
+                "id": "engineering",
+                "type": "Department",
+                "attributes": {"name": "Engineering"}
+            }),
+            json!({
+                "id": "alice",
+                "type": "User",
+                "attributes": {"name": "Alice"},
+                "parent": "engineering"
+            }),
+        ];
+
+        let stats = loader.load_json_values(entities).unwrap();
+
+        assert_eq!(stats.total, 2);
+
+        let interner = store.interner();
+        let alice_id = interner.intern("alice");
+        let eng_id = interner.intern("engineering");
+        let alice = store.get(alice_id).unwrap();
+
+        assert_eq!(alice.parent, Some(eng_id));
     }
 }

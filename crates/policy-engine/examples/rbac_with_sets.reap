@@ -1,0 +1,43 @@
+// Example Policy: RBAC with Sets
+// Real-world role-based access control using sets for O(1) lookups
+
+policy rbac_sets {
+    version: "1.0.0",
+    description: "High-performance RBAC using HashSet membership",
+    default: deny,
+
+    // Rule 1: Admin has full access (O(1) set lookup)
+    rule admin_full_access {
+        allow if "admin" in user.roles
+    }
+
+    // Rule 2: Managers can read and write
+    rule manager_rw_access {
+        allow if {
+            "manager" in user.roles &&
+            context.action in {"read", "write"}
+        }
+    }
+
+    // Rule 3: Users can only read if they have permission
+    rule user_read_access {
+        allow if {
+            "user" in user.roles &&
+            context.action == "read" &&
+            "read" in resource.permissions
+        }
+    }
+
+    // Rule 4: Check user in resource's allowed users set
+    rule allowed_users {
+        allow if user.id in resource.allowed_user_ids
+    }
+
+    // Rule 5: Group-based access
+    rule group_access {
+        allow if {
+            group := user.groups[0] &&
+            group in resource.allowed_groups
+        }
+    }
+}

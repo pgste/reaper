@@ -279,8 +279,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Test 2: 100k entities
-    if std::path::Path::new("huge-test-data.json").exists() {
-        let result = run_test("huge-test-data.json", 100_000, 10_000)?;
+    if std::path::Path::new("test-data/huge-test-data.json").exists() {
+        let result = run_test("test-data/huge-test-data.json", 100_000, 10_000)?;
         results.push(result);
     } else {
         println!("⚠️  huge-test-data.json not found, skipping 100k test");

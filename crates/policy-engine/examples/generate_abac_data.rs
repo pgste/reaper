@@ -41,8 +41,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => 1 + (i % 3),           // 1-3
         };
 
-        // 5% suspended users
-        let status = if i % 20 == 0 { "suspended" } else { "active" };
+        // 5% suspended users (but keep user_0-19 active for tests, user_20 IS suspended)
+        let status = if i >= 20 && i % 20 == 0 {
+            "suspended"
+        } else {
+            "active"
+        };
         let suspended = status == "suspended";
 
         // High clearance flag (clearance >= 5)
@@ -90,14 +94,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 10% archived
         let archived = i % 10 == 0;
 
-        // Owner from same department
-        let owner_id = format!("user_{}", (i * 5) % num_users);
+        // Owner from same department (make resources match users for first 100 for easier testing)
+        let owner_id = if i < 100 {
+            format!("user_{}", i)
+        } else {
+            format!("user_{}", (i * 5) % num_users)
+        };
 
         entities.push(json!({
-            "id": format!("doc_{}", i),
+            "id": format!("resource_{}", i),
             "type": "Resource",
             "attributes": {
-                "id": format!("doc_{}", i),
+                "id": format!("resource_{}", i),
                 "name": format!("Document {}", i),
                 "type": "document",
                 "department": department,
@@ -115,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "entities": entities
     });
 
-    let filename = "abac-test-data.json";
+    let filename = "test-data/abac-test-data.json";
     fs::write(filename, serde_json::to_string_pretty(&output)?)?;
 
     println!("\n✅ Generated ABAC test data:");

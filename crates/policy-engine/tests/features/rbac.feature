@@ -3,8 +3,8 @@ Feature: RBAC Policy Validation
   Test the RBAC policy with various user roles and resource access scenarios
 
   Background:
-    Given the policy file "crates/policy-engine/examples/policies/rbac.reap"
-    And the data file "rbac-test-data.json"
+    Given the policy file "examples/policies/rbac.reap"
+    And the data file "../../test-data/rbac-test-data.json"
 
   @admin @positive
   Scenario: Admin has full access to all resources

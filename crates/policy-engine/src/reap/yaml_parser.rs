@@ -136,7 +136,7 @@ impl YamlCondition {
                 let right_value = right.into_ast()?;
 
                 Ok(Condition::Comparison {
-                    left: left_attr,
+                    left: ComparisonLeft::EntityAttr(left_attr),
                     op,
                     right: right_value,
                 })
@@ -171,6 +171,7 @@ impl YamlEntityAttr {
         Ok(EntityAttr {
             entity,
             attribute: self.attribute,
+            index: None,
         })
     }
 }
@@ -188,6 +189,7 @@ impl YamlComparisonRight {
                 Ok(ComparisonRight::EntityAttr(EntityAttr {
                     entity,
                     attribute,
+                    index: None,
                 }))
             }
         }
@@ -379,15 +381,20 @@ rules:
 
         match &ast.rules[0].condition {
             Condition::Comparison { left, op, right } => {
-                assert_eq!(left.entity, Entity::User);
-                assert_eq!(left.attribute, "id");
+                match left {
+                    ComparisonLeft::EntityAttr(attr) => {
+                        assert_eq!(attr.entity, Entity::User);
+                        assert_eq!(attr.attribute, "id");
+                    }
+                    _ => panic!("Expected EntityAttr on left"),
+                }
                 assert_eq!(*op, Operator::Equal);
                 match right {
                     ComparisonRight::EntityAttr(attr) => {
                         assert_eq!(attr.entity, Entity::Resource);
                         assert_eq!(attr.attribute, "owner_id");
                     }
-                    _ => panic!("Expected EntityAttr"),
+                    _ => panic!("Expected EntityAttr on right"),
                 }
             }
             _ => panic!("Expected Comparison condition"),

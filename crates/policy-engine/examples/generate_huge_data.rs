@@ -118,9 +118,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Write to file
     println!("3️⃣  Writing to file...");
     let output = serde_json::to_string_pretty(&data)?;
-    fs::write("huge-test-data.json", output)?;
+    fs::write("test-data/huge-test-data.json", output)?;
 
-    let file_size = fs::metadata("huge-test-data.json")?.len();
+    let file_size = fs::metadata("test-data/huge-test-data.json")?.len();
 
     println!();
     println!("✅ Generated 100,000 entities (50,000 users, 50,000 documents)");

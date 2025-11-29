@@ -1,0 +1,46 @@
+// Object Comprehension Example
+// Demonstrates creating key-value mappings from a collection
+
+policy user_mapping_example {
+    version: "1.0.0",
+    description: "Example showing object comprehension for creating user ID to name mappings",
+    default: deny,
+
+    // Create a mapping of user ID -> user name
+    // Syntax: {key_expr: value_expr | iterator; filters}
+    rule allow_by_id_lookup {
+        // Step 1: Create a HashMap of user_id => user_name
+        // This iterates over all users and creates key-value pairs
+        user_map := {u.id: u.name | u := user.all_users[_]}
+
+        // Step 2: Look up the current user's ID in the map and check the name
+        allow if user_map[user.id] == "alice"
+    }
+
+    // Alternative: Create mapping with filters
+    rule allow_active_user_lookup {
+        // Only map active users: id => department
+        active_user_depts := {u.id: u.department | u := user.all_users[_]; u.active == true}
+
+        // Check if user's department from the map is "engineering"
+        allow if active_user_depts[user.id] == "engineering"
+    }
+}
+
+// Expected behavior:
+// - If user.all_users contains [
+//     {id: "001", name: "alice", department: "engineering", active: true},
+//     {id: "002", name: "bob", department: "sales", active: false},
+//     {id: "003", name: "charlie", department: "engineering", active: true}
+//   ]
+// - Then user_map will be {"001": "alice", "002": "bob", "003": "charlie"}
+// - Then active_user_depts will be {"001": "engineering", "003": "engineering"}
+//
+// - A user with id "001" will be allowed (name lookup matches "alice")
+// - A user with id "002" will be denied (name is "bob", not "alice")
+//
+// Key use cases for object comprehensions:
+// - Creating lookup tables for fast access
+// - Inverting relationships (e.g., email => user_id)
+// - Aggregating data by key (e.g., department => count)
+// - Building permission matrices

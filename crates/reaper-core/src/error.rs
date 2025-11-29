@@ -29,4 +29,7 @@ pub enum ReaperError {
         #[from]
         source: serde_json::Error,
     },
+
+    #[error("Materialized view error: {0}")]
+    ViewError(String),
 }

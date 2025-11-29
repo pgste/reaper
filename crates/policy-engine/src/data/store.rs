@@ -5,9 +5,12 @@
 
 use super::entity::{AttributeValue, Entity, EntityId, EntityType};
 use super::interning::{InternedString, StringInterner};
+use super::router::{QueryPattern, QueryResult, QueryRouter};
+use super::views::ViewManager;
 use dashmap::DashMap;
+use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Index strategy for optimizing different query patterns
@@ -56,6 +59,9 @@ pub struct DataStore {
 
     /// Composite index: (Type, AttrKey, AttrValue) -> Set<EntityId>
     composite_index: Arc<DashMap<(EntityType, InternedString, InternedString), HashSet<EntityId>>>,
+
+    /// Materialized view manager (Phase 6A-1)
+    view_manager: Arc<ViewManager>,
 }
 
 impl DataStore {
@@ -67,6 +73,7 @@ impl DataStore {
             type_index: Arc::new(DashMap::new()),
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
+            view_manager: Arc::new(ViewManager::new()),
         }
     }
 
@@ -81,6 +88,7 @@ impl DataStore {
             type_index: Arc::new(DashMap::new()),
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
+            view_manager: Arc::new(ViewManager::new()),
         }
     }
 
@@ -237,6 +245,31 @@ impl DataStore {
         self.composite_index.clear();
     }
 
+    /// Get entity counts by type
+    ///
+    /// Returns a map of entity type name -> count
+    /// Useful for understanding dataset composition
+    ///
+    /// # Example
+    /// ```
+    /// let stats = store.get_entity_type_stats();
+    /// // {"User": 1000, "Device": 500, "Resource": 2000}
+    /// ```
+    pub fn get_entity_type_stats(&self) -> HashMap<String, usize> {
+        self.type_index
+            .iter()
+            .map(|entry| {
+                let type_name = self
+                    .interner
+                    .resolve(*entry.key())
+                    .map(|s| s.as_ref().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let count = entry.value().len();
+                (type_name, count)
+            })
+            .collect()
+    }
+
     /// Get statistics about the data store
     pub fn stats(&self) -> DataStoreStats {
         DataStoreStats {
@@ -262,6 +295,146 @@ impl DataStore {
             + (self.composite_index.len() * 64);
 
         entity_memory + index_overhead + self.interner.stats().estimated_memory_bytes
+    }
+
+    // ========================================================================
+    // Materialized View Management (Phase 6A-1)
+    // ========================================================================
+
+    /// Get access to the view manager
+    pub fn view_manager(&self) -> &ViewManager {
+        &self.view_manager
+    }
+
+    /// Add a materialized view
+    ///
+    /// # Example
+    /// ```ignore
+    /// use policy_engine::data::{DataStore, MaterializedView, ViewQuery, ViewStrategy};
+    ///
+    /// let store = DataStore::new();
+    /// let view = MaterializedView::new(
+    ///     "user_permission".to_string(),
+    ///     ViewQuery::UserPermission {
+    ///         binding_type: "user_role_binding".to_string(),
+    ///         permission_type: "role_permission".to_string(),
+    ///         join_key: "role".to_string(),
+    ///     },
+    ///     ViewStrategy::Eager,
+    /// );
+    /// store.add_view(view)?;
+    /// ```
+    pub fn add_view(&self, view: super::views::MaterializedView) -> Result<(), ReaperError> {
+        self.view_manager.add_view(view)
+    }
+
+    /// Get a materialized view by name
+    pub fn get_view(&self, name: &str) -> Option<super::views::MaterializedView> {
+        self.view_manager.get_view(name)
+    }
+
+    /// Remove a materialized view
+    pub fn remove_view(&self, name: &str) -> Option<super::views::MaterializedView> {
+        self.view_manager.remove_view(name)
+    }
+
+    /// List all materialized view names
+    pub fn list_views(&self) -> Vec<String> {
+        self.view_manager.list_views()
+    }
+
+    /// Invalidate views that depend on the given entity type
+    ///
+    /// This should be called when entities of a specific type are modified
+    pub fn invalidate_views_by_type(&self, entity_type: &str) {
+        self.view_manager.invalidate_by_type(entity_type);
+    }
+
+    /// Invalidate a specific view by name
+    pub fn invalidate_view(&self, name: &str) -> Result<(), ReaperError> {
+        self.view_manager.invalidate_view(name)
+    }
+
+    /// Get statistics for all views
+    pub fn view_stats(&self) -> Vec<super::views::ViewStats> {
+        self.view_manager.stats()
+    }
+
+    /// Query a materialized view
+    ///
+    /// Returns entities from the view. If the view is stale, it should be
+    /// recomputed first (Phase 6A-2 will add automatic recomputation).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let results = store.query_view("user_permission", |entity| {
+    ///     // Filter by user and resource
+    ///     entity.get_attribute_str("user") == Some("alice") &&
+    ///     entity.get_attribute_str("resource") == Some("foo123")
+    /// });
+    /// ```
+    pub fn query_view<F>(&self, name: &str, predicate: F) -> Result<Vec<Arc<Entity>>, ReaperError>
+    where
+        F: Fn(&Entity) -> bool,
+    {
+        let view = self
+            .get_view(name)
+            .ok_or_else(|| ReaperError::ViewError(format!("View '{}' not found", name)))?;
+
+        Ok(view.query(predicate))
+    }
+
+    /// Get all entities from a materialized view
+    pub fn get_view_entities(&self, name: &str) -> Result<Vec<Arc<Entity>>, ReaperError> {
+        let view = self
+            .get_view(name)
+            .ok_or_else(|| ReaperError::ViewError(format!("View '{}' not found", name)))?;
+
+        Ok(view.all())
+    }
+
+    // ========================================================================
+    // Query Router (Phase 6A-2)
+    // ========================================================================
+
+    /// Execute a query using the intelligent query router
+    ///
+    /// The router automatically selects the optimal execution strategy:
+    /// - Tier 1 (100-500ns): Use pre-computed materialized views
+    /// - Tier 2 (1-3µs): Use indexed joins
+    /// - Tier 3 (3-5µs): Partial scan with some indexes
+    /// - Tier 4 (5-10µs): Full scan with filtering
+    ///
+    /// # Example
+    /// ```ignore
+    /// use policy_engine::data::{DataStore, QueryPattern};
+    ///
+    /// let store = DataStore::new();
+    ///
+    /// // Check if alice can write to foo123
+    /// let result = store.query(QueryPattern::PermissionCheck {
+    ///     user: "alice".to_string(),
+    ///     resource: "foo123".to_string(),
+    ///     action: "write".to_string(),
+    /// })?;
+    ///
+    /// println!("Found {} results using {}",
+    ///     result.entities.len(),
+    ///     result.tier.description()
+    /// );
+    /// ```
+    pub fn query(&self, pattern: QueryPattern) -> Result<QueryResult, ReaperError> {
+        // Create router on-demand (no need to store it)
+        let router = QueryRouter::new(Arc::new(self.clone()));
+        router.execute(pattern)
+    }
+
+    /// Create a query router for this data store
+    ///
+    /// Use this if you need to execute multiple queries with the same router.
+    /// Otherwise, use `query()` which creates a router on-demand.
+    pub fn create_router(&self) -> QueryRouter {
+        QueryRouter::new(Arc::new(self.clone()))
     }
 }
 
@@ -539,5 +712,272 @@ mod tests {
         // This is still efficient: each entity references shared strings via 4-byte IDs
         // instead of storing full String copies
         assert!(stats.interner_stats.estimated_memory_bytes < 100000);
+    }
+
+    #[test]
+    fn test_get_entity_type_stats() {
+        let store = DataStore::new();
+        let interner = store.interner();
+
+        let user_type = interner.intern("User");
+        let device_type = interner.intern("Device");
+        let resource_type = interner.intern("Resource");
+
+        // Insert multiple entity types
+        for i in 0..100 {
+            let user_id = interner.intern(&format!("user_{}", i));
+            store.insert(EntityBuilder::new(user_id, user_type).build());
+        }
+
+        for i in 0..50 {
+            let device_id = interner.intern(&format!("device_{}", i));
+            store.insert(EntityBuilder::new(device_id, device_type).build());
+        }
+
+        for i in 0..200 {
+            let resource_id = interner.intern(&format!("doc_{}", i));
+            store.insert(EntityBuilder::new(resource_id, resource_type).build());
+        }
+
+        // Get type stats
+        let type_stats = store.get_entity_type_stats();
+
+        assert_eq!(type_stats.get("User"), Some(&100));
+        assert_eq!(type_stats.get("Device"), Some(&50));
+        assert_eq!(type_stats.get("Resource"), Some(&200));
+        assert_eq!(type_stats.len(), 3);
+    }
+
+    // ========================================================================
+    // Materialized View Tests (Phase 6A-1)
+    // ========================================================================
+
+    #[test]
+    fn test_add_and_get_view() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+
+        let view = MaterializedView::new(
+            "test_view".to_string(),
+            ViewQuery::Custom {
+                description: "Test view".to_string(),
+            },
+            ViewStrategy::Eager,
+        );
+
+        // Add view
+        store.add_view(view).unwrap();
+
+        // Get view back
+        let retrieved = store.get_view("test_view").unwrap();
+        assert_eq!(retrieved.name, "test_view");
+
+        // List views
+        let views = store.list_views();
+        assert_eq!(views.len(), 1);
+        assert!(views.contains(&"test_view".to_string()));
+    }
+
+    #[test]
+    fn test_remove_view() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+
+        let view = MaterializedView::new(
+            "removable_view".to_string(),
+            ViewQuery::Custom {
+                description: "Test view".to_string(),
+            },
+            ViewStrategy::Lazy,
+        );
+
+        store.add_view(view).unwrap();
+        assert_eq!(store.list_views().len(), 1);
+
+        // Remove view
+        let removed = store.remove_view("removable_view");
+        assert!(removed.is_some());
+        assert_eq!(store.list_views().len(), 0);
+    }
+
+    #[test]
+    fn test_invalidate_view() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+
+        let view = MaterializedView::new(
+            "staleable_view".to_string(),
+            ViewQuery::Custom {
+                description: "Test view".to_string(),
+            },
+            ViewStrategy::Eager,
+        );
+
+        store.add_view(view).unwrap();
+
+        // Mark view as fresh
+        if let Some(mut manager_view) = store.view_manager().get_view("staleable_view") {
+            manager_view.mark_fresh();
+            // Re-add the updated view
+            store.remove_view("staleable_view");
+            store.add_view(manager_view).unwrap();
+        }
+
+        // Invalidate view
+        store.invalidate_view("staleable_view").unwrap();
+
+        // Check if stale
+        let view = store.get_view("staleable_view").unwrap();
+        assert!(view.is_stale);
+    }
+
+    #[test]
+    fn test_invalidate_views_by_type() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+
+        // Create views with dependencies
+        let view1 = MaterializedView::new(
+            "user_perm_view".to_string(),
+            ViewQuery::UserPermission {
+                binding_type: "user_role_binding".to_string(),
+                permission_type: "role_permission".to_string(),
+                join_key: "role".to_string(),
+            },
+            ViewStrategy::Eager,
+        );
+
+        let view2 = MaterializedView::new(
+            "role_users_view".to_string(),
+            ViewQuery::RoleUsers {
+                binding_type: "user_role_binding".to_string(),
+            },
+            ViewStrategy::Lazy,
+        );
+
+        store.add_view(view1).unwrap();
+        store.add_view(view2).unwrap();
+
+        // Invalidate all views depending on "user_role_binding"
+        store.invalidate_views_by_type("user_role_binding");
+
+        // Both views should be stale
+        let view1_after = store.get_view("user_perm_view").unwrap();
+        let view2_after = store.get_view("role_users_view").unwrap();
+        assert!(view1_after.is_stale);
+        assert!(view2_after.is_stale);
+    }
+
+    #[test]
+    fn test_view_with_entities() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+        let interner = store.interner();
+
+        // Create a view
+        let view = MaterializedView::new(
+            "entity_view".to_string(),
+            ViewQuery::Custom {
+                description: "Test view with entities".to_string(),
+            },
+            ViewStrategy::Eager,
+        );
+
+        // Add some entities to the view
+        let entity_id = interner.intern("test_entity");
+        let entity_type = interner.intern("TestType");
+        let entity = Arc::new(EntityBuilder::new(entity_id, entity_type).build());
+
+        view.insert("key1".to_string(), entity.clone());
+
+        // Add view to store
+        store.add_view(view).unwrap();
+
+        // Query view entities
+        let entities = store.get_view_entities("entity_view").unwrap();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].id, entity_id);
+    }
+
+    #[test]
+    fn test_query_view_with_predicate() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+        let interner = store.interner();
+
+        // Create a view
+        let view = MaterializedView::new(
+            "filtered_view".to_string(),
+            ViewQuery::Custom {
+                description: "Test view for filtering".to_string(),
+            },
+            ViewStrategy::Lazy,
+        );
+
+        // Add entities of different types
+        let type_a = interner.intern("TypeA");
+        let type_b = interner.intern("TypeB");
+
+        for i in 0..5 {
+            let id = interner.intern(&format!("entity_{}", i));
+            let entity_type = if i % 2 == 0 { type_a } else { type_b };
+            let entity = Arc::new(EntityBuilder::new(id, entity_type).build());
+            view.insert(format!("key_{}", i), entity);
+        }
+
+        store.add_view(view).unwrap();
+
+        // Query for TypeA entities
+        let type_a_entities = store
+            .query_view("filtered_view", |e| e.entity_type == type_a)
+            .unwrap();
+        assert_eq!(type_a_entities.len(), 3); // 0, 2, 4
+
+        // Query for TypeB entities
+        let type_b_entities = store
+            .query_view("filtered_view", |e| e.entity_type == type_b)
+            .unwrap();
+        assert_eq!(type_b_entities.len(), 2); // 1, 3
+    }
+
+    #[test]
+    fn test_view_stats() {
+        use crate::data::views::{MaterializedView, ViewQuery, ViewStrategy};
+
+        let store = DataStore::new();
+
+        let view1 = MaterializedView::new(
+            "stats_view_1".to_string(),
+            ViewQuery::Custom {
+                description: "First view".to_string(),
+            },
+            ViewStrategy::Eager,
+        );
+
+        let view2 = MaterializedView::new(
+            "stats_view_2".to_string(),
+            ViewQuery::Custom {
+                description: "Second view".to_string(),
+            },
+            ViewStrategy::Lazy,
+        );
+
+        store.add_view(view1).unwrap();
+        store.add_view(view2).unwrap();
+
+        // Get stats for all views
+        let stats = store.view_stats();
+        assert_eq!(stats.len(), 2);
+
+        // Verify stats contain both views
+        let view_names: Vec<String> = stats.iter().map(|s| s.name.clone()).collect();
+        assert!(view_names.contains(&"stats_view_1".to_string()));
+        assert!(view_names.contains(&"stats_view_2".to_string()));
     }
 }

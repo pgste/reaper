@@ -5,7 +5,7 @@
 
 use super::interning::{InternedString, StringInterner};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Entity ID (interned for efficiency)
@@ -18,6 +18,10 @@ pub type EntityType = InternedString;
 ///
 /// Uses Rust's enum for type-safe, memory-efficient storage.
 /// Each variant is sized for the data it holds (no wasted space).
+///
+/// Supports Rego-like data types:
+/// - Scalars: String, Int, Float, Bool, Null
+/// - Collections: List (arrays), Object (maps), Set (unordered unique values)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AttributeValue {
     /// String value (interned for efficiency)
@@ -28,10 +32,98 @@ pub enum AttributeValue {
     Float(f64),
     /// Boolean value (1 byte)
     Bool(bool),
-    /// List of values (for multi-valued attributes)
+    /// List/Array of values (ordered)
     List(Vec<AttributeValue>),
+    /// Object/Map of key-value pairs (Rego-like objects)
+    /// Keys are interned strings for efficiency
+    Object(HashMap<InternedString, AttributeValue>),
+    /// Set of unique values (unordered, Rego-like sets)
+    Set(HashSet<AttributeValue>),
     /// Null/None value
     Null,
+}
+
+// Custom Eq and Hash implementation for AttributeValue
+// Floats are hashed using their bit representation
+impl Eq for AttributeValue {}
+
+impl std::hash::Hash for AttributeValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            AttributeValue::String(s) => {
+                0u8.hash(state);
+                s.hash(state);
+            }
+            AttributeValue::Int(i) => {
+                1u8.hash(state);
+                i.hash(state);
+            }
+            AttributeValue::Float(f) => {
+                2u8.hash(state);
+                f.to_bits().hash(state); // Hash the bit representation
+            }
+            AttributeValue::Bool(b) => {
+                3u8.hash(state);
+                b.hash(state);
+            }
+            AttributeValue::List(l) => {
+                4u8.hash(state);
+                l.hash(state);
+            }
+            AttributeValue::Object(m) => {
+                5u8.hash(state);
+                // Sort keys for deterministic hashing
+                let mut pairs: Vec<_> = m.iter().collect();
+                pairs.sort_by_key(|(k, _)| **k);
+                for (k, v) in pairs {
+                    k.hash(state);
+                    v.hash(state);
+                }
+            }
+            AttributeValue::Set(s) => {
+                6u8.hash(state);
+                // Sort values for deterministic hashing
+                let mut values: Vec<_> = s.iter().collect();
+                values.sort_by(|a, b| {
+                    // Custom comparison for AttributeValue
+                    // Order: Null < Bool < Int < Float < String < List < Object < Set
+                    use AttributeValue::*;
+                    match (a, b) {
+                        (Null, Null) => std::cmp::Ordering::Equal,
+                        (Null, _) => std::cmp::Ordering::Less,
+                        (_, Null) => std::cmp::Ordering::Greater,
+                        (Bool(a), Bool(b)) => a.cmp(b),
+                        (Bool(_), _) => std::cmp::Ordering::Less,
+                        (_, Bool(_)) => std::cmp::Ordering::Greater,
+                        (Int(a), Int(b)) => a.cmp(b),
+                        (Int(_), _) => std::cmp::Ordering::Less,
+                        (_, Int(_)) => std::cmp::Ordering::Greater,
+                        (Float(a), Float(b)) => {
+                            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                        }
+                        (Float(_), _) => std::cmp::Ordering::Less,
+                        (_, Float(_)) => std::cmp::Ordering::Greater,
+                        (String(a), String(b)) => a.cmp(b),
+                        (String(_), _) => std::cmp::Ordering::Less,
+                        (_, String(_)) => std::cmp::Ordering::Greater,
+                        (List(_), List(_)) => std::cmp::Ordering::Equal, // Simplified
+                        (List(_), _) => std::cmp::Ordering::Less,
+                        (_, List(_)) => std::cmp::Ordering::Greater,
+                        (Object(_), Object(_)) => std::cmp::Ordering::Equal, // Simplified
+                        (Object(_), _) => std::cmp::Ordering::Less,
+                        (_, Object(_)) => std::cmp::Ordering::Greater,
+                        (Set(_), Set(_)) => std::cmp::Ordering::Equal, // Simplified
+                    }
+                });
+                for v in values {
+                    v.hash(state);
+                }
+            }
+            AttributeValue::Null => {
+                7u8.hash(state);
+            }
+        }
+    }
 }
 
 impl AttributeValue {
@@ -72,9 +164,48 @@ impl AttributeValue {
         }
     }
 
+    /// Get the value as a list (if it's a list)
+    pub fn as_list(&self) -> Option<&Vec<AttributeValue>> {
+        match self {
+            AttributeValue::List(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Get the value as an object (if it's an object)
+    pub fn as_object(&self) -> Option<&HashMap<InternedString, AttributeValue>> {
+        match self {
+            AttributeValue::Object(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    /// Get the value as a set (if it's a set)
+    pub fn as_set(&self) -> Option<&HashSet<AttributeValue>> {
+        match self {
+            AttributeValue::Set(s) => Some(s),
+            _ => None,
+        }
+    }
+
     /// Check if the value is null
     pub fn is_null(&self) -> bool {
         matches!(self, AttributeValue::Null)
+    }
+
+    /// Check if the value is an array/list
+    pub fn is_list(&self) -> bool {
+        matches!(self, AttributeValue::List(_))
+    }
+
+    /// Check if the value is an object/map
+    pub fn is_object(&self) -> bool {
+        matches!(self, AttributeValue::Object(_))
+    }
+
+    /// Check if the value is a set
+    pub fn is_set(&self) -> bool {
+        matches!(self, AttributeValue::Set(_))
     }
 
     /// Estimate memory usage of this value
@@ -87,6 +218,10 @@ impl AttributeValue {
             AttributeValue::List(items) => {
                 16 + items.iter().map(|v| v.memory_size()).sum::<usize>()
             }
+            AttributeValue::Object(map) => {
+                48 + map.values().map(|v| 8 + v.memory_size()).sum::<usize>()
+            }
+            AttributeValue::Set(set) => 48 + set.iter().map(|v| v.memory_size()).sum::<usize>(),
             AttributeValue::Null => 0,
         }
     }
@@ -176,6 +311,16 @@ impl Entity {
     /// Check if entity has a specific attribute
     pub fn has_attribute(&self, key: InternedString) -> bool {
         self.attributes.contains_key(&key)
+    }
+
+    /// Get an attribute value as a string by key name
+    ///
+    /// This is a convenience method that looks up the key in the interner
+    /// and returns the attribute value as a String.
+    pub fn get_attribute_str(&self, key: &str, interner: &StringInterner) -> Option<String> {
+        let key_interned = interner.intern(key);
+        self.get_string_attribute(key_interned, interner)
+            .map(|s| s.to_string())
     }
 
     /// Estimate memory usage of this entity
@@ -328,5 +473,142 @@ mod tests {
             .build();
 
         assert_eq!(child.parent, Some(parent_id));
+    }
+
+    #[test]
+    fn test_attribute_value_list() {
+        let list = AttributeValue::List(vec![
+            AttributeValue::Int(1),
+            AttributeValue::Int(2),
+            AttributeValue::Int(3),
+        ]);
+
+        assert!(list.is_list());
+        assert_eq!(list.as_list().unwrap().len(), 3);
+        assert_eq!(list.as_list().unwrap()[0], AttributeValue::Int(1));
+    }
+
+    #[test]
+    fn test_attribute_value_object() {
+        let interner = StringInterner::new();
+        let name_key = interner.intern("name");
+        let age_key = interner.intern("age");
+
+        let mut map = HashMap::new();
+        map.insert(name_key, AttributeValue::String(interner.intern("alice")));
+        map.insert(age_key, AttributeValue::Int(30));
+
+        let obj = AttributeValue::Object(map);
+
+        assert!(obj.is_object());
+        assert_eq!(obj.as_object().unwrap().len(), 2);
+        assert_eq!(
+            obj.as_object().unwrap().get(&name_key),
+            Some(&AttributeValue::String(interner.intern("alice")))
+        );
+    }
+
+    #[test]
+    fn test_attribute_value_set() {
+        let interner = StringInterner::new();
+        let mut set = HashSet::new();
+        set.insert(AttributeValue::String(interner.intern("admin")));
+        set.insert(AttributeValue::String(interner.intern("user")));
+        set.insert(AttributeValue::String(interner.intern("moderator")));
+
+        let set_val = AttributeValue::Set(set);
+
+        assert!(set_val.is_set());
+        assert_eq!(set_val.as_set().unwrap().len(), 3);
+        assert!(set_val
+            .as_set()
+            .unwrap()
+            .contains(&AttributeValue::String(interner.intern("admin"))));
+    }
+
+    #[test]
+    fn test_attribute_value_nested_structures() {
+        let interner = StringInterner::new();
+
+        // Create nested structure: object containing list of objects
+        let role_key = interner.intern("role");
+        let perms_key = interner.intern("permissions");
+        let name_key = interner.intern("name");
+
+        let mut inner_obj1 = HashMap::new();
+        inner_obj1.insert(name_key, AttributeValue::String(interner.intern("read")));
+
+        let mut inner_obj2 = HashMap::new();
+        inner_obj2.insert(name_key, AttributeValue::String(interner.intern("write")));
+
+        let perm_list = AttributeValue::List(vec![
+            AttributeValue::Object(inner_obj1),
+            AttributeValue::Object(inner_obj2),
+        ]);
+
+        let mut outer_obj = HashMap::new();
+        outer_obj.insert(role_key, AttributeValue::String(interner.intern("admin")));
+        outer_obj.insert(perms_key, perm_list);
+
+        let nested = AttributeValue::Object(outer_obj);
+
+        assert!(nested.is_object());
+        let obj = nested.as_object().unwrap();
+        assert_eq!(obj.len(), 2);
+
+        let perms = obj.get(&perms_key).unwrap();
+        assert!(perms.is_list());
+        assert_eq!(perms.as_list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_attribute_value_hash_consistency() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let _interner = StringInterner::new();
+
+        // Test that identical sets hash the same regardless of insertion order
+        let mut set1 = HashSet::new();
+        set1.insert(AttributeValue::Int(1));
+        set1.insert(AttributeValue::Int(2));
+        set1.insert(AttributeValue::Int(3));
+
+        let mut set2 = HashSet::new();
+        set2.insert(AttributeValue::Int(3));
+        set2.insert(AttributeValue::Int(1));
+        set2.insert(AttributeValue::Int(2));
+
+        let val1 = AttributeValue::Set(set1);
+        let val2 = AttributeValue::Set(set2);
+
+        let mut hasher1 = DefaultHasher::new();
+        val1.hash(&mut hasher1);
+        let hash1 = hasher1.finish();
+
+        let mut hasher2 = DefaultHasher::new();
+        val2.hash(&mut hasher2);
+        let hash2 = hasher2.finish();
+
+        assert_eq!(hash1, hash2, "Identical sets should hash the same");
+    }
+
+    #[test]
+    fn test_attribute_value_memory_size() {
+        let interner = StringInterner::new();
+
+        // Object memory size
+        let mut map = HashMap::new();
+        map.insert(interner.intern("key1"), AttributeValue::Int(100));
+        map.insert(interner.intern("key2"), AttributeValue::Int(200));
+        let obj = AttributeValue::Object(map);
+        assert!(obj.memory_size() > 48); // HashMap overhead + data
+
+        // Set memory size
+        let mut set = HashSet::new();
+        set.insert(AttributeValue::Int(1));
+        set.insert(AttributeValue::Int(2));
+        let set_val = AttributeValue::Set(set);
+        assert!(set_val.memory_size() > 48); // HashSet overhead + data
     }
 }

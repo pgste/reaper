@@ -36,9 +36,14 @@ pub enum Condition {
     False,
     /// Comparison
     Comparison {
-        left: EntityAttr,
+        left: ComparisonLeft,
         op: Operator,
         right: ComparisonRight,
+    },
+    /// Local variable assignment: x := user.role
+    Assignment {
+        variable: String,
+        value: AssignmentValue,
     },
     /// AND of conditions
     And(Vec<Condition>),
@@ -48,11 +53,45 @@ pub enum Condition {
     Not(Box<Condition>),
 }
 
+/// Left side of comparison
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ComparisonLeft {
+    EntityAttr(EntityAttr),
+    VarAttr(VarAttr),
+}
+
+/// Value that can be assigned to a variable
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AssignmentValue {
+    /// Entity attribute: user.role
+    EntityAttr(EntityAttr),
+    /// Literal value: "admin", 42, true
+    Value(Value),
+    /// Another variable reference: x
+    Variable(String),
+    /// Comprehension: {expr | iteration; filters}
+    Comprehension(Comprehension),
+}
+
 /// Entity attribute reference
+/// Supports simple access (user.role) and indexed access (user.roles[0], user.data["key"])
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityAttr {
     pub entity: Entity,
     pub attribute: String,
+    /// Optional index for bracket notation: user.roles[0] or user.data["key"]
+    pub index: Option<Index>,
+}
+
+/// Index for bracket notation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Index {
+    /// Numeric index for arrays: [0], [1], [42]
+    Number(i64),
+    /// String key for objects: ["key"], ["some-key"]
+    String(String),
+    /// Wildcard for iteration: [_] - iterates over all elements (existential quantification)
+    Wildcard,
 }
 
 /// Entity type
@@ -72,6 +111,8 @@ pub enum Operator {
     LessThan,
     GreaterEqual,
     LessEqual,
+    /// Membership test: "admin" in user.roles
+    In,
 }
 
 /// Right side of comparison
@@ -79,6 +120,19 @@ pub enum Operator {
 pub enum ComparisonRight {
     Value(Value),
     EntityAttr(EntityAttr),
+    /// Variable reference: x
+    Variable(String),
+    /// Variable attribute access: u.name, u.roles[0]
+    VarAttr(VarAttr),
+}
+
+/// Variable attribute reference (for comprehension filters)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VarAttr {
+    pub variable: String,
+    pub attribute: String,
+    /// Optional index for bracket notation: u.roles[0] or u.data["key"]
+    pub index: Option<Index>,
 }
 
 /// Literal value
@@ -89,6 +143,74 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Null,
+    /// Array of values: [1, 2, 3]
+    Array(Vec<Value>),
+    /// Object/map of key-value pairs: {"key": "value", "num": 42}
+    /// Uses Vec to maintain insertion order (important for deterministic behavior)
+    Object(Vec<(String, Value)>),
+    /// Set of unique values: {"foo", "bar", "baz"}
+    /// Parser stores as Vec, evaluator converts to HashSet
+    Set(Vec<Value>),
+}
+
+/// Comprehension expression for collecting and transforming data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Comprehension {
+    /// Set comprehension: {expr | iteration; filters}
+    /// Produces a HashSet of unique values
+    Set {
+        output: Box<Expr>,
+        iterator: ComprehensionIterator,
+        filters: Vec<Condition>,
+    },
+
+    /// Array comprehension: [expr | iteration; filters]
+    /// Produces a Vec that preserves order and allows duplicates
+    Array {
+        output: Box<Expr>,
+        iterator: ComprehensionIterator,
+        filters: Vec<Condition>,
+    },
+
+    /// Object comprehension: {key: value | iteration; filters}
+    /// Produces a HashMap of key-value pairs
+    Object {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        iterator: ComprehensionIterator,
+        filters: Vec<Condition>,
+    },
+}
+
+/// Iterator specification for comprehensions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComprehensionIterator {
+    /// Variable name to bind each element to (e.g., "u" in "u := users[_]")
+    pub variable: String,
+
+    /// Collection to iterate over (e.g., "users[_]", "user.roles[_]")
+    pub collection: EntityAttr,
+}
+
+/// Expression type for comprehension output
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Expr {
+    /// Literal value: "admin", 42, true, null
+    Literal(Value),
+
+    /// Variable reference: u, role, x
+    Variable(String),
+
+    /// Attribute access: u.name, role.level
+    /// Variable must be bound by iterator or previous assignment
+    AttributeAccess { variable: String, attribute: String },
+
+    /// Indexed access: u.roles[0], user.data["key"], perms[_]
+    IndexedAccess {
+        variable: String,
+        attribute: String,
+        index: Index,
+    },
 }
 
 impl From<&str> for Entity {
@@ -111,6 +233,7 @@ impl From<&str> for Operator {
             "<" => Operator::LessThan,
             ">=" => Operator::GreaterEqual,
             "<=" => Operator::LessEqual,
+            "in" => Operator::In,
             _ => panic!("Invalid operator: {}", s),
         }
     }

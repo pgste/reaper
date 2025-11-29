@@ -206,7 +206,160 @@ jobs:
             generate-large-data.log
 
   # ============================================================
-  # Stage 5: BDD Tests (Behavior-Driven Development)
+  # Stage 5: Scale & Performance Tests (PR only)
+  # ============================================================
+  scale-tests:
+    name: Scale & Performance Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-ci"
+          cache-on-failure: true
+
+      - name: Make scale test script executable
+        run: chmod +x ./scripts/run_scale_tests.sh
+
+      - name: Run comprehensive scale tests
+        run: |
+          ./scripts/run_scale_tests.sh 2>&1 | tee scale-tests-output.txt
+
+      - name: Run pattern-based scale tests
+        run: |
+          echo "========================================" | tee -a scale-tests-output.txt
+          echo "Pattern-Based Scale Tests" | tee -a scale-tests-output.txt
+          echo "========================================" | tee -a scale-tests-output.txt
+
+          echo "" | tee -a scale-tests-output.txt
+          echo "1️⃣  Policy Format Comparison Test" | tee -a scale-tests-output.txt
+          cargo run --release --example scale_policy_format_comparison 2>&1 | tee -a scale-tests-output.txt
+
+          echo "" | tee -a scale-tests-output.txt
+          echo "2️⃣  Cache Performance Test" | tee -a scale-tests-output.txt
+          cargo run --release --example scale_cache_performance 2>&1 | tee -a scale-tests-output.txt
+
+          echo "" | tee -a scale-tests-output.txt
+          echo "3️⃣  Decision Distribution Test" | tee -a scale-tests-output.txt
+          cargo run --release --example scale_decision_distribution 2>&1 | tee -a scale-tests-output.txt
+
+          echo "" | tee -a scale-tests-output.txt
+          echo "4️⃣  Policy Complexity Test" | tee -a scale-tests-output.txt
+          cargo run --release --example scale_policy_complexity 2>&1 | tee -a scale-tests-output.txt
+
+      - name: Extract performance summary
+        if: always()
+        run: |
+          echo "# 🚀 Scale & Performance Test Results" > scale-test-summary.md
+          echo "" >> scale-test-summary.md
+          echo "**Test Date:** $(date)" >> scale-test-summary.md
+          echo "" >> scale-test-summary.md
+
+          # Extract test results from metrics JSON
+          if [ -f /tmp/scale_test_results/metrics.json ]; then
+            echo "## Test Results" >> scale-test-summary.md
+            echo "" >> scale-test-summary.md
+            echo "| Test | Status | Duration |" >> scale-test-summary.md
+            echo "|------|--------|----------|" >> scale-test-summary.md
+
+            # Use jq if available, otherwise grep
+            if command -v jq &> /dev/null; then
+              jq -r '.tests[] | "| \(.name) | \(.status) | \(.duration_seconds)s |"' /tmp/scale_test_results/metrics.json >> scale-test-summary.md
+            else
+              echo "| See full output | - | - |" >> scale-test-summary.md
+            fi
+
+            echo "" >> scale-test-summary.md
+
+            # Extract summary
+            if command -v jq &> /dev/null; then
+              TOTAL=$(jq -r '.summary.total' /tmp/scale_test_results/metrics.json)
+              PASSED=$(jq -r '.summary.passed' /tmp/scale_test_results/metrics.json)
+              FAILED=$(jq -r '.summary.failed' /tmp/scale_test_results/metrics.json)
+
+              echo "## Summary" >> scale-test-summary.md
+              echo "" >> scale-test-summary.md
+              echo "- **Total Tests:** $TOTAL" >> scale-test-summary.md
+              echo "- **Passed:** $PASSED ✅" >> scale-test-summary.md
+              echo "- **Failed:** $FAILED" >> scale-test-summary.md
+            fi
+          fi
+
+          echo "" >> scale-test-summary.md
+          echo "## Performance Highlights" >> scale-test-summary.md
+          echo "" >> scale-test-summary.md
+
+          # Extract key performance metrics
+          echo "### Comprehension Benchmarks" >> scale-test-summary.md
+          grep -A 5 "=== Comprehension Performance Benchmark ===" scale-tests-output.txt | tail -4 >> scale-test-summary.md || echo "Not available" >> scale-test-summary.md
+          echo "" >> scale-test-summary.md
+
+          echo "### RBAC Performance" >> scale-test-summary.md
+          grep "Mean latency:\|P99 latency:\|Ops/second:" scale-tests-output.txt | grep -A 2 "RBAC" | head -3 >> scale-test-summary.md || echo "Not available" >> scale-test-summary.md
+          echo "" >> scale-test-summary.md
+
+          echo "### ABAC Performance" >> scale-test-summary.md
+          grep "Mean latency:\|P99 latency:\|Ops/second:" scale-tests-output.txt | grep -A 2 "ABAC" | head -3 >> scale-test-summary.md || echo "Not available" >> scale-test-summary.md
+          echo "" >> scale-test-summary.md
+
+          echo "### Multilayer Performance" >> scale-test-summary.md
+          grep "Mean latency:\|P99 latency:" scale-tests-output.txt | grep -A 1 "Multilayer" | tail -2 >> scale-test-summary.md || echo "Not available" >> scale-test-summary.md
+          echo "" >> scale-test-summary.md
+
+          echo "---" >> scale-test-summary.md
+          echo "📊 **Full results available in artifacts**" >> scale-test-summary.md
+
+      - name: Upload scale test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scale-test-results
+          path: |
+            /tmp/scale_test_results/
+            scale-tests-output.txt
+            scale-test-summary.md
+
+      - name: Comment PR with performance results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+
+            let summary = '# 🚀 Scale & Performance Test Results\n\n';
+
+            try {
+              if (fs.existsSync('scale-test-summary.md')) {
+                summary = fs.readFileSync('scale-test-summary.md', 'utf8');
+              } else {
+                summary += '⚠️ Summary file not found. Check artifacts for full results.\n';
+              }
+            } catch (error) {
+              summary += `❌ Error reading summary: ${error.message}\n`;
+            }
+
+            summary += '\n\n---\n\n';
+            summary += '💡 **Note:** Scale tests run automatically on PRs to track performance changes.\n';
+            summary += 'Download artifacts for detailed metrics and full output.\n';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+  # ============================================================
+  # Stage 6: BDD Tests (Behavior-Driven Development)
   # ============================================================
   bdd-tests:
     name: BDD Tests (Cucumber)
@@ -290,12 +443,12 @@ jobs:
           path: bdd-reports/cucumber-report.json
 
   # ============================================================
-  # Stage 6: Generate Combined Test Report
+  # Stage 7: Generate Combined Test Report
   # ============================================================
   generate-report:
     name: Generate Combined Test Report
     runs-on: ubuntu-latest
-    needs: [unit-tests, volume-tests, memory-scale-tests, bdd-tests]
+    needs: [unit-tests, volume-tests, memory-scale-tests, scale-tests, bdd-tests]
     if: always()
     steps:
       - name: Download all artifacts
@@ -334,6 +487,15 @@ jobs:
             cat memory-scale-tests/memory-volume-summary.md >> COMBINED_REPORT.md
           else
             echo "⚠️ Memory test results not available" >> COMBINED_REPORT.md
+          fi
+          echo "" >> COMBINED_REPORT.md
+
+          # Scale Tests (PR only)
+          echo "## 🚀 Scale & Performance Tests (PR only)" >> COMBINED_REPORT.md
+          if [ -f "scale-test-results/scale-test-summary.md" ]; then
+            cat scale-test-results/scale-test-summary.md >> COMBINED_REPORT.md
+          else
+            echo "⏭️  Scale tests only run on pull requests" >> COMBINED_REPORT.md
           fi
           echo "" >> COMBINED_REPORT.md
 
