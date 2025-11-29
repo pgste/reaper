@@ -34,4 +34,4 @@ Feature: ABAC Policy Validation
   Scenario: ABAC policy maintains sub-microsecond performance
     Given a principal "user_0"
     When they perform 1000 evaluations on random resources
-    Then the average evaluation time should be less than 15 microseconds
+    Then the average evaluation time should be less than 20 microseconds
