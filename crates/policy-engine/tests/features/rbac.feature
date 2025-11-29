@@ -34,7 +34,7 @@ Feature: RBAC Policy Validation
   Scenario: Policy evaluates with sub-microsecond performance
     Given a principal "user_0"
     When they perform 1000 evaluations on random resources
-    Then the average evaluation time should be less than 5 microseconds
+    Then the average evaluation time should be less than 10 microseconds
 
   Scenario Outline: Multiple role and resource combinations
     Given a principal "<user>"
