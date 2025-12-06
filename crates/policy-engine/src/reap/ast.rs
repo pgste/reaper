@@ -211,6 +211,60 @@ pub enum Expr {
         attribute: String,
         index: Index,
     },
+
+    /// Method call: users.count(), roles.sum(), name.lower()
+    /// Enables Rust-style method chaining for better ergonomics
+    MethodCall {
+        receiver: Box<Expr>,
+        method: MethodName,
+        args: Vec<Expr>,
+    },
+
+    /// Function call: time.now_ns(), concat(a, b), is_string(x)
+    /// Supports namespaced (time.now_ns) and global (concat) functions
+    FunctionCall {
+        namespace: Option<String>,
+        function: String,
+        args: Vec<Expr>,
+    },
+}
+
+/// Method names for method call syntax
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MethodName {
+    // Aggregate methods
+    Count,
+    Sum,
+    Max,
+    Min,
+    Any,
+    All,
+
+    // String methods
+    Lower,
+    Upper,
+    Trim,
+    Split,
+    Contains,
+    Startswith,
+    Endswith,
+
+    // Collection methods
+    Union,
+    Intersection,
+    Difference,
+}
+
+/// Type names for type checking functions
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypeName {
+    String,
+    Number,
+    Bool,
+    Array,
+    Set,
+    Object,
+    Null,
 }
 
 impl From<&str> for Entity {
@@ -245,6 +299,84 @@ impl From<&str> for Decision {
             "allow" => Decision::Allow,
             "deny" => Decision::Deny,
             _ => panic!("Invalid decision: {}", s),
+        }
+    }
+}
+
+impl MethodName {
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            // Aggregates
+            "count" => Ok(MethodName::Count),
+            "sum" => Ok(MethodName::Sum),
+            "max" => Ok(MethodName::Max),
+            "min" => Ok(MethodName::Min),
+            "any" => Ok(MethodName::Any),
+            "all" => Ok(MethodName::All),
+
+            // Strings
+            "lower" => Ok(MethodName::Lower),
+            "upper" => Ok(MethodName::Upper),
+            "trim" => Ok(MethodName::Trim),
+            "split" => Ok(MethodName::Split),
+            "contains" => Ok(MethodName::Contains),
+            "startswith" => Ok(MethodName::Startswith),
+            "endswith" => Ok(MethodName::Endswith),
+
+            // Collections
+            "union" => Ok(MethodName::Union),
+            "intersection" => Ok(MethodName::Intersection),
+            "difference" => Ok(MethodName::Difference),
+
+            _ => Err(format!("Unknown method name: {}", s)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MethodName::Count => "count",
+            MethodName::Sum => "sum",
+            MethodName::Max => "max",
+            MethodName::Min => "min",
+            MethodName::Any => "any",
+            MethodName::All => "all",
+            MethodName::Lower => "lower",
+            MethodName::Upper => "upper",
+            MethodName::Trim => "trim",
+            MethodName::Split => "split",
+            MethodName::Contains => "contains",
+            MethodName::Startswith => "startswith",
+            MethodName::Endswith => "endswith",
+            MethodName::Union => "union",
+            MethodName::Intersection => "intersection",
+            MethodName::Difference => "difference",
+        }
+    }
+}
+
+impl TypeName {
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "string" => Ok(TypeName::String),
+            "number" => Ok(TypeName::Number),
+            "bool" => Ok(TypeName::Bool),
+            "array" => Ok(TypeName::Array),
+            "set" => Ok(TypeName::Set),
+            "object" => Ok(TypeName::Object),
+            "null" => Ok(TypeName::Null),
+            _ => Err(format!("Unknown type name: {}", s)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TypeName::String => "string",
+            TypeName::Number => "number",
+            TypeName::Bool => "bool",
+            TypeName::Array => "array",
+            TypeName::Set => "set",
+            TypeName::Object => "object",
+            TypeName::Null => "null",
         }
     }
 }
