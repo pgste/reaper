@@ -1,7 +1,8 @@
-Feature: Policy Definition and Storage
-    As a system administrator
-    I want to create, manage, and deploy policies
-    So that I can control access with zero downtime
+@integration 
+Feature: Policy Definition and Storage (Integration Tests)
+    NOTE: These scenarios require running services:
+      - Reaper Platform on port 8081: make platform
+      - Reaper Agent on port 8080: make agent
 
     Background:
         Given a running Reaper Platform on port 8081
@@ -13,6 +14,7 @@ Feature: Policy Definition and Storage
         And the policy should be stored in the platform
         And the policy should have version 1
 
+    
     Scenario: Hot-swap policy deployment
         Given a policy named "swap-test" exists
         When I deploy the policy to the agent
