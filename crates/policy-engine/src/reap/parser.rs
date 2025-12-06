@@ -688,51 +688,150 @@ fn parse_comp_filters(pair: pest::iterators::Pair<Rule>) -> Result<Vec<Condition
 
 /// Parse comprehension output expression
 fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
-    let inner = pair
-        .into_inner()
+    let mut inner_pairs = pair.into_inner();
+    let first = inner_pairs
         .next()
         .ok_or_else(|| ReaperError::InvalidPolicy {
             reason: "Empty comprehension expression".to_string(),
         })?;
 
-    match inner.as_rule() {
-        Rule::comp_attribute_access => parse_comp_attribute_access(inner),
-        Rule::comp_indexed_access => parse_comp_indexed_access(inner),
-        Rule::comp_variable => Ok(Expr::Variable(inner.as_str().to_string())),
-        Rule::value => Ok(Expr::Literal(parse_value(inner)?)),
+    match first.as_rule() {
+        Rule::comp_function_call => parse_comp_function_call(first),
+
+        // Method calls or attribute access: perms.count(), u.name.lower(), or just u.name
+        Rule::comp_method_or_access => {
+            let mut inner = first.into_inner();
+            let first_inner = inner.next().ok_or_else(|| ReaperError::InvalidPolicy {
+                reason: "Empty method or access expression".to_string(),
+            })?;
+
+            match first_inner.as_rule() {
+                // u.name or u.name.method() - dot access with optional methods
+                Rule::comp_dot_access_with_methods => {
+                    let dot_inner = first_inner.into_inner();
+                    let mut variable: Option<String> = None;
+                    let mut attribute: Option<String> = None;
+                    let mut index: Option<Index> = None;
+                    let mut method_chain: Option<pest::iterators::Pair<Rule>> = None;
+                    let mut ident_count = 0;
+
+                    for part in dot_inner {
+                        match part.as_rule() {
+                            Rule::ident => {
+                                if ident_count == 0 {
+                                    variable = Some(part.as_str().to_string());
+                                } else if ident_count == 1 {
+                                    attribute = Some(part.as_str().to_string());
+                                }
+                                ident_count += 1;
+                            }
+                            Rule::bracket_index => {
+                                index = Some(parse_bracket_index(part)?);
+                            }
+                            Rule::comp_method_chain => {
+                                method_chain = Some(part);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Build base expression (attribute access or indexed access)
+                    let base = if let Some(idx) = index {
+                        Expr::IndexedAccess {
+                            variable: variable.ok_or_else(|| ReaperError::InvalidPolicy {
+                                reason: "Missing variable in indexed access".to_string(),
+                            })?,
+                            attribute: attribute.ok_or_else(|| ReaperError::InvalidPolicy {
+                                reason: "Missing attribute in indexed access".to_string(),
+                            })?,
+                            index: idx,
+                        }
+                    } else {
+                        Expr::AttributeAccess {
+                            variable: variable.ok_or_else(|| ReaperError::InvalidPolicy {
+                                reason: "Missing variable in attribute access".to_string(),
+                            })?,
+                            attribute: attribute.ok_or_else(|| ReaperError::InvalidPolicy {
+                                reason: "Missing attribute in attribute access".to_string(),
+                            })?,
+                        }
+                    };
+
+                    // Apply method chain if present
+                    if let Some(chain) = method_chain {
+                        parse_comp_method_chain(base, chain)
+                    } else {
+                        Ok(base)
+                    }
+                }
+
+                // var or var.method() - simple variable with optional method chain
+                Rule::ident => {
+                    let variable = first_inner.as_str().to_string();
+                    let base = Expr::Variable(variable);
+
+                    // Check if there's an optional method chain
+                    if let Some(method_chain) = inner.next() {
+                        if method_chain.as_rule() == Rule::comp_method_chain {
+                            parse_comp_method_chain(base, method_chain)
+                        } else {
+                            Err(ReaperError::InvalidPolicy {
+                                reason: format!(
+                                    "Expected method chain, got {:?}",
+                                    method_chain.as_rule()
+                                ),
+                            })
+                        }
+                    } else {
+                        Ok(base)
+                    }
+                }
+
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Unexpected rule in method_or_access: {:?}",
+                        first_inner.as_rule()
+                    ),
+                }),
+            }
+        }
+
+        // Literals
+        Rule::value => Ok(Expr::Literal(parse_value(first)?)),
+
+        // Base expressions without method calls (backward compatibility)
+        Rule::comp_base_expr => parse_comp_base_expr(first),
+
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(
                 "Unexpected comprehension expression type: {:?}",
-                inner.as_rule()
+                first.as_rule()
             ),
         }),
     }
 }
 
-/// Parse attribute access in comprehension: u.name
-fn parse_comp_attribute_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
-    let mut parts: Vec<String> = Vec::new();
+/// Parse base expression that can be a receiver for method calls
+fn parse_comp_base_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Empty base expression".to_string(),
+        })?;
 
-    for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::ident {
-            parts.push(inner.as_str().to_string());
-        }
+    match inner.as_rule() {
+        Rule::comp_dot_access => parse_comp_dot_access(inner),
+        Rule::comp_variable => Ok(Expr::Variable(inner.as_str().to_string())),
+        Rule::value => Ok(Expr::Literal(parse_value(inner)?)),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Unexpected base expression type: {:?}", inner.as_rule()),
+        }),
     }
-
-    if parts.len() != 2 {
-        return Err(ReaperError::InvalidPolicy {
-            reason: "Attribute access must have variable.attribute format".to_string(),
-        });
-    }
-
-    Ok(Expr::AttributeAccess {
-        variable: parts[0].clone(),
-        attribute: parts[1].clone(),
-    })
 }
 
-/// Parse indexed access in comprehension: u.roles[0]
-fn parse_comp_indexed_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+/// Parse dot access: u.name or u.roles[0]
+fn parse_comp_dot_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
     let mut variable: Option<String> = None;
     let mut attribute: Option<String> = None;
     let mut index: Option<Index> = None;
@@ -749,7 +848,6 @@ fn parse_comp_indexed_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, 
                 ident_count += 1;
             }
             Rule::bracket_index => {
-                // bracket_index contains bracket_index_value
                 let idx_value =
                     inner
                         .into_inner()
@@ -763,16 +861,108 @@ fn parse_comp_indexed_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, 
         }
     }
 
-    Ok(Expr::IndexedAccess {
-        variable: variable.ok_or_else(|| ReaperError::InvalidPolicy {
-            reason: "Indexed access missing variable".to_string(),
+    let var = variable.ok_or_else(|| ReaperError::InvalidPolicy {
+        reason: "Dot access missing variable".to_string(),
+    })?;
+    let attr = attribute.ok_or_else(|| ReaperError::InvalidPolicy {
+        reason: "Dot access missing attribute".to_string(),
+    })?;
+
+    if let Some(idx) = index {
+        Ok(Expr::IndexedAccess {
+            variable: var,
+            attribute: attr,
+            index: idx,
+        })
+    } else {
+        Ok(Expr::AttributeAccess {
+            variable: var,
+            attribute: attr,
+        })
+    }
+}
+
+/// Parse method chain: .method1().method2()...
+fn parse_comp_method_chain(
+    mut receiver: Expr,
+    chain_pair: pest::iterators::Pair<Rule>,
+) -> Result<Expr, ReaperError> {
+    for method_call in chain_pair.into_inner() {
+        if method_call.as_rule() != Rule::comp_single_method_call {
+            continue;
+        }
+
+        let mut method_name: Option<String> = None;
+        let mut args: Vec<Expr> = Vec::new();
+
+        for inner in method_call.into_inner() {
+            match inner.as_rule() {
+                Rule::ident => {
+                    method_name = Some(inner.as_str().to_string());
+                }
+                Rule::comp_arg_list => {
+                    for arg in inner.into_inner() {
+                        args.push(parse_comp_expr(arg)?);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let method =
+            MethodName::from_str(&method_name.ok_or_else(|| ReaperError::InvalidPolicy {
+                reason: "Method call missing method name".to_string(),
+            })?)
+            .map_err(|e| ReaperError::InvalidPolicy { reason: e })?;
+
+        receiver = Expr::MethodCall {
+            receiver: Box::new(receiver),
+            method,
+            args,
+        };
+    }
+
+    Ok(receiver)
+}
+
+/// Parse function call in comprehension: is_string(x), concat(a, b), time.now_ns()
+fn parse_comp_function_call(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let mut namespace: Option<String> = None;
+    let mut function_name: Option<String> = None;
+    let mut args: Vec<Expr> = Vec::new();
+    let mut ident_count = 0;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                // First ident could be namespace or function name
+                // Second ident is function name if there's a namespace
+                if ident_count == 0 {
+                    // Store as potential function name
+                    function_name = Some(inner.as_str().to_string());
+                } else if ident_count == 1 {
+                    // First ident was namespace
+                    namespace = function_name.clone();
+                    function_name = Some(inner.as_str().to_string());
+                }
+                ident_count += 1;
+            }
+            Rule::comp_arg_list => {
+                // Parse arguments
+                for arg in inner.into_inner() {
+                    args.push(parse_comp_expr(arg)?);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Expr::FunctionCall {
+        namespace,
+        function: function_name.ok_or_else(|| ReaperError::InvalidPolicy {
+            reason: "Function call missing function name".to_string(),
         })?,
-        attribute: attribute.ok_or_else(|| ReaperError::InvalidPolicy {
-            reason: "Indexed access missing attribute".to_string(),
-        })?,
-        index: index.ok_or_else(|| ReaperError::InvalidPolicy {
-            reason: "Indexed access missing index".to_string(),
-        })?,
+        args,
     })
 }
 
@@ -1680,6 +1870,580 @@ mod tests {
             }
         } else {
             panic!("Expected AND condition");
+        }
+    }
+
+    // ===== Built-in Function Tests =====
+
+    #[test]
+    fn test_parse_method_call_count() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule count_check {
+                    allow if perm_count := [perms.count() | perms := user.permissions[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value: _ } = &policy.rules[0].condition {
+            assert_eq!(variable, "perm_count");
+            // Method call in comprehension output - valid syntax
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_in_comprehension_output() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule lower_names {
+                    allow if names := [u.name.lower() | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "names");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                // Output should be a method call: u.name.lower()
+                if let Expr::MethodCall {
+                    receiver,
+                    method,
+                    args,
+                } = output.as_ref()
+                {
+                    // Receiver should be u.name (attribute access)
+                    if let Expr::AttributeAccess {
+                        variable,
+                        attribute,
+                    } = receiver.as_ref()
+                    {
+                        assert_eq!(variable, "u");
+                        assert_eq!(attribute, "name");
+                    } else {
+                        panic!("Expected attribute access as receiver");
+                    }
+                    assert_eq!(*method, MethodName::Lower);
+                    assert_eq!(args.len(), 0);
+                } else {
+                    panic!("Expected method call in output");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_sum() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule sum_test {
+                    allow if total := [u.score.sum() | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "total");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Sum);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_with_args() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule split_test {
+                    allow if parts := [u.email.split("@") | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "parts");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall {
+                    receiver,
+                    method,
+                    args,
+                } = output.as_ref()
+                {
+                    if let Expr::AttributeAccess {
+                        variable,
+                        attribute,
+                    } = receiver.as_ref()
+                    {
+                        assert_eq!(variable, "u");
+                        assert_eq!(attribute, "email");
+                    }
+                    assert_eq!(*method, MethodName::Split);
+                    assert_eq!(args.len(), 1);
+                    if let Expr::Literal(Value::String(s)) = &args[0] {
+                        assert_eq!(s, "@");
+                    } else {
+                        panic!("Expected string argument");
+                    }
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_is_string() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule type_check {
+                    allow if strings := [u.name | u := user.users[_]; is_string(u.name)]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "strings");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output: _,
+                iterator: _,
+                filters,
+            }) = value
+            {
+                assert_eq!(filters.len(), 1);
+                // The filter should parse but we're testing the function call syntax here
+                // Since filters are Condition not Expr, function calls in conditions need different handling
+                // For now, let's test function calls in comprehension output
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_max() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule max_test {
+                    allow if max_val := [scores.max() | scores := user.scores[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "max_val");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Max);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_min() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule min_test {
+                    allow if min_val := [scores.min() | scores := user.scores[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "min_val");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Min);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_upper() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule upper_test {
+                    allow if codes := [u.code.upper() | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "codes");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Upper);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_trim() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule trim_test {
+                    allow if names := [u.name.trim() | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "names");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Trim);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_contains() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule contains_test {
+                    allow if matches := [u.role.contains("admin") | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value: _ } = &policy.rules[0].condition {
+            assert_eq!(variable, "matches");
+            // Test parses successfully with contains() in output expression
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_startswith() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule prefix_test {
+                    allow if starts := [u.email.startswith("admin") | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        assert_eq!(policy.rules[0].name, "prefix_test");
+    }
+
+    #[test]
+    fn test_parse_method_call_endswith() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule suffix_test {
+                    allow if ends := [u.email.endswith("@company.com") | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        assert_eq!(policy.rules[0].name, "suffix_test");
+    }
+
+    #[test]
+    fn test_parse_method_call_union() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule union_test {
+                    allow if all_perms := [user_perms.union(role_perms) | user_perms := user.perms[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "all_perms");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, args, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Union);
+                    assert_eq!(args.len(), 1);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_intersection() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule intersection_test {
+                    allow if common := [a.intersection(b) | a := user.sets[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "common");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Intersection);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_difference() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule difference_test {
+                    allow if diff := [a.difference(b) | a := user.sets[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "diff");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::MethodCall { method, .. } = output.as_ref() {
+                    assert_eq!(*method, MethodName::Difference);
+                } else {
+                    panic!("Expected method call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_concat() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule concat_test {
+                    allow if full_names := [concat(u.first, " ", u.last) | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "full_names");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                if let Expr::FunctionCall {
+                    namespace,
+                    function,
+                    args,
+                } = output.as_ref()
+                {
+                    assert_eq!(namespace, &None);
+                    assert_eq!(function, "concat");
+                    assert_eq!(args.len(), 3);
+                } else {
+                    panic!("Expected function call");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call_chaining() {
+        let input = r#"
+            policy test {
+                default: deny,
+                rule chain_test {
+                    allow if clean_names := [u.name.trim().lower() | u := user.users[_]]
+                }
+            }
+        "#;
+
+        let policy = ReapParser::parse(input).unwrap();
+        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+            assert_eq!(variable, "clean_names");
+            if let AssignmentValue::Comprehension(Comprehension::Array {
+                output,
+                iterator: _,
+                filters: _,
+            }) = value
+            {
+                // Output should be a chained method call: u.name.trim().lower()
+                if let Expr::MethodCall {
+                    receiver,
+                    method,
+                    args: _,
+                } = output.as_ref()
+                {
+                    // Outer call is .lower()
+                    assert_eq!(*method, MethodName::Lower);
+                    // Receiver should be u.name.trim() (another method call)
+                    if let Expr::MethodCall {
+                        receiver: inner_receiver,
+                        method: inner_method,
+                        args: _,
+                    } = receiver.as_ref()
+                    {
+                        assert_eq!(*inner_method, MethodName::Trim);
+                        // Inner receiver should be u.name
+                        if let Expr::AttributeAccess {
+                            variable,
+                            attribute,
+                        } = inner_receiver.as_ref()
+                        {
+                            assert_eq!(variable, "u");
+                            assert_eq!(attribute, "name");
+                        } else {
+                            panic!("Expected attribute access in inner receiver");
+                        }
+                    } else {
+                        panic!("Expected method call as receiver for chaining");
+                    }
+                } else {
+                    panic!("Expected method call in output");
+                }
+            } else {
+                panic!("Expected array comprehension");
+            }
+        } else {
+            panic!("Expected assignment");
         }
     }
 }

@@ -1,0 +1,271 @@
+// Example policies demonstrating Phase 3 built-in functions
+// Run with: cargo run --example test_builtin_policies
+
+// Example 1: RBAC with string methods and aggregates
+policy rbac_with_builtins {
+    version: "1.0.0",
+    description: "Role-based access control using built-in functions",
+    default: deny,
+
+    // Allow admin users (case-insensitive role check)
+    rule admin_access {
+        allow if {
+            role := user.role.lower(),
+            role == "admin"
+        }
+    }
+
+    // Allow users with sufficient permissions
+    rule permission_count {
+        allow if {
+            // Collect user's permissions
+            perms := {p | p := user.permissions[_]},
+
+            // Count them
+            perm_count := perms.count(),
+
+            // Require at least 5 permissions
+            perm_count >= 5
+        }
+    }
+
+    // Allow if user has "write" permission for this resource
+    rule has_write_permission {
+        allow if {
+            // Find matching permissions
+            matching := {p | p := user.permissions[_];
+                            p.resource_id == resource.id},
+
+            // Check if any grant write access
+            write_perms := {p | p := matching[_];
+                               p.action.lower() == "write"},
+
+            // At least one write permission
+            write_perms.count() > 0
+        }
+    }
+}
+
+// Example 2: Email validation using string methods
+policy email_validation {
+    version: "1.0.0",
+    description: "Validate email addresses",
+    default: deny,
+
+    rule valid_email {
+        allow if {
+            // Split email by @
+            parts := user.email.split("@"),
+
+            // Must have exactly 2 parts
+            parts.count() == 2,
+
+            // Domain must be in allowed list
+            domain := parts[1],
+            domain.lower() in {"example.com", "company.org"}
+        }
+    }
+
+    rule proper_format {
+        allow if {
+            // Email must contain @
+            user.email.contains("@"),
+
+            // Must not start or end with whitespace
+            trimmed := user.email.trim(),
+            trimmed == user.email
+        }
+    }
+}
+
+// Example 3: Aggregate functions on collections
+policy resource_analysis {
+    version: "1.0.0",
+    description: "Analyze resource metrics using aggregates",
+    default: deny,
+
+    rule check_total_usage {
+        allow if {
+            // Sum all resource usage
+            usage_values := [r.usage | r := user.resources[_]],
+            total_usage := usage_values.sum(),
+
+            // Must be under limit
+            total_usage < 1000
+        }
+    }
+
+    rule check_max_priority {
+        allow if {
+            // Get all priorities
+            priorities := [r.priority | r := user.resources[_]],
+
+            // Find maximum
+            max_priority := priorities.max(),
+
+            // Must not exceed threshold
+            max_priority <= 10
+        }
+    }
+
+    rule check_min_quality {
+        allow if {
+            // Get quality scores
+            scores := [r.quality_score | r := user.resources[_]],
+
+            // Find minimum
+            min_score := scores.min(),
+
+            // All must meet minimum standard
+            min_score >= 50
+        }
+    }
+}
+
+// Example 4: Type checking before operations
+policy type_safe_operations {
+    version: "1.0.0",
+    description: "Use type checking to ensure safety",
+    default: deny,
+
+    rule safe_string_ops {
+        allow if {
+            // Verify role is a string before string operations
+            is_string(user.role),
+            normalized_role := user.role.lower().trim(),
+            normalized_role == "admin"
+        }
+    }
+
+    rule safe_numeric_ops {
+        allow if {
+            // Verify age is a number before comparison
+            is_number(user.age),
+            user.age >= 18
+        }
+    }
+
+    rule safe_array_access {
+        allow if {
+            // Verify permissions is an array
+            is_array(user.permissions),
+
+            // Count elements
+            count := user.permissions.count(),
+            count > 0
+        }
+    }
+}
+
+// Example 5: Set operations for permission management
+policy permission_sets {
+    version: "1.0.0",
+    description: "Combine permissions using set operations",
+    default: deny,
+
+    rule combined_permissions {
+        allow if {
+            // User's direct permissions
+            user_perms := {p.action | p := user.permissions[_]},
+
+            // Role's permissions
+            role_perms := {p.action | p := user.role_permissions[_]},
+
+            // All permissions (union)
+            all_perms := user_perms.union(role_perms),
+
+            // Check if required action is in the combined set
+            context.required_action in all_perms
+        }
+    }
+
+    rule shared_permissions {
+        allow if {
+            // User's permissions
+            user_perms := {p | p := user.permissions[_]},
+
+            // Required permissions
+            required_perms := {p | p := context.required_permissions[_]},
+
+            // Find intersection
+            common := user_perms.intersection(required_perms),
+
+            // Must have all required permissions
+            common.count() == required_perms.count()
+        }
+    }
+
+    rule missing_permissions {
+        deny if {
+            // Required permissions
+            required := {p | p := context.required_permissions[_]},
+
+            // User's permissions
+            has := {p | p := user.permissions[_]},
+
+            // Find what's missing
+            missing := required.difference(has),
+
+            // Block if any are missing
+            missing.count() > 0
+        }
+    }
+}
+
+// Example 6: Method chaining
+policy method_chaining_examples {
+    version: "1.0.0",
+    description: "Demonstrate method chaining",
+    default: deny,
+
+    rule clean_comparison {
+        allow if {
+            // Chain multiple string operations
+            clean_name := user.name.trim().lower(),
+            clean_name == "alice"
+        }
+    }
+
+    rule email_domain {
+        allow if {
+            // Split and access
+            domain := user.email.lower().split("@")[1],
+            domain.startswith("company")
+        }
+    }
+}
+
+// Example 7: Complex real-world scenario
+policy advanced_access_control {
+    version: "1.0.0",
+    description: "Complex access control with multiple built-ins",
+    default: deny,
+
+    rule comprehensive_check {
+        allow if {
+            // 1. Type safety
+            is_string(user.role),
+            is_array(user.permissions),
+            is_number(user.access_level),
+
+            // 2. String normalization
+            role := user.role.lower().trim(),
+
+            // 3. Permission aggregation
+            perm_actions := {p.action.lower() | p := user.permissions[_]},
+            required_actions := {"read", "write"},
+
+            // 4. Set operations
+            has_required := perm_actions.intersection(required_actions),
+            has_required.count() == required_actions.count(),
+
+            // 5. Numeric comparison with aggregates
+            resource_ids := [r.id | r := user.accessible_resources[_]],
+            resource_ids.count() > 0,
+            resource_ids.max() <= 1000,
+
+            // 6. Final authorization
+            (role == "admin" || user.access_level >= 5)
+        }
+    }
+}
