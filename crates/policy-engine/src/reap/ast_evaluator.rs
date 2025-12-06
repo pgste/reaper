@@ -756,6 +756,555 @@ impl ReapAstEvaluator {
                     }),
                 }
             }
+
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } => self.evaluate_method_call(receiver, method, args, context),
+
+            Expr::FunctionCall {
+                namespace,
+                function,
+                args,
+            } => self.evaluate_function_call(namespace.as_deref(), function, args, context),
+        }
+    }
+
+    /// Evaluate method call expressions (e.g., collection.count(), roles.sum())
+    fn evaluate_method_call(
+        &self,
+        receiver: &Expr,
+        method: &MethodName,
+        args: &[Expr],
+        context: &EvalContext,
+    ) -> Result<EvalValue, ReaperError> {
+        let receiver_value = self.evaluate_expr(receiver, context)?;
+
+        match method {
+            // Aggregate methods
+            MethodName::Count => self.method_count(&receiver_value),
+            MethodName::Sum => self.method_sum(&receiver_value),
+            MethodName::Max => self.method_max(&receiver_value),
+            MethodName::Min => self.method_min(&receiver_value),
+            MethodName::Any => self.method_any(&receiver_value),
+            MethodName::All => self.method_all(&receiver_value),
+
+            // String methods
+            MethodName::Lower => self.method_lower(&receiver_value),
+            MethodName::Upper => self.method_upper(&receiver_value),
+            MethodName::Trim => self.method_trim(&receiver_value),
+            MethodName::Split => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "split() requires delimiter argument".to_string(),
+                    });
+                }
+                let delimiter = self.evaluate_expr(&args[0], context)?;
+                self.method_split(&receiver_value, &delimiter)
+            }
+            MethodName::Contains => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "contains() requires substring argument".to_string(),
+                    });
+                }
+                let substring = self.evaluate_expr(&args[0], context)?;
+                self.method_contains(&receiver_value, &substring)
+            }
+            MethodName::Startswith => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "startswith() requires prefix argument".to_string(),
+                    });
+                }
+                let prefix = self.evaluate_expr(&args[0], context)?;
+                self.method_startswith(&receiver_value, &prefix)
+            }
+            MethodName::Endswith => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "endswith() requires suffix argument".to_string(),
+                    });
+                }
+                let suffix = self.evaluate_expr(&args[0], context)?;
+                self.method_endswith(&receiver_value, &suffix)
+            }
+
+            // Collection methods
+            MethodName::Union => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "union() requires another set argument".to_string(),
+                    });
+                }
+                let other = self.evaluate_expr(&args[0], context)?;
+                self.method_union(&receiver_value, &other)
+            }
+            MethodName::Intersection => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "intersection() requires another set argument".to_string(),
+                    });
+                }
+                let other = self.evaluate_expr(&args[0], context)?;
+                self.method_intersection(&receiver_value, &other)
+            }
+            MethodName::Difference => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "difference() requires another set argument".to_string(),
+                    });
+                }
+                let other = self.evaluate_expr(&args[0], context)?;
+                self.method_difference(&receiver_value, &other)
+            }
+        }
+    }
+
+    /// Evaluate function call expressions (e.g., time.now_ns(), concat(a, b))
+    fn evaluate_function_call(
+        &self,
+        namespace: Option<&str>,
+        function: &str,
+        args: &[Expr],
+        context: &EvalContext,
+    ) -> Result<EvalValue, ReaperError> {
+        match (namespace, function) {
+            // Type checking functions
+            (None, "is_string") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_string() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(value, EvalValue::String(_))))
+            }
+            (None, "is_number") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_number() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(
+                    value,
+                    EvalValue::Integer(_) | EvalValue::Float(_)
+                )))
+            }
+            (None, "is_bool") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_bool() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(value, EvalValue::Boolean(_))))
+            }
+            (None, "is_array") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_array() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(value, EvalValue::Array(_))))
+            }
+            (None, "is_set") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_set() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(value, EvalValue::Set(_))))
+            }
+            (None, "is_object") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_object() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(value, EvalValue::Object(_))))
+            }
+            (None, "is_null") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "is_null() requires one argument".to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                Ok(EvalValue::Boolean(matches!(value, EvalValue::Null)))
+            }
+
+            // String concatenation
+            (None, "concat") => {
+                let strings: Result<Vec<String>, _> = args
+                    .iter()
+                    .map(|arg| {
+                        let val = self.evaluate_expr(arg, context)?;
+                        match val {
+                            EvalValue::String(s) => Ok(s),
+                            _ => Err(ReaperError::InvalidPolicy {
+                                reason: "concat() requires string arguments".to_string(),
+                            }),
+                        }
+                    })
+                    .collect();
+
+                Ok(EvalValue::String(strings?.join("")))
+            }
+
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Unknown function: {}",
+                    namespace.map(|ns| format!("{}::{}", ns, function)).unwrap_or_else(|| function.to_string())
+                ),
+            }),
+        }
+    }
+
+    // ===== Aggregate Methods =====
+
+    /// count() - Returns the number of items in a collection
+    /// Performance: O(1) for arrays/sets (length lookup), O(n) for object (key count)
+    fn method_count(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let count = match value {
+            EvalValue::Array(arr) => arr.len(),
+            EvalValue::Set(set) => set.len(),
+            EvalValue::Object(obj) => obj.len(),
+            EvalValue::String(s) => s.len(), // Character count
+            _ => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "count() requires collection or string".to_string(),
+                })
+            }
+        };
+
+        Ok(EvalValue::Integer(count as i64))
+    }
+
+    /// sum() - Sums all numeric values in a collection
+    /// Performance: O(n) with potential SIMD optimization for large arrays
+    fn method_sum(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items = self.get_collection_items(value)?;
+
+        let mut int_sum: i64 = 0;
+        let mut has_float = false;
+        let mut float_sum: f64 = 0.0;
+
+        for item in items {
+            match item {
+                EvalValue::Integer(i) => {
+                    if has_float {
+                        float_sum += *i as f64;
+                    } else {
+                        int_sum += i;
+                    }
+                }
+                EvalValue::Float(f) => {
+                    if !has_float {
+                        // Convert accumulated int sum to float
+                        float_sum = int_sum as f64;
+                        has_float = true;
+                    }
+                    float_sum += f;
+                }
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "sum() requires numeric values".to_string(),
+                    })
+                }
+            }
+        }
+
+        if has_float {
+            Ok(EvalValue::Float(float_sum))
+        } else {
+            Ok(EvalValue::Integer(int_sum))
+        }
+    }
+
+    /// max() - Finds the maximum value in a collection
+    /// Performance: O(n) single pass
+    fn method_max(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items = self.get_collection_items(value)?;
+
+        if items.is_empty() {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "max() requires non-empty collection".to_string(),
+            });
+        }
+
+        let mut max_int: Option<i64> = None;
+        let mut max_float: Option<f64> = None;
+        let mut has_float = false;
+
+        for item in items {
+            match item {
+                EvalValue::Integer(i) => {
+                    if has_float {
+                        let i_as_float = *i as f64;
+                        max_float = Some(max_float.map_or(i_as_float, |m| m.max(i_as_float)));
+                    } else {
+                        max_int = Some(max_int.map_or(*i, |m| m.max(*i)));
+                    }
+                }
+                EvalValue::Float(f) => {
+                    if !has_float {
+                        // Convert to float comparison
+                        let current_max = max_int.map(|i| i as f64).unwrap_or(f64::NEG_INFINITY);
+                        max_float = Some(current_max.max(*f));
+                        has_float = true;
+                    } else {
+                        max_float = Some(max_float.map_or(*f, |m| m.max(*f)));
+                    }
+                }
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "max() requires numeric values".to_string(),
+                    })
+                }
+            }
+        }
+
+        if has_float {
+            Ok(EvalValue::Float(max_float.unwrap()))
+        } else {
+            Ok(EvalValue::Integer(max_int.unwrap()))
+        }
+    }
+
+    /// min() - Finds the minimum value in a collection
+    /// Performance: O(n) single pass
+    fn method_min(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items = self.get_collection_items(value)?;
+
+        if items.is_empty() {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "min() requires non-empty collection".to_string(),
+            });
+        }
+
+        let mut min_int: Option<i64> = None;
+        let mut min_float: Option<f64> = None;
+        let mut has_float = false;
+
+        for item in items {
+            match item {
+                EvalValue::Integer(i) => {
+                    if has_float {
+                        let i_as_float = *i as f64;
+                        min_float = Some(min_float.map_or(i_as_float, |m| m.min(i_as_float)));
+                    } else {
+                        min_int = Some(min_int.map_or(*i, |m| m.min(*i)));
+                    }
+                }
+                EvalValue::Float(f) => {
+                    if !has_float {
+                        // Convert to float comparison
+                        let current_min = min_int.map(|i| i as f64).unwrap_or(f64::INFINITY);
+                        min_float = Some(current_min.min(*f));
+                        has_float = true;
+                    } else {
+                        min_float = Some(min_float.map_or(*f, |m| m.min(*f)));
+                    }
+                }
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "min() requires numeric values".to_string(),
+                    })
+                }
+            }
+        }
+
+        if has_float {
+            Ok(EvalValue::Float(min_float.unwrap()))
+        } else {
+            Ok(EvalValue::Integer(min_int.unwrap()))
+        }
+    }
+
+    /// any() - Returns true if any element is truthy
+    /// Performance: O(n) with short-circuit evaluation
+    fn method_any(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items = self.get_collection_items(value)?;
+
+        for item in items {
+            let is_truthy = match item {
+                EvalValue::Boolean(b) => *b,
+                EvalValue::Integer(i) => *i != 0,
+                EvalValue::Null => false,
+                EvalValue::String(s) => !s.is_empty(),
+                _ => true, // Arrays, objects, sets are truthy if they exist
+            };
+
+            if is_truthy {
+                return Ok(EvalValue::Boolean(true));
+            }
+        }
+
+        Ok(EvalValue::Boolean(false))
+    }
+
+    /// all() - Returns true if all elements are truthy
+    /// Performance: O(n) with short-circuit evaluation
+    fn method_all(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items = self.get_collection_items(value)?;
+
+        for item in items {
+            let is_truthy = match item {
+                EvalValue::Boolean(b) => *b,
+                EvalValue::Integer(i) => *i != 0,
+                EvalValue::Null => false,
+                EvalValue::String(s) => !s.is_empty(),
+                _ => true,
+            };
+
+            if !is_truthy {
+                return Ok(EvalValue::Boolean(false));
+            }
+        }
+
+        Ok(EvalValue::Boolean(true))
+    }
+
+    // ===== String Methods =====
+
+    /// lower() - Converts string to lowercase
+    fn method_lower(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::String(s) => Ok(EvalValue::String(s.to_lowercase())),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "lower() requires string value".to_string(),
+            }),
+        }
+    }
+
+    /// upper() - Converts string to uppercase
+    fn method_upper(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::String(s) => Ok(EvalValue::String(s.to_uppercase())),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "upper() requires string value".to_string(),
+            }),
+        }
+    }
+
+    /// trim() - Removes leading/trailing whitespace
+    fn method_trim(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::String(s) => Ok(EvalValue::String(s.trim().to_string())),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "trim() requires string value".to_string(),
+            }),
+        }
+    }
+
+    /// split() - Splits string by delimiter
+    fn method_split(&self, value: &EvalValue, delimiter: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match (value, delimiter) {
+            (EvalValue::String(s), EvalValue::String(delim)) => {
+                let parts: Vec<EvalValue> = s
+                    .split(delim.as_str())
+                    .map(|part| EvalValue::String(part.to_string()))
+                    .collect();
+                Ok(EvalValue::Array(parts))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "split() requires string value and delimiter".to_string(),
+            }),
+        }
+    }
+
+    /// contains() - Checks if string contains substring
+    fn method_contains(&self, value: &EvalValue, substring: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match (value, substring) {
+            (EvalValue::String(s), EvalValue::String(sub)) => {
+                Ok(EvalValue::Boolean(s.contains(sub.as_str())))
+            }
+            (EvalValue::Array(arr), item) | (EvalValue::Set(arr), item) => {
+                Ok(EvalValue::Boolean(arr.contains(item)))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "contains() requires string/collection and value".to_string(),
+            }),
+        }
+    }
+
+    /// startswith() - Checks if string starts with prefix
+    fn method_startswith(&self, value: &EvalValue, prefix: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match (value, prefix) {
+            (EvalValue::String(s), EvalValue::String(pre)) => {
+                Ok(EvalValue::Boolean(s.starts_with(pre.as_str())))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "startswith() requires string value and prefix".to_string(),
+            }),
+        }
+    }
+
+    /// endswith() - Checks if string ends with suffix
+    fn method_endswith(&self, value: &EvalValue, suffix: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match (value, suffix) {
+            (EvalValue::String(s), EvalValue::String(suf)) => {
+                Ok(EvalValue::Boolean(s.ends_with(suf.as_str())))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "endswith() requires string value and suffix".to_string(),
+            }),
+        }
+    }
+
+    // ===== Collection Methods =====
+
+    /// union() - Returns union of two sets
+    fn method_union(&self, value: &EvalValue, other: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items1 = self.get_collection_items(value)?;
+        let items2 = self.get_collection_items(other)?;
+
+        let set1: HashSet<_> = items1.into_iter().cloned().collect();
+        let set2: HashSet<_> = items2.into_iter().cloned().collect();
+
+        let union: Vec<EvalValue> = set1.union(&set2).cloned().collect();
+        Ok(EvalValue::Set(union))
+    }
+
+    /// intersection() - Returns intersection of two sets
+    fn method_intersection(&self, value: &EvalValue, other: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items1 = self.get_collection_items(value)?;
+        let items2 = self.get_collection_items(other)?;
+
+        let set1: HashSet<_> = items1.into_iter().cloned().collect();
+        let set2: HashSet<_> = items2.into_iter().cloned().collect();
+
+        let intersection: Vec<EvalValue> = set1.intersection(&set2).cloned().collect();
+        Ok(EvalValue::Set(intersection))
+    }
+
+    /// difference() - Returns difference of two sets (items in first but not second)
+    fn method_difference(&self, value: &EvalValue, other: &EvalValue) -> Result<EvalValue, ReaperError> {
+        let items1 = self.get_collection_items(value)?;
+        let items2 = self.get_collection_items(other)?;
+
+        let set1: HashSet<_> = items1.into_iter().cloned().collect();
+        let set2: HashSet<_> = items2.into_iter().cloned().collect();
+
+        let difference: Vec<EvalValue> = set1.difference(&set2).cloned().collect();
+        Ok(EvalValue::Set(difference))
+    }
+
+    /// Helper: Extract items from a collection (returns owned Vec to avoid lifetime issues)
+    fn get_collection_items<'a>(&self, value: &'a EvalValue) -> Result<Vec<&'a EvalValue>, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => Ok(arr.iter().collect()),
+            EvalValue::Set(set) => Ok(set.iter().collect()),
+            EvalValue::Object(obj) => Ok(obj.values().collect()),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "Expected collection (array, set, or object)".to_string(),
+            }),
         }
     }
 }
