@@ -109,22 +109,65 @@ comp_filters = {
 }
 
 comp_expr = {
-    comp_indexed_access |
-    comp_attribute_access |
-    comp_variable |
+    comp_function_call |
+    comp_method_or_access |
     value
 }
 
-comp_attribute_access = {
-    ident ~ "." ~ ident
+// Handle method calls or attribute access in a unified way
+comp_method_or_access = {
+    comp_dot_access_with_methods |   // u.name or u.name.method()
+    (ident ~ comp_method_chain?)     // var or var.method()
 }
 
-comp_indexed_access = {
-    ident ~ "." ~ ident ~ bracket_index
+// Dot access optionally followed by methods: u.name, u.roles[0], u.name.lower()
+// Use negative lookahead to avoid matching var.method() as attribute access
+comp_dot_access_with_methods = {
+    ident ~ "." ~ ident ~ !("(") ~ bracket_index? ~ comp_method_chain?
+}
+
+// Base expressions that can be receivers for method calls
+comp_base_expr = {
+    comp_dot_access |  // ident.ident with optional [index]
+    comp_variable |    // simple ident
+    value              // literals
+}
+
+// Dot access: covers both attribute access (u.name) and indexed access (u.roles[0])
+comp_dot_access = {
+    ident ~ "." ~ ident ~ bracket_index?
 }
 
 comp_variable = {
     ident
+}
+
+// Method chain: .method1().method2()...
+comp_method_chain = {
+    comp_single_method_call+
+}
+
+comp_single_method_call = {
+    "." ~ ident ~ "(" ~ comp_arg_list? ~ ")"
+}
+
+// Function call: is_string(x), concat(a, b)
+comp_function_call = {
+    (ident ~ "::" ~ ident ~ "(" ~ comp_arg_list? ~ ")") |  // Namespaced: time::now_ns()
+    (ident ~ "(" ~ comp_arg_list? ~ ")")                    // Global: concat(a, b)
+}
+
+comp_arg_list = {
+    comp_expr ~ ("," ~ comp_expr)*
+}
+
+// Keep old rules for backward compatibility with existing parser code
+comp_attribute_access = {
+    comp_dot_access
+}
+
+comp_indexed_access = {
+    comp_dot_access
 }
 
 // Comparisons

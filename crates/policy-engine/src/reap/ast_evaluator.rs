@@ -140,20 +140,20 @@ impl ReapAstEvaluator {
 
         // Phase 1: Evaluate all DENY rules first
         for rule in &self.policy.rules {
-            if matches!(rule.decision, super::ast::Decision::Deny) {
-                if self.evaluate_condition(&rule.condition, &mut context)? {
-                    // Explicit deny - return immediately, no allow can override this
-                    return Ok(PolicyAction::Deny);
-                }
+            if matches!(rule.decision, super::ast::Decision::Deny)
+                && self.evaluate_condition(&rule.condition, &mut context)?
+            {
+                // Explicit deny - return immediately, no allow can override this
+                return Ok(PolicyAction::Deny);
             }
         }
 
         // Phase 2: No deny matched, now evaluate ALLOW rules
         for rule in &self.policy.rules {
-            if matches!(rule.decision, super::ast::Decision::Allow) {
-                if self.evaluate_condition(&rule.condition, &mut context)? {
-                    return Ok(PolicyAction::Allow);
-                }
+            if matches!(rule.decision, super::ast::Decision::Allow)
+                && self.evaluate_condition(&rule.condition, &mut context)?
+            {
+                return Ok(PolicyAction::Allow);
             }
         }
 
@@ -960,7 +960,9 @@ impl ReapAstEvaluator {
             _ => Err(ReaperError::InvalidPolicy {
                 reason: format!(
                     "Unknown function: {}",
-                    namespace.map(|ns| format!("{}::{}", ns, function)).unwrap_or_else(|| function.to_string())
+                    namespace
+                        .map(|ns| format!("{}::{}", ns, function))
+                        .unwrap_or_else(|| function.to_string())
                 ),
             }),
         }
@@ -1204,7 +1206,11 @@ impl ReapAstEvaluator {
     }
 
     /// split() - Splits string by delimiter
-    fn method_split(&self, value: &EvalValue, delimiter: &EvalValue) -> Result<EvalValue, ReaperError> {
+    fn method_split(
+        &self,
+        value: &EvalValue,
+        delimiter: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
         match (value, delimiter) {
             (EvalValue::String(s), EvalValue::String(delim)) => {
                 let parts: Vec<EvalValue> = s
@@ -1220,7 +1226,11 @@ impl ReapAstEvaluator {
     }
 
     /// contains() - Checks if string contains substring
-    fn method_contains(&self, value: &EvalValue, substring: &EvalValue) -> Result<EvalValue, ReaperError> {
+    fn method_contains(
+        &self,
+        value: &EvalValue,
+        substring: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
         match (value, substring) {
             (EvalValue::String(s), EvalValue::String(sub)) => {
                 Ok(EvalValue::Boolean(s.contains(sub.as_str())))
@@ -1235,7 +1245,11 @@ impl ReapAstEvaluator {
     }
 
     /// startswith() - Checks if string starts with prefix
-    fn method_startswith(&self, value: &EvalValue, prefix: &EvalValue) -> Result<EvalValue, ReaperError> {
+    fn method_startswith(
+        &self,
+        value: &EvalValue,
+        prefix: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
         match (value, prefix) {
             (EvalValue::String(s), EvalValue::String(pre)) => {
                 Ok(EvalValue::Boolean(s.starts_with(pre.as_str())))
@@ -1247,7 +1261,11 @@ impl ReapAstEvaluator {
     }
 
     /// endswith() - Checks if string ends with suffix
-    fn method_endswith(&self, value: &EvalValue, suffix: &EvalValue) -> Result<EvalValue, ReaperError> {
+    fn method_endswith(
+        &self,
+        value: &EvalValue,
+        suffix: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
         match (value, suffix) {
             (EvalValue::String(s), EvalValue::String(suf)) => {
                 Ok(EvalValue::Boolean(s.ends_with(suf.as_str())))
@@ -1273,7 +1291,11 @@ impl ReapAstEvaluator {
     }
 
     /// intersection() - Returns intersection of two sets
-    fn method_intersection(&self, value: &EvalValue, other: &EvalValue) -> Result<EvalValue, ReaperError> {
+    fn method_intersection(
+        &self,
+        value: &EvalValue,
+        other: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
         let items1 = self.get_collection_items(value)?;
         let items2 = self.get_collection_items(other)?;
 
@@ -1285,7 +1307,11 @@ impl ReapAstEvaluator {
     }
 
     /// difference() - Returns difference of two sets (items in first but not second)
-    fn method_difference(&self, value: &EvalValue, other: &EvalValue) -> Result<EvalValue, ReaperError> {
+    fn method_difference(
+        &self,
+        value: &EvalValue,
+        other: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
         let items1 = self.get_collection_items(value)?;
         let items2 = self.get_collection_items(other)?;
 
@@ -1297,7 +1323,10 @@ impl ReapAstEvaluator {
     }
 
     /// Helper: Extract items from a collection (returns owned Vec to avoid lifetime issues)
-    fn get_collection_items<'a>(&self, value: &'a EvalValue) -> Result<Vec<&'a EvalValue>, ReaperError> {
+    fn get_collection_items<'a>(
+        &self,
+        value: &'a EvalValue,
+    ) -> Result<Vec<&'a EvalValue>, ReaperError> {
         match value {
             EvalValue::Array(arr) => Ok(arr.iter().collect()),
             EvalValue::Set(set) => Ok(set.iter().collect()),

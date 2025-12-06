@@ -257,6 +257,7 @@ pub enum MethodName {
 
 /// Type names for type checking functions
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum TypeName {
     String,
     Number,
@@ -355,6 +356,7 @@ impl MethodName {
 }
 
 impl TypeName {
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "string" => Ok(TypeName::String),
@@ -368,6 +370,7 @@ impl TypeName {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             TypeName::String => "string",
