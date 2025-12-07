@@ -77,6 +77,7 @@ assignment = {
 
 assignment_value = {
     comprehension |
+    comp_function_call |  // Function calls (e.g., time::now_ns())
     entity_attr |
     value |
     ident  // Variable reference

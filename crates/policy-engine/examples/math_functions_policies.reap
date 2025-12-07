@@ -1,0 +1,226 @@
+// Math Functions Policy Examples
+// Demonstrates mathematical operations and calculations using math namespace
+
+policy financial_calculations {
+    version: "1.0",
+    description: "Demonstrates math functions for financial and numerical operations",
+    default: deny,
+
+    // Example 1: Budget calculation with rounding
+    rule budget_approval {
+        allow if total := math::round(user.requested_amount)
+        && total <= resource.budget_limit
+        && user.role == "manager"
+        && context.action == "approve_budget"
+    }
+
+    // Example 2: Floor function for billing cycles (always round down)
+    rule billing_cycles {
+        allow if cycles := math::floor(user.days_active / 30)
+        && cycles >= 1
+        && resource.type == "subscription_billing"
+        && user.status == "active"
+    }
+
+    // Example 3: Ceil function for resource allocation (always round up)
+    rule resource_allocation {
+        allow if servers_needed := math::ceil(user.expected_load / 1000)
+        && servers_needed <= resource.max_servers
+        && user.role in ["admin", "ops"]
+        && context.action == "allocate_servers"
+    }
+
+    // Example 4: Absolute value for difference calculations
+    rule price_variance_check {
+        allow if actual := user.actual_price
+        && expected := resource.expected_price
+        && variance := math::abs(actual - expected)
+        && variance <= resource.max_variance
+        && user.role == "pricing_analyst"
+    }
+
+    // Example 5: Power function for compound interest
+    rule investment_eligibility {
+        allow if principal := user.investment_amount
+        && rate := 1.05
+        && years := user.investment_years
+        && final_value := math::pow(rate, years)
+        && calculated_return := principal * final_value
+        && calculated_return >= resource.minimum_return
+        && user.role == "investor"
+    }
+
+    // Example 6: Square root for distance calculations (Euclidean distance)
+    rule proximity_check {
+        allow if dx := user.x_coord - resource.x_coord
+        && dy := user.y_coord - resource.y_coord
+        && dx_squared := math::pow(dx, 2)
+        && dy_squared := math::pow(dy, 2)
+        && distance := math::sqrt(dx_squared + dy_squared)
+        && distance <= resource.max_distance
+        && context.action == "access_location"
+    }
+
+    // Example 7: Min/Max for rate limiting
+    rule api_rate_limit {
+        allow if base_rate := user.subscription_tier * 100
+        && min_rate := math::max(base_rate, 50)
+        && max_rate := math::min(min_rate, 1000)
+        && user.current_requests < max_rate
+        && context.action == "api_call"
+    }
+
+    // Example 8: Clamp for score normalization
+    rule normalized_score_check {
+        allow if raw_score := user.test_score
+        && normalized := math::clamp(raw_score, 0, 100)
+        && normalized >= resource.passing_score
+        && user.role == "student"
+        && context.action == "submit_exam"
+    }
+
+    // Example 9: Complex discount calculation
+    rule discount_approval {
+        allow if base_discount := user.loyalty_years * 5
+        && max_discount := math::min(base_discount, 50)
+        && order_total := user.order_amount
+        && discount_amount := math::floor(order_total * max_discount / 100)
+        && final_total := order_total - discount_amount
+        && final_total >= resource.minimum_order
+        && user.status == "verified"
+    }
+
+    // Example 10: Absolute difference for tolerance checks
+    rule measurement_tolerance {
+        allow if measured := user.measured_value
+        && target := resource.target_value
+        && abs_diff := math::abs(measured - target)
+        && tolerance_pct := resource.tolerance_percentage
+        && max_diff := target * tolerance_pct / 100
+        && abs_diff <= max_diff
+        && context.action == "quality_check"
+    }
+
+    // Example 11: Power of 2 for memory allocation
+    rule memory_allocation {
+        allow if requested_mb := user.requested_memory
+        && exponent := math::ceil(math::sqrt(requested_mb))
+        && allocated := math::pow(2, exponent)
+        && allocated <= resource.max_memory
+        && user.role == "developer"
+        && context.action == "allocate_memory"
+    }
+
+    // Example 12: Min for choosing smallest timeout
+    rule timeout_configuration {
+        allow if user_timeout := user.preferred_timeout
+        && system_timeout := resource.system_max_timeout
+        && network_timeout := context.network_timeout
+        && min_timeout := math::min(user_timeout, system_timeout)
+        && final_timeout := math::min(min_timeout, network_timeout)
+        && final_timeout >= 5
+        && context.action == "configure_timeout"
+    }
+
+    // Example 13: Max for choosing highest priority
+    rule priority_escalation {
+        allow if base_priority := user.base_priority
+        && urgency_boost := context.urgency_level * 10
+        && sla_boost := resource.sla_level * 5
+        && max_boost := math::max(urgency_boost, sla_boost)
+        && final_priority := base_priority + max_boost
+        && final_priority >= resource.escalation_threshold
+        && user.role == "support_agent"
+    }
+
+    // Example 14: Clamp for temperature range validation
+    rule temperature_control {
+        allow if target_temp := user.requested_temperature
+        && safe_temp := math::clamp(target_temp, -20, 80)
+        && current_temp := resource.current_temperature
+        && temp_diff := math::abs(safe_temp - current_temp)
+        && temp_diff <= resource.max_temp_change
+        && user.role == "operator"
+        && context.action == "adjust_temperature"
+    }
+
+    // Example 15: Complex financial calculation combining multiple functions
+    rule loan_approval {
+        allow if principal := user.loan_amount
+        && annual_rate := resource.interest_rate / 100
+        && monthly_rate := annual_rate / 12
+        && months := user.loan_term_months
+        && rate_plus_one := 1 + monthly_rate
+        && power_term := math::pow(rate_plus_one, months)
+        && numerator := monthly_rate * power_term
+        && denominator := power_term - 1
+        && monthly_payment := principal * numerator / denominator
+        && rounded_payment := math::ceil(monthly_payment)
+        && annual_income := user.annual_income
+        && max_payment := annual_income / 12 * 0.28
+        && rounded_payment <= max_payment
+        && user.credit_score >= resource.min_credit_score
+        && context.action == "approve_loan"
+    }
+
+    // Example 16: Percentage calculation with rounding
+    rule commission_calculation {
+        allow if sales_amount := user.total_sales
+        && base_rate := 0.05
+        && bonus_rate := math::min(user.performance_score / 100 * 0.03, 0.03)
+        && total_rate := base_rate + bonus_rate
+        && commission := sales_amount * total_rate
+        && rounded_commission := math::round(commission)
+        && rounded_commission >= resource.minimum_payout
+        && user.role == "sales_rep"
+        && context.action == "process_commission"
+    }
+
+    // Example 17: Absolute value for bidirectional threshold
+    rule deviation_alert {
+        allow if current_value := user.current_metric
+        && baseline := resource.baseline_metric
+        && deviation := math::abs(current_value - baseline)
+        && threshold := resource.alert_threshold
+        && deviation > threshold
+        && user.role == "monitoring_system"
+        && context.action == "trigger_alert"
+    }
+
+    // Example 18: Square root for standard deviation approximation
+    rule variance_check {
+        allow if sum_squares := user.sum_of_squared_differences
+        && sample_count := user.sample_count
+        && variance := sum_squares / sample_count
+        && std_dev := math::sqrt(variance)
+        && max_std_dev := resource.max_standard_deviation
+        && std_dev <= max_std_dev
+        && user.role == "analyst"
+        && context.action == "validate_data"
+    }
+
+    // Example 19: Clamp with dynamic bounds
+    rule dynamic_rate_limiting {
+        allow if request_rate := user.requests_per_second
+        && tier_multiplier := user.tier_level
+        && min_allowed := 10 * tier_multiplier
+        && max_allowed := 100 * tier_multiplier
+        && clamped_rate := math::clamp(request_rate, min_allowed, max_allowed)
+        && clamped_rate == request_rate
+        && context.action == "rate_check"
+    }
+
+    // Example 20: Combined operations for complex scoring
+    rule credit_score_evaluation {
+        allow if payment_score := math::clamp(user.payment_history * 100, 0, 100)
+        && utilization := user.credit_used / user.credit_limit
+        && util_score := math::clamp((1 - utilization) * 100, 0, 100)
+        && age_months := user.account_age_months
+        && age_score := math::min(math::sqrt(age_months) * 10, 100)
+        && weighted_total := payment_score * 0.5 + util_score * 0.3 + age_score * 0.2
+        && final_score := math::round(weighted_total)
+        && final_score >= resource.approval_threshold
+        && user.role == "credit_applicant"
+        && context.action == "credit_approval"
+    }
+}

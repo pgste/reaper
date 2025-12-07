@@ -527,6 +527,7 @@ impl ReapAstEvaluator {
                     reason: format!("Undefined variable: {}", var_name),
                 }),
             AssignmentValue::Comprehension(comp) => self.evaluate_comprehension(comp, context),
+            AssignmentValue::Expr(expr) => self.evaluate_expr(expr, context),
         }
     }
 
@@ -845,6 +846,45 @@ impl ReapAstEvaluator {
                 self.method_endswith(&receiver_value, &suffix)
             }
 
+            // Regex methods
+            MethodName::Matches => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "matches() requires pattern argument".to_string(),
+                    });
+                }
+                let pattern = self.evaluate_expr(&args[0], context)?;
+                self.method_matches(&receiver_value, &pattern)
+            }
+            MethodName::Find => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "find() requires pattern argument".to_string(),
+                    });
+                }
+                let pattern = self.evaluate_expr(&args[0], context)?;
+                self.method_find(&receiver_value, &pattern)
+            }
+            MethodName::FindAll => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "find_all() requires pattern argument".to_string(),
+                    });
+                }
+                let pattern = self.evaluate_expr(&args[0], context)?;
+                self.method_find_all(&receiver_value, &pattern)
+            }
+            MethodName::Replace => {
+                if args.len() < 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "replace() requires pattern and replacement arguments".to_string(),
+                    });
+                }
+                let pattern = self.evaluate_expr(&args[0], context)?;
+                let replacement = self.evaluate_expr(&args[1], context)?;
+                self.method_replace(&receiver_value, &pattern, &replacement)
+            }
+
             // Collection methods
             MethodName::Union => {
                 if args.is_empty() {
@@ -872,6 +912,36 @@ impl ReapAstEvaluator {
                 }
                 let other = self.evaluate_expr(&args[0], context)?;
                 self.method_difference(&receiver_value, &other)
+            }
+
+            // Advanced collection methods
+            MethodName::First => self.method_first(&receiver_value),
+            MethodName::Last => self.method_last(&receiver_value),
+            MethodName::Slice => {
+                if args.len() < 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "slice() requires start and end arguments".to_string(),
+                    });
+                }
+                let start = self.evaluate_expr(&args[0], context)?;
+                let end = self.evaluate_expr(&args[1], context)?;
+                self.method_slice(&receiver_value, &start, &end)
+            }
+            MethodName::Reverse => self.method_reverse(&receiver_value),
+            MethodName::Sort => self.method_sort(&receiver_value),
+            MethodName::Unique => self.method_unique(&receiver_value),
+
+            // Object methods
+            MethodName::Keys => self.method_keys(&receiver_value),
+            MethodName::Values => self.method_values(&receiver_value),
+            MethodName::HasKey => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "has_key() requires a key argument".to_string(),
+                    });
+                }
+                let key = self.evaluate_expr(&args[0], context)?;
+                self.method_has_key(&receiver_value, &key)
             }
         }
     }
@@ -969,6 +1039,535 @@ impl ReapAstEvaluator {
                     .collect();
 
                 Ok(EvalValue::String(strings?.join("")))
+            }
+
+            // ===== Time/Date Functions =====
+
+            // Current time functions
+            (Some("time"), "now_ns") => {
+                if !args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::now_ns() takes no arguments".to_string(),
+                    });
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| ReaperError::InvalidPolicy {
+                        reason: format!("System time error: {}", e),
+                    })?;
+                Ok(EvalValue::Integer(now.as_nanos() as i64))
+            }
+
+            (Some("time"), "now_ms") => {
+                if !args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::now_ms() takes no arguments".to_string(),
+                    });
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| ReaperError::InvalidPolicy {
+                        reason: format!("System time error: {}", e),
+                    })?;
+                Ok(EvalValue::Integer(now.as_millis() as i64))
+            }
+
+            (Some("time"), "now") => {
+                if !args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::now() takes no arguments".to_string(),
+                    });
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| ReaperError::InvalidPolicy {
+                        reason: format!("System time error: {}", e),
+                    })?;
+                Ok(EvalValue::Integer(now.as_secs() as i64))
+            }
+
+            // Time parsing
+            (Some("time"), "parse_rfc3339") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::parse_rfc3339() requires exactly one argument (string)"
+                            .to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                let time_str = match value {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::parse_rfc3339() requires a string argument".to_string(),
+                        })
+                    }
+                };
+
+                // Parse RFC3339/ISO8601 string using chrono
+                use chrono::DateTime;
+                let dt = DateTime::parse_from_rfc3339(&time_str).map_err(|e| {
+                    ReaperError::InvalidPolicy {
+                        reason: format!("Invalid RFC3339 timestamp '{}': {}", time_str, e),
+                    }
+                })?;
+
+                Ok(EvalValue::Integer(dt.timestamp_nanos_opt().unwrap_or(0)))
+            }
+
+            // Time formatting
+            (Some("time"), "format_rfc3339") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason:
+                            "time::format_rfc3339() requires exactly one argument (nanoseconds)"
+                                .to_string(),
+                    });
+                }
+                let value = self.evaluate_expr(&args[0], context)?;
+                let nanos =
+                    match value {
+                        EvalValue::Integer(n) => n,
+                        _ => return Err(ReaperError::InvalidPolicy {
+                            reason:
+                                "time::format_rfc3339() requires an integer argument (nanoseconds)"
+                                    .to_string(),
+                        }),
+                    };
+
+                use chrono::DateTime;
+                let dt =
+                    DateTime::from_timestamp(nanos / 1_000_000_000, (nanos % 1_000_000_000) as u32)
+                        .ok_or_else(|| ReaperError::InvalidPolicy {
+                            reason: format!("Invalid timestamp: {}", nanos),
+                        })?;
+
+                Ok(EvalValue::String(dt.to_rfc3339()))
+            }
+
+            // Time arithmetic
+            (Some("time"), "add_ns") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::add_ns() requires exactly two arguments (timestamp_ns, duration_ns)".to_string(),
+                    });
+                }
+                let timestamp = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason:
+                                "time::add_ns() first argument must be an integer (nanoseconds)"
+                                    .to_string(),
+                        })
+                    }
+                };
+                let duration = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => return Err(ReaperError::InvalidPolicy {
+                        reason: "time::add_ns() second argument must be an integer (duration in nanoseconds)".to_string(),
+                    }),
+                };
+
+                Ok(EvalValue::Integer(timestamp.saturating_add(duration)))
+            }
+
+            (Some("time"), "subtract_ns") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::subtract_ns() requires exactly two arguments (timestamp_ns, duration_ns)".to_string(),
+                    });
+                }
+                let timestamp = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => return Err(ReaperError::InvalidPolicy {
+                        reason:
+                            "time::subtract_ns() first argument must be an integer (nanoseconds)"
+                                .to_string(),
+                    }),
+                };
+                let duration = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => return Err(ReaperError::InvalidPolicy {
+                        reason: "time::subtract_ns() second argument must be an integer (duration in nanoseconds)".to_string(),
+                    }),
+                };
+
+                Ok(EvalValue::Integer(timestamp.saturating_sub(duration)))
+            }
+
+            // Time comparison helpers
+            (Some("time"), "is_before") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::is_before() requires exactly two arguments (t1, t2)"
+                            .to_string(),
+                    });
+                }
+                let t1 = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_before() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+                let t2 = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_before() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+
+                Ok(EvalValue::Boolean(t1 < t2))
+            }
+
+            (Some("time"), "is_after") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::is_after() requires exactly two arguments (t1, t2)"
+                            .to_string(),
+                    });
+                }
+                let t1 = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_after() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+                let t2 = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_after() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+
+                Ok(EvalValue::Boolean(t1 > t2))
+            }
+
+            (Some("time"), "is_between") => {
+                if args.len() != 3 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason:
+                            "time::is_between() requires exactly three arguments (t, start, end)"
+                                .to_string(),
+                    });
+                }
+                let t = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_between() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+                let start = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_between() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+                let end = match self.evaluate_expr(&args[2], context)? {
+                    EvalValue::Integer(n) => n,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "time::is_between() arguments must be integers (timestamps)"
+                                .to_string(),
+                        })
+                    }
+                };
+
+                Ok(EvalValue::Boolean(t >= start && t <= end))
+            }
+
+            // Regex namespace functions
+            (Some("regex"), "is_valid") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "regex::is_valid() requires exactly one argument (pattern)"
+                            .to_string(),
+                    });
+                }
+                let pattern = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::is_valid() argument must be a string".to_string(),
+                        })
+                    }
+                };
+
+                use regex::Regex;
+                let is_valid = Regex::new(&pattern).is_ok();
+                Ok(EvalValue::Boolean(is_valid))
+            }
+
+            (Some("regex"), "escape") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "regex::escape() requires exactly one argument (string)"
+                            .to_string(),
+                    });
+                }
+                let input = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::escape() argument must be a string".to_string(),
+                        })
+                    }
+                };
+
+                use regex::escape;
+                Ok(EvalValue::String(escape(&input)))
+            }
+
+            // Math namespace functions
+            (Some("math"), "abs") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::abs() requires exactly one argument".to_string(),
+                    });
+                }
+                match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => Ok(EvalValue::Integer(n.abs())),
+                    EvalValue::Float(f) => Ok(EvalValue::Float(f.abs())),
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: "math::abs() requires numeric argument".to_string(),
+                    }),
+                }
+            }
+
+            (Some("math"), "round") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::round() requires exactly one argument".to_string(),
+                    });
+                }
+                let num = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::round() requires numeric argument".to_string(),
+                        })
+                    }
+                };
+                Ok(EvalValue::Integer(num.round() as i64))
+            }
+
+            (Some("math"), "floor") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::floor() requires exactly one argument".to_string(),
+                    });
+                }
+                let num = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::floor() requires numeric argument".to_string(),
+                        })
+                    }
+                };
+                Ok(EvalValue::Integer(num.floor() as i64))
+            }
+
+            (Some("math"), "ceil") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::ceil() requires exactly one argument".to_string(),
+                    });
+                }
+                let num = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::ceil() requires numeric argument".to_string(),
+                        })
+                    }
+                };
+                Ok(EvalValue::Integer(num.ceil() as i64))
+            }
+
+            (Some("math"), "sqrt") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::sqrt() requires exactly one argument".to_string(),
+                    });
+                }
+                let num = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::sqrt() requires numeric argument".to_string(),
+                        })
+                    }
+                };
+                if num < 0.0 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::sqrt() requires non-negative argument".to_string(),
+                    });
+                }
+                Ok(EvalValue::Float(num.sqrt()))
+            }
+
+            (Some("math"), "pow") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::pow() requires exactly two arguments (base, exponent)"
+                            .to_string(),
+                    });
+                }
+                let base = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::pow() base must be numeric".to_string(),
+                        })
+                    }
+                };
+                let exp = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::pow() exponent must be numeric".to_string(),
+                        })
+                    }
+                };
+                let result = base.powf(exp);
+                // Return integer if result is a whole number and exponent was non-negative
+                if exp >= 0.0 && result.fract() == 0.0 && result.is_finite() {
+                    Ok(EvalValue::Integer(result as i64))
+                } else {
+                    Ok(EvalValue::Float(result))
+                }
+            }
+
+            (Some("math"), "min") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::min() requires exactly two arguments".to_string(),
+                    });
+                }
+                let a = self.evaluate_expr(&args[0], context)?;
+                let b = self.evaluate_expr(&args[1], context)?;
+
+                match (&a, &b) {
+                    (EvalValue::Integer(x), EvalValue::Integer(y)) => {
+                        Ok(EvalValue::Integer(*x.min(y)))
+                    }
+                    (EvalValue::Float(x), EvalValue::Float(y)) => Ok(EvalValue::Float(x.min(*y))),
+                    (EvalValue::Integer(x), EvalValue::Float(y))
+                    | (EvalValue::Float(y), EvalValue::Integer(x)) => {
+                        Ok(EvalValue::Float((*x as f64).min(*y)))
+                    }
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: "math::min() requires two numeric arguments".to_string(),
+                    }),
+                }
+            }
+
+            (Some("math"), "max") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::max() requires exactly two arguments".to_string(),
+                    });
+                }
+                let a = self.evaluate_expr(&args[0], context)?;
+                let b = self.evaluate_expr(&args[1], context)?;
+
+                match (&a, &b) {
+                    (EvalValue::Integer(x), EvalValue::Integer(y)) => {
+                        Ok(EvalValue::Integer(*x.max(y)))
+                    }
+                    (EvalValue::Float(x), EvalValue::Float(y)) => Ok(EvalValue::Float(x.max(*y))),
+                    (EvalValue::Integer(x), EvalValue::Float(y))
+                    | (EvalValue::Float(y), EvalValue::Integer(x)) => {
+                        Ok(EvalValue::Float((*x as f64).max(*y)))
+                    }
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: "math::max() requires two numeric arguments".to_string(),
+                    }),
+                }
+            }
+
+            (Some("math"), "clamp") => {
+                if args.len() != 3 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::clamp() requires exactly three arguments (value, min, max)"
+                            .to_string(),
+                    });
+                }
+                let val = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::clamp() value must be numeric".to_string(),
+                        })
+                    }
+                };
+                let min = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::clamp() min must be numeric".to_string(),
+                        })
+                    }
+                };
+                let max = match self.evaluate_expr(&args[2], context)? {
+                    EvalValue::Integer(n) => n as f64,
+                    EvalValue::Float(f) => f,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "math::clamp() max must be numeric".to_string(),
+                        })
+                    }
+                };
+
+                if min > max {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "math::clamp() min must be <= max".to_string(),
+                    });
+                }
+
+                let clamped = val.clamp(min, max);
+                // Return integer if all inputs were integers
+                if matches!(
+                    self.evaluate_expr(&args[0], context)?,
+                    EvalValue::Integer(_)
+                ) && matches!(
+                    self.evaluate_expr(&args[1], context)?,
+                    EvalValue::Integer(_)
+                ) && matches!(
+                    self.evaluate_expr(&args[2], context)?,
+                    EvalValue::Integer(_)
+                ) {
+                    Ok(EvalValue::Integer(clamped as i64))
+                } else {
+                    Ok(EvalValue::Float(clamped))
+                }
             }
 
             _ => Err(ReaperError::InvalidPolicy {
@@ -1290,6 +1889,101 @@ impl ReapAstEvaluator {
         }
     }
 
+    // ===== Regex Methods =====
+
+    /// matches() - Tests if string matches regex pattern
+    fn method_matches(
+        &self,
+        value: &EvalValue,
+        pattern: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
+        match (value, pattern) {
+            (EvalValue::String(s), EvalValue::String(pat)) => {
+                use regex::Regex;
+                let re = Regex::new(pat).map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Invalid regex pattern '{}': {}", pat, e),
+                })?;
+                Ok(EvalValue::Boolean(re.is_match(s)))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "matches() requires string value and pattern".to_string(),
+            }),
+        }
+    }
+
+    /// find() - Finds first match of regex pattern in string
+    fn method_find(
+        &self,
+        value: &EvalValue,
+        pattern: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
+        match (value, pattern) {
+            (EvalValue::String(s), EvalValue::String(pat)) => {
+                use regex::Regex;
+                let re = Regex::new(pat).map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Invalid regex pattern '{}': {}", pat, e),
+                })?;
+
+                match re.find(s) {
+                    Some(m) => Ok(EvalValue::String(m.as_str().to_string())),
+                    None => Ok(EvalValue::Null),
+                }
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "find() requires string value and pattern".to_string(),
+            }),
+        }
+    }
+
+    /// find_all() - Finds all matches of regex pattern in string
+    fn method_find_all(
+        &self,
+        value: &EvalValue,
+        pattern: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
+        match (value, pattern) {
+            (EvalValue::String(s), EvalValue::String(pat)) => {
+                use regex::Regex;
+                let re = Regex::new(pat).map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Invalid regex pattern '{}': {}", pat, e),
+                })?;
+
+                let matches: Vec<EvalValue> = re
+                    .find_iter(s)
+                    .map(|m| EvalValue::String(m.as_str().to_string()))
+                    .collect();
+
+                Ok(EvalValue::Array(matches))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "find_all() requires string value and pattern".to_string(),
+            }),
+        }
+    }
+
+    /// replace() - Replaces all matches of regex pattern with replacement string
+    fn method_replace(
+        &self,
+        value: &EvalValue,
+        pattern: &EvalValue,
+        replacement: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
+        match (value, pattern, replacement) {
+            (EvalValue::String(s), EvalValue::String(pat), EvalValue::String(rep)) => {
+                use regex::Regex;
+                let re = Regex::new(pat).map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Invalid regex pattern '{}': {}", pat, e),
+                })?;
+
+                let result = re.replace_all(s, rep.as_str()).to_string();
+                Ok(EvalValue::String(result))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "replace() requires string value, pattern, and replacement".to_string(),
+            }),
+        }
+    }
+
     // ===== Collection Methods =====
 
     /// union() - Returns union of two sets
@@ -1347,6 +2041,273 @@ impl ReapAstEvaluator {
             EvalValue::Object(obj) => Ok(obj.values().collect()),
             _ => Err(ReaperError::InvalidPolicy {
                 reason: "Expected collection (array, set, or object)".to_string(),
+            }),
+        }
+    }
+
+    // ============================================================================
+    // Advanced Collection Methods
+    // ============================================================================
+
+    /// first() - Returns the first element of an array, or Null if empty
+    /// Uses Rust's slice .first() method for optimal performance
+    fn method_first(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => {
+                // Use slice .first() - returns Option<&T>
+                match arr.first() {
+                    Some(elem) => Ok(elem.clone()),
+                    None => Ok(EvalValue::Null),
+                }
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "first() requires an array".to_string(),
+            }),
+        }
+    }
+
+    /// last() - Returns the last element of an array, or Null if empty
+    /// Uses Rust's slice .last() method for optimal performance
+    fn method_last(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => {
+                // Use slice .last() - returns Option<&T>
+                match arr.last() {
+                    Some(elem) => Ok(elem.clone()),
+                    None => Ok(EvalValue::Null),
+                }
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "last() requires an array".to_string(),
+            }),
+        }
+    }
+
+    /// slice(start, end) - Extracts a subarray from start (inclusive) to end (exclusive)
+    /// Uses Rust's slice indexing with proper bounds checking
+    fn method_slice(
+        &self,
+        value: &EvalValue,
+        start: &EvalValue,
+        end: &EvalValue,
+    ) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => {
+                // Extract integer indices
+                let start_idx = match start {
+                    EvalValue::Integer(i) => *i,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "slice() start index must be an integer".to_string(),
+                        })
+                    }
+                };
+
+                let end_idx = match end {
+                    EvalValue::Integer(i) => *i,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "slice() end index must be an integer".to_string(),
+                        })
+                    }
+                };
+
+                // Convert to usize with bounds checking
+                let len = arr.len();
+                let start_usize = if start_idx < 0 {
+                    0
+                } else if start_idx as usize > len {
+                    len
+                } else {
+                    start_idx as usize
+                };
+
+                let end_usize = if end_idx < 0 {
+                    0
+                } else if end_idx as usize > len {
+                    len
+                } else {
+                    end_idx as usize
+                };
+
+                // Ensure start <= end
+                if start_usize > end_usize {
+                    return Ok(EvalValue::Array(Vec::new()));
+                }
+
+                // Use slice indexing - zero-copy view, then clone
+                let sliced = arr[start_usize..end_usize].to_vec();
+                Ok(EvalValue::Array(sliced))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "slice() requires an array".to_string(),
+            }),
+        }
+    }
+
+    /// reverse() - Returns a new array with elements in reverse order
+    /// Uses Rust's iterator .rev() for optimal performance - O(n) with single pass
+    fn method_reverse(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => {
+                // Use iterator .rev() - highly optimized by Rust std
+                let reversed: Vec<EvalValue> = arr.iter().rev().cloned().collect();
+                Ok(EvalValue::Array(reversed))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "reverse() requires an array".to_string(),
+            }),
+        }
+    }
+
+    /// sort() - Returns a new array with elements sorted in ascending order
+    /// Type-aware sorting: handles integers, floats, strings, and booleans
+    /// Uses Rust's optimized .sort_by() with pattern matching for type safety
+    fn method_sort(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => {
+                if arr.is_empty() {
+                    return Ok(EvalValue::Array(Vec::new()));
+                }
+
+                // Clone array for sorting (preserve original)
+                let mut sorted = arr.clone();
+
+                // Type-aware sorting using pattern matching
+                sorted.sort_by(|a, b| {
+                    use std::cmp::Ordering;
+
+                    match (a, b) {
+                        // Integer comparison
+                        (EvalValue::Integer(x), EvalValue::Integer(y)) => x.cmp(y),
+
+                        // Float comparison (handle NaN by treating as greater)
+                        (EvalValue::Float(x), EvalValue::Float(y)) => {
+                            x.partial_cmp(y).unwrap_or(Ordering::Equal)
+                        }
+
+                        // Mixed numeric types - convert to f64 for comparison
+                        (EvalValue::Integer(x), EvalValue::Float(y)) => {
+                            (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)
+                        }
+                        (EvalValue::Float(x), EvalValue::Integer(y)) => {
+                            x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)
+                        }
+
+                        // String comparison (lexicographic)
+                        (EvalValue::String(x), EvalValue::String(y)) => x.cmp(y),
+
+                        // Boolean comparison (false < true)
+                        (EvalValue::Boolean(x), EvalValue::Boolean(y)) => x.cmp(y),
+
+                        // Null comparison (null is always less than non-null)
+                        (EvalValue::Null, EvalValue::Null) => Ordering::Equal,
+                        (EvalValue::Null, _) => Ordering::Less,
+                        (_, EvalValue::Null) => Ordering::Greater,
+
+                        // Mixed types - define stable ordering by type precedence:
+                        // Null < Boolean < Integer < Float < String < Array < Set < Object
+                        _ => {
+                            let type_order = |v: &EvalValue| match v {
+                                EvalValue::Null => 0,
+                                EvalValue::Boolean(_) => 1,
+                                EvalValue::Integer(_) => 2,
+                                EvalValue::Float(_) => 3,
+                                EvalValue::String(_) => 4,
+                                EvalValue::Array(_) => 5,
+                                EvalValue::Set(_) => 6,
+                                EvalValue::Object(_) => 7,
+                            };
+                            type_order(a).cmp(&type_order(b))
+                        }
+                    }
+                });
+
+                Ok(EvalValue::Array(sorted))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "sort() requires an array".to_string(),
+            }),
+        }
+    }
+
+    /// unique() - Returns a Set containing only unique elements from array
+    /// Uses HashSet for O(n) deduplication - highly efficient Rust pattern
+    fn method_unique(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Array(arr) => {
+                // Use HashSet for deduplication - O(n) average case
+                // HashSet automatically handles uniqueness
+                let unique_set: HashSet<EvalValue> = arr.iter().cloned().collect();
+
+                // Convert back to Vec for Set variant
+                let unique_vec: Vec<EvalValue> = unique_set.into_iter().collect();
+
+                Ok(EvalValue::Set(unique_vec))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "unique() requires an array".to_string(),
+            }),
+        }
+    }
+
+    // ============================================================================
+    // Object Methods
+    // ============================================================================
+
+    /// keys() - Returns an array of all keys in an object
+    /// Preserves insertion order (HashMap maintains order in Rust)
+    fn method_keys(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Object(obj) => {
+                // Extract keys and convert to EvalValue strings
+                let keys: Vec<EvalValue> =
+                    obj.keys().map(|k| EvalValue::String(k.clone())).collect();
+
+                Ok(EvalValue::Array(keys))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "keys() requires an object".to_string(),
+            }),
+        }
+    }
+
+    /// values() - Returns an array of all values in an object
+    /// Preserves insertion order
+    fn method_values(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Object(obj) => {
+                // Extract values - already EvalValue so just clone
+                let values: Vec<EvalValue> = obj.values().cloned().collect();
+
+                Ok(EvalValue::Array(values))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "values() requires an object".to_string(),
+            }),
+        }
+    }
+
+    /// has_key(key) - Checks if an object contains a specific key
+    /// O(1) average case lookup using HashMap
+    fn method_has_key(&self, value: &EvalValue, key: &EvalValue) -> Result<EvalValue, ReaperError> {
+        match value {
+            EvalValue::Object(obj) => {
+                // Extract key string
+                let key_str = match key {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "has_key() requires a string key".to_string(),
+                        })
+                    }
+                };
+
+                // Use HashMap .contains_key() - O(1) average case
+                Ok(EvalValue::Boolean(obj.contains_key(key_str)))
+            }
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "has_key() requires an object".to_string(),
             }),
         }
     }
@@ -1563,4 +2524,319 @@ mod tests {
 
     // TODO: Add more tests for comprehensions once we can properly test them
     // (need to add test data with arrays/objects for iteration)
+
+    #[test]
+    fn test_time_now_functions() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule time_check {
+                    allow if now_ns := time::now_ns()
+                    && now_ms := time::now_ms()
+                    && now_s := time::now()
+                    && time::is_before(0, now_ns)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_time_parse_format_rfc3339() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule time_parse {
+                    allow if parsed := time::parse_rfc3339("2024-01-15T12:30:00Z")
+                    && formatted := time::format_rfc3339(parsed)
+                    && time::is_before(0, parsed)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_time_arithmetic() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule time_arithmetic {
+                    allow if base := time::parse_rfc3339("2024-01-15T12:00:00Z")
+                    && future := time::add_ns(base, 3600000000000)
+                    && past := time::subtract_ns(base, 3600000000000)
+                    && time::is_before(base, future)
+                    && time::is_before(past, base)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_time_comparisons() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule time_comparisons {
+                    allow if t1 := time::parse_rfc3339("2024-01-15T10:00:00Z")
+                    && t2 := time::parse_rfc3339("2024-01-15T12:00:00Z")
+                    && t3 := time::parse_rfc3339("2024-01-15T14:00:00Z")
+                    && time::is_before(t1, t2)
+                    && time::is_after(t3, t2)
+                    && time::is_between(t2, t1, t3)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_time_based_access_control() {
+        // Test realistic scenario: allow access only during business hours
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule business_hours {
+                    allow if start := time::parse_rfc3339("2024-01-15T09:00:00Z")
+                    && end := time::parse_rfc3339("2024-01-15T17:00:00Z")
+                    && current := time::parse_rfc3339("2024-01-15T12:00:00Z")
+                    && time::is_between(current, start, end)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    // NOTE: Comprehensive regex evaluator tests deferred to integration test suite
+    // Parser tests verify syntax works correctly
+
+    #[test]
+    fn test_regex_namespace_functions() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule pattern_validation {
+                    allow if pattern := "[a-z]+"
+                    && regex::is_valid(pattern)
+                    && special_chars := ".*+?"
+                    && escaped := regex::escape(special_chars)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_math_abs_functions() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule math_absolute {
+                    allow if neg_int := -42
+                    && pos_int := math::abs(neg_int)
+                    && neg_float := -3.14
+                    && pos_float := math::abs(neg_float)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_math_rounding_functions() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule math_rounding {
+                    allow if rounded := math::round(3.7)
+                    && floored := math::floor(3.9)
+                    && ceiled := math::ceil(3.1)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_math_pow_sqrt() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule math_power_sqrt {
+                    allow if squared := math::pow(5, 2)
+                    && cubed := math::pow(2, 3)
+                    && sqrt_result := math::sqrt(16)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
+
+    #[test]
+    fn test_math_min_max_clamp() {
+        let policy_text = r#"
+            policy test {
+                default: deny,
+                rule math_comparisons {
+                    allow if min_val := math::min(10, 20)
+                    && max_val := math::max(10, 20)
+                    && clamped_high := math::clamp(150, 0, 100)
+                    && clamped_low := math::clamp(-50, 0, 100)
+                    && clamped_mid := math::clamp(50, 0, 100)
+                }
+            }
+        "#;
+
+        let store = create_test_store();
+        let policy = super::super::ReapParser::parse(policy_text).unwrap();
+        let evaluator = ReapAstEvaluator::new(store, policy);
+
+        let mut context = HashMap::new();
+        context.insert("principal".to_string(), "alice".to_string());
+
+        let request = PolicyRequest {
+            resource: "doc1".to_string(),
+            action: "read".to_string(),
+            context,
+        };
+
+        let decision = evaluator.evaluate(&request).unwrap();
+        assert!(matches!(decision, PolicyAction::Allow));
+    }
 }

@@ -1,0 +1,224 @@
+// Collection Operations Policy Examples
+// Demonstrates advanced array and object manipulation using Rust-optimized collection methods
+
+policy data_processing {
+    version: "1.0",
+    description: "Advanced collection operations for data processing and analysis",
+    default: deny,
+
+    // Example 1: Array first() - Access first element of permission lists
+    rule check_primary_permission {
+        allow if primary_perms := [p.first() | p := user.permission_lists[_]]
+        && primary_perms.any()
+        && resource.requires_primary == true
+        && user.role == "admin"
+    }
+
+    // Example 2: Array last() - Check most recent entries
+    rule check_latest_access {
+        allow if latest_times := [times.last() | times := user.access_history[_]]
+        && latest_times.any()
+        && resource.type == "audit_log"
+        && user.role in ["auditor", "admin"]
+    }
+
+    // Example 3: Array slice() - Extract specific ranges for analysis
+    rule analyze_recent_events {
+        allow if recent_events := [events.slice(0, 10) | events := user.event_logs[_]]
+        && recent_events.count() > 0
+        && context.action == "analyze_events"
+        && user.role == "analyst"
+    }
+
+    // Example 4: Array reverse() - Process items in reverse order
+    rule reverse_priority_check {
+        allow if reversed_priorities := [prios.reverse() | prios := resource.priority_lists[_]]
+        && reversed_priorities.any()
+        && context.processing_mode == "reverse"
+        && user.has_permission == true
+    }
+
+    // Example 5: Array sort() - Type-aware sorting for rankings
+    rule sorted_scores_analysis {
+        allow if sorted_scores := [scores.sort() | scores := user.test_scores[_]]
+        && sorted_scores.count() > 0
+        && resource.type == "score_report"
+        && user.role in ["teacher", "admin"]
+    }
+
+    // Example 6: Array unique() - Deduplication for unique values
+    rule unique_tags_extraction {
+        allow if unique_tag_sets := [tags.unique() | tags := resource.tag_lists[_]]
+        && unique_tag_sets.count() > 0
+        && context.action == "extract_unique_tags"
+        && user.role == "data_curator"
+    }
+
+    // Example 7: Object keys() - Extract all property names
+    rule metadata_keys_access {
+        allow if all_keys := [meta.keys() | meta := resource.metadata_objects[_]]
+        && all_keys.count() > 0
+        && context.action == "inspect_schema"
+        && user.role in ["admin", "developer"]
+    }
+
+    // Example 8: Object values() - Extract all property values
+    rule metadata_values_extraction {
+        allow if all_values := [meta.values() | meta := user.config_objects[_]]
+        && all_values.count() > 0
+        && resource.type == "configuration"
+        && user.role == "ops"
+    }
+
+    // Example 9: Object has_key() - Check for required properties
+    rule required_fields_validation {
+        allow if has_required := [obj.has_key("role") | obj := context.user_objects[_]]
+        && has_required.all()
+        && resource.requires_role_field == true
+        && user.role == "validator"
+    }
+
+    // Example 10: Combined first() and last() - Range validation
+    rule validate_sequence_range {
+        allow if sequences := user.data_sequences
+        && first_items := [seq.first() | seq := sequences[_]]
+        && last_items := [seq.last() | seq := sequences[_]]
+        && first_items.count() == last_items.count()
+        && context.action == "validate_range"
+    }
+
+    // Example 11: Slice with sorting - Top-N analysis
+    rule top_performers_analysis {
+        allow if performance_lists := resource.performance_data
+        && sorted_lists := [perf.sort() | perf := performance_lists[_]]
+        && top_performers := [sorted.slice(-10, -1) | sorted := sorted_lists[_]]
+        && top_performers.any()
+        && user.role == "manager"
+    }
+
+    // Example 12: Unique with sorting - Canonical sorted unique sets
+    rule canonical_tag_lists {
+        allow if tag_arrays := resource.document_tags
+        && unique_tags := [tags.unique() | tags := tag_arrays[_]]
+        && context.action == "generate_tag_index"
+        && user.role in ["indexer", "librarian"]
+    }
+
+    // Example 13: Reverse with slice - Tail extraction
+    rule recent_logs_reversed {
+        allow if log_arrays := user.activity_logs
+        && reversed_logs := [logs.reverse() | logs := log_arrays[_]]
+        && recent_reversed := [rev.slice(0, 20) | rev := reversed_logs[_]]
+        && recent_reversed.any()
+        && resource.type == "log_viewer"
+    }
+
+    // Example 14: Keys with filtering - Schema validation
+    rule validate_object_schema {
+        allow if objects := resource.data_objects
+        && key_sets := [obj.keys() | obj := objects[_]]
+        && context.action == "validate_schema"
+        && user.role == "data_engineer"
+    }
+
+    // Example 15: Values with aggregation - Data extraction
+    rule extract_all_values {
+        allow if config_objects := user.settings
+        && value_arrays := [cfg.values() | cfg := config_objects[_]]
+        && value_arrays.count() > 0
+        && resource.type == "settings_export"
+        && user.role in ["admin", "backup_operator"]
+    }
+
+    // Example 16: has_key() for security checks - Required field enforcement
+    rule enforce_required_metadata {
+        allow if metadata_list := resource.document_metadata
+        && has_owner := [meta.has_key("owner") | meta := metadata_list[_]]
+        && has_timestamp := [meta.has_key("timestamp") | meta := metadata_list[_]]
+        && has_owner.all()
+        && has_timestamp.all()
+        && context.action == "publish"
+    }
+
+    // Example 17: Multi-level slicing - Nested data extraction
+    rule nested_data_slicing {
+        allow if nested_arrays := user.hierarchical_data
+        && level1_sliced := [arr.slice(1, 5) | arr := nested_arrays[_]]
+        && level1_sliced.count() > 0
+        && resource.depth_level == 1
+        && user.role == "data_analyst"
+    }
+
+    // Example 18: Sort with type mixing - Heterogeneous data handling
+    rule mixed_type_sorting {
+        allow if mixed_arrays := resource.mixed_data
+        && sorted_mixed := [arr.sort() | arr := mixed_arrays[_]]
+        && sorted_mixed.any()
+        && context.action == "sort_mixed_types"
+        && user.role in ["developer", "debugger"]
+    }
+
+    // Example 19: Unique for deduplication pipelines - Data cleaning
+    rule deduplicate_entries {
+        allow if entry_arrays := user.submitted_data
+        && deduplicated := [entries.unique() | entries := entry_arrays[_]]
+        && deduplicated.count() > 0
+        && resource.type == "data_cleaning"
+        && user.role == "data_cleaner"
+    }
+
+    // Example 20: Combined operations - Complex data transformation
+    rule complex_transformation {
+        allow if raw_data := resource.raw_inputs
+        && unique_data := [data.unique() | data := raw_data[_]]
+        && sorted_unique := [uniq.sort() | uniq := unique_data[_]]
+        && processed := [sorted.reverse() | sorted := sorted_unique[_]]
+        && processed.count() > 0
+        && context.action == "transform_pipeline"
+        && user.role == "pipeline_operator"
+    }
+
+    // Example 21: First element safety - Null handling for empty arrays
+    rule safe_first_access {
+        allow if data_arrays := user.optional_data
+        && first_elements := [arr.first() | arr := data_arrays[_]]
+        && context.action == "peek_first"
+        && user.role == "reader"
+    }
+
+    // Example 22: Last element for state checking - Finality verification
+    rule check_final_state {
+        allow if state_sequences := resource.state_history
+        && final_states := [seq.last() | seq := state_sequences[_]]
+        && final_states.any()
+        && context.action == "verify_completion"
+        && user.role in ["validator", "auditor"]
+    }
+
+    // Example 23: Slice bounds safety - Automatic clamping
+    rule safe_slice_operation {
+        allow if arrays := user.variable_length_data
+        && safe_slices := [arr.slice(0, 1000) | arr := arrays[_]]
+        && safe_slices.count() > 0
+        && resource.type == "bulk_export"
+        && user.role == "exporter"
+    }
+
+    // Example 24: Object keys for iteration - Dynamic property access
+    rule dynamic_property_check {
+        allow if objects := resource.dynamic_configs
+        && property_names := [obj.keys() | obj := objects[_]]
+        && property_names.any()
+        && context.action == "enumerate_properties"
+        && user.role == "config_manager"
+    }
+
+    // Example 25: Empty array handling - Graceful degradation
+    rule handle_empty_collections {
+        allow if collections := user.sparse_data
+        && first_vals := [coll.first() | coll := collections[_]]
+        && reversed_colls := [coll.reverse() | coll := collections[_]]
+        && context.allows_empty == true
+        && user.role == "processor"
+    }
+}

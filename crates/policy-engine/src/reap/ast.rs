@@ -73,6 +73,8 @@ pub enum AssignmentValue {
     Variable(String),
     /// Comprehension: {expr | iteration; filters}
     Comprehension(Comprehension),
+    /// Expression (e.g., function call): time::now_ns()
+    Expr(Expr),
 }
 
 /// Entity attribute reference
@@ -251,10 +253,29 @@ pub enum MethodName {
     Startswith,
     Endswith,
 
-    // Collection methods
+    // Regex methods
+    Matches,
+    Find,
+    FindAll,
+    Replace,
+
+    // Collection methods (existing set operations)
     Union,
     Intersection,
     Difference,
+
+    // Advanced collection methods
+    First,
+    Last,
+    Slice,
+    Reverse,
+    Sort,
+    Unique,
+
+    // Object methods
+    Keys,
+    Values,
+    HasKey,
 }
 
 /// Type names for type checking functions
@@ -326,10 +347,29 @@ impl MethodName {
             "startswith" => Ok(MethodName::Startswith),
             "endswith" => Ok(MethodName::Endswith),
 
-            // Collections
+            // Regex
+            "matches" => Ok(MethodName::Matches),
+            "find" => Ok(MethodName::Find),
+            "find_all" => Ok(MethodName::FindAll),
+            "replace" => Ok(MethodName::Replace),
+
+            // Collections (existing set operations)
             "union" => Ok(MethodName::Union),
             "intersection" => Ok(MethodName::Intersection),
             "difference" => Ok(MethodName::Difference),
+
+            // Advanced collection methods
+            "first" => Ok(MethodName::First),
+            "last" => Ok(MethodName::Last),
+            "slice" => Ok(MethodName::Slice),
+            "reverse" => Ok(MethodName::Reverse),
+            "sort" => Ok(MethodName::Sort),
+            "unique" => Ok(MethodName::Unique),
+
+            // Object methods
+            "keys" => Ok(MethodName::Keys),
+            "values" => Ok(MethodName::Values),
+            "has_key" => Ok(MethodName::HasKey),
 
             _ => Err(format!("Unknown method name: {}", s)),
         }
@@ -350,9 +390,22 @@ impl MethodName {
             MethodName::Contains => "contains",
             MethodName::Startswith => "startswith",
             MethodName::Endswith => "endswith",
+            MethodName::Matches => "matches",
+            MethodName::Find => "find",
+            MethodName::FindAll => "find_all",
+            MethodName::Replace => "replace",
             MethodName::Union => "union",
             MethodName::Intersection => "intersection",
             MethodName::Difference => "difference",
+            MethodName::First => "first",
+            MethodName::Last => "last",
+            MethodName::Slice => "slice",
+            MethodName::Reverse => "reverse",
+            MethodName::Sort => "sort",
+            MethodName::Unique => "unique",
+            MethodName::Keys => "keys",
+            MethodName::Values => "values",
+            MethodName::HasKey => "has_key",
         }
     }
 }
