@@ -99,6 +99,16 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                     .to_string(),
             })
         }
+
+        Condition::Expr(_expr) => {
+            // Expression-based conditions (like function calls) not yet supported in compiler
+            Err(ReaperError::InvalidPolicy {
+                reason: "Expression-based conditions (e.g., function calls like is_string(x)) \
+                        are not yet supported in compiled policies. \
+                        Use .reap format with direct evaluation for expression support."
+                    .to_string(),
+            })
+        }
     }
 }
 

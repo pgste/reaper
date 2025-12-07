@@ -1,0 +1,5 @@
+[build]
+jobs = 2  # Limit parallel compilation jobs
+
+[profile.dev]
+split-debuginfo = "unpacked"  # Reduce memory during linking

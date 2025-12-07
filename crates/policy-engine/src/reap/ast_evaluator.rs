@@ -202,6 +202,20 @@ impl ReapAstEvaluator {
             }
 
             Condition::Not(cond) => Ok(!self.evaluate_condition(cond, context)?),
+
+            Condition::Expr(expr) => {
+                // Evaluate the expression and convert to boolean
+                let value = self.evaluate_expr(expr, context)?;
+                match value {
+                    EvalValue::Boolean(b) => Ok(b),
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "Expression in condition must evaluate to boolean, got: {:?}",
+                            value
+                        ),
+                    }),
+                }
+            }
         }
     }
 
