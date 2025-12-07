@@ -731,12 +731,11 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperErro
                                 ident_count += 1;
                             }
                             Rule::bracket_index => {
-                                let idx_value =
-                                    part.into_inner()
-                                        .next()
-                                        .ok_or_else(|| ReaperError::InvalidPolicy {
-                                            reason: "Empty bracket index".to_string(),
-                                        })?;
+                                let idx_value = part.into_inner().next().ok_or_else(|| {
+                                    ReaperError::InvalidPolicy {
+                                        reason: "Empty bracket index".to_string(),
+                                    }
+                                })?;
                                 index = Some(parse_bracket_index(idx_value)?);
                             }
                             Rule::comp_method_chain => {
