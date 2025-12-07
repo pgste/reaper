@@ -51,6 +51,8 @@ pub enum Condition {
     Or(Vec<Condition>),
     /// NOT of condition
     Not(Box<Condition>),
+    /// Expression that evaluates to boolean (e.g., function calls like is_string(x))
+    Expr(Expr),
 }
 
 /// Left side of comparison

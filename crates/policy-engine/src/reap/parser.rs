@@ -173,6 +173,11 @@ fn parse_primary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Re
         Rule::condition_expr => parse_condition_expr(inner),
         Rule::assignment => parse_assignment(inner),
         Rule::comparison => parse_comparison(inner),
+        Rule::comp_function_call => {
+            // Parse function call and wrap it as an expression condition
+            let expr = parse_comp_function_call(inner)?;
+            Ok(Condition::Expr(expr))
+        }
         Rule::boolean_literal => match inner.as_str() {
             "true" => Ok(Condition::True),
             "false" => Ok(Condition::False),
@@ -726,7 +731,13 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperErro
                                 ident_count += 1;
                             }
                             Rule::bracket_index => {
-                                index = Some(parse_bracket_index(part)?);
+                                let idx_value =
+                                    part.into_inner()
+                                        .next()
+                                        .ok_or_else(|| ReaperError::InvalidPolicy {
+                                            reason: "Empty bracket index".to_string(),
+                                        })?;
+                                index = Some(parse_bracket_index(idx_value)?);
                             }
                             Rule::comp_method_chain => {
                                 method_chain = Some(part);

@@ -66,6 +66,7 @@ primary_expr = {
     "(" ~ condition_expr ~ ")" |
     assignment |
     comparison |
+    comp_function_call |  // Support function calls in conditions (e.g., is_string(x))
     boolean_literal
 }
 
