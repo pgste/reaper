@@ -92,6 +92,18 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                 });
             }
 
+            // Check if this is an expression assignment (e.g., function call)
+            if matches!(value, AssignmentValue::Expr(_)) {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Expression assignments (e.g., function calls) are not yet supported in compiled policies. \
+                        Variable '{}' uses an expression which requires direct AST evaluation. \
+                        Use .reap format with direct evaluation for expression support.",
+                        variable
+                    ),
+                });
+            }
+
             // Regular assignments not yet supported in compiler
             Err(ReaperError::InvalidPolicy {
                 reason: "Variable assignments (:=) are not yet supported in compiled policies. \

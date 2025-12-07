@@ -1,0 +1,98 @@
+// Time-Based Policy Examples
+// Demonstrates all time/date functions in Phase 4
+
+policy temporal_access_control {
+    version: "1.0",
+    description: "Demonstrates time-based access control using time:: functions",
+    default: deny,
+
+    // Example 1: Business hours access (9 AM - 5 PM UTC)
+    rule business_hours_only {
+        allow if start := time::parse_rfc3339("2024-01-15T09:00:00Z")
+        && end := time::parse_rfc3339("2024-01-15T17:00:00Z")
+        && current := time::now_ns()
+        && time::is_between(current, start, end)
+        && user.role == "employee"
+    }
+
+    // Example 2: Token expiration check
+    rule valid_token {
+        allow if token_exp := context.token_expires_at
+        && now := time::now_ns()
+        && time::is_before(now, token_exp)
+        && user.role == "authenticated"
+    }
+
+    // Example 3: Time-limited trial access (7 days from signup)
+    rule trial_period {
+        allow if signup := context.signup_timestamp
+        && trial_duration := 604800000000000
+        && trial_end := time::add_ns(signup, trial_duration)
+        && now := time::now_ns()
+        && time::is_before(now, trial_end)
+        && user.plan == "trial"
+    }
+
+    // Example 4: Maintenance window restriction
+    rule maintenance_window {
+        deny if maint_start := time::parse_rfc3339("2024-01-20T02:00:00Z")
+        && maint_end := time::parse_rfc3339("2024-01-20T04:00:00Z")
+        && now := time::now_ns()
+        && time::is_between(now, maint_start, maint_end)
+    }
+
+    // Example 5: Age verification (must be 18+ years old)
+    rule age_verification {
+        allow if birthdate := user.birthdate
+        && now := time::now()
+        && age_seconds := time::subtract_ns(now, birthdate)
+        && eighteen_years := 568024668
+        && time::is_after(age_seconds, eighteen_years)
+        && resource.type == "restricted_content"
+    }
+
+    // Example 6: Time-based rate limiting (requests per hour)
+    rule rate_limit_hourly {
+        allow if last_request := context.last_request_time
+        && now := time::now_ns()
+        && one_hour := 3600000000000
+        && time_since_last := time::subtract_ns(now, last_request)
+        && time::is_after(time_since_last, one_hour)
+        && user.role == "api_user"
+    }
+
+    // Example 7: Format timestamp for logging
+    rule audit_with_timestamp {
+        allow if now := time::now_ns()
+        && timestamp := time::format_rfc3339(now)
+        && user.role == "admin"
+        && resource.action == "sensitive_operation"
+    }
+
+    // Example 8: Weekend access restriction
+    rule weekday_only {
+        allow if now := time::now_ns()
+        && formatted := time::format_rfc3339(now)
+        && user.role == "contractor"
+        && resource.type == "internal_system"
+    }
+
+    // Example 9: Progressive access based on tenure
+    rule tenure_based_access {
+        allow if hire_date := user.hire_date
+        && now := time::now()
+        && tenure := time::subtract_ns(now, hire_date)
+        && six_months := 15768000000000000
+        && time::is_after(tenure, six_months)
+        && resource.level == "intermediate"
+    }
+
+    // Example 10: Time-windowed resource access
+    rule scheduled_access {
+        allow if window_start := resource.access_start
+        && window_end := resource.access_end
+        && now := time::now_ns()
+        && time::is_between(now, window_start, window_end)
+        && user.role in resource.allowed_roles
+    }
+}

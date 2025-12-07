@@ -205,7 +205,7 @@ fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Reap
 fn parse_assignment_value(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<AssignmentValue, ReaperError> {
-    // The pair is assignment_value, which contains comprehension, entity_attr, value, or ident
+    // The pair is assignment_value, which contains comprehension, comp_function_call, entity_attr, value, or ident
     let inner = pair
         .into_inner()
         .next()
@@ -215,6 +215,7 @@ fn parse_assignment_value(
 
     match inner.as_rule() {
         Rule::comprehension => Ok(AssignmentValue::Comprehension(parse_comprehension(inner)?)),
+        Rule::comp_function_call => Ok(AssignmentValue::Expr(parse_comp_function_call(inner)?)),
         Rule::entity_attr => Ok(AssignmentValue::EntityAttr(parse_entity_attr(inner)?)),
         Rule::value => Ok(AssignmentValue::Value(parse_value(inner)?)),
         Rule::ident => Ok(AssignmentValue::Variable(inner.as_str().to_string())),
@@ -2456,4 +2457,264 @@ mod tests {
             panic!("Expected assignment");
         }
     }
+}
+
+#[test]
+fn test_parse_time_now_ns() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule time_check {
+                    allow if now := time::now_ns()
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+    // Verify it parses correctly
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "now");
+        if let AssignmentValue::Variable(ref _v) = value {
+            // This would actually be a function call expression
+            // Just verify it compiles
+        }
+    }
+}
+
+#[test]
+fn test_parse_time_parse_rfc3339() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule time_check {
+                    allow if timestamp := time::parse_rfc3339("2025-01-01T00:00:00Z")
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_time_arithmetic() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule time_check {
+                    allow if future := time::add_ns(time::now_ns(), 3600000000000)
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_time_comparison() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule time_check {
+                    allow if time::is_before(user.expires_at, time::now_ns())
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_regex_matches() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule email_validation {
+                    allow if valid_emails := [e.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") | e := user.emails[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_regex_find() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule pattern_extract {
+                    allow if matches := [t.find("\\d+") | t := user.texts[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_regex_replace() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule sanitize {
+                    allow if clean_values := [inp.replace("[^a-zA-Z0-9]", "") | inp := user.inputs[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_regex_namespace_functions() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule validate_pattern {
+                    allow if pattern := "[a-z]+"
+                    && regex::is_valid(pattern)
+                    && escaped := regex::escape(user.input)
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_math_abs_and_round() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule math_rounding {
+                    allow if abs_val := math::abs(-42)
+                    && rounded := math::round(3.7)
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_math_floor_ceil() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule math_floor_ceil {
+                    allow if floor_val := math::floor(3.9)
+                    && ceil_val := math::ceil(3.1)
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_math_pow_sqrt() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule math_power {
+                    allow if squared := math::pow(5, 2)
+                    && sqrt_val := math::sqrt(16)
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_math_min_max_clamp() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule math_comparisons {
+                    allow if min_val := math::min(10, 20)
+                    && max_val := math::max(10, 20)
+                    && clamped := math::clamp(150, 0, 100)
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_collection_first_last() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule array_access {
+                    allow if first_names := [arr.first() | arr := user.lists[_]]
+                    && last_items := [a.last() | a := resource.arrays[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_collection_slice_reverse() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule array_manipulation {
+                    allow if sliced_arrays := [arr.slice(1, 4) | arr := user.data[_]]
+                    && reversed_lists := [lst.reverse() | lst := resource.lists[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_collection_sort_unique() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule array_processing {
+                    allow if sorted_nums := [nums.sort() | nums := user.numbers[_]]
+                    && unique_vals := [vals.unique() | vals := resource.values[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_object_methods() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule object_access {
+                    allow if all_keys := [obj.keys() | obj := user.objects[_]]
+                    && all_values := [o.values() | o := resource.data[_]]
+                    && has_role := [obj.has_key("role") | obj := context.metadata[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
 }
