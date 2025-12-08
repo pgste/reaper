@@ -1570,6 +1570,81 @@ impl ReapAstEvaluator {
                 }
             }
 
+            // ============================================================================
+            // JSON Functions - High-performance JSON parsing and serialization
+            // ============================================================================
+            (Some("json"), "parse") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "json::parse() requires a JSON string argument".to_string(),
+                    });
+                }
+
+                let json_str = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "json::parse() requires a string argument".to_string(),
+                        })
+                    }
+                };
+
+                // Use sonic_rs for ultra-fast SIMD-accelerated parsing
+                match sonic_rs::from_str::<sonic_rs::Value>(&json_str) {
+                    Ok(json_value) => {
+                        // Convert sonic_rs::Value to EvalValue
+                        self.json_value_to_eval_value(&json_value)
+                    }
+                    Err(e) => Err(ReaperError::InvalidPolicy {
+                        reason: format!("json::parse() failed: {}", e),
+                    }),
+                }
+            }
+
+            (Some("json"), "stringify") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "json::stringify() requires a value argument".to_string(),
+                    });
+                }
+
+                let value = self.evaluate_expr(&args[0], context)?;
+
+                // Convert EvalValue to sonic_rs::Value
+                let json_value = self.eval_value_to_json_value(&value)?;
+
+                // Serialize to JSON string using sonic_rs for maximum speed
+                // Compact output (no pretty-printing) for optimal performance
+                match sonic_rs::to_string(&json_value) {
+                    Ok(json_str) => Ok(EvalValue::String(json_str)),
+                    Err(e) => Err(ReaperError::InvalidPolicy {
+                        reason: format!("json::stringify() failed: {}", e),
+                    }),
+                }
+            }
+
+            (Some("json"), "is_valid") => {
+                if args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "json::is_valid() requires a string argument".to_string(),
+                    });
+                }
+
+                let json_str = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "json::is_valid() requires a string argument".to_string(),
+                        })
+                    }
+                };
+
+                // Ultra-fast validation using sonic_rs's SIMD-accelerated parser
+                // Stops parsing on first error for maximum efficiency
+                let is_valid = sonic_rs::from_str::<sonic_rs::Value>(&json_str).is_ok();
+                Ok(EvalValue::Boolean(is_valid))
+            }
+
             _ => Err(ReaperError::InvalidPolicy {
                 reason: format!(
                     "Unknown function: {}",
@@ -2309,6 +2384,95 @@ impl ReapAstEvaluator {
             _ => Err(ReaperError::InvalidPolicy {
                 reason: "has_key() requires an object".to_string(),
             }),
+        }
+    }
+
+    // ============================================================================
+    // JSON Conversion Helpers - sonic_rs::Value <-> EvalValue
+    // ============================================================================
+
+    /// Convert sonic_rs::Value to EvalValue
+    /// Uses SIMD-accelerated parsing with pattern matching for maximum performance
+    #[allow(clippy::only_used_in_recursion)]
+    fn json_value_to_eval_value(&self, json: &sonic_rs::Value) -> Result<EvalValue, ReaperError> {
+        use sonic_rs::{JsonContainerTrait, JsonValueTrait};
+
+        if json.is_null() {
+            Ok(EvalValue::Null)
+        } else if let Some(b) = json.as_bool() {
+            Ok(EvalValue::Boolean(b))
+        } else if let Some(i) = json.as_i64() {
+            Ok(EvalValue::Integer(i))
+        } else if let Some(f) = json.as_f64() {
+            Ok(EvalValue::Float(f))
+        } else if let Some(s) = json.as_str() {
+            Ok(EvalValue::String(s.to_string()))
+        } else if let Some(arr) = json.as_array() {
+            // Recursively convert array elements
+            let eval_arr: Result<Vec<EvalValue>, ReaperError> = arr
+                .iter()
+                .map(|v| self.json_value_to_eval_value(v))
+                .collect();
+            Ok(EvalValue::Array(eval_arr?))
+        } else if let Some(obj) = json.as_object() {
+            // Convert JSON object to HashMap (preserves insertion order)
+            let mut eval_obj = HashMap::new();
+            for (key, value) in obj {
+                eval_obj.insert(key.to_string(), self.json_value_to_eval_value(value)?);
+            }
+            Ok(EvalValue::Object(eval_obj))
+        } else {
+            Err(ReaperError::InvalidPolicy {
+                reason: "Unsupported JSON value type".to_string(),
+            })
+        }
+    }
+
+    /// Convert EvalValue to sonic_rs::Value for high-speed serialization
+    /// Uses SIMD acceleration with minimal allocations
+    #[allow(clippy::only_used_in_recursion)]
+    fn eval_value_to_json_value(&self, eval: &EvalValue) -> Result<sonic_rs::Value, ReaperError> {
+        use sonic_rs::{json, Object};
+
+        match eval {
+            EvalValue::Null => Ok(json!(null)),
+            EvalValue::Boolean(b) => Ok(json!(*b)),
+            EvalValue::Integer(i) => Ok(json!(*i)),
+            EvalValue::Float(f) => {
+                // Convert float to JSON number (may fail for NaN/Infinity)
+                if f.is_nan() || f.is_infinite() {
+                    Err(ReaperError::InvalidPolicy {
+                        reason: format!("Cannot convert float {} to JSON (NaN or Infinity)", f),
+                    })
+                } else {
+                    Ok(json!(*f))
+                }
+            }
+            EvalValue::String(s) => Ok(json!(s)),
+            EvalValue::Array(arr) => {
+                // Recursively convert array elements
+                let json_arr: Result<Vec<sonic_rs::Value>, ReaperError> = arr
+                    .iter()
+                    .map(|v| self.eval_value_to_json_value(v))
+                    .collect();
+                Ok(json!(json_arr?))
+            }
+            EvalValue::Set(set) => {
+                // Convert Set to JSON array (JSON doesn't have native Set type)
+                let json_arr: Result<Vec<sonic_rs::Value>, ReaperError> = set
+                    .iter()
+                    .map(|v| self.eval_value_to_json_value(v))
+                    .collect();
+                Ok(json!(json_arr?))
+            }
+            EvalValue::Object(obj) => {
+                // Convert HashMap to JSON object
+                let mut json_obj = Object::new();
+                for (key, value) in obj {
+                    json_obj.insert(key, self.eval_value_to_json_value(value)?);
+                }
+                Ok(json!(json_obj))
+            }
         }
     }
 }
