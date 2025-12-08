@@ -2718,3 +2718,49 @@ fn test_parse_object_methods() {
     let policy = ReapParser::parse(input).unwrap();
     assert_eq!(policy.rules.len(), 1);
 }
+
+#[test]
+fn test_parse_json_parse() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule json_parsing {
+                    allow if json_data := [json::parse(s) | s := user.json_strings[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_json_stringify() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule json_serialization {
+                    allow if json_strings := [json::stringify(obj) | obj := user.objects[_]]
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
+
+#[test]
+fn test_parse_json_is_valid() {
+    let input = r#"
+            policy test {
+                default: deny,
+                rule json_validation {
+                    allow if valid_checks := [json::is_valid(s) | s := user.strings[_]]
+                    
+                }
+            }
+        "#;
+
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
