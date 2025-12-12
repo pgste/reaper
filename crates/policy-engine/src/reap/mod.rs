@@ -25,6 +25,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 /// Main entry point for loading .reap policies
+#[derive(Clone)]
 pub struct ReaperPolicy {
     ast: Policy,
 }

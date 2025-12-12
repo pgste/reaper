@@ -1,0 +1,109 @@
+// Collection Operations Policy
+// Tests array, set, and map operations
+
+policy collection_operations {
+    version: "1.0",
+    description: "Collection operations for integration testing",
+    default: deny,
+
+    // Array Contains Check - map actions to required permissions
+    rule array_contains_permission {
+        allow if {
+            user.permissions != null &&
+            resource.type == "document" &&
+            (
+                (context.action == "view" && "read" in user.permissions) ||
+                (context.action == "edit" && "write" in user.permissions) ||
+                "admin" in user.permissions
+            )
+        }
+    }
+
+    // Array Length Check
+    rule minimum_skills {
+        allow if {
+            user.skills != null &&
+            resource.type == "senior_position" &&
+            all_skills := [s | s := user.skills[_]] &&
+            skill_count := all_skills.count() &&
+            skill_count >= 5
+        }
+    }
+
+    // Set Intersection Check (groups overlap)
+    rule group_overlap {
+        allow if {
+            user.groups != null &&
+            resource.type == "shared_resource" &&
+            groups := user.groups &&
+            overlap := groups.intersection(["engineering", "platform", "admin"]) &&
+            overlap_count := overlap.count() &&
+            overlap_count > 0
+        }
+    }
+
+    // Set Subset Check (all tags allowed)
+    rule allowed_tags_only {
+        allow if {
+            user.tags != null &&
+            resource.type == "content" &&
+            tags := user.tags &&
+            allowed := tags.intersection(["public", "draft", "review", "internal"]) &&
+            allowed_count := allowed.count() &&
+            tag_count := tags.count() &&
+            allowed_count == tag_count
+        }
+    }
+
+    // Array Any Check (at least one admin role)
+    rule has_any_admin_role {
+        allow if {
+            user.roles != null &&
+            resource.type == "system" &&
+            "admin" in user.roles
+        }
+    }
+
+    // Array All Check (all projects active)
+    rule all_projects_active {
+        allow if {
+            user.projects != null &&
+            resource.type == "invoice" &&
+            inactive := [p | p := user.projects[_]; p.active == false] &&
+            inactive.count() == 0
+        }
+    }
+
+    // Map Keys Check (required metadata)
+    rule required_metadata_keys {
+        allow if {
+            user.metadata != null &&
+            resource.type == "profile" &&
+            metadata := user.metadata &&
+            keys := metadata.keys() &&
+            "name" in keys &&
+            "email" in keys &&
+            "phone" in keys
+        }
+    }
+
+    // Comprehension Filter (verified emails)
+    rule verified_emails_only {
+        allow if {
+            user.email_addresses != null &&
+            resource.type == "email_campaign" &&
+            unverified := [e | e := user.email_addresses[_]; e.verified == false] &&
+            unverified.count() == 0
+        }
+    }
+
+    // Nested Array Access
+    rule nested_permissions {
+        allow if {
+            user.departments != null &&
+            resource.type == "workflow" &&
+            exec_depts := [d | d := user.departments[_]; d.permissions.contains("execute")] &&
+            exec_depts.count() > 0
+        }
+    }
+}

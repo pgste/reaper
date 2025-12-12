@@ -60,6 +60,7 @@ pub enum Condition {
 pub enum ComparisonLeft {
     EntityAttr(EntityAttr),
     VarAttr(VarAttr),
+    Expr(Expr), // Expressions like var.method() calls
 }
 
 /// Value that can be assigned to a variable
@@ -186,14 +187,23 @@ pub enum Comprehension {
     },
 }
 
+/// Collection source for comprehension iteration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IterationSource {
+    /// Entity attribute: user.roles[_], resource.items[_]
+    EntityAttr(EntityAttr),
+    /// Variable attribute: group.items[_], item.values[_]
+    VarAttr(VarAttr),
+}
+
 /// Iterator specification for comprehensions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComprehensionIterator {
     /// Variable name to bind each element to (e.g., "u" in "u := users[_]")
     pub variable: String,
 
-    /// Collection to iterate over (e.g., "users[_]", "user.roles[_]")
-    pub collection: EntityAttr,
+    /// Collection to iterate over (e.g., "users[_]", "user.roles[_]", "group.items[_]")
+    pub collection: IterationSource,
 }
 
 /// Expression type for comprehension output

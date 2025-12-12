@@ -66,6 +66,8 @@ primary_expr = {
     "(" ~ condition_expr ~ ")" |
     assignment |
     comparison |
+    entity_method_call |   // Support entity method calls in conditions (e.g., user.email.contains("x"))
+    var_method_call |      // Support variable method calls in conditions (e.g., list.contains(x))
     comp_function_call |  // Support function calls in conditions (e.g., is_string(x))
     boolean_literal
 }
@@ -77,7 +79,9 @@ assignment = {
 
 assignment_value = {
     comprehension |
-    comp_function_call |  // Function calls (e.g., time::now_ns())
+    comp_function_call |    // Function calls (e.g., time::now_ns())
+    entity_method_call |    // Entity method calls (e.g., user.name.lower())
+    var_method_call |       // Variable method calls (e.g., skills.count())
     entity_attr |
     value |
     ident  // Variable reference
@@ -103,7 +107,7 @@ object_comprehension = {
 }
 
 comp_iterator = {
-    ident ~ ":=" ~ entity_attr
+    ident ~ ":=" ~ (var_attr | entity_attr)
 }
 
 comp_filters = {
@@ -176,7 +180,9 @@ comp_indexed_access = {
 comparison = {
     value ~ "in" ~ entity_attr |
     value ~ "in" ~ var_attr |
+    value ~ "in" ~ ident |
     entity_attr ~ op ~ comparison_right |
+    var_method_call ~ op ~ comparison_right |
     var_attr ~ op ~ comparison_right |
     ident ~ op ~ comparison_right
 }
@@ -189,12 +195,22 @@ comparison_right = {
 }
 
 entity_attr = {
-    entity ~ "." ~ ident ~ bracket_index?
+    entity ~ ("." ~ ident)+ ~ bracket_index?
 }
 
-// Variable attribute access: u.name, u.roles[0]
+// Variable attribute access: u.name, u.roles[0], u.data.field
 var_attr = {
-    !entity ~ ident ~ "." ~ ident ~ bracket_index?
+    !entity ~ ident ~ ("." ~ ident)+ ~ bracket_index?
+}
+
+// Entity method call: user.name.lower(), resource.title.upper()
+entity_method_call = {
+    entity ~ ("." ~ ident ~ !("("))+ ~ comp_method_chain
+}
+
+// Variable method call: skills.count(), tags.intersection([...]), d.permissions.contains("x")
+var_method_call = {
+    !entity ~ ident ~ (("." ~ ident ~ !("("))* ~ comp_method_chain)
 }
 
 bracket_index = { "[" ~ bracket_index_value ~ "]" }

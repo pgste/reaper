@@ -143,6 +143,13 @@ fn compile_comparison(
                 ),
             });
         }
+        ComparisonLeft::Expr(_) => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "Expression comparisons (e.g., variable.method() == value) are not supported in compiled policies. \
+                    Expressions require direct AST evaluation. \
+                    Use .reap format with AST evaluation for expression support.".to_string(),
+            });
+        }
     };
 
     match right {

@@ -65,11 +65,241 @@ async fn perform_action(world: &mut PolicyWorld, action: String, resource: Strin
 async fn perform_multiple_evaluations(world: &mut PolicyWorld, count: usize) {
     let action = world.context.action.clone().unwrap_or("read".to_string());
 
-    for i in 0..count {
-        world.context.action = Some(action.clone());
-        world.context.resource = Some(format!("resource_{}", i % 2000));
+    // Determine which resource list to use based on the principal
+    // Each data file has distinct principals we can detect
+    let empty_string = String::new();
+    let principal = world.context.principal.as_ref().unwrap_or(&empty_string);
 
-        world.context.evaluate().expect("Evaluation failed");
+    // Determine which resource naming scheme to use based on the principal
+    // Check if this is a numbered principal (user_0, user_1, etc.) for Day 1 tests
+    let use_numbered_resources = principal.starts_with("user_") &&
+                                  principal.len() <= 7 &&  // "user_0" to "user_99"
+                                  principal.chars().skip(5).all(|c| c.is_numeric() || c == '_');
+
+    if use_numbered_resources {
+        // Day 1: Use numbered resources (resource_0, resource_1, ...)
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            world.context.resource = Some(format!("resource_{}", i));
+            world.context.evaluate().expect("Evaluation failed");
+        }
+    } else if principal.starts_with("user_with_") || principal.starts_with("user_without_") {
+        // Day 2: Collection operations - use collection test data resources
+        let resource_types = [
+            "document",
+            "senior_position",
+            "shared_resource",
+            "content",
+            "system",
+            "invoice",
+            "profile",
+            "email_campaign",
+            "workflow",
+            "resource_0",
+            "resource_1",
+        ];
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            world.context.resource = Some(resource_types[i % resource_types.len()].to_string());
+            world.context.evaluate().expect("Evaluation failed");
+        }
+    } else if principal == "user_valid_json"
+        || principal == "user_invalid_json"
+        || principal == "user_complete_profile"
+        || principal == "user_incomplete_profile"
+        || principal == "user_nested_data"
+        || principal == "user_missing_nested"
+        || principal == "user_array_items"
+        || principal == "user_empty_array"
+        || principal == "user_correct_types"
+        || principal == "user_wrong_types"
+        || principal.starts_with("user_json_")
+    {
+        // Day 2: JSON operations - use json test data resources
+        let resource_types = [
+            "api_endpoint",
+            "user_profile",
+            "payment",
+            "order",
+            "form_data",
+            "text_field",
+            "number_field",
+            "boolean_field",
+            "structured_data",
+            "data_merge",
+            "resource_0",
+            "resource_1",
+        ];
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            world.context.resource = Some(resource_types[i % resource_types.len()].to_string());
+            world.context.evaluate().expect("Evaluation failed");
+        }
+    } else if principal.contains("credit")
+        || principal.contains("seller")
+        || principal.contains("sensor")
+    {
+        // Day 2: Math operations - use math test data resources
+        let resource_types = [
+            "seller_good_rating",
+            "seller_poor_rating",
+            "seller_fair_price",
+            "seller_high_price",
+            "sensor_normal_temp",
+            "sensor_extreme_temp",
+            "premium_loan",
+            "shopping_cart",
+            "featured_listing",
+            "marketplace",
+            "premium_tier",
+            "temperature_monitor",
+            "loyalty_reward",
+            "sale_item",
+            "resource_0",
+            "resource_1",
+        ];
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            world.context.resource = Some(resource_types[i % resource_types.len()].to_string());
+            world.context.evaluate().expect("Evaluation failed");
+        }
+    } else if principal.contains("valid_email")
+        || principal.contains("invalid_email")
+        || principal.contains("phone")
+    {
+        // Day 2: Regex operations - use regex test data resources
+        let resource_types = [
+            "email_validation",
+            "phone_validation",
+            "url_validation",
+            "ip_validation",
+            "uuid_validation",
+            "payment_validation",
+            "redacted_data",
+            "csv_data",
+            "log_entry",
+            "resource_0",
+            "resource_1",
+        ];
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            world.context.resource = Some(resource_types[i % resource_types.len()].to_string());
+            world.context.evaluate().expect("Evaluation failed");
+        }
+    } else if principal.contains("token")
+        || principal.contains("employee")
+        || principal.contains("tenant")
+        || principal.contains("operator")
+        || principal.contains("planner")
+        || principal.contains("contractor")
+    {
+        // Day 3: Time operations - use time test data resources
+        let resource_types = [
+            "employee",
+            "employee_after_hours",
+            "tenant_active",
+            "tenant_expired",
+            "operator",
+            "operator_wrong_time",
+            "event_planner",
+            "event_planner_past",
+            "contractor_active",
+            "contractor_expired",
+            "system_with_timestamp",
+            "audit_logger",
+            "api_client_normal",
+            "api_client_exceeded",
+            "archiver",
+            "retention_policy",
+            "api_endpoint",
+            "office_system",
+            "alcohol",
+            "apartment_101",
+            "production_system",
+            "production_system_outside_window",
+            "web_session",
+            "conference_room",
+            "project_files",
+            "timestamp_data",
+            "audit_trail",
+            "rate_limited_endpoint",
+            "old_data",
+            "expired_data",
+            "resource_0",
+            "resource_1",
+        ];
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            world.context.resource = Some(resource_types[i % resource_types.len()].to_string());
+            world.context.evaluate().expect("Evaluation failed");
+        }
+    } else {
+        // Day 4: Use named resources based on the data file
+        let resource_types: &[&str] = if principal.starts_with("user_mixed_case")
+            || principal.starts_with("user_wrong_case")
+            || principal.starts_with("user_uppercase_code")
+            || principal.starts_with("user_lowercase_code")
+            || principal.starts_with("user_whitespace_role")
+            || principal.starts_with("user_email_contains")
+            || principal.starts_with("user_admin_username")
+            || principal.starts_with("user_gov_email")
+            || principal.starts_with("user_full_name")
+            || principal.starts_with("user_complex_email")
+        {
+            // String test data resources
+            &[
+                "case_insensitive",
+                "code_entry",
+                "trimmed_check",
+                "internal_docs",
+                "system_settings",
+                "classified_docs",
+                "profile",
+                "email_check",
+            ]
+        } else if principal.starts_with("user_priority_tasks")
+            || principal.starts_with("user_recent_login")
+            || principal.starts_with("user_top_scores")
+            || principal.starts_with("user_desc_order")
+            || principal.starts_with("user_sortable_data")
+            || principal.starts_with("user_unique_skills")
+            || principal.starts_with("user_combined_perms")
+            || principal.starts_with("user_filtered_access")
+            || principal.starts_with("user_high_max_score")
+            || principal.starts_with("user_consistent_performance")
+        {
+            // Advanced collection test data resources
+            &[
+                "task_queue",
+                "session",
+                "leaderboard",
+                "items",
+                "records",
+                "specialized_role",
+                "multi_function",
+                "filtered_content",
+                "competition",
+                "quality_check",
+            ]
+        } else {
+            // Comprehension test data resources (default for Day 4)
+            &[
+                "set_result",
+                "array_result",
+                "object_result",
+                "complex_filter",
+                "nested_result",
+                "transformed_data",
+            ]
+        };
+
+        for i in 0..count {
+            world.context.action = Some(action.clone());
+            // Cycle through available resource types
+            world.context.resource = Some(resource_types[i % resource_types.len()].to_string());
+
+            world.context.evaluate().expect("Evaluation failed");
+        }
     }
 }
 

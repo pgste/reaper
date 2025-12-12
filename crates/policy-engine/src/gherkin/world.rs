@@ -62,11 +62,24 @@ impl TestContext {
         let policy = self.policy.take().ok_or("No policy loaded")?;
         let store = self.store.clone().ok_or("No data loaded")?;
 
-        let evaluator = policy
-            .build(store)
-            .map_err(|e| format!("Failed to build evaluator: {:?}", e))?;
+        // Try compiled evaluator first (faster, but limited features)
+        // If compilation fails, fall back to AST evaluator (slower, but supports all features)
+        let evaluator: Box<dyn PolicyEvaluator> = match policy.clone().build(store.clone()) {
+            Ok(compiled) => {
+                // Compiled evaluator works - use it
+                Box::new(compiled)
+            }
+            Err(_compile_error) => {
+                // Compilation failed - fall back to AST evaluator
+                // AST evaluator supports advanced features like:
+                // - Function call assignments (now := time::now_ns())
+                // - Function calls in conditions (time::is_after(...))
+                // - Context entity (context.action)
+                Box::new(policy.build_ast_evaluator(store))
+            }
+        };
 
-        self.evaluator = Some(Box::new(evaluator));
+        self.evaluator = Some(evaluator);
         Ok(())
     }
 
