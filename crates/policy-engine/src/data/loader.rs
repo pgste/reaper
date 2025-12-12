@@ -242,9 +242,15 @@ pub(crate) fn json_value_to_attribute(
                 .collect();
             Ok(AttributeValue::List(items?))
         }
-        JsonValue::Object(_) => Err(ReaperError::InvalidPolicy {
-            reason: "Nested objects not supported as attribute values".to_string(),
-        }),
+        JsonValue::Object(obj) => {
+            let mut map = std::collections::HashMap::new();
+            for (key, value) in obj {
+                let key_id = interner.intern(&key);
+                let attr_value = json_value_to_attribute(value, interner)?;
+                map.insert(key_id, attr_value);
+            }
+            Ok(AttributeValue::Object(map))
+        }
     }
 }
 

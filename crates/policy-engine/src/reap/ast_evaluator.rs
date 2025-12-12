@@ -11,8 +11,8 @@
 use super::ast::*;
 use crate::data::{AttributeValue, DataStore, EntityId};
 use crate::{PolicyAction, PolicyRequest};
+use parking_lot::Mutex;
 use reaper_core::ReaperError;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -25,15 +25,20 @@ use std::sync::Arc;
 /// Performance optimizations:
 /// - Regex pattern caching: 2-5x speedup for repeated patterns
 /// - SIMD aggregates: 2-4x speedup for large numeric arrays (>64 elements)
+///
+/// Thread-safety:
+/// - Uses parking_lot::Mutex for regex cache (thread-safe, low overhead)
+/// - Implements Send + Sync for concurrent evaluation
 #[derive(Debug)]
 pub struct ReapAstEvaluator {
     /// Reference to the data store
     store: Arc<DataStore>,
     /// Parsed policy AST
     policy: Policy,
-    /// Regex pattern cache for performance (2-5x speedup)
+    /// Thread-safe regex pattern cache for performance (2-5x speedup)
     /// Compiled regex patterns are expensive, cache them by pattern string
-    regex_cache: RefCell<HashMap<String, regex::Regex>>,
+    /// Uses parking_lot::Mutex for efficient thread-safe access
+    regex_cache: Mutex<HashMap<String, regex::Regex>>,
 }
 
 /// Evaluation context holding variable bindings
@@ -45,6 +50,8 @@ struct EvalContext {
     user_id: EntityId,
     /// Resource entity from request
     resource_id: EntityId,
+    /// Request context (includes action and other attributes)
+    request_context: HashMap<String, String>,
 }
 
 /// Runtime value during evaluation
@@ -125,7 +132,7 @@ impl ReapAstEvaluator {
         Self {
             store,
             policy,
-            regex_cache: RefCell::new(HashMap::new()),
+            regex_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -141,10 +148,15 @@ impl ReapAstEvaluator {
         let resource_id = interner.intern(&request.resource);
 
         // Create evaluation context
+        let mut request_context = request.context.clone();
+        // Add action to context if not already present
+        request_context.insert("action".to_string(), request.action.clone());
+
         let mut context = EvalContext {
             variables: HashMap::new(),
             user_id,
             resource_id,
+            request_context,
         };
 
         // Security-first evaluation: Deny rules ALWAYS take precedence over Allow rules
@@ -243,6 +255,7 @@ impl ReapAstEvaluator {
         let left_value = match left {
             ComparisonLeft::EntityAttr(attr) => self.get_entity_attribute(attr, context)?,
             ComparisonLeft::VarAttr(var_attr) => self.get_var_attribute(var_attr, context)?,
+            ComparisonLeft::Expr(expr) => self.evaluate_expr(expr, context)?,
         };
 
         // Get right value
@@ -269,7 +282,9 @@ impl ReapAstEvaluator {
                 self.compare_numeric(&left_value, &right_value, |a, b| a >= b)
             }
             Operator::LessEqual => self.compare_numeric(&left_value, &right_value, |a, b| a <= b),
-            Operator::In => self.check_membership(&right_value, &left_value),
+            // For "in" operator: "value in collection" is parsed as left=collection, right=value
+            // So we need to check if right_value is in left_value (collection)
+            Operator::In => self.check_membership(&left_value, &right_value),
         }
     }
 
@@ -343,14 +358,34 @@ impl ReapAstEvaluator {
         attr: &EntityAttr,
         context: &EvalContext,
     ) -> Result<EvalValue, ReaperError> {
+        // Handle context entity specially - it's not stored in DataStore
+        if attr.entity == Entity::Context {
+            // Context attributes come from the request context map
+            let attr_parts: Vec<&str> = attr.attribute.split('.').collect();
+
+            // Get the first attribute from context map
+            let value = context.request_context.get(attr_parts[0]);
+
+            if attr_parts.len() == 1 {
+                // Simple attribute like context.action
+                return Ok(value
+                    .map(|s| EvalValue::String(s.clone()))
+                    .unwrap_or(EvalValue::Null));
+            } else {
+                // Chained attributes not supported for context yet
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Chained context attributes not yet supported: context.{}",
+                        attr.attribute
+                    ),
+                });
+            }
+        }
+
         let entity_id = match attr.entity {
             Entity::User => context.user_id,
             Entity::Resource => context.resource_id,
-            Entity::Context => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "Context entity not yet supported in AST evaluator".to_string(),
-                })
-            }
+            Entity::Context => unreachable!("Context entity handled above"),
         };
 
         // Get entity from DataStore
@@ -361,13 +396,80 @@ impl ReapAstEvaluator {
                 reason: format!("Entity with ID {:?} not found", entity_id),
             })?;
 
+        // Get attribute value - handle chained attributes like "payload.valid"
+        let interner = self.store.interner();
+        let attr_parts: Vec<&str> = attr.attribute.split('.').collect();
+
+        // Start with the first attribute
+        let first_attr_id = interner.intern(attr_parts[0]);
+        let value = entity.get_attribute(first_attr_id);
+
+        // Navigate through chained attributes
+        if attr_parts.len() > 1 && value.is_some() {
+            let mut current_value = self.attribute_value_to_eval_value(value, &None)?;
+
+            for attr_name in &attr_parts[1..] {
+                match current_value {
+                    EvalValue::Object(ref map) => {
+                        // EvalValue::Object uses String keys, not InternedString
+                        if let Some(nested_val) = map.get(*attr_name) {
+                            // nested_val is already an EvalValue, just clone it
+                            current_value = nested_val.clone();
+                        } else {
+                            return Ok(EvalValue::Null);
+                        }
+                    }
+                    EvalValue::Null => return Ok(EvalValue::Null),
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: format!(
+                                "Cannot access attribute '{}' on non-object value",
+                                attr_name
+                            ),
+                        })
+                    }
+                }
+            }
+
+            // Apply index if present
+            match &attr.index {
+                Some(index) => self.apply_index(&current_value, index),
+                None => Ok(current_value),
+            }
+        } else {
+            // Single attribute or null value
+            match value {
+                Some(attr_val) => self.attribute_value_to_eval_value(Some(attr_val), &attr.index),
+                None => Ok(EvalValue::Null),
+            }
+        }
+    }
+
+    /// Helper to get entity attribute by entity_id and attribute name (without EntityAttr struct)
+    fn get_entity_attr_by_name(
+        &self,
+        entity_id: EntityId,
+        attribute: &str,
+    ) -> Result<EvalValue, ReaperError> {
+        // Get entity from DataStore
+        let entity = self
+            .store
+            .get(entity_id)
+            .ok_or_else(|| ReaperError::InvalidPolicy {
+                reason: format!("Entity with ID {:?} not found", entity_id),
+            })?;
+
         // Get attribute value
         let interner = self.store.interner();
-        let attr_id = interner.intern(&attr.attribute);
+        let attr_id = interner.intern(attribute);
         let value = entity.get_attribute(attr_id);
 
-        // Convert AttributeValue to EvalValue
-        self.attribute_value_to_eval_value(value, &attr.index)
+        // If attribute doesn't exist, return Null instead of error
+        // This matches policy language semantics where missing attributes are null
+        match value {
+            Some(attr_val) => self.attribute_value_to_eval_value(Some(attr_val), &None),
+            None => Ok(EvalValue::Null),
+        }
     }
 
     /// Get variable attribute value
@@ -705,8 +807,13 @@ impl ReapAstEvaluator {
         iterator: &ComprehensionIterator,
         context: &EvalContext,
     ) -> Result<Vec<EvalValue>, ReaperError> {
-        // Get the collection to iterate over
-        let collection = self.get_entity_attribute(&iterator.collection, context)?;
+        // Get the collection to iterate over based on source type
+        let collection = match &iterator.collection {
+            IterationSource::EntityAttr(entity_attr) => {
+                self.get_entity_attribute(entity_attr, context)?
+            }
+            IterationSource::VarAttr(var_attr) => self.get_var_attribute(var_attr, context)?,
+        };
 
         // If it's an array or set, return its elements
         match collection {
@@ -723,6 +830,26 @@ impl ReapAstEvaluator {
             Expr::Literal(val) => Ok(self.value_to_eval_value(val)),
 
             Expr::Variable(var_name) => {
+                // Check if this is a pseudo-entity reference like "user.name" from entity method calls
+                if var_name.starts_with("user.")
+                    || var_name.starts_with("resource.")
+                    || var_name.starts_with("context.")
+                {
+                    // Parse the entity and attribute
+                    let parts: Vec<&str> = var_name.splitn(2, '.').collect();
+                    if parts.len() == 2 {
+                        let entity = Entity::from(parts[0]);
+                        let attribute = parts[1].to_string();
+                        let entity_attr = EntityAttr {
+                            entity,
+                            attribute,
+                            index: None,
+                        };
+                        return self.get_entity_attribute(&entity_attr, context);
+                    }
+                }
+
+                // Regular variable lookup
                 context
                     .variables
                     .get(var_name)
@@ -736,24 +863,42 @@ impl ReapAstEvaluator {
                 variable,
                 attribute,
             } => {
-                let var_value =
-                    context
-                        .variables
-                        .get(variable)
-                        .ok_or_else(|| ReaperError::InvalidPolicy {
-                            reason: format!("Undefined variable: {}", variable),
+                // Check if this is an entity reference (user, resource, context)
+                // These are special identifiers that refer to entities, not variables
+                match variable.as_str() {
+                    "user" => {
+                        // Get user entity attribute
+                        self.get_entity_attr_by_name(context.user_id, attribute)
+                    }
+                    "resource" => {
+                        // Get resource entity attribute
+                        self.get_entity_attr_by_name(context.resource_id, attribute)
+                    }
+                    "context" => {
+                        // Context entity not yet fully supported in AST evaluator
+                        // For now, return null
+                        Ok(EvalValue::Null)
+                    }
+                    _ => {
+                        // Regular variable attribute access
+                        let var_value = context.variables.get(variable).ok_or_else(|| {
+                            ReaperError::InvalidPolicy {
+                                reason: format!("Undefined variable: {}", variable),
+                            }
                         })?;
 
-                match var_value {
-                    EvalValue::Object(map) => {
-                        Ok(map.get(attribute).cloned().unwrap_or(EvalValue::Null))
+                        match var_value {
+                            EvalValue::Object(map) => {
+                                Ok(map.get(attribute).cloned().unwrap_or(EvalValue::Null))
+                            }
+                            _ => Err(ReaperError::InvalidPolicy {
+                                reason: format!(
+                                    "Cannot access attribute '{}' on non-object variable '{}'",
+                                    attribute, variable
+                                ),
+                            }),
+                        }
                     }
-                    _ => Err(ReaperError::InvalidPolicy {
-                        reason: format!(
-                            "Cannot access attribute '{}' on non-object variable '{}'",
-                            attribute, variable
-                        ),
-                    }),
                 }
             }
 
@@ -762,25 +907,43 @@ impl ReapAstEvaluator {
                 attribute,
                 index,
             } => {
-                let var_value =
-                    context
-                        .variables
-                        .get(variable)
-                        .ok_or_else(|| ReaperError::InvalidPolicy {
-                            reason: format!("Undefined variable: {}", variable),
-                        })?;
-
-                match var_value {
-                    EvalValue::Object(map) => {
-                        let attr_value = map.get(attribute).cloned().unwrap_or(EvalValue::Null);
+                // Check if this is an entity reference (user, resource, context)
+                match variable.as_str() {
+                    "user" | "resource" => {
+                        let entity_id = if variable == "user" {
+                            context.user_id
+                        } else {
+                            context.resource_id
+                        };
+                        let attr_value = self.get_entity_attr_by_name(entity_id, attribute)?;
                         self.apply_index(&attr_value, index)
                     }
-                    _ => Err(ReaperError::InvalidPolicy {
-                        reason: format!(
-                            "Cannot access attribute '{}' on non-object variable '{}'",
-                            attribute, variable
-                        ),
-                    }),
+                    "context" => {
+                        // Context entity not yet fully supported
+                        Ok(EvalValue::Null)
+                    }
+                    _ => {
+                        // Regular variable indexed access
+                        let var_value = context.variables.get(variable).ok_or_else(|| {
+                            ReaperError::InvalidPolicy {
+                                reason: format!("Undefined variable: {}", variable),
+                            }
+                        })?;
+
+                        match var_value {
+                            EvalValue::Object(map) => {
+                                let attr_value =
+                                    map.get(attribute).cloned().unwrap_or(EvalValue::Null);
+                                self.apply_index(&attr_value, index)
+                            }
+                            _ => Err(ReaperError::InvalidPolicy {
+                                reason: format!(
+                                    "Cannot access attribute '{}' on non-object variable '{}'",
+                                    attribute, variable
+                                ),
+                            }),
+                        }
+                    }
                 }
             }
 
@@ -1346,6 +1509,112 @@ impl ReapAstEvaluator {
 
                 use regex::escape;
                 Ok(EvalValue::String(escape(&input)))
+            }
+
+            (Some("regex"), "matches") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "regex::matches() requires exactly two arguments (text, pattern)"
+                            .to_string(),
+                    });
+                }
+                let text = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::matches() first argument must be a string".to_string(),
+                        })
+                    }
+                };
+                let pattern = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::matches() second argument must be a string (pattern)"
+                                .to_string(),
+                        })
+                    }
+                };
+
+                // Use cached regex compilation for performance
+                let re = self.get_cached_regex(&pattern)?;
+                Ok(EvalValue::Boolean(re.is_match(&text)))
+            }
+
+            (Some("regex"), "replace") => {
+                if args.len() != 3 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason:
+                            "regex::replace() requires exactly three arguments (text, pattern, replacement)"
+                                .to_string(),
+                    });
+                }
+                let text = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::replace() first argument must be a string".to_string(),
+                        })
+                    }
+                };
+                let pattern = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::replace() second argument must be a string (pattern)"
+                                .to_string(),
+                        })
+                    }
+                };
+                let replacement = match self.evaluate_expr(&args[2], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason:
+                                "regex::replace() third argument must be a string (replacement)"
+                                    .to_string(),
+                        })
+                    }
+                };
+
+                // Use cached regex compilation for performance
+                let re = self.get_cached_regex(&pattern)?;
+                let result = re.replace_all(&text, replacement.as_str()).to_string();
+                Ok(EvalValue::String(result))
+            }
+
+            (Some("regex"), "split") => {
+                if args.len() != 2 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "regex::split() requires exactly two arguments (text, pattern)"
+                            .to_string(),
+                    });
+                }
+                let text = match self.evaluate_expr(&args[0], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::split() first argument must be a string".to_string(),
+                        })
+                    }
+                };
+                let pattern = match self.evaluate_expr(&args[1], context)? {
+                    EvalValue::String(s) => s,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "regex::split() second argument must be a string (pattern)"
+                                .to_string(),
+                        })
+                    }
+                };
+
+                // Use cached regex compilation for performance
+                let re = self.get_cached_regex(&pattern)?;
+                let parts: Vec<EvalValue> = re
+                    .split(&text)
+                    .map(|s| EvalValue::String(s.to_string()))
+                    .collect();
+                Ok(EvalValue::Array(parts))
             }
 
             // Math namespace functions
@@ -2086,19 +2355,23 @@ impl ReapAstEvaluator {
     /// Caching provides significant speedup when the same pattern is used multiple times.
     fn get_cached_regex(&self, pattern: &str) -> Result<regex::Regex, ReaperError> {
         // Fast path: check if already cached
-        if let Some(re) = self.regex_cache.borrow().get(pattern) {
-            return Ok(re.clone());
-        }
+        {
+            let cache = self.regex_cache.lock();
+            if let Some(re) = cache.get(pattern) {
+                return Ok(re.clone());
+            }
+        } // Release lock before compiling (slow operation)
 
-        // Slow path: compile and cache
+        // Slow path: compile regex (outside lock to avoid holding lock during compilation)
         let re = regex::Regex::new(pattern).map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("Invalid regex pattern '{}': {}", pattern, e),
         })?;
 
         // Insert into cache for future use
-        self.regex_cache
-            .borrow_mut()
-            .insert(pattern.to_string(), re.clone());
+        {
+            let mut cache = self.regex_cache.lock();
+            cache.insert(pattern.to_string(), re.clone());
+        }
 
         Ok(re)
     }
@@ -2608,6 +2881,55 @@ impl From<Decision> for PolicyAction {
             Decision::Allow => PolicyAction::Allow,
             Decision::Deny => PolicyAction::Deny,
         }
+    }
+}
+
+// Implement PolicyEvaluator trait for ReapAstEvaluator
+// This allows it to be used as a drop-in replacement for the compiled evaluator
+impl crate::evaluators::PolicyEvaluator for ReapAstEvaluator {
+    fn evaluate(
+        &self,
+        request: &crate::PolicyRequest,
+    ) -> Result<crate::PolicyAction, reaper_core::ReaperError> {
+        // Delegate to the existing evaluate method
+        self.evaluate(request)
+    }
+
+    fn validate(&self) -> Result<(), reaper_core::ReaperError> {
+        // AST evaluator is always valid if it was constructed successfully
+        // The parser validates syntax, and the evaluator handles runtime errors gracefully
+        Ok(())
+    }
+
+    fn evaluator_type(&self) -> &str {
+        "ReapAstEvaluator"
+    }
+
+    fn metadata(&self) -> Option<crate::evaluators::EvaluatorMetadata> {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("features".to_string(), "comprehensions,variable_assignments,function_calls,time_functions,regex_caching,simd_aggregates".to_string());
+        extra.insert("policy_name".to_string(), self.policy.name.clone());
+        if let Some(version) = self.policy.metadata.get("version") {
+            extra.insert("version".to_string(), version.clone());
+        }
+
+        // Calculate complexity score (0-100)
+        let rule_count = self.policy.rules.len();
+        let complexity = if rule_count < 5 {
+            10 // Simple
+        } else if rule_count < 20 {
+            30 // Moderate
+        } else if rule_count < 50 {
+            60 // Complex
+        } else {
+            90 // Very complex
+        };
+
+        Some(crate::evaluators::EvaluatorMetadata {
+            rule_count,
+            complexity,
+            extra,
+        })
     }
 }
 

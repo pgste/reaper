@@ -173,6 +173,16 @@ fn parse_primary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Re
         Rule::condition_expr => parse_condition_expr(inner),
         Rule::assignment => parse_assignment(inner),
         Rule::comparison => parse_comparison(inner),
+        Rule::entity_method_call => {
+            // Parse entity method call and wrap it as an expression condition
+            let expr = parse_entity_method_call(inner)?;
+            Ok(Condition::Expr(expr))
+        }
+        Rule::var_method_call => {
+            // Parse variable method call and wrap it as an expression condition
+            let expr = parse_var_method_call(inner)?;
+            Ok(Condition::Expr(expr))
+        }
         Rule::comp_function_call => {
             // Parse function call and wrap it as an expression condition
             let expr = parse_comp_function_call(inner)?;
@@ -205,7 +215,7 @@ fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Reap
 fn parse_assignment_value(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<AssignmentValue, ReaperError> {
-    // The pair is assignment_value, which contains comprehension, comp_function_call, entity_attr, value, or ident
+    // The pair is assignment_value, which contains comprehension, comp_function_call, var_method_call, entity_attr, value, or ident
     let inner = pair
         .into_inner()
         .next()
@@ -216,6 +226,8 @@ fn parse_assignment_value(
     match inner.as_rule() {
         Rule::comprehension => Ok(AssignmentValue::Comprehension(parse_comprehension(inner)?)),
         Rule::comp_function_call => Ok(AssignmentValue::Expr(parse_comp_function_call(inner)?)),
+        Rule::entity_method_call => Ok(AssignmentValue::Expr(parse_entity_method_call(inner)?)),
+        Rule::var_method_call => Ok(AssignmentValue::Expr(parse_var_method_call(inner)?)),
         Rule::entity_attr => Ok(AssignmentValue::EntityAttr(parse_entity_attr(inner)?)),
         Rule::value => Ok(AssignmentValue::Value(parse_value(inner)?)),
         Rule::ident => Ok(AssignmentValue::Variable(inner.as_str().to_string())),
@@ -240,6 +252,7 @@ fn parse_comparison(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Reap
         let left = match next_pair.as_rule() {
             Rule::entity_attr => ComparisonLeft::EntityAttr(parse_entity_attr(next_pair)?),
             Rule::var_attr => ComparisonLeft::VarAttr(parse_var_attr(next_pair)?),
+            Rule::ident => ComparisonLeft::Expr(Expr::Variable(next_pair.as_str().to_string())),
             _ => {
                 return Err(ReaperError::InvalidPolicy {
                     reason: format!(
@@ -263,18 +276,14 @@ fn parse_comparison(pair: pest::iterators::Pair<Rule>) -> Result<Condition, Reap
     let op = Operator::from(op_pair.as_str());
     let right_pair = inner.next().unwrap();
 
-    // Parse the left side (entity_attr, var_attr, or simple ident)
+    // Parse the left side (entity_attr, var_attr, var_method_call, or simple ident)
     let left = match first_pair.as_rule() {
         Rule::entity_attr => ComparisonLeft::EntityAttr(parse_entity_attr(first_pair)?),
         Rule::var_attr => ComparisonLeft::VarAttr(parse_var_attr(first_pair)?),
+        Rule::var_method_call => ComparisonLeft::Expr(parse_var_method_call(first_pair)?),
         Rule::ident => {
-            // Simple variable on left side - not supported in comparisons (only in assignments)
-            return Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "Variable '{}' cannot appear on left side of comparison (use entity.attribute or var.attribute instead)",
-                    first_pair.as_str()
-                ),
-            });
+            // Simple variable on left side - wrap as Variable expression
+            ComparisonLeft::Expr(Expr::Variable(first_pair.as_str().to_string()))
         }
         _ => {
             return Err(ReaperError::InvalidPolicy {
@@ -314,19 +323,26 @@ fn parse_comparison_right(
 fn parse_entity_attr(pair: pest::iterators::Pair<Rule>) -> Result<EntityAttr, ReaperError> {
     let mut inner = pair.into_inner();
     let entity = Entity::from(inner.next().unwrap().as_str());
-    let attribute = inner.next().unwrap().as_str().to_string();
 
-    // Check for optional bracket index
-    let index = if let Some(bracket_pair) = inner.next() {
-        if bracket_pair.as_rule() == Rule::bracket_index {
-            let index_value_pair = bracket_pair.into_inner().next().unwrap();
-            Some(parse_bracket_index(index_value_pair)?)
-        } else {
-            None
+    // Collect all attribute identifiers (supports chained attributes like user.data.field.subfield)
+    let mut attributes = Vec::new();
+    let mut index = None;
+
+    for item in inner {
+        match item.as_rule() {
+            Rule::ident => {
+                attributes.push(item.as_str());
+            }
+            Rule::bracket_index => {
+                let index_value_pair = item.into_inner().next().unwrap();
+                index = Some(parse_bracket_index(index_value_pair)?);
+            }
+            _ => {}
         }
-    } else {
-        None
-    };
+    }
+
+    // Join attributes with dots
+    let attribute = attributes.join(".");
 
     Ok(EntityAttr {
         entity,
@@ -655,7 +671,7 @@ fn parse_comp_iterator(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<ComprehensionIterator, ReaperError> {
     let mut variable: Option<String> = None;
-    let mut collection: Option<EntityAttr> = None;
+    let mut collection: Option<IterationSource> = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -663,7 +679,10 @@ fn parse_comp_iterator(
                 variable = Some(inner.as_str().to_string());
             }
             Rule::entity_attr => {
-                collection = Some(parse_entity_attr(inner)?);
+                collection = Some(IterationSource::EntityAttr(parse_entity_attr(inner)?));
+            }
+            Rule::var_attr => {
+                collection = Some(IterationSource::VarAttr(parse_var_attr(inner)?));
             }
             _ => {}
         }
@@ -934,6 +953,159 @@ fn parse_comp_method_chain(
     }
 
     Ok(receiver)
+}
+
+/// Parse variable method call: skills.count(), tags.intersection([...]), d.permissions.contains("x")
+fn parse_var_method_call(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let mut idents: Vec<String> = Vec::new();
+    let mut method_chain: Option<pest::iterators::Pair<Rule>> = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                idents.push(inner.as_str().to_string());
+            }
+            Rule::comp_method_chain => {
+                method_chain = Some(inner);
+            }
+            _ => {}
+        }
+    }
+
+    if idents.is_empty() {
+        return Err(ReaperError::InvalidPolicy {
+            reason: "Variable method call missing variable name".to_string(),
+        });
+    }
+
+    let chain = method_chain.ok_or_else(|| ReaperError::InvalidPolicy {
+        reason: "Variable method call missing method chain".to_string(),
+    })?;
+
+    // Start with the first identifier as the variable
+    let mut receiver = Expr::Variable(idents[0].clone());
+
+    // Build attribute access chain for remaining identifiers (if any)
+    // e.g., d.permissions becomes Variable("d") -> AttributeAccess{variable: "d", attribute: "permissions"}
+    for attr in idents.iter().skip(1) {
+        // Get the variable name from the current receiver
+        let var_name = match &receiver {
+            Expr::Variable(name) => name.clone(),
+            Expr::AttributeAccess { variable, .. } => variable.clone(),
+            _ => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "Invalid receiver for attribute access".to_string(),
+                })
+            }
+        };
+
+        receiver = Expr::AttributeAccess {
+            variable: var_name,
+            attribute: attr.clone(),
+        };
+    }
+
+    // Apply the method chain to the receiver
+    parse_comp_method_chain(receiver, chain)
+}
+
+/// Parse entity method call: user.name.lower(), resource.title.upper()
+fn parse_entity_method_call(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+    let mut entity: Option<Entity> = None;
+    let mut idents: Vec<String> = Vec::new();
+    let mut method_chain: Option<pest::iterators::Pair<Rule>> = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::entity => {
+                entity = Some(Entity::from(inner.as_str()));
+            }
+            Rule::ident => {
+                idents.push(inner.as_str().to_string());
+            }
+            Rule::comp_method_chain => {
+                method_chain = Some(inner);
+            }
+            _ => {}
+        }
+    }
+
+    let entity = entity.ok_or_else(|| ReaperError::InvalidPolicy {
+        reason: "Entity method call missing entity".to_string(),
+    })?;
+
+    if idents.is_empty() {
+        return Err(ReaperError::InvalidPolicy {
+            reason: "Entity method call missing attribute".to_string(),
+        });
+    }
+
+    let chain = method_chain.ok_or_else(|| ReaperError::InvalidPolicy {
+        reason: "Entity method call missing method chain".to_string(),
+    })?;
+
+    // Build the base expression as entity attribute access
+    // For user.name.lower(), start with just "name" as EntityAttr
+    let _base_attr = EntityAttr {
+        entity,
+        attribute: idents[0].clone(),
+        index: None,
+    };
+
+    // If there are additional attributes before the method, we need to convert to a variable-like access
+    // For simplicity, we'll create a FunctionCall that gets the entity attr and then chains methods
+    // But actually, we can represent this as: get entity.attr, then call methods on it
+    // The AST evaluator will need to handle this
+
+    // For now, let's create an indexed access or attribute access chain
+    // Actually, looking at the AST, we don't have a direct way to represent entity.attr.method()
+    // We need to use the fact that after evaluation, entity.name becomes a value, then we call methods
+
+    // Let's use a workaround: create a placeholder variable that will be resolved at evaluation time
+    // Actually, better approach: create nested MethodCall where the receiver is an entity access
+
+    // Since we can't directly represent entity attribute in Expr, we need to think differently
+    // Let's return a FunctionCall that represents this operation
+    // Actually no - let's return it as a properly structured expression
+
+    // The real solution: we need to add entity attribute access to the Expr enum
+    // For now, let's create the expression differently
+
+    // Let me check what receivers MethodCall accepts...
+    // It accepts Box<Expr>, and Expr can be Variable, AttributeAccess, etc.
+    // But we need entity attribute access in Expr
+
+    // Simple solution: represent user.name as a variable for the purposes of method chaining
+    // The evaluator will need to handle this specially
+
+    // Actually, let's use a different approach:
+    // Parse user.name as if it were a variable path, then apply methods
+    // The evaluator will recognize it as an entity and resolve accordingly
+
+    // Build a pseudo-variable path: "user.name"
+    let entity_path = format!("{:?}.{}", entity, idents[0]).to_lowercase();
+    let mut receiver = Expr::Variable(entity_path);
+
+    // Build attribute access chain for remaining identifiers before methods (if any)
+    for attr in idents.iter().skip(1) {
+        let var_name = match &receiver {
+            Expr::Variable(name) => name.clone(),
+            Expr::AttributeAccess { variable, .. } => variable.clone(),
+            _ => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "Invalid receiver for attribute access".to_string(),
+                })
+            }
+        };
+
+        receiver = Expr::AttributeAccess {
+            variable: var_name,
+            attribute: attr.clone(),
+        };
+    }
+
+    // Apply the method chain to the receiver
+    parse_comp_method_chain(receiver, chain)
 }
 
 /// Parse function call in comprehension: is_string(x), concat(a, b), time.now_ns()
@@ -1469,9 +1641,13 @@ mod tests {
 
                 // Check iterator: u := user.team[_]
                 assert_eq!(iterator.variable, "u");
-                assert_eq!(iterator.collection.entity, Entity::User);
-                assert_eq!(iterator.collection.attribute, "team");
-                assert!(matches!(iterator.collection.index, Some(Index::Wildcard)));
+                if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
+                    assert_eq!(entity_attr.entity, Entity::User);
+                    assert_eq!(entity_attr.attribute, "team");
+                    assert!(matches!(entity_attr.index, Some(Index::Wildcard)));
+                } else {
+                    panic!("Expected EntityAttr in collection");
+                }
 
                 // No filters
                 assert_eq!(filters.len(), 0);
@@ -1517,8 +1693,12 @@ mod tests {
 
                 // Check iterator
                 assert_eq!(iterator.variable, "u");
-                assert_eq!(iterator.collection.entity, Entity::User);
-                assert_eq!(iterator.collection.attribute, "contacts");
+                if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
+                    assert_eq!(entity_attr.entity, Entity::User);
+                    assert_eq!(entity_attr.attribute, "contacts");
+                } else {
+                    panic!("Expected EntityAttr in collection");
+                }
 
                 // No filters
                 assert_eq!(filters.len(), 0);
@@ -1577,7 +1757,11 @@ mod tests {
 
                 // Check iterator
                 assert_eq!(iterator.variable, "u");
-                assert_eq!(iterator.collection.entity, Entity::User);
+                if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
+                    assert_eq!(entity_attr.entity, Entity::User);
+                } else {
+                    panic!("Expected EntityAttr in collection");
+                }
 
                 // No filters
                 assert_eq!(filters.len(), 0);
