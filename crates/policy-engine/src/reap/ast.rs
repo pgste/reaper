@@ -76,6 +76,12 @@ pub enum AssignmentValue {
     Comprehension(Comprehension),
     /// Expression (e.g., function call): time::now_ns()
     Expr(Expr),
+    /// Comparison: user.age >= 18
+    Comparison {
+        left: ComparisonLeft,
+        op: Operator,
+        right: ComparisonRight,
+    },
 }
 
 /// Entity attribute reference
@@ -129,6 +135,8 @@ pub enum ComparisonRight {
     Variable(String),
     /// Variable attribute access: u.name, u.roles[0]
     VarAttr(VarAttr),
+    /// Expression (method calls, etc.): t.trim().count()
+    Expr(Expr),
 }
 
 /// Variable attribute reference (for comprehension filters)
@@ -194,6 +202,8 @@ pub enum IterationSource {
     EntityAttr(EntityAttr),
     /// Variable attribute: group.items[_], item.values[_]
     VarAttr(VarAttr),
+    /// Indexed variable: row[_], items[0]
+    IndexedVariable { variable: String, index: Index },
 }
 
 /// Iterator specification for comprehensions

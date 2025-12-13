@@ -167,6 +167,10 @@ fn compile_comparison(
         ComparisonRight::Variable(_) => Err(ReaperError::InvalidPolicy {
             reason: "Variable references are not yet supported in compiled policies".to_string(),
         }),
+        ComparisonRight::Expr(_) => Err(ReaperError::InvalidPolicy {
+            reason: "Expression comparisons (method calls, etc.) are not supported in compiled policies. \
+                Use .reap format with AST evaluation for expression support.".to_string(),
+        }),
     }
 }
 
