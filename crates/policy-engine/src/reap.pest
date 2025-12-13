@@ -69,7 +69,8 @@ primary_expr = {
     entity_method_call |   // Support entity method calls in conditions (e.g., user.email.contains("x"))
     var_method_call |      // Support variable method calls in conditions (e.g., list.contains(x))
     comp_function_call |  // Support function calls in conditions (e.g., is_string(x))
-    boolean_literal
+    boolean_literal |
+    ident  // Variable reference (for boolean variables)
 }
 
 // Variable assignment: x := user.role
@@ -79,10 +80,13 @@ assignment = {
 
 assignment_value = {
     comprehension |
+    comparison |            // Comparison expressions (must come before method calls to match entity_method_call > value)
     comp_function_call |    // Function calls (e.g., time::now_ns())
     entity_method_call |    // Entity method calls (e.g., user.name.lower())
     var_method_call |       // Variable method calls (e.g., skills.count())
     entity_attr |
+    var_attr |              // Variable attribute access (e.g., first_group.items)
+    (ident ~ bracket_index) |  // Indexed variable (e.g., row[_], items[0])
     value |
     ident  // Variable reference
 }
@@ -107,7 +111,7 @@ object_comprehension = {
 }
 
 comp_iterator = {
-    ident ~ ":=" ~ (var_attr | entity_attr)
+    ident ~ ":=" ~ (var_attr | entity_attr | (ident ~ bracket_index))
 }
 
 comp_filters = {
@@ -181,6 +185,7 @@ comparison = {
     value ~ "in" ~ entity_attr |
     value ~ "in" ~ var_attr |
     value ~ "in" ~ ident |
+    entity_method_call ~ op ~ comparison_right |  // Entity method calls: user.name.count() > 0
     entity_attr ~ op ~ comparison_right |
     var_method_call ~ op ~ comparison_right |
     var_attr ~ op ~ comparison_right |
@@ -188,6 +193,7 @@ comparison = {
 }
 
 comparison_right = {
+    var_method_call |   // Method calls: t.trim().count()
     entity_attr |
     var_attr |
     value |

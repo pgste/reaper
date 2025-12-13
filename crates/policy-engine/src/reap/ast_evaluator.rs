@@ -270,6 +270,7 @@ impl ReapAstEvaluator {
                     }
                 })?
             }
+            ComparisonRight::Expr(expr) => self.evaluate_expr(expr, context)?,
         };
 
         // Perform comparison based on operator
@@ -500,6 +501,10 @@ impl ReapAstEvaluator {
                     Ok(value)
                 }
             }
+            EvalValue::Null => {
+                // Null propagation: accessing attributes on null returns null
+                Ok(EvalValue::Null)
+            }
             _ => Err(ReaperError::InvalidPolicy {
                 reason: format!(
                     "Cannot access attribute '{}' on non-object variable '{}'",
@@ -642,6 +647,11 @@ impl ReapAstEvaluator {
                 }),
             AssignmentValue::Comprehension(comp) => self.evaluate_comprehension(comp, context),
             AssignmentValue::Expr(expr) => self.evaluate_expr(expr, context),
+            AssignmentValue::Comparison { left, op, right } => {
+                // Evaluate comparison and return boolean result
+                let result = self.evaluate_comparison(left, *op, right, context)?;
+                Ok(EvalValue::Boolean(result))
+            }
         }
     }
 
@@ -808,12 +818,24 @@ impl ReapAstEvaluator {
         context: &EvalContext,
     ) -> Result<Vec<EvalValue>, ReaperError> {
         // Get the collection to iterate over based on source type
-        let collection = match &iterator.collection {
-            IterationSource::EntityAttr(entity_attr) => {
-                self.get_entity_attribute(entity_attr, context)?
-            }
-            IterationSource::VarAttr(var_attr) => self.get_var_attribute(var_attr, context)?,
-        };
+        let collection =
+            match &iterator.collection {
+                IterationSource::EntityAttr(entity_attr) => {
+                    self.get_entity_attribute(entity_attr, context)?
+                }
+                IterationSource::VarAttr(var_attr) => self.get_var_attribute(var_attr, context)?,
+                IterationSource::IndexedVariable { variable, index } => {
+                    // Get the variable from context
+                    let var_value = context.variables.get(variable).ok_or_else(|| {
+                        ReaperError::InvalidPolicy {
+                            reason: format!("Undefined variable in iteration: {}", variable),
+                        }
+                    })?;
+
+                    // Apply the index
+                    self.apply_index(var_value, index)?
+                }
+            };
 
         // If it's an array or set, return its elements
         match collection {
@@ -891,6 +913,10 @@ impl ReapAstEvaluator {
                             EvalValue::Object(map) => {
                                 Ok(map.get(attribute).cloned().unwrap_or(EvalValue::Null))
                             }
+                            EvalValue::Null => {
+                                // Null propagation: accessing attributes on null returns null
+                                Ok(EvalValue::Null)
+                            }
                             _ => Err(ReaperError::InvalidPolicy {
                                 reason: format!(
                                     "Cannot access attribute '{}' on non-object variable '{}'",
@@ -930,11 +956,20 @@ impl ReapAstEvaluator {
                             }
                         })?;
 
+                        // If attribute is empty, index the variable directly
+                        if attribute.is_empty() {
+                            return self.apply_index(var_value, index);
+                        }
+
                         match var_value {
                             EvalValue::Object(map) => {
                                 let attr_value =
                                     map.get(attribute).cloned().unwrap_or(EvalValue::Null);
                                 self.apply_index(&attr_value, index)
+                            }
+                            EvalValue::Null => {
+                                // Null propagation: accessing attributes on null returns null
+                                Ok(EvalValue::Null)
                             }
                             _ => Err(ReaperError::InvalidPolicy {
                                 reason: format!(
@@ -1942,19 +1977,14 @@ impl ReapAstEvaluator {
     /// count() - Returns the number of items in a collection
     /// Performance: O(1) for arrays/sets (length lookup), O(n) for object (key count)
     fn method_count(&self, value: &EvalValue) -> Result<EvalValue, ReaperError> {
-        let count = match value {
-            EvalValue::Array(arr) => arr.len(),
-            EvalValue::Set(set) => set.len(),
-            EvalValue::Object(obj) => obj.len(),
-            EvalValue::String(s) => s.len(), // Character count
-            _ => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "count() requires collection or string".to_string(),
-                })
-            }
-        };
-
-        Ok(EvalValue::Integer(count as i64))
+        match value {
+            EvalValue::Array(arr) => Ok(EvalValue::Integer(arr.len() as i64)),
+            EvalValue::Set(set) => Ok(EvalValue::Integer(set.len() as i64)),
+            EvalValue::Object(obj) => Ok(EvalValue::Integer(obj.len() as i64)),
+            EvalValue::String(s) => Ok(EvalValue::Integer(s.len() as i64)), // Character count
+            EvalValue::Null => Ok(EvalValue::Integer(0)), // Null counts as 0 items
+            _ => Ok(EvalValue::Null), // Unsupported types return null (for type checking patterns)
+        }
     }
 
     /// sum() - Sums all numeric values in a collection
