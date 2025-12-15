@@ -101,6 +101,7 @@ fn multi_rule_policy(c: &mut Criterion) {
     for num_rules in [1, 5, 10, 20].iter() {
         let mut rules = Vec::new();
         for i in 0..*num_rules {
+            // No trailing commas - join with space instead
             rules.push(format!(
                 "rule r{} {{ allow if user.dept == \"dept{}\" }}",
                 i, i
@@ -109,7 +110,8 @@ fn multi_rule_policy(c: &mut Criterion) {
         // Add matching rule at the end
         rules.push("rule final { allow if user.dept == resource.dept }".to_string());
 
-        let policy = format!("policy p {{ default: deny, {} }}", rules.join(", "));
+        // Join with space (no commas between rules for single-line format)
+        let policy = format!("policy p {{ default: deny, {} }}", rules.join(" "));
 
         let ev = create_evaluator(&policy, data);
         group.bench_with_input(BenchmarkId::new("rules", num_rules), num_rules, |b, _| {
