@@ -1905,10 +1905,23 @@ impl ReapAstEvaluator {
                     }
                 };
 
-                // Use sonic_rs for ultra-fast SIMD-accelerated parsing
+                // Use sonic_rs for ultra-fast SIMD-accelerated parsing (native)
+                // Fall back to serde_json for WASM compatibility
+                #[cfg(not(target_arch = "wasm32"))]
                 match sonic_rs::from_str::<sonic_rs::Value>(&json_str) {
                     Ok(json_value) => {
                         // Convert sonic_rs::Value to EvalValue
+                        self.json_value_to_eval_value(&json_value)
+                    }
+                    Err(e) => Err(ReaperError::InvalidPolicy {
+                        reason: format!("json::parse() failed: {}", e),
+                    }),
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                match serde_json::from_str::<serde_json::Value>(&json_str) {
+                    Ok(json_value) => {
+                        // Convert serde_json::Value to EvalValue
                         self.json_value_to_eval_value(&json_value)
                     }
                     Err(e) => Err(ReaperError::InvalidPolicy {
@@ -1926,12 +1939,21 @@ impl ReapAstEvaluator {
 
                 let value = self.evaluate_expr(&args[0], context)?;
 
-                // Convert EvalValue to sonic_rs::Value
+                // Convert EvalValue to JSON Value
                 let json_value = self.eval_value_to_json_value(&value)?;
 
-                // Serialize to JSON string using sonic_rs for maximum speed
+                // Serialize to JSON string (sonic_rs for native, serde_json for WASM)
                 // Compact output (no pretty-printing) for optimal performance
+                #[cfg(not(target_arch = "wasm32"))]
                 match sonic_rs::to_string(&json_value) {
+                    Ok(json_str) => Ok(EvalValue::String(json_str)),
+                    Err(e) => Err(ReaperError::InvalidPolicy {
+                        reason: format!("json::stringify() failed: {}", e),
+                    }),
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                match serde_json::to_string(&json_value) {
                     Ok(json_str) => Ok(EvalValue::String(json_str)),
                     Err(e) => Err(ReaperError::InvalidPolicy {
                         reason: format!("json::stringify() failed: {}", e),
@@ -1955,9 +1977,14 @@ impl ReapAstEvaluator {
                     }
                 };
 
-                // Ultra-fast validation using sonic_rs's SIMD-accelerated parser
-                // Stops parsing on first error for maximum efficiency
+                // Ultra-fast validation using SIMD-accelerated parser (native)
+                // Falls back to serde_json for WASM compatibility
+                #[cfg(not(target_arch = "wasm32"))]
                 let is_valid = sonic_rs::from_str::<sonic_rs::Value>(&json_str).is_ok();
+
+                #[cfg(target_arch = "wasm32")]
+                let is_valid = serde_json::from_str::<serde_json::Value>(&json_str).is_ok();
+
                 Ok(EvalValue::Boolean(is_valid))
             }
 
@@ -2816,12 +2843,13 @@ impl ReapAstEvaluator {
     }
 
     // ============================================================================
-    // JSON Conversion Helpers - sonic_rs::Value <-> EvalValue
+    // JSON Conversion Helpers - JSON Value <-> EvalValue
     // ============================================================================
 
-    /// Convert sonic_rs::Value to EvalValue
-    /// Uses SIMD-accelerated parsing with pattern matching for maximum performance
+    /// Convert JSON Value to EvalValue
+    /// Uses sonic_rs (SIMD-accelerated) for native, serde_json for WASM
     #[allow(clippy::only_used_in_recursion)]
+    #[cfg(not(target_arch = "wasm32"))]
     fn json_value_to_eval_value(&self, json: &sonic_rs::Value) -> Result<EvalValue, ReaperError> {
         use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
@@ -2856,9 +2884,46 @@ impl ReapAstEvaluator {
         }
     }
 
-    /// Convert EvalValue to sonic_rs::Value for high-speed serialization
+    /// Convert serde_json::Value to EvalValue (WASM version)
+    #[allow(clippy::only_used_in_recursion)]
+    #[cfg(target_arch = "wasm32")]
+    fn json_value_to_eval_value(&self, json: &serde_json::Value) -> Result<EvalValue, ReaperError> {
+        match json {
+            serde_json::Value::Null => Ok(EvalValue::Null),
+            serde_json::Value::Bool(b) => Ok(EvalValue::Boolean(*b)),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(EvalValue::Integer(i))
+                } else if let Some(f) = n.as_f64() {
+                    Ok(EvalValue::Float(f))
+                } else {
+                    Err(ReaperError::InvalidPolicy {
+                        reason: "Unsupported JSON number type".to_string(),
+                    })
+                }
+            }
+            serde_json::Value::String(s) => Ok(EvalValue::String(s.clone())),
+            serde_json::Value::Array(arr) => {
+                let eval_arr: Result<Vec<EvalValue>, ReaperError> = arr
+                    .iter()
+                    .map(|v| self.json_value_to_eval_value(v))
+                    .collect();
+                Ok(EvalValue::Array(eval_arr?))
+            }
+            serde_json::Value::Object(obj) => {
+                let mut eval_obj = HashMap::new();
+                for (key, value) in obj {
+                    eval_obj.insert(key.clone(), self.json_value_to_eval_value(value)?);
+                }
+                Ok(EvalValue::Object(eval_obj))
+            }
+        }
+    }
+
+    /// Convert EvalValue to sonic_rs::Value for high-speed serialization (native)
     /// Uses SIMD acceleration with minimal allocations
     #[allow(clippy::only_used_in_recursion)]
+    #[cfg(not(target_arch = "wasm32"))]
     fn eval_value_to_json_value(&self, eval: &EvalValue) -> Result<sonic_rs::Value, ReaperError> {
         use sonic_rs::{json, Object};
 
@@ -2898,6 +2963,54 @@ impl ReapAstEvaluator {
                 let mut json_obj = Object::new();
                 for (key, value) in obj {
                     json_obj.insert(key, self.eval_value_to_json_value(value)?);
+                }
+                Ok(json!(json_obj))
+            }
+        }
+    }
+
+    /// Convert EvalValue to serde_json::Value (WASM version)
+    #[allow(clippy::only_used_in_recursion)]
+    #[cfg(target_arch = "wasm32")]
+    fn eval_value_to_json_value(&self, eval: &EvalValue) -> Result<serde_json::Value, ReaperError> {
+        use serde_json::{json, Map};
+
+        match eval {
+            EvalValue::Null => Ok(json!(null)),
+            EvalValue::Boolean(b) => Ok(json!(*b)),
+            EvalValue::Integer(i) => Ok(json!(*i)),
+            EvalValue::Float(f) => {
+                // Convert float to JSON number (may fail for NaN/Infinity)
+                if f.is_nan() || f.is_infinite() {
+                    Err(ReaperError::InvalidPolicy {
+                        reason: format!("Cannot convert float {} to JSON (NaN or Infinity)", f),
+                    })
+                } else {
+                    Ok(json!(*f))
+                }
+            }
+            EvalValue::String(s) => Ok(json!(s)),
+            EvalValue::Array(arr) => {
+                // Recursively convert array elements
+                let json_arr: Result<Vec<serde_json::Value>, ReaperError> = arr
+                    .iter()
+                    .map(|v| self.eval_value_to_json_value(v))
+                    .collect();
+                Ok(json!(json_arr?))
+            }
+            EvalValue::Set(set) => {
+                // Convert Set to JSON array (JSON doesn't have native Set type)
+                let json_arr: Result<Vec<serde_json::Value>, ReaperError> = set
+                    .iter()
+                    .map(|v| self.eval_value_to_json_value(v))
+                    .collect();
+                Ok(json!(json_arr?))
+            }
+            EvalValue::Object(obj) => {
+                // Convert HashMap to JSON object
+                let mut json_obj = Map::new();
+                for (key, value) in obj {
+                    json_obj.insert(key.clone(), self.eval_value_to_json_value(value)?);
                 }
                 Ok(json!(json_obj))
             }

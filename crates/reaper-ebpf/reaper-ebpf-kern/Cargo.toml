@@ -1,0 +1,22 @@
+[package]
+name = "reaper-ebpf-kern"
+version = "0.1.0"
+edition = "2021"
+
+# Exclude from workspace - eBPF programs need special compilation
+[workspace]
+
+[dependencies]
+aya-bpf = "0.1"
+aya-log-ebpf = "0.1"
+
+[profile.dev]
+opt-level = 3
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+
+# eBPF programs are compiled to bpf target
+# Build with: cargo build --target=bpfel-unknown-none -Z build-std=core

@@ -100,7 +100,116 @@ jobs:
         run: exit ${{ env.UNIT_TEST_EXIT_CODE }}
 
   # ============================================================
-  # Stage 3: Volume Tests (10k iterations per policy)
+  # Stage 3: eBPF Compilation & Testing (x86_64 only)
+  # ============================================================
+  ebpf-build:
+    name: eBPF Compilation (x86_64)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust nightly toolchain for eBPF
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-ci"
+          cache-on-failure: true
+
+      - name: Add eBPF target
+        run: rustup +nightly target add bpfel-unknown-none
+
+      - name: Build eBPF kernel program
+        run: |
+          echo "Building eBPF kernel program for x86_64..."
+          cd crates/reaper-ebpf/reaper-ebpf-kern
+          cargo +nightly build --target=bpfel-unknown-none -Z build-std=core --release 2>&1 | tee ../../../ebpf-build.log
+          echo "eBPF build completed!"
+
+      - name: Verify eBPF binary exists
+        run: |
+          EBPF_BINARY="target/bpfel-unknown-none/release/reaper_ebpf_kern"
+          if [ -f "$EBPF_BINARY" ]; then
+            echo "✅ eBPF kernel program compiled successfully!"
+            ls -lh "$EBPF_BINARY"
+            file "$EBPF_BINARY"
+          else
+            echo "❌ eBPF binary not found at $EBPF_BINARY"
+            exit 1
+          fi
+
+      - name: Build eBPF userspace components
+        run: |
+          echo "Building eBPF userspace components..."
+          cargo build -p reaper-ebpf --release 2>&1 | tee -a ebpf-build.log
+
+      - name: Run eBPF benchmarks (userspace only)
+        run: |
+          echo "Running eBPF benchmarks..."
+          cargo run --release --example ebpf_benchmarks 2>&1 | tee ebpf-benchmark-results.txt
+
+      - name: Run complete eBPF system example (API demo)
+        continue-on-error: true
+        run: |
+          echo "Running complete eBPF system example (will show API without kernel loading)..."
+          cargo run --release --example complete_ebpf_system 2>&1 | tee ebpf-complete-system.txt
+
+      - name: Generate eBPF build summary
+        if: always()
+        run: |
+          echo "# eBPF Build & Test Results (x86_64)" > ebpf-summary.md
+          echo "" >> ebpf-summary.md
+          echo "## Build Status" >> ebpf-summary.md
+          echo "" >> ebpf-summary.md
+
+          if [ -f "target/bpfel-unknown-none/release/reaper_ebpf_kern" ]; then
+            echo "✅ **eBPF kernel program compiled successfully**" >> ebpf-summary.md
+            echo "" >> ebpf-summary.md
+            echo "**Binary Details:**" >> ebpf-summary.md
+            echo '```' >> ebpf-summary.md
+            ls -lh target/bpfel-unknown-none/release/reaper_ebpf_kern >> ebpf-summary.md
+            file target/bpfel-unknown-none/release/reaper_ebpf_kern >> ebpf-summary.md
+            echo '```' >> ebpf-summary.md
+          else
+            echo "❌ **eBPF kernel program compilation failed**" >> ebpf-summary.md
+          fi
+
+          echo "" >> ebpf-summary.md
+          echo "## Architecture" >> ebpf-summary.md
+          echo "- **Target:** bpfel-unknown-none (eBPF Little Endian)" >> ebpf-summary.md
+          echo "- **Build Mode:** Release" >> ebpf-summary.md
+          echo "- **Toolchain:** Rust nightly with -Z build-std=core" >> ebpf-summary.md
+          echo "" >> ebpf-summary.md
+
+          echo "## Benchmark Results" >> ebpf-summary.md
+          if [ -f ebpf-benchmark-results.txt ]; then
+            echo '```' >> ebpf-summary.md
+            grep -A 50 "Learning Engine Overhead\|Policy Compilation\|Expected eBPF Performance" ebpf-benchmark-results.txt >> ebpf-summary.md || echo "Benchmark output available in artifacts" >> ebpf-summary.md
+            echo '```' >> ebpf-summary.md
+          fi
+
+      - name: Upload eBPF artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ebpf-build-results
+          path: |
+            target/bpfel-unknown-none/release/reaper_ebpf_kern
+            ebpf-build.log
+            ebpf-benchmark-results.txt
+            ebpf-complete-system.txt
+            ebpf-summary.md
+
+  # ============================================================
+  # Stage 4: Volume Tests (10k iterations per policy)
   # ============================================================
   volume-tests:
     name: Volume Tests - ${{ matrix.policy }}
@@ -154,7 +263,7 @@ jobs:
             generate-${{ matrix.policy }}-data.log
 
   # ============================================================
-  # Stage 4: Memory & Scale Tests
+  # Stage 5: Memory & Scale Tests
   # ============================================================
   memory-scale-tests:
     name: Memory & Scale Tests (100k entities)
@@ -206,7 +315,7 @@ jobs:
             generate-large-data.log
 
   # ============================================================
-  # Stage 5: Scale & Performance Tests (PR only)
+  # Stage 6: Scale & Performance Tests (PR only)
   # ============================================================
   scale-tests:
     name: Scale & Performance Tests
@@ -359,7 +468,7 @@ jobs:
             });
 
   # ============================================================
-  # Stage 6: BDD Tests (Behavior-Driven Development)
+  # Stage 7: BDD Tests (Behavior-Driven Development)
   # ============================================================
   bdd-tests:
     name: BDD Tests (Cucumber)
@@ -450,12 +559,12 @@ jobs:
           path: bdd-reports/cucumber-report.json
 
   # ============================================================
-  # Stage 7: Generate Combined Test Report
+  # Stage 8: Generate Combined Test Report
   # ============================================================
   generate-report:
     name: Generate Combined Test Report
     runs-on: ubuntu-latest
-    needs: [unit-tests, volume-tests, memory-scale-tests, scale-tests, bdd-tests]
+    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, bdd-tests]
     if: always()
     steps:
       - name: Download all artifacts
@@ -476,6 +585,15 @@ jobs:
             cat unit-test-results/unit-test-summary.md >> COMBINED_REPORT.md
           else
             echo "⚠️ Unit test results not available" >> COMBINED_REPORT.md
+          fi
+          echo "" >> COMBINED_REPORT.md
+
+          # eBPF Build
+          echo "## ⚡ eBPF Compilation (x86_64)" >> COMBINED_REPORT.md
+          if [ -f "ebpf-build-results/ebpf-summary.md" ]; then
+            cat ebpf-build-results/ebpf-summary.md >> COMBINED_REPORT.md
+          else
+            echo "⚠️ eBPF build results not available" >> COMBINED_REPORT.md
           fi
           echo "" >> COMBINED_REPORT.md
 

@@ -15,10 +15,18 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 tower = { workspace = true }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+scopeguard = "1.2"
+opentelemetry = { version = "0.21", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.14", features = ["trace", "metrics"] }
+opentelemetry-semantic-conventions = "0.13"
+tracing-opentelemetry = "0.22"
 
 [dev-dependencies]
 criterion = { workspace = true }

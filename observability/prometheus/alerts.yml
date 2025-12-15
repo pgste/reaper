@@ -1,0 +1,239 @@
+groups:
+  - name: reaper_security
+    interval: 30s
+    rules:
+      # Critical: High denial rate (potential attack)
+      - alert: HighDenialRate
+        expr: rate(reaper_decisions_total{decision="deny"}[5m]) > 100
+        for: 2m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "High denial rate detected"
+          description: "{{ $value | humanize }} denials/sec over last 5 minutes. Possible attack or misconfigured policy."
+          dashboard: "https://grafana/d/security"
+
+      # Critical: Repeated denials from same principal (brute force)
+      - alert: RepeatedDenials
+        expr: increase(reaper_decisions_total{decision="deny"}[1m]) by (principal_id) > 10
+        for: 1m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "Repeated access denials for {{ $labels.principal_id }}"
+          description: "Principal {{ $labels.principal_id }} denied {{ $value }} times in 1 minute. Potential brute force attempt."
+          action: "Consider blocking IP or principal"
+
+      # Warning: Unusual denial spike
+      - alert: DenialSpike
+        expr: rate(reaper_decisions_total{decision="deny"}[5m]) > 2 * rate(reaper_decisions_total{decision="deny"}[1h] offset 1h)
+        for: 5m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Denial rate spike detected"
+          description: "Current denial rate is 2x higher than usual baseline"
+
+      # Info: Access to sensitive resources denied
+      - alert: SensitiveResourceDenial
+        expr: increase(reaper_decisions_total{decision="deny", resource_classification="secret|confidential"}[5m]) > 0
+        labels:
+          severity: info
+          category: audit
+        annotations:
+          summary: "Access to sensitive resource denied"
+          description: "Attempt to access classified resource: {{ $labels.resource }}"
+          requires_review: "yes"
+
+  - name: reaper_performance
+    interval: 30s
+    rules:
+      # Critical: Policy evaluation failures
+      - alert: PolicyEvaluationFailures
+        expr: rate(reaper_errors_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Policy evaluation failures detected"
+          description: "{{ $value | humanize }} errors/sec. Policy engine may be unhealthy."
+          action: "Check logs and policy validity"
+
+      # Critical: P99 latency degradation
+      - alert: HighP99Latency
+        expr: histogram_quantile(0.99, rate(reaper_decision_duration_seconds_bucket[5m])) > 0.0001
+        for: 5m
+        labels:
+          severity: critical
+          category: performance
+        annotations:
+          summary: "P99 decision latency > 100µs"
+          description: "P99 latency is {{ $value | humanizeDuration }}. Target is <100µs."
+          dashboard: "https://grafana/d/performance"
+
+      # Warning: P95 latency degradation
+      - alert: ElevatedP95Latency
+        expr: histogram_quantile(0.95, rate(reaper_decision_duration_seconds_bucket[5m])) > 0.00005
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "P95 decision latency > 50µs"
+          description: "P95 latency is {{ $value | humanizeDuration }}. Target is <50µs."
+
+      # Warning: Slow policy evaluation
+      - alert: SlowPolicy
+        expr: rate(reaper_policy_evaluation_ns{policy_id!=""}[5m]) > 100000
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Policy {{ $labels.policy_id }} is slow"
+          description: "Policy averaging {{ $value }}ns per evaluation (>100µs)"
+          action: "Review policy complexity or add caching"
+
+      # Warning: Cache hit rate drop
+      - alert: LowCacheHitRate
+        expr: |
+          rate(reaper_cache_hits_total[10m]) /
+          (rate(reaper_cache_hits_total[10m]) + rate(reaper_cache_misses_total[10m])) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Cache hit rate below 80%"
+          description: "Current hit rate: {{ $value | humanizePercentage }}. Expected >80%."
+          action: "Check cache size and eviction policy"
+
+  - name: reaper_availability
+    interval: 30s
+    rules:
+      # Critical: Agent down
+      - alert: ReaperAgentDown
+        expr: up{job="reaper-agent"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Reaper Agent is down"
+          description: "Agent {{ $labels.instance }} is not responding to health checks"
+          action: "Check container logs and restart if needed"
+
+      # Critical: Platform down
+      - alert: ReaperPlatformDown
+        expr: up{job="reaper-platform"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Reaper Platform is down"
+          description: "Platform {{ $labels.instance }} is not responding"
+          action: "Immediate investigation required"
+
+      # Warning: No policies loaded
+      - alert: NoPoliciesLoaded
+        expr: reaper_active_policies == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: configuration
+        annotations:
+          summary: "No active policies"
+          description: "Agent has no policies loaded. All requests will be denied by default."
+          action: "Deploy policies immediately"
+
+      # Warning: Policy load failures
+      - alert: PolicyLoadFailures
+        expr: increase(reaper_policy_load_errors_total[10m]) > 0
+        labels:
+          severity: warning
+          category: configuration
+        annotations:
+          summary: "Policy load failures detected"
+          description: "Failed to load {{ $value }} policies in last 10 minutes"
+          action: "Check policy syntax and bundle format"
+
+  - name: reaper_compliance
+    interval: 1m
+    rules:
+      # Info: High-privilege access
+      - alert: HighPrivilegeAccess
+        expr: increase(reaper_decisions_total{decision="allow", resource_classification="secret"}[1h]) > 0
+        labels:
+          severity: info
+          category: audit
+        annotations:
+          summary: "High-privilege access granted"
+          description: "{{ $value }} accesses to secret resources in last hour"
+          requires_audit: "yes"
+
+      # Info: Policy changes
+      - alert: PolicyDeployment
+        expr: changes(reaper_active_policies[5m]) > 0
+        labels:
+          severity: info
+          category: audit
+        annotations:
+          summary: "Policy configuration changed"
+          description: "Policy count changed from {{ $value }} policies"
+          requires_approval: "verify change was authorized"
+
+      # Warning: Denial ratio too high
+      - alert: HighDenialRatio
+        expr: |
+          rate(reaper_decisions_total{decision="deny"}[1h]) /
+          rate(reaper_decisions_total[1h]) > 0.2
+        for: 1h
+        labels:
+          severity: warning
+          category: audit
+        annotations:
+          summary: "Denial ratio > 20%"
+          description: "{{ $value | humanizePercentage }} of requests denied. May indicate overly restrictive policies."
+          action: "Review policy rules for correctness"
+
+  - name: reaper_capacity
+    interval: 1m
+    rules:
+      # Warning: High request rate
+      - alert: HighRequestRate
+        expr: rate(reaper_decisions_total[5m]) > 10000
+        for: 10m
+        labels:
+          severity: warning
+          category: capacity
+        annotations:
+          summary: "Request rate > 10K RPS"
+          description: "Current rate: {{ $value | humanize }} RPS. Consider scaling."
+
+      # Warning: High concurrent evaluations
+      - alert: HighConcurrentEvaluations
+        expr: reaper_concurrent_evaluations > 1000
+        for: 5m
+        labels:
+          severity: warning
+          category: capacity
+        annotations:
+          summary: "High concurrent evaluations"
+          description: "{{ $value }} concurrent policy evaluations. May need more instances."
+
+      # Info: Scaling threshold reached
+      - alert: ScalingThreshold
+        expr: rate(reaper_decisions_total[5m]) > 5000
+        for: 30m
+        labels:
+          severity: info
+          category: capacity
+        annotations:
+          summary: "Scaling threshold reached"
+          description: "Sustained 5K+ RPS. Consider horizontal scaling."
+          action: "Add more Agent replicas"

@@ -1,0 +1,64 @@
+version: '3.9'
+
+services:
+  # Reaper Platform - Management & Deployment
+  platform:
+    build:
+      context: .
+      dockerfile: services/reaper-platform/Dockerfile
+    container_name: reaper-platform
+    ports:
+      - "8081:8081"
+    environment:
+      - RUST_LOG=info,reaper_platform=debug
+      - REAPER_BIND_ADDR=0.0.0.0:8081
+    volumes:
+      - platform-data:/data
+    networks:
+      - reaper-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # Reaper Agent - Policy Enforcement
+  agent:
+    build:
+      context: .
+      dockerfile: services/reaper-agent/Dockerfile
+    container_name: reaper-agent
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info,reaper_agent=debug
+      - REAPER_BIND_ADDR=0.0.0.0:8080
+      - PLATFORM_URL=http://platform:8081
+    volumes:
+      - agent-data:/data
+      - ./policies:/policies:ro  # Mount policies directory (if you have .rbb bundles)
+    networks:
+      - reaper-net
+    depends_on:
+      platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s  # Agent needs more time to load policies
+    restart: unless-stopped
+
+networks:
+  reaper-net:
+    driver: bridge
+    name: reaper-network
+
+volumes:
+  platform-data:
+    name: reaper-platform-data
+  agent-data:
+    name: reaper-agent-data
