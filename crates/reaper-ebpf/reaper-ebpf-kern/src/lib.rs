@@ -164,12 +164,12 @@ pub fn reaper_file_open(ctx: LsmContext) -> i32 {
 
 fn try_file_open(ctx: LsmContext) -> Result<i32, i64> {
     // Extract UID/GID
-    let uid_gid = unsafe { aya_ebpf::helpers::bpf_get_current_uid_gid() };
+    let uid_gid = aya_ebpf::helpers::bpf_get_current_uid_gid();
     let uid = (uid_gid >> 32) as u32;
     let gid = (uid_gid & 0xFFFFFFFF) as u32;
 
     // Extract PID
-    let pid_tgid = unsafe { aya_ebpf::helpers::bpf_get_current_pid_tgid() };
+    let pid_tgid = aya_ebpf::helpers::bpf_get_current_pid_tgid();
     let pid = (pid_tgid >> 32) as u32;
 
     // Extract file path from LSM context
@@ -268,8 +268,8 @@ fn try_inode_permission(_ctx: LsmContext) -> Result<i32, i64> {
     // mask contains: MAY_READ, MAY_WRITE, MAY_EXEC, MAY_APPEND, etc.
 
     // Extract UID/GID for policy check
-    let uid_gid = unsafe { aya_ebpf::helpers::bpf_get_current_uid_gid() };
-    let uid = (uid_gid >> 32) as u32;
+    let uid_gid = aya_ebpf::helpers::bpf_get_current_uid_gid();
+    let _uid = (uid_gid >> 32) as u32;
     let _gid = (uid_gid & 0xFFFFFFFF) as u32;
 
     // For now, we'll allow all inode operations
@@ -316,7 +316,7 @@ fn try_socket_connect(_ctx: LsmContext) -> Result<i32, i64> {
 ///
 /// This uses BPF helpers to extract the path from the file struct.
 /// Returns the path length on success.
-fn extract_file_path(ctx: &LsmContext, path_buf: &mut [u8; MAX_PATH_LEN]) -> Result<u32, i64> {
+fn extract_file_path(_ctx: &LsmContext, _path_buf: &mut [u8; MAX_PATH_LEN]) -> Result<u32, i64> {
     // LSM file_open hook receives: struct file *file
     // We need to extract the path from file->f_path
 
@@ -338,6 +338,7 @@ fn extract_file_path(ctx: &LsmContext, path_buf: &mut [u8; MAX_PATH_LEN]) -> Res
 /// Used for wildcard policies like "/api/*"
 /// Returns true if path starts with prefix
 #[inline(always)]
+#[allow(dead_code)]  // Will be used when prefix matching is implemented
 fn matches_prefix(path: &[u8; MAX_PATH_LEN], prefix: &[u8; MAX_PATH_LEN]) -> bool {
     for i in 0..MAX_PATH_LEN {
         if prefix[i] == 0 {
@@ -375,9 +376,7 @@ fn send_to_userspace(
     };
 
     // Submit to ring buffer
-    unsafe {
-        EVENTS.output(&event, 0);
-    }
+    let _ = EVENTS.output(&event, 0);
 
     Ok(())
 }

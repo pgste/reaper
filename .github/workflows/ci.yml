@@ -130,18 +130,35 @@ jobs:
           cd crates/reaper-ebpf/reaper-ebpf-kern
           cargo +nightly build --target=bpfel-unknown-none -Z build-std=core --release 2>&1 | tee ../../../ebpf-build.log
           echo "eBPF build completed!"
+          echo ""
+          echo "Checking for eBPF artifacts..."
+          ls -la target/bpfel-unknown-none/release/ || true
+          echo ""
 
       - name: Verify eBPF binary exists
         run: |
-          EBPF_BINARY="target/bpfel-unknown-none/release/reaper_ebpf_kern"
-          if [ -f "$EBPF_BINARY" ]; then
-            echo "✅ eBPF kernel program compiled successfully!"
-            ls -lh "$EBPF_BINARY"
-            file "$EBPF_BINARY"
+          # Binary is in the subdirectory where we built it
+          EBPF_DIR="crates/reaper-ebpf/reaper-ebpf-kern/target/bpfel-unknown-none/release"
+
+          echo "Searching for eBPF binaries in $EBPF_DIR..."
+          ls -la "$EBPF_DIR/" || echo "Directory not found"
+
+          # eBPF programs can have different names depending on the crate type
+          # Check for common patterns
+          if [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
+            EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
+          elif [ -f "$EBPF_DIR/libreaper_ebpf_kern.a" ]; then
+            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.a"
           else
-            echo "❌ eBPF binary not found at $EBPF_BINARY"
+            echo "❌ eBPF binary not found. Available files:"
+            ls -la "$EBPF_DIR/" || echo "No files found"
             exit 1
           fi
+
+          echo "✅ eBPF kernel program compiled successfully!"
+          echo "Binary: $EBPF_BINARY"
+          ls -lh "$EBPF_BINARY"
+          file "$EBPF_BINARY"
 
       - name: Build eBPF userspace components
         run: |
@@ -167,16 +184,31 @@ jobs:
           echo "## Build Status" >> ebpf-summary.md
           echo "" >> ebpf-summary.md
 
-          if [ -f "target/bpfel-unknown-none/release/reaper_ebpf_kern" ]; then
+          EBPF_DIR="crates/reaper-ebpf/reaper-ebpf-kern/target/bpfel-unknown-none/release"
+
+          # Find the eBPF binary
+          EBPF_BINARY=""
+          if [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
+            EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
+          elif [ -f "$EBPF_DIR/libreaper_ebpf_kern.a" ]; then
+            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.a"
+          fi
+
+          if [ -n "$EBPF_BINARY" ]; then
             echo "✅ **eBPF kernel program compiled successfully**" >> ebpf-summary.md
             echo "" >> ebpf-summary.md
             echo "**Binary Details:**" >> ebpf-summary.md
             echo '```' >> ebpf-summary.md
-            ls -lh target/bpfel-unknown-none/release/reaper_ebpf_kern >> ebpf-summary.md
-            file target/bpfel-unknown-none/release/reaper_ebpf_kern >> ebpf-summary.md
+            ls -lh "$EBPF_BINARY" >> ebpf-summary.md
+            file "$EBPF_BINARY" >> ebpf-summary.md
             echo '```' >> ebpf-summary.md
           else
             echo "❌ **eBPF kernel program compilation failed**" >> ebpf-summary.md
+            echo "" >> ebpf-summary.md
+            echo "Files in release directory:" >> ebpf-summary.md
+            echo '```' >> ebpf-summary.md
+            ls -la "$EBPF_DIR/" >> ebpf-summary.md || echo "Directory not found" >> ebpf-summary.md
+            echo '```' >> ebpf-summary.md
           fi
 
           echo "" >> ebpf-summary.md
@@ -199,7 +231,7 @@ jobs:
         with:
           name: ebpf-build-results
           path: |
-            target/bpfel-unknown-none/release/reaper_ebpf_kern
+            crates/reaper-ebpf/reaper-ebpf-kern/target/bpfel-unknown-none/release/
             ebpf-build.log
             ebpf-benchmark-results.txt
             ebpf-complete-system.txt
