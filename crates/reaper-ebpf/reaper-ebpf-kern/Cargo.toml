@@ -6,6 +6,10 @@ edition = "2021"
 # Exclude from workspace - eBPF programs need special compilation
 [workspace]
 
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
 [dependencies]
 aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"

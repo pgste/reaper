@@ -144,15 +144,30 @@ jobs:
           ls -la "$EBPF_DIR/" || echo "Directory not found"
 
           # eBPF programs can have different names depending on the crate type
-          # Check for common patterns
-          if [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
+          # With crate-type = ["cdylib"], it produces .so files
+          # The actual eBPF bytecode might also be in deps/
+          if [ -f "$EBPF_DIR/libreaper_ebpf_kern.so" ]; then
+            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.so"
+          elif [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
             EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
           elif [ -f "$EBPF_DIR/libreaper_ebpf_kern.a" ]; then
             EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.a"
           else
-            echo "❌ eBPF binary not found. Available files:"
-            ls -la "$EBPF_DIR/" || echo "No files found"
-            exit 1
+            # Check deps directory for eBPF object files
+            echo "Checking deps directory..."
+            ls -la "$EBPF_DIR/deps/" || echo "No deps directory"
+
+            # Find any .so or similar files in deps
+            EBPF_BINARY=$(find "$EBPF_DIR/deps/" -name "*.so" -o -name "libreaper_ebpf_kern*" | head -1)
+
+            if [ -z "$EBPF_BINARY" ]; then
+              echo "❌ eBPF binary not found. Available files:"
+              ls -la "$EBPF_DIR/" || echo "No files found"
+              echo ""
+              echo "Deps directory:"
+              ls -la "$EBPF_DIR/deps/" || echo "No deps directory"
+              exit 1
+            fi
           fi
 
           echo "✅ eBPF kernel program compiled successfully!"
@@ -186,12 +201,17 @@ jobs:
 
           EBPF_DIR="crates/reaper-ebpf/reaper-ebpf-kern/target/bpfel-unknown-none/release"
 
-          # Find the eBPF binary
+          # Find the eBPF binary (try multiple patterns)
           EBPF_BINARY=""
-          if [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
+          if [ -f "$EBPF_DIR/libreaper_ebpf_kern.so" ]; then
+            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.so"
+          elif [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
             EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
           elif [ -f "$EBPF_DIR/libreaper_ebpf_kern.a" ]; then
             EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.a"
+          else
+            # Check deps directory
+            EBPF_BINARY=$(find "$EBPF_DIR/deps/" -name "*.so" -o -name "libreaper_ebpf_kern*" 2>/dev/null | head -1)
           fi
 
           if [ -n "$EBPF_BINARY" ]; then
