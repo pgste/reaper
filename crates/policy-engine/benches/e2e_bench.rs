@@ -107,9 +107,7 @@ fn multi_rule_policy(c: &mut Criterion) {
             ));
         }
         // Add matching rule at the end
-        rules.push(
-            "rule final { allow if user.dept == resource.dept }".to_string()
-        );
+        rules.push("rule final { allow if user.dept == resource.dept }".to_string());
 
         let policy = format!("policy p {{ default: deny, {} }}", rules.join(", "));
 
