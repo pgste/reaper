@@ -1,4 +1,4 @@
-.PHONY: setup dev test bdd bench bench-summary coverage clean release check agent platform cli
+.PHONY: setup dev test bdd bench bench-summary coverage clean release check agent platform cli ebpf ebpf-setup ebpf-kern ebpf-test
 
 # One-time setup
 setup:
@@ -95,3 +95,32 @@ status:
 	@echo "  make agent       # Run Reaper Agent"
 	@echo "  make platform    # Run Reaper Platform"
 	@echo "  make cli         # Build Reaper CLI"
+	@echo "  make ebpf        # Build eBPF components"
+
+# eBPF Setup
+ebpf-setup:
+	@echo "🔧 Setting up eBPF build environment..."
+	rustup toolchain install nightly
+	rustup component add rust-src --toolchain nightly
+	rustup +nightly target add bpfel-unknown-none
+	@echo "✅ eBPF toolchain ready!"
+
+# Build eBPF userspace components
+ebpf:
+	@echo "🏗️  Building eBPF userspace components..."
+	cargo build -p reaper-ebpf
+	@echo "✅ eBPF userspace built successfully!"
+
+# Build eBPF kernel program (when implemented)
+ebpf-kern:
+	@echo "🏗️  Building eBPF kernel program..."
+	@echo "⚠️  Kernel program not yet implemented"
+	@echo "📝 See crates/reaper-ebpf/BUILD.md for details"
+	# cd crates/reaper-ebpf/reaper-ebpf-kern && \
+	# cargo +nightly build --target=bpfel-unknown-none -Z build-std=core --release
+
+# Test eBPF components
+ebpf-test:
+	@echo "🧪 Testing eBPF components..."
+	cargo test -p reaper-ebpf
+	@echo "✅ eBPF tests passed!"

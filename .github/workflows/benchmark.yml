@@ -1,0 +1,157 @@
+name: Benchmark Performance
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  # Allow manual trigger
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Performance Regression Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache target directory
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-target-bench-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Download previous benchmark data
+      uses: actions/cache@v4
+      with:
+        path: ./cache
+        key: ${{ runner.os }}-benchmark-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-benchmark-
+
+    - name: Run benchmarks
+      run: |
+        # Run all benchmarks and save results
+        cargo bench --workspace -- --save-baseline current
+
+    - name: Compare to baseline
+      id: compare
+      continue-on-error: true
+      run: |
+        # If we have a previous baseline, compare
+        if [ -d "./cache/criterion" ]; then
+          cp -r ./cache/criterion ./target/
+          cargo bench --workspace -- --baseline main --load-baseline current > bench_output.txt 2>&1 || true
+          cat bench_output.txt
+
+          # Check for regressions (>10% slowdown)
+          if grep -q "Performance has regressed" bench_output.txt; then
+            echo "regression=true" >> $GITHUB_OUTPUT
+          else
+            echo "regression=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "No baseline found, creating initial baseline"
+          echo "regression=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Save benchmark results
+      run: |
+        mkdir -p ./cache
+        cp -r ./target/criterion ./cache/
+
+    - name: Generate benchmark report
+      run: |
+        echo "## 📊 Benchmark Results" > benchmark_report.md
+        echo "" >> benchmark_report.md
+
+        # Extract key metrics
+        echo "### Built-in Functions" >> benchmark_report.md
+        cargo bench --bench builtins_bench type_check 2>&1 | grep "time:" | head -10 >> benchmark_report.md || true
+
+        echo "" >> benchmark_report.md
+        echo "### Collection Methods" >> benchmark_report.md
+        cargo bench --bench builtins_bench collection 2>&1 | grep "time:" | head -10 >> benchmark_report.md || true
+
+        cat benchmark_report.md
+
+    - name: Upload benchmark report
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-report
+        path: |
+          benchmark_report.md
+          target/criterion/
+
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const report = fs.readFileSync('benchmark_report.md', 'utf8');
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: report
+          });
+
+    - name: Fail if regression detected
+      if: steps.compare.outputs.regression == 'true'
+      run: |
+        echo "❌ Performance regression detected!"
+        echo "Review the benchmark report for details."
+        exit 1
+
+  # Quick smoke test for benchmarks
+  benchmark-smoke:
+    name: Benchmark Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache target
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-target-smoke-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Verify benchmarks compile
+      run: cargo build --benches --workspace
+
+    - name: Run benchmark tests
+      run: |
+        cargo bench --bench builtins_bench -- --test
+        cargo bench --bench caching_bench -- --test
+        cargo bench --bench simd_bench -- --test
+        cargo bench --bench e2e_bench -- --test
+        echo "✅ All benchmarks pass smoke tests"

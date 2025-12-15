@@ -1,0 +1,377 @@
+{
+  "dashboard": {
+    "title": "Reaper Security Dashboard",
+    "tags": ["reaper", "security", "policy", "access-control"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "5s",
+
+    "panels": [
+      {
+        "id": 1,
+        "title": "Decision Rate",
+        "type": "timeseries",
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "rate(reaper_decisions_total{decision=\"allow\"}[5m])",
+            "legendFormat": "Allow",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(reaper_decisions_total{decision=\"deny\"}[5m])",
+            "legendFormat": "Deny",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "custom": {
+              "axisLabel": "Decisions/sec",
+              "fillOpacity": 20,
+              "showPoints": "never"
+            },
+            "unit": "reqps"
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Deny" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Allow" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+            }
+          ]
+        }
+      },
+
+      {
+        "id": 2,
+        "title": "Denial Rate %",
+        "type": "gauge",
+        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 8 },
+        "targets": [
+          {
+            "expr": "100 * rate(reaper_decisions_total{decision=\"deny\"}[5m]) / rate(reaper_decisions_total[5m])",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 2, "color": "yellow" },
+                { "value": 5, "color": "orange" },
+                { "value": 10, "color": "red" }
+              ]
+            },
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "options": {
+          "showThresholdLabels": true,
+          "showThresholdMarkers": true
+        }
+      },
+
+      {
+        "id": 3,
+        "title": "Total Decisions (24h)",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(reaper_decisions_total[24h]))",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "blue" }
+              ]
+            },
+            "unit": "short"
+          }
+        },
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        }
+      },
+
+      {
+        "id": 4,
+        "title": "Denials (24h)",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 4, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(reaper_decisions_total{decision=\"deny\"}[24h]))",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 100, "color": "yellow" },
+                { "value": 1000, "color": "red" }
+              ]
+            },
+            "unit": "short"
+          }
+        },
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        }
+      },
+
+      {
+        "id": 5,
+        "title": "Recent Denials (Live Stream)",
+        "type": "logs",
+        "gridPos": { "x": 0, "y": 8, "w": 24, "h": 10 },
+        "targets": [
+          {
+            "expr": "{service=\"reaper-agent\"} | json | decision=\"deny\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "wrapLogMessage": false,
+          "enableLogDetails": true,
+          "sortOrder": "Descending"
+        }
+      },
+
+      {
+        "id": 6,
+        "title": "Top 10 Denied Users",
+        "type": "bargauge",
+        "gridPos": { "x": 0, "y": 18, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "topk(10, sum by (principal_id) (increase(reaper_decisions_total{decision=\"deny\"}[1h])))",
+            "legendFormat": "{{principal_id}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 5, "color": "yellow" },
+                { "value": 10, "color": "red" }
+              ]
+            },
+            "unit": "short"
+          }
+        },
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient",
+          "showUnfilled": true
+        }
+      },
+
+      {
+        "id": 7,
+        "title": "Top 10 Protected Resources",
+        "type": "bargauge",
+        "gridPos": { "x": 12, "y": 18, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "topk(10, sum by (resource_type) (increase(reaper_decisions_total{decision=\"deny\"}[1h])))",
+            "legendFormat": "{{resource_type}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "unit": "short"
+          }
+        },
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        }
+      },
+
+      {
+        "id": 8,
+        "title": "Policy Usage Heatmap",
+        "type": "heatmap",
+        "gridPos": { "x": 0, "y": 26, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "expr": "sum by (policy_name) (rate(reaper_decisions_total[1m]))",
+            "format": "time_series",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              }
+            }
+          }
+        },
+        "options": {
+          "calculate": true,
+          "cellGap": 2,
+          "cellValues": {},
+          "color": {
+            "mode": "scheme",
+            "scheme": "Spectral",
+            "steps": 128
+          },
+          "yAxis": {
+            "axisLabel": "Policy"
+          }
+        }
+      },
+
+      {
+        "id": 9,
+        "title": "Suspicious Activity Alerts",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 34, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "expr": "sum by (principal_id, resource) (increase(reaper_decisions_total{decision=\"deny\"}[5m])) > 10",
+            "format": "table",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto",
+              "displayMode": "auto"
+            },
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 10, "color": "yellow" },
+                { "value": 20, "color": "red" }
+              ]
+            }
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Value" },
+              "properties": [
+                { "id": "displayName", "value": "Denials (5min)" },
+                { "id": "custom.displayMode", "value": "gradient-gauge" }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "showHeader": true,
+          "sortBy": [{ "displayName": "Denials (5min)", "desc": true }]
+        }
+      },
+
+      {
+        "id": 10,
+        "title": "Decision Latency Distribution",
+        "type": "heatmap",
+        "gridPos": { "x": 0, "y": 42, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "expr": "rate(reaper_decision_duration_seconds_bucket[5m])",
+            "format": "heatmap",
+            "legendFormat": "{{le}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "calculate": true,
+          "color": {
+            "mode": "scheme",
+            "scheme": "Turbo"
+          },
+          "yAxis": {
+            "decimals": 6,
+            "unit": "s",
+            "axisLabel": "Latency"
+          }
+        }
+      }
+    ],
+
+    "templating": {
+      "list": [
+        {
+          "name": "environment",
+          "type": "query",
+          "query": "label_values(reaper_decisions_total, environment)",
+          "current": { "text": "All", "value": "$__all" },
+          "includeAll": true,
+          "multi": false
+        },
+        {
+          "name": "service",
+          "type": "query",
+          "query": "label_values(reaper_decisions_total, service)",
+          "current": { "text": "All", "value": "$__all" },
+          "includeAll": true
+        }
+      ]
+    },
+
+    "annotations": {
+      "list": [
+        {
+          "name": "Policy Deployments",
+          "datasource": "Prometheus",
+          "expr": "changes(reaper_active_policies[1m]) > 0",
+          "iconColor": "blue",
+          "enable": true
+        },
+        {
+          "name": "High Denial Events",
+          "datasource": "Prometheus",
+          "expr": "rate(reaper_decisions_total{decision=\"deny\"}[1m]) > 10",
+          "iconColor": "red",
+          "enable": true
+        }
+      ]
+    },
+
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+
+    "timepicker": {
+      "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+    }
+  }
+}
