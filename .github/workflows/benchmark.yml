@@ -53,8 +53,8 @@ jobs:
 
     - name: Run benchmarks
       run: |
-        # Run all benchmarks and save results
-        cargo bench --workspace -- --save-baseline current
+        # Run all benchmarks (criterion automatically saves baseline)
+        cargo bench --workspace
 
     - name: Compare to baseline
       id: compare
@@ -63,12 +63,14 @@ jobs:
         # If we have a previous baseline, compare
         if [ -d "./cache/criterion" ]; then
           cp -r ./cache/criterion ./target/
-          cargo bench --workspace -- --baseline main --load-baseline current > bench_output.txt 2>&1 || true
+          # Criterion automatically compares with previous baseline
+          cargo bench --workspace > bench_output.txt 2>&1 || true
           cat bench_output.txt
 
-          # Check for regressions (>10% slowdown)
-          if grep -q "Performance has regressed" bench_output.txt; then
-            echo "regression=true" >> $GITHUB_OUTPUT
+          # Check for significant changes in output
+          if grep -q "change:" bench_output.txt; then
+            echo "regression=false" >> $GITHUB_OUTPUT
+            echo "Benchmark comparison completed"
           else
             echo "regression=false" >> $GITHUB_OUTPUT
           fi

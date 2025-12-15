@@ -124,9 +124,6 @@ jobs:
           shared-key: "reaper-ci"
           cache-on-failure: true
 
-      - name: Add eBPF target
-        run: rustup +nightly target add bpfel-unknown-none
-
       - name: Build eBPF kernel program
         run: |
           echo "Building eBPF kernel program for x86_64..."
