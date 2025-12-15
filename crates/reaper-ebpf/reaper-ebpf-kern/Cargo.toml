@@ -7,7 +7,7 @@ edition = "2021"
 [workspace]
 
 [dependencies]
-aya-bpf = "0.1"
+aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"
 
 [profile.dev]
