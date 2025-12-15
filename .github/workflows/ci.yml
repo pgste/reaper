@@ -143,24 +143,19 @@ jobs:
           echo "Searching for eBPF binaries in $EBPF_DIR..."
           ls -la "$EBPF_DIR/" || echo "Directory not found"
 
-          # eBPF programs can have different names depending on the crate type
-          # With crate-type = ["cdylib"], it produces .so files
-          # The actual eBPF bytecode might also be in deps/
-          if [ -f "$EBPF_DIR/libreaper_ebpf_kern.so" ]; then
-            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.so"
-          elif [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
-            EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
-          elif [ -f "$EBPF_DIR/libreaper_ebpf_kern.a" ]; then
-            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.a"
-          else
-            # Check deps directory for eBPF object files
-            echo "Checking deps directory..."
-            ls -la "$EBPF_DIR/deps/" || echo "No deps directory"
+          # eBPF programs compile to .o files in deps/ directory
+          # Look for the compiled object file (*.rcgu.o pattern)
+          echo "Searching for eBPF object files in deps..."
+          EBPF_BINARY=$(find "$EBPF_DIR/deps/" -name "*.rcgu.o" -name "*reaper_ebpf_kern*" | head -1)
 
-            # Find any .so or similar files in deps
-            EBPF_BINARY=$(find "$EBPF_DIR/deps/" -name "*.so" -o -name "libreaper_ebpf_kern*" | head -1)
-
-            if [ -z "$EBPF_BINARY" ]; then
+          if [ -z "$EBPF_BINARY" ]; then
+            # Fallback: try other patterns
+            echo "No .rcgu.o found, checking other patterns..."
+            if [ -f "$EBPF_DIR/libreaper_ebpf_kern.so" ]; then
+              EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.so"
+            elif [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
+              EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
+            else
               echo "❌ eBPF binary not found. Available files:"
               ls -la "$EBPF_DIR/" || echo "No files found"
               echo ""
@@ -201,17 +196,16 @@ jobs:
 
           EBPF_DIR="crates/reaper-ebpf/reaper-ebpf-kern/target/bpfel-unknown-none/release"
 
-          # Find the eBPF binary (try multiple patterns)
-          EBPF_BINARY=""
-          if [ -f "$EBPF_DIR/libreaper_ebpf_kern.so" ]; then
-            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.so"
-          elif [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
-            EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
-          elif [ -f "$EBPF_DIR/libreaper_ebpf_kern.a" ]; then
-            EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.a"
-          else
-            # Check deps directory
-            EBPF_BINARY=$(find "$EBPF_DIR/deps/" -name "*.so" -o -name "libreaper_ebpf_kern*" 2>/dev/null | head -1)
+          # Find the eBPF binary (object file in deps/)
+          EBPF_BINARY=$(find "$EBPF_DIR/deps/" -name "*.rcgu.o" -name "*reaper_ebpf_kern*" 2>/dev/null | head -1)
+
+          # Fallback to other patterns if needed
+          if [ -z "$EBPF_BINARY" ]; then
+            if [ -f "$EBPF_DIR/libreaper_ebpf_kern.so" ]; then
+              EBPF_BINARY="$EBPF_DIR/libreaper_ebpf_kern.so"
+            elif [ -f "$EBPF_DIR/reaper_ebpf_kern" ]; then
+              EBPF_BINARY="$EBPF_DIR/reaper_ebpf_kern"
+            fi
           fi
 
           if [ -n "$EBPF_BINARY" ]; then
