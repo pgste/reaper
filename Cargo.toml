@@ -7,7 +7,8 @@ members = [
     "crates/metrics",
     "services/reaper-agent",
     "services/reaper-platform",
-    "tools/reaper-cli", "crates/reaper-ebpf",
+    "tools/reaper-cli",
+    "crates/reaper-ebpf",
 ]
 
 [workspace.dependencies]
@@ -23,9 +24,9 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Utilities
-uuid = { version = "1.0", features = ["v4", "serde", "js"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.19", features = ["v4", "serde", "js"] }
+tracing = "0.1.43"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 clap = { version = "4.0", features = ["derive"] }
 
 # Performance-oriented data structures
@@ -34,18 +35,18 @@ parking_lot = "0.12"
 
 # Testing frameworks
 tokio-test = "0.4"
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8.1", features = ["html_reports"] }
 proptest = "1.0"
 
 # BDD Testing
-cucumber = "0.21.1"
+cucumber = "0.22.0"
 async-trait = "0.1"
-reqwest = { version = "0.12.23", features = ["json"] }
+reqwest = { version = "0.12.26", features = ["json"] }
 
 # Web framework for API services
-axum = { version = "0.8.4", features = ["json", "tokio"] }
+axum = { version = "0.8.7", features = ["json", "tokio"] }
 tower = "0.5.2"
-hyper = "1.0"
+hyper = "1.8.1"
 
 [workspace.metadata.release]
 shared-version = true

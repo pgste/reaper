@@ -130,15 +130,61 @@ impl SlowPathHandler {
 
     /// Poll ring buffer for events (async)
     ///
-    /// TODO: Implement once RingBuf is available
+    /// Reads available events from the eBPF ring buffer and processes them.
+    /// Returns the number of events processed.
     async fn poll_events(&mut self) -> Result<usize> {
-        // Placeholder - will be implemented with actual RingBuf
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        Ok(0)
+        let mut controller = self.controller.write().await;
+
+        // Get ring buffer from controller
+        let mut events_buf = match controller.events() {
+            Ok(buf) => buf,
+            Err(e) => {
+                // Ring buffer might not be available yet
+                debug!("Failed to get events ring buffer: {}", e);
+                return Ok(0);
+            }
+        };
+
+        // Note: We keep the controller lock for the duration of event processing
+        // to maintain the reference to events_buf. This is limited to 1000 events
+        // per call to prevent holding the lock too long.
+
+        let mut count = 0;
+
+        // Process all available events in the ring buffer
+        loop {
+            // Try to read an event (non-blocking)
+            match events_buf.next() {
+                Some(event_bytes) => {
+                    count += 1;
+
+                    self.events_processed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                    // Process the event
+                    if let Err(e) = self.handle_event(&event_bytes).await {
+                        error!("Error handling event: {}", e);
+                        self.events_errors
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                None => {
+                    // No more events available
+                    break;
+                }
+            }
+
+            // Limit processing to prevent blocking too long
+            if count >= 1000 {
+                debug!("Processed 1000 events, yielding to other tasks");
+                break;
+            }
+        }
+
+        Ok(count)
     }
 
     /// Handle a single event from eBPF
-    #[allow(dead_code)]
     async fn handle_event(&self, event_bytes: &[u8]) -> Result<()> {
         // Parse event
         let event = self.parse_event(event_bytes)?;
@@ -199,7 +245,6 @@ impl SlowPathHandler {
     }
 
     /// Parse PolicyEvent from raw bytes
-    #[allow(dead_code)]
     fn parse_event(&self, bytes: &[u8]) -> Result<PolicyEvent> {
         if bytes.len() < std::mem::size_of::<PolicyEvent>() {
             anyhow::bail!(

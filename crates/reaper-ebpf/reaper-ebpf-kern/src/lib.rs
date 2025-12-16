@@ -162,6 +162,60 @@ pub fn reaper_file_open(ctx: LsmContext) -> i32 {
     }
 }
 
+/// Apply a policy entry with UID/GID checks
+///
+/// Returns the policy decision (0 = allow, -1 = deny)
+#[inline(always)]
+fn apply_policy(
+    ctx: &LsmContext,
+    policy: &PolicyEntry,
+    uid: u32,
+    gid: u32,
+    path_len: u32,
+) -> Result<i32, i64> {
+    // Check UID requirement if enabled
+    if policy.flags & 0x01 != 0 {
+        // UID check enabled
+        if uid != policy.required_uid {
+            increment_stat(STAT_FAST_PATH);
+            increment_stat(STAT_DENIALS);
+            return Ok(-1); // -EPERM (deny)
+        }
+    }
+
+    // Check GID requirement if enabled
+    if policy.flags & 0x02 != 0 {
+        // GID check enabled
+        if gid != policy.required_gid {
+            increment_stat(STAT_FAST_PATH);
+            increment_stat(STAT_DENIALS);
+            return Ok(-1); // -EPERM (deny)
+        }
+    }
+
+    // All checks passed, apply policy action
+    increment_stat(STAT_FAST_PATH);
+    match policy.action {
+        0 => {
+            // Deny
+            increment_stat(STAT_DENIALS);
+            info!(ctx, "eBPF: DENY uid={} path_len={}", uid, path_len);
+            Ok(-1) // -EPERM
+        }
+        1 => {
+            // Allow
+            increment_stat(STAT_ALLOWS);
+            Ok(0) // Allow
+        }
+        _ => {
+            // Log (allow but log)
+            increment_stat(STAT_ALLOWS);
+            info!(ctx, "eBPF: LOG uid={} path_len={}", uid, path_len);
+            Ok(0)
+        }
+    }
+}
+
 fn try_file_open(ctx: LsmContext) -> Result<i32, i64> {
     // Extract UID/GID
     let uid_gid = aya_ebpf::helpers::bpf_get_current_uid_gid();
@@ -177,60 +231,22 @@ fn try_file_open(ctx: LsmContext) -> Result<i32, i64> {
     let mut path: [u8; MAX_PATH_LEN] = [0; MAX_PATH_LEN];
     let path_len = extract_file_path(&ctx, &mut path)?;
 
-    // Fast path: Lookup in policy map
+    // Fast path: Lookup in policy map (exact match)
     if let Some(policy) = unsafe { POLICY_MAP.get(&path) } {
-        // Check additional conditions if needed
-        if policy.flags & 0x01 != 0 {  // Check UID
-            if uid != policy.required_uid {
-                increment_stat(STAT_FAST_PATH);
-                increment_stat(STAT_DENIALS);
-                return Ok(-1);  // -EPERM
-            }
-        }
-
-        if policy.flags & 0x02 != 0 {  // Check GID
-            if gid != policy.required_gid {
-                increment_stat(STAT_FAST_PATH);
-                increment_stat(STAT_DENIALS);
-                return Ok(-1);  // -EPERM
-            }
-        }
-
-        // Policy matched, apply action
-        increment_stat(STAT_FAST_PATH);
-        return match policy.action {
-            0 => {  // Deny
-                increment_stat(STAT_DENIALS);
-                info!(&ctx, "eBPF: DENY file_open uid={} path_len={}", uid, path_len);
-                Ok(-1)  // -EPERM
-            }
-            1 => {  // Allow
-                increment_stat(STAT_ALLOWS);
-                Ok(0)  // Allow
-            }
-            _ => {  // Log (allow but log)
-                increment_stat(STAT_ALLOWS);
-                info!(&ctx, "eBPF: LOG file_open uid={} path_len={}", uid, path_len);
-                Ok(0)
-            }
-        };
+        return apply_policy(&ctx, policy, uid, gid, path_len);
     }
 
-    // Check wildcard policy
-    let wildcard_key = 0u8;
-    if let Some(policy) = unsafe { WILDCARD_POLICY.get(&wildcard_key) } {
-        increment_stat(STAT_FAST_PATH);
-        return match policy.action {
-            0 => {
-                increment_stat(STAT_DENIALS);
-                Ok(-1)  // Deny
-            }
-            1 => {
-                increment_stat(STAT_ALLOWS);
-                Ok(0)  // Allow
-            }
-            _ => Ok(0),  // Log
-        };
+    // Check for wildcard entry in POLICY_MAP (key[0] == 0xFF)
+    let mut wildcard_key: [u8; MAX_PATH_LEN] = [0; MAX_PATH_LEN];
+    wildcard_key[0] = 0xFF;  // Wildcard marker
+    if let Some(policy) = unsafe { POLICY_MAP.get(&wildcard_key) } {
+        return apply_policy(&ctx, policy, uid, gid, path_len);
+    }
+
+    // Check global wildcard policy (separate map)
+    let global_wildcard_key = 0u8;
+    if let Some(policy) = unsafe { WILDCARD_POLICY.get(&global_wildcard_key) } {
+        return apply_policy(&ctx, policy, uid, gid, path_len);
     }
 
     // Slow path: No policy match, send to userspace
@@ -316,21 +332,87 @@ fn try_socket_connect(_ctx: LsmContext) -> Result<i32, i64> {
 ///
 /// This uses BPF helpers to extract the path from the file struct.
 /// Returns the path length on success.
-fn extract_file_path(_ctx: &LsmContext, _path_buf: &mut [u8; MAX_PATH_LEN]) -> Result<u32, i64> {
-    // LSM file_open hook receives: struct file *file
-    // We need to extract the path from file->f_path
+///
+/// # Full Implementation (requires kernel 5.9+ and vmlinux.h bindings):
+///
+/// ```c
+/// // Get file pointer from LSM context
+/// struct file *file = (struct file *)ctx->args[0];
+///
+/// // Extract path using bpf_d_path helper
+/// struct path *path = &file->f_path;
+/// long ret = bpf_d_path(path, path_buf, MAX_PATH_LEN);
+/// if (ret < 0) {
+///     return ret;  // Error
+/// }
+/// return ret;  // Path length
+/// ```
+///
+/// # Current Implementation:
+///
+/// aya-ebpf 0.1 doesn't expose bpf_d_path or provide vmlinux bindings.
+/// For now, we extract the process command name as a proxy identifier.
+/// This allows testing the architecture end-to-end while we work on:
+///
+/// 1. Upgrading to newer aya version with more helpers
+/// 2. Adding vmlinux.h bindings for kernel struct access
+/// 3. Implementing full bpf_d_path extraction
+///
+fn extract_file_path(_ctx: &LsmContext, path_buf: &mut [u8; MAX_PATH_LEN]) -> Result<u32, i64> {
+    // TODO: Full path extraction requires:
+    // 1. Access to file pointer from ctx (ctx as *const _ as *const *const c_void)
+    // 2. Reading file->f_path with bpf_probe_read_kernel()
+    // 3. Calling bpf_d_path(&file->f_path, buf, len)
+    //
+    // This needs either:
+    // - Upgrading to aya-ebpf with bpf_d_path support
+    // - Generating vmlinux.h and using raw FFI
+    // - Using aya-ebpf codegen for kernel struct access
 
-    // For now, this is a simplified implementation
-    // In production, you'd use bpf_d_path() helper or similar
-    // to convert file->f_path to a string
+    // For now: Extract process command name as identifier
+    // This allows testing the full architecture (fast path, slow path, learning)
+    // without kernel struct access complexity
 
-    // Placeholder: Return empty path for now
-    // TODO: Implement actual path extraction using BPF helpers
-    // This requires accessing file->f_path->dentry and calling bpf_d_path()
+    // Get current process command (comm)
+    // SAFETY: bpf_get_current_comm is safe to call from eBPF context
+    let comm = match aya_ebpf::helpers::bpf_get_current_comm() {
+        Ok(comm_buf) => comm_buf,
+        Err(_) => {
+            return Err(-1);
+        }
+    };
 
-    // For demonstration, we'll return 0 (empty path)
-    // This allows the program to compile and the architecture to work
-    Ok(0)
+    // Copy comm to path_buf with a prefix to indicate it's a comm, not a path
+    // Format: "comm:<process_name>"
+    let prefix = b"comm:";
+    let prefix_len = prefix.len();
+
+    // Copy prefix
+    for i in 0..prefix_len {
+        if i < MAX_PATH_LEN {
+            path_buf[i] = prefix[i];
+        }
+    }
+
+    // Copy comm (up to null terminator)
+    let mut comm_len = 0;
+    for i in 0..comm.len() {
+        if comm[i] == 0 {
+            break;
+        }
+        if prefix_len + i < MAX_PATH_LEN {
+            path_buf[prefix_len + i] = comm[i];
+            comm_len += 1;
+        }
+    }
+
+    // Null terminate
+    let total_len = prefix_len + comm_len;
+    if total_len < MAX_PATH_LEN {
+        path_buf[total_len] = 0;
+    }
+
+    Ok(total_len as u32)
 }
 
 /// Check if path matches a prefix pattern

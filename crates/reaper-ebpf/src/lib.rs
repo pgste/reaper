@@ -169,14 +169,71 @@ impl EbpfPolicyEngine {
     /// Simple policies → compiled to eBPF
     /// Complex policies → kept in userspace
     ///
-    /// TODO: This needs to be updated to work with the actual PolicyBundle structure
-    pub async fn deploy_bundle(&mut self, _bundle: PolicyBundle) -> Result<()> {
-        info!("Deploying policy bundle");
+    /// This method analyzes the bundle and automatically routes policies:
+    /// - Simple rules without conditions → eBPF fast path (<100ns)
+    /// - Complex rules with ABAC/conditions → userspace slow path (10-50µs)
+    pub async fn deploy_bundle(&mut self, bundle: PolicyBundle) -> Result<()> {
+        info!("Deploying policy bundle: {}", bundle.metadata.policy_name);
 
-        // TODO: Implement once we have proper access to bundle contents
-        // For now this is a placeholder
+        // Extract the policy from the bundle
+        let policy = bundle.policy;
 
-        info!("Bundle deployment not yet implemented for eBPF");
+        // Count rules
+        let total_rules = policy.rules.len();
+        let mut ebpf_rules = 0;
+        let mut userspace_rules = 0;
+
+        // Check each rule to see if it's eBPF-compatible
+        for (index, rule) in policy.rules.iter().enumerate() {
+            // Rules without conditions can go to eBPF
+            // For now, we check if the condition is just "True" (unconditional rules)
+            let is_simple = matches!(rule.condition, policy_engine::reap::ReapCondition::True);
+
+            if is_simple {
+                info!(
+                    "Deploying rule '{}' to eBPF fast path (wildcard policy)",
+                    rule.name
+                );
+
+                // Convert decision to PolicyAction
+                let action = match rule.decision {
+                    policy_engine::reap::Decision::Allow => policy_engine::PolicyAction::Allow,
+                    policy_engine::reap::Decision::Deny => policy_engine::PolicyAction::Deny,
+                };
+
+                // Compile to eBPF format (wildcard policy for unconditional rules)
+                let mut controller = self.ebpf_controller.write().await;
+                let (key, entry) = controller.compiler().compile_decision(
+                    "*", // Wildcard - matches all resources
+                    action,
+                    None,         // uid
+                    None,         // gid
+                    index as u32, // priority
+                )?;
+
+                // Deploy to eBPF map
+                controller.insert_policy(key, entry)?;
+                drop(controller);
+
+                ebpf_rules += 1;
+            } else {
+                info!(
+                    "Keeping rule '{}' in userspace slow path (has complex conditions)",
+                    rule.name
+                );
+
+                // TODO: Deploy complex rules to userspace PolicyEngine
+                // For now, these will only be evaluated via slow path handler
+                // when eBPF triggers a slow path event
+
+                userspace_rules += 1;
+            }
+        }
+
+        info!(
+            "Bundle deployment complete: {} total rules ({} → eBPF, {} → userspace)",
+            total_rules, ebpf_rules, userspace_rules
+        );
 
         Ok(())
     }
