@@ -14,7 +14,7 @@ use crate::types::{
 use anyhow::{Context as AnyhowContext, Result};
 use aya::{
     maps::{HashMap as AyaHashMap, RingBuf},
-    Bpf,
+    Ebpf,
 };
 use policy_engine::SimplePolicyEvaluator;
 use std::path::Path;
@@ -23,7 +23,7 @@ use tracing::{debug, info, warn};
 /// eBPF Controller - Manages the kernel-side eBPF program
 pub struct EbpfController {
     /// Loaded eBPF program (owns all maps)
-    bpf: Bpf,
+    bpf: Ebpf,
 
     /// Policy compiler
     compiler: PolicyCompiler,
@@ -49,7 +49,7 @@ impl EbpfController {
         info!("Loading eBPF program from: {}", path.display());
 
         // Load eBPF program
-        let bpf = Bpf::load_file(path)
+        let bpf = Ebpf::load_file(path)
             .with_context(|| format!("Failed to load eBPF program from {}", path.display()))?;
 
         info!("eBPF program loaded successfully");
