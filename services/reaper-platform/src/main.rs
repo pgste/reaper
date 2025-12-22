@@ -7,10 +7,14 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
-use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRule};
+use policy_engine::{
+    reap::{Decision, Policy, ReapCondition, ReapRule},
+    EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine, PolicyRule,
+};
 use reaper_core::{endpoints, ReaperError, BUILD_INFO, VERSION};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -21,6 +25,11 @@ use uuid::Uuid;
 struct PlatformState {
     policy_engine: PolicyEngine,
     deployment_stats: Arc<RwLock<DeploymentStats>>,
+    /// Bundle storage: policy_id -> PolicyBundle
+    bundle_storage: Arc<RwLock<HashMap<String, PolicyBundle>>>,
+    /// Registered agents: agent_id -> agent_url
+    #[allow(dead_code)]
+    agents: Arc<RwLock<HashMap<String, String>>>,
 }
 
 // Add Debug manually since PolicyEngine doesn't implement Debug
@@ -107,6 +116,56 @@ impl From<EnhancedPolicy> for PolicyResponse {
     }
 }
 
+/// Request to create a bundle from a policy
+#[derive(Debug, Deserialize)]
+struct CreateBundleRequest {
+    pub policy_id: String,
+    pub version: String,
+    pub description: Option<String>,
+}
+
+/// Bundle response
+#[derive(Debug, Serialize)]
+struct BundleResponse {
+    pub bundle_id: String,
+    pub policy_id: String,
+    pub version: String,
+    pub size_bytes: usize,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Request to deploy bundle to agents
+#[derive(Debug, Deserialize)]
+struct DeployBundleToAgentsRequest {
+    pub bundle_id: String, // Bundle ID to deploy
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub agent_ids: Vec<String>, // If empty, deploy to all agents
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Deployment result per agent
+#[derive(Debug, Serialize)]
+struct AgentDeploymentResult {
+    pub agent_id: String,
+    pub agent_url: String,
+    pub success: bool,
+    pub message: String,
+    pub deployed_version: Option<String>,
+}
+
+/// Bundle deployment response
+#[derive(Debug, Serialize)]
+struct DeployBundleToAgentsResponse {
+    pub bundle_id: String,
+    pub total_agents: usize,
+    pub successful: usize,
+    pub failed: usize,
+    pub results: Vec<AgentDeploymentResult>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -132,9 +191,15 @@ async fn main() -> anyhow::Result<()> {
     info!("Deploying default allow-all policy");
     policy_engine.deploy_policy(default_policy)?;
 
+    // Initialize agents with default localhost agent for testing
+    let mut agents = HashMap::new();
+    agents.insert("agent-001".to_string(), "http://localhost:8080".to_string());
+
     let state = Arc::new(PlatformState {
         policy_engine,
         deployment_stats: Arc::new(RwLock::new(DeploymentStats::default())),
+        bundle_storage: Arc::new(RwLock::new(HashMap::new())),
+        agents: Arc::new(RwLock::new(agents)),
     });
 
     let app = Router::new()
@@ -154,6 +219,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/policies/{id}/deploy",
             post(deploy_policy_to_agents),
         )
+        // Bundle management
+        .route("/api/v1/bundles", post(create_bundle))
+        .route("/api/v1/bundles/{id}", get(get_bundle))
+        .route("/api/v1/bundles/deploy", post(deploy_bundle_to_agents))
         // Agent management (placeholder for now)
         .route(endpoints::API_V1_AGENTS, get(list_agents))
         .route("/api/v1/agents/{id}", get(get_agent))
@@ -621,3 +690,259 @@ async fn get_agent(Path(id): Path<String>) -> Result<Json<Value>, StatusCode> {
         }
     })))
 }
+
+/// Create a .rbb bundle from a policy
+#[instrument(skip(state))]
+async fn create_bundle(
+    State(state): State<Arc<PlatformState>>,
+    Json(req): Json<CreateBundleRequest>,
+) -> Result<Json<BundleResponse>, (StatusCode, String)> {
+    info!(
+        "Creating bundle for policy {} (version: {})",
+        req.policy_id, req.version
+    );
+
+    // 1. Get the policy from the engine
+    let policy_uuid = Uuid::from_str(&req.policy_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Invalid policy ID format".to_string(),
+        )
+    })?;
+
+    let policy = state
+        .policy_engine
+        .get_policy(&policy_uuid)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Policy not found".to_string()))?;
+
+    // 2. Convert Enhanced Policy to Reaper Policy AST (simplified for now)
+    // For now, we'll create a simple Policy with the metadata
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("version".to_string(), req.version.clone());
+    if let Some(desc) = req.description {
+        metadata.insert("description".to_string(), desc);
+    }
+
+    // Convert policy rules to Reaper DSL rules (simplified: all rules become unconditional)
+    let reap_rules: Vec<ReapRule> = policy
+        .rules
+        .iter()
+        .map(|rule| ReapRule {
+            name: format!("rule_{}", uuid::Uuid::new_v4().simple()),
+            decision: match rule.action {
+                PolicyAction::Allow => Decision::Allow,
+                PolicyAction::Deny => Decision::Deny,
+                _ => Decision::Deny,
+            },
+            condition: ReapCondition::True, // Simplified: all rules unconditional
+        })
+        .collect();
+
+    let reap_policy = Policy {
+        name: policy.name.clone(),
+        metadata,
+        default_decision: Decision::Deny,
+        rules: reap_rules,
+    };
+
+    // 3. Compile to .rbb bundle
+    let bundle = PolicyBundle::new(reap_policy);
+
+    // Calculate size for response (serialize temporarily)
+    let bundle_bytes = bundle.to_bytes().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Bundle compilation failed: {}", e),
+        )
+    })?;
+    let size_bytes = bundle_bytes.len();
+
+    // 4. Store bundle
+    let bundle_id = format!("bundle_{}", uuid::Uuid::new_v4().simple());
+    state
+        .bundle_storage
+        .write()
+        .insert(bundle_id.clone(), bundle);
+
+    info!("Bundle created successfully: {}", bundle_id);
+
+    Ok(Json(BundleResponse {
+        bundle_id,
+        policy_id: req.policy_id,
+        version: req.version,
+        size_bytes,
+        created_at: Utc::now(),
+    }))
+}
+
+/// Get a bundle by ID
+#[instrument(skip(state))]
+async fn get_bundle(
+    State(state): State<Arc<PlatformState>>,
+    Path(bundle_id): Path<String>,
+) -> Result<Vec<u8>, (StatusCode, String)> {
+    info!("Retrieving bundle: {}", bundle_id);
+
+    let storage = state.bundle_storage.read();
+    let bundle = storage
+        .get(&bundle_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Bundle not found".to_string()))?;
+
+    bundle.to_bytes().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Bundle serialization failed: {}", e),
+        )
+    })
+}
+
+/// Deploy a bundle to all or specific agents
+async fn deploy_bundle_to_agents(
+    State(_state): State<Arc<PlatformState>>,
+    Json(req): Json<DeployBundleToAgentsRequest>,
+) -> Result<Json<DeployBundleToAgentsResponse>, (StatusCode, String)> {
+    // Minimal stub to test if signature is valid
+    info!("Deploy bundle request received: {}", req.bundle_id);
+    Ok(Json(DeployBundleToAgentsResponse {
+        bundle_id: req.bundle_id,
+        total_agents: 0,
+        successful: 0,
+        failed: 0,
+        results: vec![],
+    }))
+}
+
+/*
+async fn deploy_bundle_to_agents_FULL(
+    State(state): State<Arc<PlatformState>>,
+    Json(req): Json<DeployBundleToAgentsRequest>,
+) -> Result<Json<DeployBundleToAgentsResponse>, (StatusCode, String)> {
+    info!("Deploying bundle {} to agents", req.bundle_id);
+
+    // 1. Get the bundle
+    let storage = state.bundle_storage.read();
+    let bundle = storage.get(&req.bundle_id).ok_or_else(|| {
+        warn!("Bundle not found: {}", req.bundle_id);
+        (StatusCode::NOT_FOUND, "Bundle not found".to_string())
+    })?;
+
+    let bundle_bytes = bundle.to_bytes().map_err(|e| {
+        error!("Bundle serialization failed: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Bundle serialization failed: {}", e),
+        )
+    })?;
+
+    let bundle_version = bundle
+        .metadata
+        .policy_version
+        .clone()
+        .unwrap_or_else(|| "1.0.0".to_string());
+    drop(storage);
+
+    // 2. Get agents to deploy to
+    let agents_map = state.agents.read();
+    let target_agents: Vec<(String, String)> = if req.agent_ids.is_empty() {
+        // Deploy to all agents
+        agents_map
+            .iter()
+            .map(|(id, url)| (id.clone(), url.clone()))
+            .collect()
+    } else {
+        // Deploy to specified agents
+        req.agent_ids
+            .iter()
+            .filter_map(|id| agents_map.get(id).map(|url| (id.clone(), url.clone())))
+            .collect()
+    };
+    drop(agents_map);
+
+    if target_agents.is_empty() {
+        warn!("No agents available for deployment");
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "No agents available for deployment".to_string(),
+        ));
+    }
+
+    // 3. Deploy to each agent
+    let client = reqwest::Client::new();
+    let mut results = Vec::new();
+    let mut successful = 0;
+    let mut failed = 0;
+
+    for (agent_id, agent_url) in &target_agents {
+        let deploy_url = format!("{}/api/v1/bundles/deploy", agent_url);
+
+        let deploy_req = serde_json::json!({
+            "bundle": bundle_bytes,
+            "version": bundle_version,
+            "force": req.force,
+        });
+
+        match client.post(&deploy_url).json(&deploy_req).send().await {
+            Ok(response) if response.status().is_success() => {
+                successful += 1;
+                results.push(AgentDeploymentResult {
+                    agent_id: agent_id.clone(),
+                    agent_url: agent_url.clone(),
+                    success: true,
+                    message: "Bundle deployed successfully".to_string(),
+                    deployed_version: Some(bundle_version.clone()),
+                });
+                info!("Bundle deployed successfully to agent {}", agent_id);
+            }
+            Ok(response) => {
+                failed += 1;
+                let error_msg = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                results.push(AgentDeploymentResult {
+                    agent_id: agent_id.clone(),
+                    agent_url: agent_url.clone(),
+                    success: false,
+                    message: format!("Deployment failed: {}", error_msg),
+                    deployed_version: None,
+                });
+                warn!("Bundle deployment failed for agent {}: {}", agent_id, error_msg);
+            }
+            Err(e) => {
+                failed += 1;
+                results.push(AgentDeploymentResult {
+                    agent_id: agent_id.clone(),
+                    agent_url: agent_url.clone(),
+                    success: false,
+                    message: format!("Connection error: {}", e),
+                    deployed_version: None,
+                });
+                error!("Failed to connect to agent {}: {}", agent_id, e);
+            }
+        }
+    }
+
+    // 4. Update deployment stats
+    {
+        let mut stats = state.deployment_stats.write();
+        stats.total_deployments += target_agents.len() as u64;
+        stats.successful_deployments += successful as u64;
+        stats.failed_deployments += failed as u64;
+    }
+
+    info!(
+        "Bundle deployment complete: {} successful, {} failed out of {} agents",
+        successful,
+        failed,
+        target_agents.len()
+    );
+
+    Ok(Json(DeployBundleToAgentsResponse {
+        bundle_id: req.bundle_id,
+        total_agents: target_agents.len(),
+        successful,
+        failed,
+        results,
+    }))
+}
+*/

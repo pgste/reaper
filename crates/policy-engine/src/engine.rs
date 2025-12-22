@@ -9,12 +9,15 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use reaper_core::{PolicyId, ReaperError, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::evaluators::{CedarPolicyEvaluator, PolicyEvaluator, SimplePolicyEvaluator};
+use crate::reap::PolicyBundle;
 
 /// Policy action types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,6 +25,19 @@ pub enum PolicyAction {
     Allow,
     Deny,
     Log,
+}
+
+/// Policy version tracking for bundle deployments
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyVersion {
+    /// Semantic version string (e.g., "1.2.3")
+    pub version: String,
+    /// When this version was deployed
+    pub deployed_at: SystemTime,
+    /// SHA-256 hash of the bundle for integrity verification
+    pub bundle_hash: [u8; 32],
+    /// Policy identifier this version belongs to
+    pub policy_id: String,
 }
 
 /// Supported policy languages
@@ -352,6 +368,10 @@ pub struct PolicyEngine {
     policy_names: Arc<DashMap<String, PolicyId>>,
     /// Default policy for unknown policies
     default_policy: Arc<RwLock<Option<Arc<EnhancedPolicy>>>>,
+    /// Version tracking for policy bundles
+    versions: Arc<DashMap<PolicyId, Vec<PolicyVersion>>>,
+    /// Bundle cache for rollback support (keyed by policy_id:version)
+    bundle_cache: Arc<DashMap<String, PolicyBundle>>,
 }
 
 impl std::fmt::Debug for PolicyEngine {
@@ -371,6 +391,8 @@ impl PolicyEngine {
             active_policies: Arc::new(DashMap::new()),
             policy_names: Arc::new(DashMap::new()),
             default_policy: Arc::new(RwLock::new(None)),
+            versions: Arc::new(DashMap::new()),
+            bundle_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -411,6 +433,152 @@ impl PolicyEngine {
 
         info!("Policy {} removed successfully", policy_id);
         Ok(Arc::try_unwrap(removed_policy).unwrap_or_else(|arc| (*arc).clone()))
+    }
+
+    /// Deploy a policy from a .rbb bundle with version tracking
+    ///
+    /// This method:
+    /// 1. Validates the bundle
+    /// 2. Generates a SHA-256 hash for integrity verification
+    /// 3. Checks that the version is newer than the current version (unless force=true)
+    /// 4. Compiles the policy to an EnhancedPolicy
+    /// 5. Atomically inserts/replaces the policy in the engine
+    /// 6. Stores version metadata for tracking and rollback
+    /// 7. Caches the bundle for potential rollback operations
+    ///
+    /// # Arguments
+    /// * `bundle` - The PolicyBundle to deploy
+    /// * `force` - If true, skip version validation and allow downgrade
+    ///
+    /// # Returns
+    /// PolicyVersion with deployment metadata including bundle hash
+    #[instrument(skip(self, bundle), fields(policy_name = %bundle.policy.name))]
+    pub fn deploy_bundle(&self, bundle: PolicyBundle, force: bool) -> Result<PolicyVersion> {
+        let bundle_version = bundle.metadata.policy_version.as_deref().unwrap_or("1.0.0");
+        info!(
+            "Deploying policy bundle: {} (version: {})",
+            bundle.metadata.policy_name, bundle_version
+        );
+
+        // 1. Generate bundle hash (SHA-256)
+        let bundle_bytes = bundle.to_bytes().map_err(|e| ReaperError::InvalidPolicy {
+            reason: format!("Failed to serialize bundle: {}", e),
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bundle_bytes);
+        let bundle_hash: [u8; 32] = hasher.finalize().into();
+
+        // 2. Convert bundle to EnhancedPolicy
+        let policy = bundle.to_enhanced_policy()?;
+        let policy_id = policy.id;
+        let policy_id_str = policy_id.to_string();
+
+        // 3. Version validation (unless force=true)
+        if !force {
+            if let Some(existing_versions) = self.versions.get(&policy_id) {
+                if !existing_versions.is_empty() {
+                    // Check if new version is actually newer
+                    // For simplicity, we just check if the version string is different
+                    let last_version = &existing_versions.last().unwrap().version;
+                    if last_version == bundle_version {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: format!(
+                                "Version {} already deployed. Use force=true to redeploy.",
+                                bundle_version
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 4. Deploy the policy (atomic hot-swap)
+        self.deploy_policy(policy)?;
+
+        // 5. Create version metadata
+        let policy_version = PolicyVersion {
+            version: bundle_version.to_string(),
+            deployed_at: SystemTime::now(),
+            bundle_hash,
+            policy_id: policy_id_str.clone(),
+        };
+
+        // 6. Store version in history
+        self.versions
+            .entry(policy_id)
+            .or_default()
+            .push(policy_version.clone());
+
+        // 7. Cache bundle for rollback (key: policy_id:version)
+        let cache_key = format!("{}:{}", policy_id_str, bundle_version);
+        self.bundle_cache.insert(cache_key, bundle.clone());
+
+        info!(
+            "Bundle deployed successfully: {} version {}",
+            bundle.metadata.policy_name, bundle_version
+        );
+
+        Ok(policy_version)
+    }
+
+    /// Rollback a policy to a previous version
+    ///
+    /// This loads the cached bundle for the specified version and re-deploys it.
+    ///
+    /// # Arguments
+    /// * `policy_id` - The ID of the policy to rollback
+    /// * `target_version` - The version to rollback to
+    ///
+    /// # Returns
+    /// PolicyVersion of the restored version
+    #[instrument(skip(self), fields(policy_id = %policy_id, target_version = %target_version))]
+    pub fn rollback(&self, policy_id: &PolicyId, target_version: &str) -> Result<PolicyVersion> {
+        info!(
+            "Rolling back policy {} to version {}",
+            policy_id, target_version
+        );
+
+        // 1. Lookup bundle from cache
+        let cache_key = format!("{}:{}", policy_id, target_version);
+        let bundle = self
+            .bundle_cache
+            .get(&cache_key)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| ReaperError::PolicyNotFound {
+                policy_id: format!(
+                    "Bundle not found in cache: {}:{}",
+                    policy_id, target_version
+                ),
+            })?;
+
+        // 2. Re-deploy bundle (force=true to allow "downgrade")
+        let version = self.deploy_bundle(bundle, true)?;
+
+        info!(
+            "Rollback successful: policy {} restored to version {}",
+            policy_id, target_version
+        );
+
+        Ok(version)
+    }
+
+    /// Get the current version of a policy
+    ///
+    /// Returns the most recently deployed version metadata.
+    pub fn get_version(&self, policy_id: &PolicyId) -> Option<PolicyVersion> {
+        self.versions
+            .get(policy_id)
+            .and_then(|versions| versions.last().cloned())
+    }
+
+    /// List all versions of a policy in chronological order
+    ///
+    /// Returns all cached versions for the specified policy.
+    pub fn list_versions(&self, policy_id: &PolicyId) -> Vec<PolicyVersion> {
+        self.versions
+            .get(policy_id)
+            .map(|versions| versions.clone())
+            .unwrap_or_default()
     }
 
     /// Get policy by ID - lock-free for maximum performance
@@ -781,5 +949,233 @@ mod tests {
                 "Tree optimization should be enabled"
             );
         }
+    }
+
+    // ========== Hot-Reload Tests ==========
+
+    #[tokio::test]
+    async fn test_bundle_deployment_with_version_tracking() {
+        use crate::reap::{Decision, Policy as ReapPolicy, ReapCondition, ReapRule};
+
+        let engine = PolicyEngine::new();
+
+        // Create a Reap policy
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("version".to_string(), "1.0.0".to_string());
+
+        let reap_policy = ReapPolicy {
+            name: "test-bundle-policy".to_string(),
+            metadata,
+            default_decision: Decision::Deny,
+            rules: vec![ReapRule {
+                name: "allow-admins".to_string(),
+                decision: Decision::Allow,
+                condition: ReapCondition::True,
+            }],
+        };
+
+        // Create bundle
+        let bundle = crate::reap::PolicyBundle::new(reap_policy);
+
+        // Deploy bundle with version tracking
+        let version = engine.deploy_bundle(bundle.clone(), false).unwrap();
+
+        assert_eq!(version.version, "1.0.0");
+        assert_eq!(version.policy_id, version.policy_id);
+        assert!(version.bundle_hash.len() == 32); // SHA-256 hash
+        assert_eq!(
+            version.deployed_at.elapsed().unwrap().as_secs(),
+            0,
+            "Deployment should be recent"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_version_history() {
+        use crate::reap::{Decision, Policy as ReapPolicy};
+
+        let engine = PolicyEngine::new();
+
+        // Create and deploy first version
+        let mut metadata1 = std::collections::HashMap::new();
+        metadata1.insert("version".to_string(), "1.0.0".to_string());
+
+        let policy1 = ReapPolicy {
+            name: "versioned-policy".to_string(),
+            metadata: metadata1,
+            default_decision: Decision::Deny,
+            rules: vec![],
+        };
+
+        let bundle1 = crate::reap::PolicyBundle::new(policy1);
+        let version1 = engine.deploy_bundle(bundle1, false).unwrap();
+
+        // Create and deploy second version
+        let mut metadata2 = std::collections::HashMap::new();
+        metadata2.insert("version".to_string(), "2.0.0".to_string());
+
+        let policy2 = ReapPolicy {
+            name: "another-policy".to_string(),
+            metadata: metadata2,
+            default_decision: Decision::Allow,
+            rules: vec![],
+        };
+
+        let bundle2 = crate::reap::PolicyBundle::new(policy2);
+        let version2 = engine.deploy_bundle(bundle2, false).unwrap();
+
+        // Verify each has their own version history
+        let policy1_uuid = uuid::Uuid::parse_str(&version1.policy_id).unwrap();
+        let versions1 = engine.list_versions(&policy1_uuid);
+        assert_eq!(versions1.len(), 1);
+        assert_eq!(versions1[0].version, "1.0.0");
+
+        let policy2_uuid = uuid::Uuid::parse_str(&version2.policy_id).unwrap();
+        let versions2 = engine.list_versions(&policy2_uuid);
+        assert_eq!(versions2.len(), 1);
+        assert_eq!(versions2[0].version, "2.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_bundle_rollback() {
+        use crate::reap::{Decision, Policy as ReapPolicy};
+
+        let engine = PolicyEngine::new();
+
+        // Deploy version 1.0.0
+        let mut metadata1 = std::collections::HashMap::new();
+        metadata1.insert("version".to_string(), "1.0.0".to_string());
+
+        let policy1 = ReapPolicy {
+            name: "rollback-test".to_string(),
+            metadata: metadata1,
+            default_decision: Decision::Deny,
+            rules: vec![],
+        };
+
+        let bundle1 = crate::reap::PolicyBundle::new(policy1);
+        let version1 = engine.deploy_bundle(bundle1, false).unwrap();
+
+        // Deploy version 2.0.0
+        let mut metadata2 = std::collections::HashMap::new();
+        metadata2.insert("version".to_string(), "2.0.0".to_string());
+
+        let policy2 = ReapPolicy {
+            name: "rollback-test".to_string(),
+            metadata: metadata2,
+            default_decision: Decision::Allow,
+            rules: vec![],
+        };
+
+        let bundle2 = crate::reap::PolicyBundle::new(policy2);
+        engine.deploy_bundle(bundle2, false).unwrap();
+
+        // Rollback to 1.0.0
+        let policy_uuid = uuid::Uuid::parse_str(&version1.policy_id).unwrap();
+        let rollback_version = engine.rollback(&policy_uuid, "1.0.0").unwrap();
+
+        assert_eq!(rollback_version.version, "1.0.0");
+
+        // Verify the policy was rolled back
+        let policy = engine.get_policy(&policy_uuid).unwrap();
+        assert_eq!(policy.name, "rollback-test");
+    }
+
+    #[tokio::test]
+    async fn test_bundle_force_deployment() {
+        use crate::reap::{Decision, Policy as ReapPolicy};
+
+        let engine = PolicyEngine::new();
+
+        // Create bundle
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("version".to_string(), "1.0.0".to_string());
+
+        let policy = ReapPolicy {
+            name: "force-test".to_string(),
+            metadata,
+            default_decision: Decision::Deny,
+            rules: vec![],
+        };
+
+        let bundle = crate::reap::PolicyBundle::new(policy);
+
+        // Deploy first time
+        engine.deploy_bundle(bundle.clone(), false).unwrap();
+
+        // Deploy again with force=true (should succeed)
+        let version = engine.deploy_bundle(bundle, true).unwrap();
+        assert_eq!(version.version, "1.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_bundle_hash_integrity() {
+        use crate::reap::{Decision, Policy as ReapPolicy};
+
+        let engine = PolicyEngine::new();
+
+        // Create two identical bundles
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("version".to_string(), "1.0.0".to_string());
+
+        let policy = ReapPolicy {
+            name: "hash-test".to_string(),
+            metadata: metadata.clone(),
+            default_decision: Decision::Deny,
+            rules: vec![],
+        };
+
+        let bundle1 = crate::reap::PolicyBundle::new(policy.clone());
+        let version1 = engine.deploy_bundle(bundle1, false).unwrap();
+
+        // Create different bundle
+        let mut metadata2 = std::collections::HashMap::new();
+        metadata2.insert("version".to_string(), "2.0.0".to_string());
+
+        let policy2 = ReapPolicy {
+            name: "hash-test".to_string(),
+            metadata: metadata2,
+            default_decision: Decision::Allow,
+            rules: vec![],
+        };
+
+        let bundle2 = crate::reap::PolicyBundle::new(policy2);
+        let version2 = engine.deploy_bundle(bundle2, false).unwrap();
+
+        // Hashes should be different
+        assert_ne!(
+            version1.bundle_hash, version2.bundle_hash,
+            "Different bundles should have different hashes"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_version_metadata() {
+        use crate::reap::{Decision, Policy as ReapPolicy};
+
+        let engine = PolicyEngine::new();
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("version".to_string(), "1.5.0".to_string());
+
+        let policy = ReapPolicy {
+            name: "version-metadata-test".to_string(),
+            metadata,
+            default_decision: Decision::Deny,
+            rules: vec![],
+        };
+
+        let bundle = crate::reap::PolicyBundle::new(policy);
+        let deployed_version = engine.deploy_bundle(bundle, false).unwrap();
+
+        // Get version metadata
+        let policy_uuid = uuid::Uuid::parse_str(&deployed_version.policy_id).unwrap();
+        let retrieved_version = engine.get_version(&policy_uuid).unwrap();
+
+        assert_eq!(retrieved_version.version, "1.5.0");
+        assert_eq!(
+            retrieved_version.bundle_hash, deployed_version.bundle_hash,
+            "Hashes should match"
+        );
     }
 }

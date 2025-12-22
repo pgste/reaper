@@ -13,7 +13,9 @@ use opentelemetry_sdk::{
     Resource,
 };
 use opentelemetry_semantic_conventions as semconv;
-use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRequest, PolicyRule};
+use policy_engine::{
+    EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine, PolicyRequest, PolicyRule,
+};
 use prometheus::{
     register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Encoder, Gauge,
     HistogramVec, TextEncoder,
@@ -145,6 +147,24 @@ struct DeployPolicyRule {
     pub action: String,
     pub resource: String,
     pub conditions: Option<Vec<String>>,
+}
+
+/// Bundle deployment request
+#[derive(Debug, Deserialize)]
+struct DeployBundleRequest {
+    pub bundle: Vec<u8>, // Raw .rbb bytes
+    pub version: String, // Expected version
+    #[serde(default)]
+    pub force: bool, // Override version check
+}
+
+/// Bundle deployment response
+#[derive(Debug, serde::Serialize)]
+struct DeployBundleResponse {
+    pub policy_id: String,
+    pub version: String,
+    pub deployed_at: String,
+    pub bundle_hash: String, // Hex-encoded SHA-256
 }
 
 impl AgentStats {
@@ -283,6 +303,17 @@ async fn main() -> anyhow::Result<()> {
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
         .route("/api/v1/policies", get(list_policies))
+        // Bundle deployment (hot-reload with versioning)
+        .route("/api/v1/bundles/deploy", post(deploy_bundle))
+        // Entity CRUD operations (requires eBPF integration)
+        .route("/api/v1/entities", post(upsert_entity_handler))
+        .route("/api/v1/entities/:type/:id", get(get_entity_handler))
+        .route(
+            "/api/v1/entities/:type/:id",
+            axum::routing::delete(delete_entity_handler),
+        )
+        .route("/api/v1/entities/:type", get(list_entities_handler))
+        .route("/api/v1/entities/batch", post(batch_upsert_handler))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:8080").await?;
@@ -683,4 +714,273 @@ async fn list_policies(State(state): State<Arc<AgentState>>) -> Result<Json<Valu
         "policies": policy_list,
         "total": policy_list.len()
     })))
+}
+
+/// Deploy a policy bundle (.rbb file) with version tracking
+#[instrument(skip(state, payload))]
+async fn deploy_bundle(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<DeployBundleRequest>,
+) -> Result<Json<DeployBundleResponse>, (StatusCode, String)> {
+    info!(
+        "Received bundle deployment request (version: {}, force: {})",
+        payload.version, payload.force
+    );
+
+    // 1. Parse .rbb bundle
+    let bundle = PolicyBundle::from_bytes(&payload.bundle).map_err(|e| {
+        ERRORS_TOTAL.with_label_values(&["invalid_bundle"]).inc();
+        error!("Failed to parse bundle: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid bundle format: {}", e),
+        )
+    })?;
+
+    info!(
+        "Bundle parsed successfully: {} (version: {})",
+        bundle.metadata.policy_name,
+        bundle
+            .metadata
+            .policy_version
+            .as_deref()
+            .unwrap_or("unknown")
+    );
+
+    // 2. Deploy to PolicyEngine with version tracking
+    let policy_version = state
+        .policy_engine
+        .deploy_bundle(bundle, payload.force)
+        .map_err(|e| {
+            ERRORS_TOTAL
+                .with_label_values(&["bundle_deployment_failed"])
+                .inc();
+            error!("Failed to deploy bundle: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Bundle deployment failed: {}", e),
+            )
+        })?;
+
+    // 3. Update metrics
+    let engine_stats = state.policy_engine.get_stats();
+    ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
+
+    info!(
+        "Bundle deployed successfully: policy_id={}, version={}",
+        policy_version.policy_id, policy_version.version
+    );
+
+    // 4. Convert bundle_hash to hex string
+    let bundle_hash_hex = policy_version
+        .bundle_hash
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+
+    // 5. Return response
+    let response = DeployBundleResponse {
+        policy_id: policy_version.policy_id,
+        version: policy_version.version,
+        deployed_at: chrono::DateTime::<chrono::Utc>::from(policy_version.deployed_at).to_rfc3339(),
+        bundle_hash: bundle_hash_hex,
+    };
+
+    Ok(Json(response))
+}
+
+// ===== Entity CRUD Operations (Stub Implementation) =====
+//
+// NOTE: These endpoints define the API contract for entity management.
+// Full implementation requires eBPF integration with entity maps.
+// Currently returns stub responses for API compatibility.
+
+#[derive(Debug, Deserialize)]
+struct UpsertEntityRequest {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub string_attrs: HashMap<String, String>,
+    pub numeric_attrs: HashMap<String, i64>,
+    pub relationships: Vec<RelationshipRequest>,
+    pub flags: HashMap<String, bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelationshipRequest {
+    pub rel_type: String,
+    pub target: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct EntityResponse {
+    pub entity_id: String,
+    pub entity_type: String,
+    pub version: u32,
+    pub created_at: String,
+    pub updated_at: String,
+    pub string_attrs: HashMap<String, String>,
+    pub numeric_attrs: HashMap<String, i64>,
+    pub relationships: Vec<RelationshipResponse>,
+    pub flags: HashMap<String, bool>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RelationshipResponse {
+    pub rel_type: String,
+    pub target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListParams {
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize {
+    100
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ListEntitiesResponse {
+    pub entities: Vec<EntityResponse>,
+    pub total: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchUpsertRequest {
+    pub entities: Vec<UpsertEntityRequest>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BatchUpsertResponse {
+    pub succeeded: usize,
+    pub failed: usize,
+    pub errors: Vec<(String, String)>, // (entity_id, error)
+}
+
+/// POST /api/v1/entities - Create or update entity
+#[instrument(skip(state))]
+async fn upsert_entity_handler(
+    State(state): State<Arc<AgentState>>,
+    Json(req): Json<UpsertEntityRequest>,
+) -> Result<Json<EntityResponse>, (StatusCode, String)> {
+    let _ = state; // Suppress unused warning
+                   // TODO: Implement with eBPF entity maps when integrated
+    info!(
+        "Entity upsert request (stub): type={}, id={}",
+        req.entity_type, req.entity_id
+    );
+
+    // Return stub response
+    let response = EntityResponse {
+        entity_id: req.entity_id.clone(),
+        entity_type: req.entity_type.clone(),
+        version: 1,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        string_attrs: req.string_attrs.clone(),
+        numeric_attrs: req.numeric_attrs.clone(),
+        relationships: req
+            .relationships
+            .iter()
+            .map(|r| RelationshipResponse {
+                rel_type: r.rel_type.clone(),
+                target: r.target.clone(),
+            })
+            .collect(),
+        flags: req.flags.clone(),
+    };
+
+    Ok(Json(response))
+}
+
+/// GET /api/v1/entities/:type/:id - Get entity
+#[instrument(skip(state))]
+async fn get_entity_handler(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path((entity_type, entity_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<EntityResponse>, (StatusCode, String)> {
+    let _ = state; // Suppress unused warning
+                   // TODO: Implement with eBPF entity maps when integrated
+    info!(
+        "Entity get request (stub): type={}, id={}",
+        entity_type, entity_id
+    );
+
+    // Return stub response
+    let response = EntityResponse {
+        entity_id: entity_id.clone(),
+        entity_type: entity_type.clone(),
+        version: 1,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        string_attrs: HashMap::new(),
+        numeric_attrs: HashMap::new(),
+        relationships: vec![],
+        flags: HashMap::new(),
+    };
+
+    Ok(Json(response))
+}
+
+/// DELETE /api/v1/entities/:type/:id - Delete entity
+#[instrument(skip(state))]
+async fn delete_entity_handler(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path((entity_type, entity_id)): axum::extract::Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let _ = state; // Suppress unused warning
+                   // TODO: Implement with eBPF entity maps when integrated
+    info!(
+        "Entity delete request (stub): type={}, id={}",
+        entity_type, entity_id
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/v1/entities/:type - List entities of type
+#[instrument(skip(state))]
+async fn list_entities_handler(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path(entity_type): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<ListParams>,
+) -> Result<Json<ListEntitiesResponse>, (StatusCode, String)> {
+    let _ = state; // Suppress unused warning
+                   // TODO: Implement with eBPF entity maps when integrated
+    info!(
+        "Entity list request (stub): type={}, limit={}",
+        entity_type, params.limit
+    );
+
+    // Return stub response
+    let response = ListEntitiesResponse {
+        entities: vec![],
+        total: 0,
+    };
+
+    Ok(Json(response))
+}
+
+/// POST /api/v1/entities/batch - Batch upsert
+#[instrument(skip(state))]
+async fn batch_upsert_handler(
+    State(state): State<Arc<AgentState>>,
+    Json(req): Json<BatchUpsertRequest>,
+) -> Result<Json<BatchUpsertResponse>, (StatusCode, String)> {
+    let _ = state; // Suppress unused warning
+                   // TODO: Implement with eBPF entity maps when integrated
+    info!(
+        "Batch upsert request (stub): {} entities",
+        req.entities.len()
+    );
+
+    // Return stub response
+    let response = BatchUpsertResponse {
+        succeeded: req.entities.len(),
+        failed: 0,
+        errors: vec![],
+    };
+
+    Ok(Json(response))
 }

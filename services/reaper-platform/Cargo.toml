@@ -19,6 +19,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

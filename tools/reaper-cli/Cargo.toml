@@ -7,6 +7,7 @@ description = "Reaper CLI - Command-line interface for management"
 [dependencies]
 reaper-core = { path = "../../crates/reaper-core" }
 policy-engine = { path = "../../crates/policy-engine" }
+reaper-ebpf = { path = "../../crates/reaper-ebpf" }
 message-queue = { path = "../../crates/message-queue" }
 metrics = { path = "../../crates/metrics" }
 clap = { workspace = true }
@@ -16,6 +17,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { version = "0.12.23", features = ["json"] }
 uuid = { workspace = true }
+tabled = "0.16"
 
 [dev-dependencies]
 criterion = { workspace = true }
