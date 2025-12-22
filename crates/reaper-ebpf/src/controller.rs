@@ -16,9 +16,25 @@ use aya::{
     maps::{HashMap as AyaHashMap, RingBuf},
     Ebpf,
 };
-use policy_engine::SimplePolicyEvaluator;
+use policy_engine::{reap::PolicyBundle, SimplePolicyEvaluator};
 use std::path::Path;
+use std::time::SystemTime;
 use tracing::{debug, info, warn};
+
+/// Version information for deployed bundles in eBPF
+#[derive(Debug, Clone)]
+pub struct EbpfBundleVersion {
+    /// Bundle version string
+    pub version: String,
+    /// When deployed
+    pub deployed_at: SystemTime,
+    /// Policy name
+    pub policy_name: String,
+    /// Number of rules deployed to eBPF
+    pub ebpf_rule_count: usize,
+    /// Number of rules sent to userspace
+    pub userspace_rule_count: usize,
+}
 
 /// eBPF Controller - Manages the kernel-side eBPF program
 pub struct EbpfController {
@@ -30,6 +46,9 @@ pub struct EbpfController {
 
     /// Count of policies in eBPF
     policy_count: usize,
+
+    /// Current bundle version (if any)
+    current_version: Option<EbpfBundleVersion>,
 }
 
 impl EbpfController {
@@ -58,6 +77,7 @@ impl EbpfController {
             bpf,
             compiler: PolicyCompiler::new(),
             policy_count: 0,
+            current_version: None,
         })
     }
 
@@ -279,6 +299,80 @@ impl EbpfController {
     /// Get count of policies in eBPF
     pub fn policy_count(&self) -> usize {
         self.policy_count
+    }
+
+    /// Deploy a policy bundle to eBPF with version tracking
+    ///
+    /// Analyzes the bundle and deploys compatible rules to eBPF fast path.
+    /// Returns version information including rule distribution.
+    ///
+    /// # Arguments
+    /// * `bundle` - The policy bundle to deploy
+    ///
+    /// # Returns
+    /// Version information about the deployment
+    pub fn deploy_bundle(&mut self, bundle: &PolicyBundle) -> Result<EbpfBundleVersion> {
+        let policy_name = bundle.policy.name.clone();
+        let version = bundle
+            .metadata
+            .policy_version
+            .clone()
+            .unwrap_or_else(|| "1.0.0".to_string());
+
+        info!(
+            "Deploying bundle '{}' version {} to eBPF",
+            policy_name, version
+        );
+
+        // Convert bundle to EnhancedPolicy
+        let enhanced_policy = bundle
+            .to_enhanced_policy()
+            .context("Failed to convert bundle to EnhancedPolicy")?;
+
+        // For now, all rules go to eBPF as Simple policy
+        // TODO: Implement eBPF compatibility analysis to separate simple vs complex rules
+        let total_rules = enhanced_policy.rules.len();
+
+        // Clear existing policies before deploying new bundle
+        self.clear_policies()?;
+
+        // Build Simple evaluator from enhanced policy rules
+        let simple_evaluator = SimplePolicyEvaluator::new(enhanced_policy.rules.clone());
+
+        // Deploy to eBPF
+        self.deploy_simple_policy(&simple_evaluator)?;
+
+        let ebpf_rule_count = self.policy_count;
+        let userspace_rule_count = total_rules.saturating_sub(ebpf_rule_count);
+
+        // Create version metadata
+        let bundle_version = EbpfBundleVersion {
+            version: version.clone(),
+            deployed_at: SystemTime::now(),
+            policy_name: policy_name.clone(),
+            ebpf_rule_count,
+            userspace_rule_count,
+        };
+
+        // Store current version
+        self.current_version = Some(bundle_version.clone());
+
+        info!(
+            "Bundle '{}' v{} deployed: {} rules in eBPF, {} in userspace",
+            policy_name, version, ebpf_rule_count, userspace_rule_count
+        );
+
+        Ok(bundle_version)
+    }
+
+    /// Get current bundle version
+    pub fn get_bundle_version(&self) -> Option<&EbpfBundleVersion> {
+        self.current_version.as_ref()
+    }
+
+    /// Clear current version (called when clearing policies)
+    pub fn clear_version(&mut self) {
+        self.current_version = None;
     }
 }
 

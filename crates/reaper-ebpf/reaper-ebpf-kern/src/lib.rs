@@ -16,12 +16,15 @@
 #![no_std]
 #![no_main]
 
+mod entity;
+
 use aya_ebpf::{
     macros::{lsm, map},
     maps::{HashMap, RingBuf},
     programs::LsmContext,
 };
 use aya_log_ebpf::info;
+use entity::{Entity, MAX_ENTITY_ID_LEN};
 
 /// Maximum path length supported in eBPF
 const MAX_PATH_LEN: usize = 256;
@@ -141,6 +144,40 @@ const STAT_SLOW_PATH: u32 = 1;    // Count of slow path (userspace) evaluations
 const STAT_DENIALS: u32 = 2;      // Count of denials
 const STAT_ALLOWS: u32 = 3;       // Count of allows
 const STAT_ERRORS: u32 = 4;       // Count of errors
+
+// ============================================================================
+// Entity Maps (Tier 1: Direct maps for < 10K entities)
+// ============================================================================
+
+/// User entities map
+/// Stores user attributes, JWT claims, and relationships
+#[map]
+static USERS: HashMap<[u8; MAX_ENTITY_ID_LEN], Entity> =
+    HashMap::with_max_entries(10000, 0);
+
+/// Role entities map (for RBAC)
+/// Stores role definitions and associated permissions
+#[map]
+static ROLES: HashMap<[u8; MAX_ENTITY_ID_LEN], Entity> =
+    HashMap::with_max_entries(1000, 0);
+
+/// Group entities map (for hierarchical access)
+/// Stores group memberships and hierarchies
+#[map]
+static GROUPS: HashMap<[u8; MAX_ENTITY_ID_LEN], Entity> =
+    HashMap::with_max_entries(5000, 0);
+
+/// Resource entities map (for ABAC)
+/// Stores protected resource attributes
+#[map]
+static RESOURCES: HashMap<[u8; MAX_ENTITY_ID_LEN], Entity> =
+    HashMap::with_max_entries(10000, 0);
+
+/// JWT session entities map (for authentication)
+/// Stores active JWT sessions with claims
+#[map]
+static JWT_SESSIONS: HashMap<[u8; MAX_ENTITY_ID_LEN], Entity> =
+    HashMap::with_max_entries(50000, 0);
 
 // ============================================================================
 // LSM Hooks

@@ -9,7 +9,10 @@ mod compiler;
 mod parser;
 mod yaml_parser;
 
-pub use ast::{Condition as ReapCondition, Decision, Policy, Rule as ReapRule, Value as ReapValue};
+pub use ast::{
+    AssignmentValue, ComparisonLeft, ComparisonRight, Condition as ReapCondition, Decision, Entity,
+    EntityAttr, Expr, Index, Operator, Policy, Rule as ReapRule, Value as ReapValue, VarAttr,
+};
 pub use ast_evaluator::ReapAstEvaluator;
 pub use bundle::{BundleFormat, PolicyBundle};
 pub use compiler::compile_policy;

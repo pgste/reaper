@@ -77,21 +77,42 @@
 //! ```
 
 // Public modules
+pub mod analyzer;
 pub mod compiler;
 pub mod controller;
+pub mod custom;
+pub mod entity;
+pub mod jwt;
 pub mod learning;
+pub mod loader;
 pub mod slow_path;
+pub mod tier;
 pub mod types;
+pub mod validation;
 
 // Re-exports
+pub use analyzer::{AccessPattern as AnalysisAccessPattern, AnalysisResult, ConditionAnalyzer};
 pub use compiler::PolicyCompiler;
-pub use controller::EbpfController;
-pub use learning::{AccessPattern, LearningEngine, LearningStats};
-pub use slow_path::{SlowPathHandler, SlowPathStats};
-pub use types::{
-    CombinedStats, EbpfStats, PolicyAction, PolicyEntry, PolicyEvent, MAX_CONTEXT_KEY_LEN,
-    MAX_CONTEXT_VALUE_LEN, MAX_PATH_LEN,
+pub use controller::{EbpfBundleVersion, EbpfController};
+pub use custom::{CustomDataRegistry, CustomDataSource, CustomSchema, RelationshipSchema};
+pub use entity::{
+    DataTier, EntityData, EntityDataset, EntityType, LoadStats, RelationshipData, ValidationResult,
+    MAX_ATTR_KEY_LEN, MAX_ENTITY_ID_LEN, MAX_NUMERIC_ATTRS, MAX_RELATIONSHIPS, MAX_STRING_ATTRS,
+    MAX_STRING_VALUE_LEN,
 };
+pub use jwt::{JwtClaims, JwtParser};
+pub use learning::{AccessPattern, AutoPromotionResult, LearningEngine, LearningStats};
+pub use loader::{BatchResult, Entity, EntityLoader, NumericAttr, Relationship, StringAttr};
+pub use slow_path::{SlowPathHandler, SlowPathStats};
+pub use tier::{
+    BloomFilter, BloomFilterStats, Tier2Strategy, Tier3Strategy, TierStrategy, TIER2_SHARD_COUNT,
+    TIER3_BLOOM_HASH_COUNT, TIER3_BLOOM_SIZE_BITS, TIER3_PARTITION_COUNT,
+};
+pub use types::{
+    CombinedStats, EbpfStats, EntityEvent, EntityEventLog, EntityEventStats, PolicyAction,
+    PolicyEntry, PolicyEvent, MAX_CONTEXT_KEY_LEN, MAX_CONTEXT_VALUE_LEN, MAX_PATH_LEN,
+};
+pub use validation::EntityValidator;
 
 use anyhow::Result;
 use policy_engine::{PolicyBundle, PolicyEngine};

@@ -33,6 +33,8 @@ dashmap = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = "0.4"
+jsonwebtoken = "9"
+base64 = "0.22"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

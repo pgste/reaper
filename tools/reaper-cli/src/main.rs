@@ -14,6 +14,10 @@ use policy_engine::{
     PolicyRequest, ReaperPolicy,
 };
 
+// eBPF command handlers
+mod ebpf_commands;
+use ebpf_commands::{handle_analyze_policy, handle_validate_data};
+
 #[derive(Parser)]
 #[command(name = "reaper")]
 #[command(about = "Reaper CLI - High-Performance Policy Management")]
@@ -112,6 +116,44 @@ enum Commands {
         /// Number of requests to send
         #[arg(short, long, default_value = "1000")]
         requests: usize,
+    },
+
+    /// Validate entity data for eBPF loading
+    ValidateData {
+        /// Path to entity JSON file
+        #[arg(short, long)]
+        file: String,
+
+        /// Check eBPF compatibility
+        #[arg(long)]
+        check_ebpf: bool,
+
+        /// Output format (table, json)
+        #[arg(long, default_value = "table")]
+        format: String,
+
+        /// Path to custom schema definitions (JSON)
+        #[arg(long)]
+        custom_schemas: Option<String>,
+    },
+
+    /// Analyze policy for eBPF promotability
+    AnalyzePolicy {
+        /// Path to policy file (.reap, .yaml, .yml, .json)
+        #[arg(short, long)]
+        file: String,
+
+        /// Check eBPF compatibility
+        #[arg(long)]
+        check_ebpf: bool,
+
+        /// Show detailed recommendations
+        #[arg(long)]
+        show_recommendations: bool,
+
+        /// Output format (table, json)
+        #[arg(long, default_value = "table")]
+        format: String,
     },
 }
 
@@ -564,6 +606,20 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => handle_status(&cli, &client).await?,
         Commands::Demo => handle_demo(&cli, &client).await?,
         Commands::Benchmark { requests } => handle_benchmark(&cli, &client, requests).await?,
+
+        Commands::ValidateData {
+            ref file,
+            check_ebpf,
+            ref format,
+            ref custom_schemas,
+        } => handle_validate_data(file, check_ebpf, format, custom_schemas.as_deref())?,
+
+        Commands::AnalyzePolicy {
+            ref file,
+            check_ebpf,
+            show_recommendations,
+            ref format,
+        } => handle_analyze_policy(file, check_ebpf, show_recommendations, format)?,
     }
 
     Ok(())

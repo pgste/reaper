@@ -22,6 +22,7 @@ pest = "2.7"
 pest_derive = "2.7"
 bincode = "1.3"
 regex = "1.10"
+sha2 = { workspace = true }
 
 # JSON parsing: sonic-rs (SIMD) for native, serde_json for WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

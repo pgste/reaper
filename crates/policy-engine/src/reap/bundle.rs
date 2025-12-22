@@ -2,10 +2,12 @@
 //!
 //! Compiles .reap policies into optimized binary bundles for instant loading.
 
-use super::ast::Policy;
+use super::ast::{Decision as ReapDecision, Policy};
+use crate::engine::{EnhancedPolicy, PolicyAction, PolicyRule};
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+use uuid::Uuid;
 
 /// Bundle format metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +98,77 @@ impl PolicyBundle {
         }
 
         Ok(bundle)
+    }
+
+    /// Convert bundle to EnhancedPolicy for use with PolicyEngine
+    ///
+    /// This converts the Reaper Policy AST to a Simple language policy
+    /// since the Custom language evaluator is not yet implemented.
+    ///
+    /// For now, this converts only unconditional allow/deny rules.
+    /// Complex conditions will be simplified to wildcards.
+    pub fn to_enhanced_policy(&self) -> Result<EnhancedPolicy, ReaperError> {
+        // Convert Reaper DSL rules to Simple rules
+        let mut rules = Vec::new();
+
+        for rule in &self.policy.rules {
+            let action = match rule.decision {
+                ReapDecision::Allow => PolicyAction::Allow,
+                ReapDecision::Deny => PolicyAction::Deny,
+            };
+
+            // For now, convert all rules to wildcard resource
+            // TODO: Extract resource patterns from conditions
+            let simple_rule = PolicyRule {
+                action,
+                resource: "*".to_string(),
+                conditions: vec![],
+            };
+
+            rules.push(simple_rule);
+        }
+
+        // If no rules, add a default deny rule
+        if rules.is_empty() {
+            let default_action = match self.policy.default_decision {
+                ReapDecision::Allow => PolicyAction::Allow,
+                ReapDecision::Deny => PolicyAction::Deny,
+            };
+
+            rules.push(PolicyRule {
+                action: default_action,
+                resource: "*".to_string(),
+                conditions: vec![],
+            });
+        }
+
+        // Create EnhancedPolicy
+        let mut policy = EnhancedPolicy::new(
+            self.policy.name.clone(),
+            format!(
+                "Deployed from bundle version {}",
+                self.metadata.policy_version.as_deref().unwrap_or("unknown")
+            ),
+            rules,
+        );
+
+        // Set policy ID from metadata if available
+        // For now, generate a new UUID each time
+        // TODO: Store policy ID in bundle metadata for stable IDs
+        policy.id = Uuid::new_v4();
+
+        // Set metadata
+        if let Some(version) = &self.metadata.policy_version {
+            policy
+                .metadata
+                .insert("bundle_version".to_string(), version.clone());
+        }
+        policy.metadata.insert(
+            "bundle_checksum".to_string(),
+            self.metadata.source_checksum.to_string(),
+        );
+
+        Ok(policy)
     }
 }
 
