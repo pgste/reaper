@@ -63,63 +63,15 @@ jobs:
         sudo mv eopa /usr/local/bin/opa
         opa version
 
-    - name: Install eBPF build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang llvm linux-headers-$(uname -r)
-
-    - name: Setup Rust nightly for eBPF
-      run: |
-        rustup toolchain install nightly
-        rustup component add rust-src --toolchain nightly
-        rustup +nightly target add bpfel-unknown-none
-
-    - name: Build eBPF kernel program
-      run: |
-        cd crates/reaper-ebpf/reaper-ebpf-kern
-        cargo +nightly build \
-          --target=bpfel-unknown-none \
-          -Z build-std=core \
-          --release
-
-        # Verify eBPF object was created
-        ls -lh target/bpfel-unknown-none/release/*.o || echo "eBPF build artifacts:"
-        find target/bpfel-unknown-none/release -name "*.o" -type f
-
-    - name: Build Reaper Agent (with eBPF support)
-      run: |
-        cargo build --release --bin reaper-agent
-        cargo build --release -p reaper-ebpf
+    - name: Build Reaper Agent
+      run: cargo build --release --bin reaper-agent
 
     - name: Build Benchmark Tool
       working-directory: benchmarks/reaper-vs-opa
       run: cargo build --release
 
-    - name: Check eBPF capabilities
-      id: ebpf_check
-      continue-on-error: true
-      run: |
-        # Check if we can load eBPF programs (requires CAP_BPF)
-        echo "Checking eBPF capabilities..."
-
-        # Check kernel version (need 5.7+)
-        KERNEL_VERSION=$(uname -r | cut -d. -f1,2)
-        echo "Kernel version: $KERNEL_VERSION"
-
-        # Check if LSM BPF is available
-        if [ -f /sys/kernel/security/lsm ]; then
-          LSM_MODULES=$(cat /sys/kernel/security/lsm)
-          echo "LSM modules: $LSM_MODULES"
-        fi
-
-        # Set flag for eBPF support (this is informational for now)
-        # Actual eBPF loading requires root which GitHub Actions doesn't provide by default
-        echo "ebpf_supported=false" >> $GITHUB_OUTPUT
-        echo "eBPF build successful, but loading requires root privileges"
-
     - name: Start Reaper Agent
       run: |
-        # Start Reaper Agent (userspace mode - eBPF integration is TODO)
         ./target/release/reaper-agent &
         REAPER_PID=$!
         echo "REAPER_PID=$REAPER_PID" >> $GITHUB_ENV
@@ -245,9 +197,8 @@ jobs:
           comment += '\n---\n\n';
           comment += '**Notes**:\n';
           comment += '- Using [Styra Enterprise OPA](https://github.com/StyraInc/enterprise-opa) (open source) for fair comparison\n';
-          comment += '- eBPF kernel program built successfully ✅\n';
-          comment += '- eBPF benchmarking: Coming soon (requires kernel LSM BPF support + root privileges)\n';
-          comment += '- **Expected eBPF performance**: <100ns fast path (500-2000x faster than userspace)\n';
+          comment += '- Tested with **100,000 entities** for realistic performance comparison\n';
+          comment += '- All scenarios run concurrently for faster CI feedback\n';
 
           github.rest.issues.createComment({
             issue_number: context.issue.number,
