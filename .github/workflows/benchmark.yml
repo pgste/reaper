@@ -28,12 +28,12 @@ jobs:
       matrix:
         scenario: [rbac, abac, rebac, multilayer]
         scale: [10k]
-        include:
-          # Optional: Add 100k scale tests (comment out if not available)
-          # - scenario: rbac
-          #   scale: 100k
-          # - scenario: abac
-          #   scale: 100k
+        # Optional: Add 100k scale tests by uncommenting the include section
+        # include:
+        #   - scenario: rbac
+        #     scale: 100k
+        #   - scenario: abac
+        #     scale: 100k
       fail-fast: false  # Continue running other tests even if one fails
 
     name: ${{ matrix.scenario }}-${{ matrix.scale }}
