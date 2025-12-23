@@ -1,0 +1,28 @@
+# Build artifacts
+target/
+**/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+
+# Test data
+benchmarks/*/results/
+benchmarks/*/data/
+
+# Logs
+*.log

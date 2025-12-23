@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::State,
     http::StatusCode,
     response::{Json, Response},
@@ -20,7 +21,7 @@ use prometheus::{
     register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Encoder, Gauge,
     HistogramVec, TextEncoder,
 };
-use reaper_core::{endpoints, ReaperError, BUILD_INFO, VERSION};
+use reaper_core::{endpoints, BUILD_INFO, VERSION};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -102,6 +103,7 @@ lazy_static! {
 #[derive(Clone)]
 struct AgentState {
     policy_engine: PolicyEngine,
+    data_store: Arc<policy_engine::DataStore>, // Shared entity store for compiled evaluators
     stats: Arc<AgentStats>,
 }
 
@@ -110,6 +112,7 @@ impl std::fmt::Debug for AgentState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentState")
             .field("policy_engine", &self.policy_engine)
+            .field("data_store", &"DataStore")
             .field("stats", &"AgentStats")
             .finish()
     }
@@ -128,6 +131,7 @@ struct AgentStats {
 struct EvaluateRequest {
     pub policy_id: Option<String>,
     pub policy_name: Option<String>,
+    pub principal: String, // Role: admin, manager, engineer, viewer
     pub resource: String,
     pub action: String,
     pub context: Option<HashMap<String, String>>,
@@ -185,20 +189,34 @@ impl AgentStats {
 
 /// Initialize observability stack (logs, traces, metrics)
 fn init_observability() -> anyhow::Result<()> {
+    // Check if OpenTelemetry is enabled
+    let otel_enabled = std::env::var("OTEL_ENABLED")
+        .unwrap_or_else(|_| "false".to_string())
+        .to_lowercase()
+        == "true";
+
     // Determine output format from environment
     let use_json =
         std::env::var("REAPER_LOG_FORMAT").unwrap_or_else(|_| "json".to_string()) == "json";
 
-    // Build subscriber (with telemetry layer)
-    if use_json {
-        // Initialize OpenTelemetry tracer
+    // Create async non-blocking writer for high-performance logging
+    let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stdout());
+
+    if otel_enabled {
+        // OTEL enabled - require endpoint configuration
+        let otel_endpoint = std::env::var("OTEL_ENDPOINT").map_err(|_| {
+            anyhow::anyhow!(
+                "OTEL_ENABLED=true requires OTEL_ENDPOINT to be set (e.g., http://tempo:4317)"
+            )
+        })?;
+
+        // Initialize OpenTelemetry tracer with configured endpoint
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
             .with_exporter(
-                opentelemetry_otlp::new_exporter().tonic().with_endpoint(
-                    std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-                        .unwrap_or_else(|_| "http://tempo:4317".to_string()),
-                ),
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint(otel_endpoint.clone()),
             )
             .with_trace_config(
                 sdktrace::config()
@@ -212,49 +230,76 @@ fn init_observability() -> anyhow::Result<()> {
             )
             .install_batch(opentelemetry_sdk::runtime::Tokio)?;
 
-        // Structured JSON logs for production (Loki-compatible)
-        let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info,reaper_agent=debug".into()),
-            )
-            .with(tracing_subscriber::fmt::layer().json())
-            .with(telemetry)
-            .init();
+        // Build subscriber with telemetry layer
+        if use_json {
+            // Structured JSON logs with OTEL
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "warn,reaper_agent=info".into()),
+                )
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .json()
+                        .with_writer(non_blocking),
+                )
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+        } else {
+            // Pretty logs with OTEL
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info,reaper_agent=info".into()),
+                )
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .pretty()
+                        .with_writer(non_blocking.clone()),
+                )
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+        }
+
+        info!(
+            "OpenTelemetry enabled - exporting traces to {}",
+            otel_endpoint
+        );
     } else {
-        // Initialize OpenTelemetry tracer
-        let tracer = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter().tonic().with_endpoint(
-                    std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-                        .unwrap_or_else(|_| "http://tempo:4317".to_string()),
-                ),
-            )
-            .with_trace_config(
-                sdktrace::config()
-                    .with_sampler(Sampler::AlwaysOn)
-                    .with_id_generator(RandomIdGenerator::default())
-                    .with_resource(Resource::new(vec![
-                        KeyValue::new(semconv::resource::SERVICE_NAME, "reaper-agent"),
-                        KeyValue::new(semconv::resource::SERVICE_VERSION, VERSION),
-                        KeyValue::new("reaper.component", "policy-engine"),
-                    ])),
-            )
-            .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+        // OTEL disabled - simple logging only
+        if use_json {
+            // Structured JSON logs without OTEL
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "warn,reaper_agent=info".into()),
+                )
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .json()
+                        .with_writer(non_blocking),
+                )
+                .init();
+        } else {
+            // Pretty logs without OTEL
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info,reaper_agent=info".into()),
+                )
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .pretty()
+                        .with_writer(non_blocking),
+                )
+                .init();
+        }
 
-        // Pretty logs for development
-        let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info,reaper_agent=debug".into()),
-            )
-            .with(tracing_subscriber::fmt::layer().pretty())
-            .with(telemetry)
-            .init();
+        info!("OpenTelemetry disabled - logs only (set OTEL_ENABLED=true to enable tracing)");
     }
+
+    // Keep guard alive for the duration of the program
+    std::mem::forget(_guard);
 
     Ok(())
 }
@@ -271,24 +316,17 @@ async fn main() -> anyhow::Result<()> {
         "Starting Reaper Agent - High-Performance Policy Enforcement"
     );
 
+    // Initialize PolicyEngine and DataStore
     let policy_engine = PolicyEngine::new();
+    let data_store = Arc::new(policy_engine::DataStore::new());
 
-    // Create a demo policy for immediate testing
-    let demo_policy = EnhancedPolicy::new(
-        "demo-allow-all".to_string(),
-        "Demo policy that allows all requests for testing".to_string(),
-        vec![PolicyRule {
-            action: PolicyAction::Allow,
-            resource: "*".to_string(),
-            conditions: vec![],
-        }],
-    );
-
-    info!("Deploying demo allow-all policy for testing");
-    policy_engine.deploy_policy(demo_policy)?;
+    info!("Reaper Agent initialized - ready to receive policies and data via API");
+    info!("  POST /api/v1/data           - Load entity data (JSON)");
+    info!("  POST /api/v1/policies/compile - Deploy compiled .reap policy");
 
     let state = Arc::new(AgentState {
         policy_engine,
+        data_store,
         stats: Arc::new(AgentStats::default()),
     });
 
@@ -300,20 +338,27 @@ async fn main() -> anyhow::Result<()> {
         .route(endpoints::METRICS, get(metrics))
         // Policy evaluation - the core agent functionality
         .route(endpoints::API_V1_MESSAGES, post(evaluate_policy))
+        // Data management - load entities
+        .route("/api/v1/data", post(load_data_handler))
+        .route("/api/v1/data/stream", post(load_data_stream_handler))
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
+        .route("/api/v1/policies/compile", post(deploy_compiled_policy))
         .route("/api/v1/policies", get(list_policies))
         // Bundle deployment (hot-reload with versioning)
         .route("/api/v1/bundles/deploy", post(deploy_bundle))
         // Entity CRUD operations (requires eBPF integration)
         .route("/api/v1/entities", post(upsert_entity_handler))
-        .route("/api/v1/entities/:type/:id", get(get_entity_handler))
+        .route("/api/v1/entities/{type}/{id}", get(get_entity_handler))
         .route(
-            "/api/v1/entities/:type/:id",
+            "/api/v1/entities/{type}/{id}",
             axum::routing::delete(delete_entity_handler),
         )
-        .route("/api/v1/entities/:type", get(list_entities_handler))
+        .route("/api/v1/entities/{type}", get(list_entities_handler))
         .route("/api/v1/entities/batch", post(batch_upsert_handler))
+        // Debug endpoints
+        .route("/debug/datastore", get(debug_datastore))
+        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:8080").await?;
@@ -439,16 +484,34 @@ async fn evaluate_policy(
         "none".to_string()
     };
 
-    // Determine which policy to use
-    let policy_id = if let Some(id_str) = payload.policy_id {
+    // Determine which policy/policies to evaluate
+    // Can specify: UUID, policy name, or nothing (evaluate all)
+    let policy_ids: Vec<Uuid> = if let Some(id_str) = payload.policy_id {
+        // Try to parse as UUID first
         match Uuid::from_str(&id_str) {
-            Ok(id) => Some(id),
+            Ok(id) => vec![id],
             Err(_) => {
-                ERRORS_TOTAL.with_label_values(&["invalid_policy_id"]).inc();
-                return Ok(Json(json!({
-                    "error": "Invalid policy ID format",
-                    "policy_id": id_str
-                })));
+                // Not a valid UUID - treat as policy name
+                match state.policy_engine.get_policy_by_name(&id_str) {
+                    Some(policy) => {
+                        state.stats.record_cache_hit();
+                        CACHE_HITS.with_label_values(&["policy"]).inc();
+                        vec![policy.id]
+                    }
+                    None => {
+                        // Policy not found - DENY by default for security
+                        ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
+                        return Ok(Json(json!({
+                            "decision": "deny",
+                            "policy_id": id_str,
+                            "policy_version": 0,
+                            "evaluation_time_microseconds": 0.0,
+                            "total_time_microseconds": 0.0,
+                            "matched_rule": "policy_not_found",
+                            "agent_id": "reaper-agent-001"
+                        })));
+                    }
+                }
             }
         }
     } else if let Some(ref name) = payload.policy_name {
@@ -457,161 +520,199 @@ async fn evaluate_policy(
             Some(policy) => {
                 state.stats.record_cache_hit();
                 CACHE_HITS.with_label_values(&["policy"]).inc();
-                Some(policy.id)
+                vec![policy.id]
             }
             None => {
+                // Policy not found - DENY by default for security
                 state.stats.record_cache_miss();
                 CACHE_MISSES.with_label_values(&["policy"]).inc();
                 ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
                 return Ok(Json(json!({
-                    "error": "Policy not found",
-                    "policy_name": name
+                    "decision": "deny",
+                    "policy_name": name,
+                    "policy_version": 0,
+                    "evaluation_time_microseconds": 0.0,
+                    "total_time_microseconds": 0.0,
+                    "matched_rule": "policy_not_found",
+                    "agent_id": "reaper-agent-001"
                 })));
             }
         }
     } else {
-        // Use any available policy (demo mode)
-        let policies = state.policy_engine.list_policies();
-        if let Some(policy) = policies.first() {
-            Some(policy.id)
-        } else {
+        // No policy specified - evaluate ALL policies (if any deny, return deny)
+        let all_policies = state.policy_engine.list_policies();
+        if all_policies.is_empty() {
             ERRORS_TOTAL.with_label_values(&["no_policies"]).inc();
             return Ok(Json(json!({
-                "error": "No policies available for evaluation"
+                "decision": "deny",
+                "policy_version": 0,
+                "evaluation_time_microseconds": 0.0,
+                "total_time_microseconds": 0.0,
+                "matched_rule": "no_policies_loaded",
+                "agent_id": "reaper-agent-001"
             })));
         }
-    };
-
-    let policy_id = match policy_id {
-        Some(id) => id,
-        None => {
-            ERRORS_TOTAL.with_label_values(&["no_policy"]).inc();
-            return Ok(Json(json!({
-                "error": "No policy specified and no default policy available"
-            })));
-        }
-    };
-
-    // Get policy name for metrics
-    let policy_name = if let Some(ref name) = payload.policy_name {
-        name.clone()
-    } else {
-        state
-            .policy_engine
-            .get_policy(&policy_id)
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "unknown".to_string())
+        all_policies.into_iter().map(|p| p.id).collect()
     };
 
     // Create policy request
+    // The compiled evaluator looks up user entities by ID in the DataStore
+    // Use the principal as-is (it's already an entity ID like "user_admin")
+    let mut context = payload.context.unwrap_or_default();
+    context.insert("principal".to_string(), payload.principal.clone());
+
     let request = PolicyRequest {
         resource: payload.resource.clone(),
         action: payload.action.clone(),
-        context: payload.context.unwrap_or_default(),
+        context,
     };
 
-    // Evaluate policy
-    match state.policy_engine.evaluate(&policy_id, &request) {
-        Ok(decision) => {
-            let total_time = start_time.elapsed();
-            state.stats.record_evaluation(decision.evaluation_time_ns);
+    // Evaluate all policies in policy_ids (may be 1 or many)
+    // If ANY policy denies, return deny (security first)
+    let mut final_decision = PolicyAction::Allow;
+    let mut total_eval_time_ns = 0u64;
+    let mut matched_policy_id = Uuid::nil();
+    let mut matched_policy_name = String::from("unknown");
+    let mut matched_policy_version = 0u64;
+    let mut matched_rule = String::from("default_allow");
 
-            let decision_str = match decision.decision {
-                PolicyAction::Allow => "allow",
-                PolicyAction::Deny => "deny",
-                PolicyAction::Log => "log",
-            };
+    for policy_id in &policy_ids {
+        match state.policy_engine.evaluate(policy_id, &request) {
+            Ok(decision) => {
+                total_eval_time_ns += decision.evaluation_time_ns;
 
-            // Record Prometheus metrics
-            DECISIONS_TOTAL
-                .with_label_values(&[decision_str, &policy_name, &policy_id.to_string()])
-                .inc();
+                // If this policy denies, override the final decision
+                if matches!(decision.decision, PolicyAction::Deny) {
+                    final_decision = PolicyAction::Deny;
+                    matched_policy_id = decision.policy_id;
+                    matched_policy_version = decision.policy_version;
+                    matched_rule = decision
+                        .matched_rule
+                        .map(|idx| format!("rule_{}", idx))
+                        .unwrap_or_else(|| "no_rule".to_string());
 
-            // Record latency (convert ns to seconds for Prometheus)
-            let latency_seconds = decision.evaluation_time_ns as f64 / 1_000_000_000.0;
-            DECISION_DURATION
-                .with_label_values(&[&policy_name])
-                .observe(latency_seconds);
+                    // Get policy name for this denial
+                    if let Some(policy) = state.policy_engine.get_policy(policy_id) {
+                        matched_policy_name = policy.name.clone();
+                    }
 
-            // Record span attributes for distributed tracing
-            span.record("policy_name", &policy_name);
-            span.record("decision", decision_str);
-            span.record("latency_ns", decision.evaluation_time_ns);
+                    // Break early on deny (security first - no need to check other policies)
+                    break;
+                } else if matches!(final_decision, PolicyAction::Allow) {
+                    // Only update if we haven't seen a deny yet
+                    matched_policy_id = decision.policy_id;
+                    matched_policy_version = decision.policy_version;
+                    matched_rule = decision
+                        .matched_rule
+                        .map(|idx| format!("rule_{}", idx))
+                        .unwrap_or_else(|| "no_rule".to_string());
 
-            // Add OpenTelemetry span attributes
-            otel_span.set_attribute(KeyValue::new("reaper.policy.name", policy_name.clone()));
-            otel_span.set_attribute(KeyValue::new("reaper.policy.id", policy_id.to_string()));
-            otel_span.set_attribute(KeyValue::new("reaper.decision", decision_str));
-            otel_span.set_attribute(KeyValue::new(
-                "reaper.latency_ns",
-                decision.evaluation_time_ns as i64,
-            ));
-            otel_span.set_attribute(KeyValue::new("reaper.resource", payload.resource.clone()));
-            otel_span.set_attribute(KeyValue::new("reaper.action", payload.action.clone()));
-
-            // Record denials separately for security monitoring
-            if decision_str == "deny" {
-                DENIALS_TOTAL
-                    .with_label_values(&[&policy_name, &payload.resource, &payload.action])
-                    .inc();
-
-                // Structured log for denial (security event)
-                warn!(
-                    trace_id = %trace_id,
-                    decision_id = %format!("dec_{}", uuid::Uuid::new_v4().simple()),
-                    policy_name = %policy_name,
-                    policy_id = %policy_id,
-                    resource = %payload.resource,
-                    action = %payload.action,
-                    decision = "deny",
-                    latency_ns = decision.evaluation_time_ns,
-                    latency_us = decision.evaluation_time_ns as f64 / 1000.0,
-                    "ACCESS DENIED - Security event"
-                );
-            } else {
-                // Structured log for allow (sampled in production)
-                info!(
-                    trace_id = %trace_id,
-                    decision_id = %format!("dec_{}", uuid::Uuid::new_v4().simple()),
-                    policy_name = %policy_name,
-                    policy_id = %policy_id,
-                    resource = %payload.resource,
-                    action = %payload.action,
-                    decision = decision_str,
-                    latency_ns = decision.evaluation_time_ns,
-                    latency_us = decision.evaluation_time_ns as f64 / 1000.0,
-                    "Policy decision"
-                );
+                    if let Some(policy) = state.policy_engine.get_policy(policy_id) {
+                        matched_policy_name = policy.name.clone();
+                    }
+                }
             }
-
-            Ok(Json(json!({
-                "decision": decision_str,
-                "policy_id": decision.policy_id.to_string(),
-                "policy_version": decision.policy_version,
-                "evaluation_time_microseconds": decision.evaluation_time_ns as f64 / 1000.0,
-                "total_time_microseconds": total_time.as_nanos() as f64 / 1000.0,
-                "matched_rule": decision.matched_rule,
-                "agent_id": "reaper-agent-001"
-            })))
-        }
-        Err(ReaperError::PolicyNotFound { policy_id }) => {
-            state.stats.record_cache_miss();
-            CACHE_MISSES.with_label_values(&["policy"]).inc();
-            ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
-            warn!("Policy not found: {}", policy_id);
-            Ok(Json(json!({
-                "error": "Policy not found",
-                "policy_id": policy_id
-            })))
-        }
-        Err(e) => {
-            ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
-            error!("Policy evaluation failed: {}", e);
-            Ok(Json(json!({
-                "error": format!("Policy evaluation failed: {}", e)
-            })))
+            Err(e) => {
+                // On error, deny for security (fail closed)
+                error!("Policy evaluation error for {}: {}", policy_id, e);
+                ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
+                final_decision = PolicyAction::Deny;
+                matched_rule = format!("evaluation_error: {}", e);
+                break;
+            }
         }
     }
+
+    let total_time = start_time.elapsed();
+    state.stats.record_evaluation(total_eval_time_ns);
+
+    let decision_str = match final_decision {
+        PolicyAction::Allow => "allow",
+        PolicyAction::Deny => "deny",
+        PolicyAction::Log => "log",
+    };
+
+    // Record Prometheus metrics
+    DECISIONS_TOTAL
+        .with_label_values(&[
+            decision_str,
+            &matched_policy_name,
+            &matched_policy_id.to_string(),
+        ])
+        .inc();
+
+    // Record latency (convert ns to seconds for Prometheus)
+    let latency_seconds = total_eval_time_ns as f64 / 1_000_000_000.0;
+    DECISION_DURATION
+        .with_label_values(&[&matched_policy_name])
+        .observe(latency_seconds);
+
+    // Record span attributes for distributed tracing
+    span.record("policy_name", matched_policy_name.as_str());
+    span.record("decision", decision_str);
+    span.record("latency_ns", total_eval_time_ns);
+
+    // Add OpenTelemetry span attributes
+    otel_span.set_attribute(KeyValue::new(
+        "reaper.policy.name",
+        matched_policy_name.clone(),
+    ));
+    otel_span.set_attribute(KeyValue::new(
+        "reaper.policy.id",
+        matched_policy_id.to_string(),
+    ));
+    otel_span.set_attribute(KeyValue::new("reaper.decision", decision_str));
+    otel_span.set_attribute(KeyValue::new(
+        "reaper.latency_ns",
+        total_eval_time_ns as i64,
+    ));
+    otel_span.set_attribute(KeyValue::new("reaper.resource", payload.resource.clone()));
+    otel_span.set_attribute(KeyValue::new("reaper.action", payload.action.clone()));
+
+    // Log all decisions asynchronously (non-blocking)
+    if decision_str == "deny" {
+        DENIALS_TOTAL
+            .with_label_values(&[&matched_policy_name, &payload.resource, &payload.action])
+            .inc();
+
+        // Structured log for denial (security event)
+        warn!(
+            trace_id = %trace_id,
+            decision_id = %format!("dec_{}", uuid::Uuid::new_v4().simple()),
+            policy_name = %matched_policy_name,
+            policy_id = %matched_policy_id,
+            resource = %payload.resource,
+            action = %payload.action,
+            decision = "deny",
+            latency_ns = total_eval_time_ns,
+            latency_us = total_eval_time_ns as f64 / 1000.0,
+            "Policy decision: DENY"
+        );
+    } else {
+        // Log allow decisions at INFO level (async, non-blocking)
+        info!(
+            trace_id = %trace_id,
+            decision_id = %format!("dec_{}", uuid::Uuid::new_v4().simple()),
+            policy_name = %matched_policy_name,
+            policy_id = %matched_policy_id,
+            resource = %payload.resource,
+            action = %payload.action,
+            decision = decision_str,
+            latency_ns = total_eval_time_ns,
+            latency_us = total_eval_time_ns as f64 / 1000.0,
+            "Policy decision: ALLOW"
+        );
+    }
+
+    Ok(Json(json!({
+        "decision": decision_str,
+        "policy_id": matched_policy_id.to_string(),
+        "policy_version": matched_policy_version,
+        "evaluation_time_microseconds": total_eval_time_ns as f64 / 1000.0,
+        "total_time_microseconds": total_time.as_nanos() as f64 / 1000.0,
+        "matched_rule": matched_rule,
+        "agent_id": "reaper-agent-001"
+    })))
 }
 
 #[instrument(skip(state, payload))]
@@ -713,6 +814,194 @@ async fn list_policies(State(state): State<Arc<AgentState>>) -> Result<Json<Valu
     Ok(Json(json!({
         "policies": policy_list,
         "total": policy_list.len()
+    })))
+}
+
+/// Load entity data (JSON) into the agent's DataStore
+#[derive(Debug, Deserialize)]
+struct LoadDataRequest {
+    pub data: String, // Raw JSON string with entities
+}
+
+#[instrument(skip(state, payload))]
+async fn load_data_handler(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<LoadDataRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    info!("Loading entity data into DataStore");
+
+    use policy_engine::DataLoader;
+
+    // DataStore uses Arc internally, so cloning is cheap and shares data
+    let loader = DataLoader::new((*state.data_store).clone());
+    let entity_count = loader.load_json(&payload.data).map_err(|e| {
+        error!("Failed to load entity data: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to load entity data: {}", e),
+        )
+    })?;
+
+    info!("✓ Loaded {} entities into DataStore", entity_count);
+
+    Ok(Json(json!({
+        "status": "success",
+        "entities_loaded": entity_count,
+        "message": format!("Loaded {} entities successfully", entity_count)
+    })))
+}
+
+/// Load entity data using streaming for memory efficiency
+/// Accepts file content as raw bytes in request body
+#[instrument(skip(state, body))]
+async fn load_data_stream_handler(
+    State(state): State<Arc<AgentState>>,
+    body: Bytes,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    info!("Loading entity data using streaming (memory-efficient)");
+
+    use policy_engine::{DataLoader, StreamingLoader};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    // Write incoming data to temp file
+    let mut temp_file = NamedTempFile::new().map_err(|e| {
+        error!("Failed to create temp file: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create temp file: {}", e),
+        )
+    })?;
+
+    temp_file.write_all(&body).map_err(|e| {
+        error!("Failed to write to temp file: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to write to temp file: {}", e),
+        )
+    })?;
+
+    temp_file.flush().map_err(|e| {
+        error!("Failed to flush temp file: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to flush temp file: {}", e),
+        )
+    })?;
+
+    let temp_path = temp_file.path();
+
+    // Use streaming loader with 10K chunk size
+    let loader = DataLoader::new((*state.data_store).clone());
+    let streaming_loader = StreamingLoader::new(loader, 10_000);
+
+    let stats = streaming_loader.stream_and_load(temp_path).map_err(|e| {
+        error!("Failed to stream entity data: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to stream entity data: {}", e),
+        )
+    })?;
+
+    info!(
+        "✓ Streamed {} entities in {} chunks ({:.2}s)",
+        stats.total,
+        stats.chunks_processed,
+        stats.duration.as_secs_f64()
+    );
+
+    Ok(Json(json!({
+        "status": "success",
+        "entities_loaded": stats.total,
+        "chunks_processed": stats.chunks_processed,
+        "duration_ms": stats.duration.as_millis(),
+        "message": format!("Streamed {} entities in {} chunks", stats.total, stats.chunks_processed)
+    })))
+}
+
+/// Deploy and compile a .reap policy file with the agent's DataStore
+#[derive(Debug, Deserialize)]
+struct DeployCompiledPolicyRequest {
+    pub policy_content: String, // Raw .reap policy content
+    pub policy_name: String,
+}
+
+#[instrument(skip(state, payload))]
+async fn deploy_compiled_policy(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<DeployCompiledPolicyRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    info!(
+        "Deploying and compiling .reap policy: {}",
+        payload.policy_name
+    );
+
+    use policy_engine::ReaperPolicy;
+    use std::str::FromStr;
+
+    // Parse the .reap policy content
+    let policy = ReaperPolicy::from_str(&payload.policy_content).map_err(|e| {
+        error!("Failed to parse .reap policy: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to parse .reap policy: {}", e),
+        )
+    })?;
+
+    // Compile with the agent's DataStore
+    let evaluator = policy.build(state.data_store.clone()).map_err(|e| {
+        error!("Failed to compile policy: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to compile policy: {}", e),
+        )
+    })?;
+
+    info!("✓ Policy compiled successfully");
+
+    // Create EnhancedPolicy with the compiled evaluator
+    let enhanced_policy = EnhancedPolicy {
+        id: uuid::Uuid::new_v4(),
+        version: 1,
+        name: payload.policy_name.clone(),
+        description: "Compiled .reap policy".to_string(),
+        language: policy_engine::PolicyLanguage::Custom,
+        content: payload.policy_content.clone(),
+        rules: vec![],
+        metadata: std::collections::HashMap::new(),
+        priority: 100,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        evaluator: Some(Arc::new(evaluator)),
+    };
+
+    let policy_id = enhanced_policy.id;
+
+    // Deploy to PolicyEngine
+    state
+        .policy_engine
+        .deploy_policy(enhanced_policy)
+        .map_err(|e| {
+            error!("Failed to deploy policy: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to deploy policy: {}", e),
+            )
+        })?;
+
+    // Update metrics
+    let engine_stats = state.policy_engine.get_stats();
+    ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
+
+    info!("✓ Policy deployed successfully: {}", policy_id);
+
+    Ok(Json(json!({
+        "status": "deployed",
+        "policy_id": policy_id.to_string(),
+        "policy_name": payload.policy_name,
+        "version": 1,
+        "deployment_time": chrono::Utc::now(),
+        "message": "Policy compiled and deployed successfully"
     })))
 }
 
@@ -983,4 +1272,15 @@ async fn batch_upsert_handler(
     };
 
     Ok(Json(response))
+}
+
+// Debug endpoint to check DataStore stats
+#[instrument(skip(state))]
+async fn debug_datastore(State(state): State<Arc<AgentState>>) -> Result<Json<Value>, StatusCode> {
+    let stats = state.data_store.stats();
+    Ok(Json(json!({
+        "total_entities": stats.total_entities,
+        "unique_types": stats.unique_types,
+        "indexed_attributes": stats.indexed_attributes
+    })))
 }

@@ -52,6 +52,8 @@ pub struct Rule {
 pub enum Condition {
     /// Always true
     Always,
+    /// Compare action to literal value
+    ActionEquals { value: String },
     /// Compare user attribute to literal value
     UserEquals { attribute: String, value: String },
     /// Compare resource attribute to literal value
@@ -181,24 +183,69 @@ impl ReaperDSLEvaluator {
         match condition {
             Condition::Always => true,
 
+            Condition::ActionEquals { value } => {
+                // Action comes from context["action"]
+                _context.get("action").map(|a| a == value).unwrap_or(false)
+            }
+
             Condition::UserEquals { attribute, value } => {
                 let attr_key = interner.intern(attribute);
 
-                match user.get_attribute(attr_key) {
+                let result = match user.get_attribute(attr_key) {
                     Some(AttributeValue::String(actual)) => {
                         let expected_value = interner.intern(value);
-                        *actual == expected_value
+                        let matched = *actual == expected_value;
+                        tracing::debug!(
+                            attribute = %attribute,
+                            expected = %value,
+                            actual = ?interner.resolve(*actual),
+                            matched = %matched,
+                            "UserEquals: String comparison"
+                        );
+                        matched
                     }
                     Some(AttributeValue::Bool(actual)) => {
                         // Handle boolean comparisons: "true" == true, "false" == false
-                        value == &actual.to_string()
+                        let matched = value == &actual.to_string();
+                        tracing::debug!(
+                            attribute = %attribute,
+                            expected = %value,
+                            actual = %actual,
+                            matched = %matched,
+                            "UserEquals: Bool comparison"
+                        );
+                        matched
                     }
                     Some(AttributeValue::Int(actual)) => {
                         // Handle integer comparisons: "42" == 42
-                        value == &actual.to_string()
+                        let matched = value == &actual.to_string();
+                        tracing::debug!(
+                            attribute = %attribute,
+                            expected = %value,
+                            actual = %actual,
+                            matched = %matched,
+                            "UserEquals: Int comparison"
+                        );
+                        matched
                     }
-                    _ => false,
-                }
+                    None => {
+                        tracing::debug!(
+                            attribute = %attribute,
+                            expected = %value,
+                            "UserEquals: Attribute not found"
+                        );
+                        false
+                    }
+                    _ => {
+                        tracing::debug!(
+                            attribute = %attribute,
+                            expected = %value,
+                            "UserEquals: Type mismatch"
+                        );
+                        false
+                    }
+                };
+                result
             }
 
             Condition::ResourceEquals { attribute, value } => {
@@ -228,13 +275,72 @@ impl ReaperDSLEvaluator {
                 let user_key = interner.intern(user_attr);
                 let resource_key = interner.intern(resource_attr);
 
-                match (
+                let result = match (
                     user.get_attribute(user_key),
                     resource.get_attribute(resource_key),
                 ) {
-                    (Some(AttributeValue::String(u)), Some(AttributeValue::String(r))) => u == r,
-                    _ => false,
-                }
+                    (Some(AttributeValue::String(u)), Some(AttributeValue::String(r))) => {
+                        let matched = u == r;
+                        tracing::debug!(
+                            user_attr = %user_attr,
+                            resource_attr = %resource_attr,
+                            user_val = ?interner.resolve(*u),
+                            resource_val = ?interner.resolve(*r),
+                            matched = %matched,
+                            "UserEqualsResource: String comparison"
+                        );
+                        matched
+                    }
+                    (Some(AttributeValue::Int(u)), Some(AttributeValue::Int(r))) => {
+                        let matched = u == r;
+                        tracing::debug!(
+                            user_attr = %user_attr,
+                            resource_attr = %resource_attr,
+                            user_val = %u,
+                            resource_val = %r,
+                            matched = %matched,
+                            "UserEqualsResource: Int comparison"
+                        );
+                        matched
+                    }
+                    (Some(AttributeValue::Bool(u)), Some(AttributeValue::Bool(r))) => {
+                        let matched = u == r;
+                        tracing::debug!(
+                            user_attr = %user_attr,
+                            resource_attr = %resource_attr,
+                            user_val = %u,
+                            resource_val = %r,
+                            matched = %matched,
+                            "UserEqualsResource: Bool comparison"
+                        );
+                        matched
+                    }
+                    (None, _) => {
+                        tracing::debug!(
+                            user_attr = %user_attr,
+                            resource_attr = %resource_attr,
+                            "UserEqualsResource: User attribute not found"
+                        );
+                        false
+                    }
+                    (_, None) => {
+                        tracing::debug!(
+                            user_attr = %user_attr,
+                            resource_attr = %resource_attr,
+                            "UserEqualsResource: Resource attribute not found"
+                        );
+                        false
+                    }
+                    _ => {
+                        tracing::debug!(
+                            user_attr = %user_attr,
+                            resource_attr = %resource_attr,
+                            "UserEqualsResource: Type mismatch or unsupported types"
+                        );
+                        false
+                    }
+                };
+                result
             }
 
             Condition::UserIntGreater {
@@ -427,9 +533,30 @@ impl ReaperDSLEvaluator {
                 }
             }
 
-            Condition::And(conditions) => conditions
-                .iter()
-                .all(|c| self.evaluate_condition(c, user, resource, _context, variables)),
+            Condition::And(conditions) => {
+                tracing::debug!(
+                    conditions_count = %conditions.len(),
+                    "Evaluating AND condition"
+                );
+                let mut all_match = true;
+                for (i, c) in conditions.iter().enumerate() {
+                    let matches = self.evaluate_condition(c, user, resource, _context, variables);
+                    tracing::debug!(
+                        index = %i,
+                        matched = %matches,
+                        "AND sub-condition result"
+                    );
+                    if !matches {
+                        all_match = false;
+                        break;
+                    }
+                }
+                tracing::debug!(
+                    result = %all_match,
+                    "AND condition final result"
+                );
+                all_match
+            }
 
             Condition::Or(conditions) => conditions
                 .iter()
@@ -546,6 +673,10 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
                 reason: format!("Resource entity not found: {:?}", resource_id),
             })?;
 
+        // Create evaluation context with action included
+        let mut eval_context = request.context.clone();
+        eval_context.insert("action".to_string(), request.action.clone());
+
         // Variable context for local bindings (scoped to policy evaluation)
         // Performance: HashMap with pre-allocated capacity for common case
         let mut variables = std::collections::HashMap::with_capacity(4);
@@ -559,7 +690,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
                 &rule.condition,
                 &user,
                 &resource,
-                &request.context,
+                &eval_context,
                 &mut variables,
             ) {
                 // Explicit deny - return immediately, no allow can override this
@@ -571,13 +702,29 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
 
         // Phase 2: No deny matched, evaluate ALLOW rules (pre-partitioned, no type checking needed)
         for rule in &self.allow_rules {
-            if self.evaluate_condition(
+            let matches = self.evaluate_condition(
                 &rule.condition,
                 &user,
                 &resource,
-                &request.context,
+                &eval_context,
                 &mut variables,
-            ) {
+            );
+
+            // Debug logging
+            tracing::debug!(
+                rule_name = %rule.name,
+                matches = %matches,
+                action = %request.action,
+                user_id = ?user_id,
+                "Evaluating allow rule"
+            );
+
+            if matches {
+                tracing::info!(
+                    rule_name = %rule.name,
+                    action = %request.action,
+                    "Rule matched - returning Allow"
+                );
                 return Ok(PolicyAction::Allow);
             }
             // Clear variables between rules (each rule has independent scope)
@@ -585,6 +732,12 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         }
 
         // Phase 3: No rule matched - return default decision
+        tracing::debug!(
+            default_decision = ?self.default_decision,
+            action = %request.action,
+            user_id = ?user_id,
+            "No rules matched - returning default decision"
+        );
         Ok(self.default_decision.clone())
     }
 

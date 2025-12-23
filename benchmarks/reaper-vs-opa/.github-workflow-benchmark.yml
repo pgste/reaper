@@ -1,0 +1,208 @@
+# GitHub Actions workflow for Reaper vs OPA benchmarks
+# To use: copy to .github/workflows/benchmark.yml
+
+name: Benchmark
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: 'Number of requests'
+        required: false
+        default: '10000'
+      concurrency:
+        description: 'Concurrent requests'
+        required: false
+        default: '50'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Run tests concurrently for different scenarios and scales
+      matrix:
+        scenario: [rbac, abac, rebac, multilayer]
+        scale: [10k]
+        include:
+          # Optional: Add 100k scale tests (comment out if not available)
+          # - scenario: rbac
+          #   scale: 100k
+          # - scenario: abac
+          #   scale: 100k
+      fail-fast: false  # Continue running other tests even if one fails
+
+    name: ${{ matrix.scenario }}-${{ matrix.scale }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install Enterprise OPA
+      run: |
+        # Download Styra Enterprise OPA (open source)
+        # Use eopa_Linux_x86_64 for standard GitHub runners
+        # Use eopa_Linux_arm64 for ARM-based runners
+        curl -L -o eopa https://github.com/StyraInc/enterprise-opa/releases/latest/download/eopa_Linux_x86_64
+        chmod +x eopa
+        sudo mv eopa /usr/local/bin/opa
+        opa version
+
+    - name: Build Reaper Agent
+      run: cargo build --release --bin reaper-agent
+
+    - name: Build Benchmark Tool
+      working-directory: benchmarks/reaper-vs-opa
+      run: cargo build --release
+
+    - name: Start Reaper Agent
+      run: |
+        ./target/release/reaper-agent &
+        REAPER_PID=$!
+        echo "REAPER_PID=$REAPER_PID" >> $GITHUB_ENV
+        sleep 5
+
+        # Verify Reaper is running
+        curl -f http://localhost:8080/health || exit 1
+
+    - name: Start Enterprise OPA
+      run: |
+        opa run --server --addr=0.0.0.0:8181 --log-level=info &
+        OPA_PID=$!
+        echo "OPA_PID=$OPA_PID" >> $GITHUB_ENV
+        sleep 5
+
+        # Verify OPA is running
+        curl -f http://localhost:8181/health || exit 1
+
+    - name: Run Benchmark - ${{ matrix.scenario }} @ ${{ matrix.scale }}
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        REQUESTS=${{ github.event.inputs.requests || '50000' }}
+        CONCURRENCY=${{ github.event.inputs.concurrency || '50' }}
+
+        # Run benchmark for specific scenario and scale
+        ./bin/benchmark.sh \
+          --scenario ${{ matrix.scenario }} \
+          --scale ${{ matrix.scale }} \
+          --requests $REQUESTS \
+          --concurrency $CONCURRENCY
+
+    - name: Upload Results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results-${{ matrix.scenario }}-${{ matrix.scale }}
+        path: |
+          benchmarks/reaper-vs-opa/results/${{ matrix.scale }}/${{ matrix.scenario }}/
+        if-no-files-found: error
+
+    - name: Stop Services
+      if: always()
+      run: |
+        kill ${{ env.REAPER_PID }} || true
+        kill ${{ env.OPA_PID }} || true
+
+  # Aggregate results and post to PR
+  report:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Download all results
+      uses: actions/download-artifact@v3
+      with:
+        path: all-results
+
+    - name: Combine and Comment PR with Results
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          let comment = '## 📊 Benchmark Results (Reaper vs Enterprise OPA)\n\n';
+          comment += '| Scenario | Scale | Engine | RPS | P50 (μs) | P95 (μs) | P99 (μs) | Speedup |\n';
+          comment += '|----------|-------|--------|-----|----------|----------|----------|--------|\n';
+
+          // Read all result files
+          const resultsDir = 'all-results';
+          const artifacts = fs.readdirSync(resultsDir);
+
+          const allResults = [];
+
+          for (const artifact of artifacts) {
+            const match = artifact.match(/benchmark-results-(\w+)-(\w+)/);
+            if (!match) continue;
+
+            const [_, scenario, scale] = match;
+            const resultsFile = path.join(resultsDir, artifact, 'results.json');
+
+            if (fs.existsSync(resultsFile)) {
+              const results = JSON.parse(fs.readFileSync(resultsFile, 'utf8'));
+              allResults.push({ scenario, scale, results });
+            }
+          }
+
+          // Sort by scenario and scale
+          allResults.sort((a, b) => {
+            if (a.scenario !== b.scenario) return a.scenario.localeCompare(b.scenario);
+            return a.scale.localeCompare(b.scale);
+          });
+
+          // Format results
+          for (const { scenario, scale, results } of allResults) {
+            if (results.length >= 2) {
+              const reaper = results[0];
+              const opa = results[1];
+              const speedup = (reaper.throughput_rps / opa.throughput_rps).toFixed(2);
+
+              // Reaper row
+              comment += `| ${scenario} | ${scale} | Reaper | `;
+              comment += `${Math.round(reaper.throughput_rps)} | `;
+              comment += `${Math.round(reaper.latency_p50_us)} | `;
+              comment += `${Math.round(reaper.latency_p95_us)} | `;
+              comment += `${Math.round(reaper.latency_p99_us)} | `;
+              comment += `**${speedup}x** |\n`;
+
+              // OPA row
+              comment += `| ${scenario} | ${scale} | Enterprise OPA | `;
+              comment += `${Math.round(opa.throughput_rps)} | `;
+              comment += `${Math.round(opa.latency_p50_us)} | `;
+              comment += `${Math.round(opa.latency_p95_us)} | `;
+              comment += `${Math.round(opa.latency_p99_us)} | `;
+              comment += `1.00x |\n`;
+            }
+          }
+
+          comment += '\n**Note**: Using [Styra Enterprise OPA](https://github.com/StyraInc/enterprise-opa) (open source) for fair comparison.\n';
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });

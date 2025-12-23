@@ -797,12 +797,24 @@ async fn get_bundle(
 }
 
 /// Deploy a bundle to all or specific agents
+#[instrument(skip(state))]
 async fn deploy_bundle_to_agents(
-    State(_state): State<Arc<PlatformState>>,
+    State(state): State<Arc<PlatformState>>,
     Json(req): Json<DeployBundleToAgentsRequest>,
 ) -> Result<Json<DeployBundleToAgentsResponse>, (StatusCode, String)> {
-    // Minimal stub to test if signature is valid
-    info!("Deploy bundle request received: {}", req.bundle_id);
+    info!("Deploying bundle {} to agents", req.bundle_id);
+
+    // Get the bundle
+    let storage = state.bundle_storage.read();
+    let _bundle = storage.get(&req.bundle_id).ok_or_else(|| {
+        warn!("Bundle not found: {}", req.bundle_id);
+        (StatusCode::NOT_FOUND, "Bundle not found".to_string())
+    })?;
+    drop(storage);
+
+    // TODO: Full implementation coming
+    warn!("Bundle deployment not yet fully implemented");
+
     Ok(Json(DeployBundleToAgentsResponse {
         bundle_id: req.bundle_id,
         total_agents: 0,
@@ -811,138 +823,3 @@ async fn deploy_bundle_to_agents(
         results: vec![],
     }))
 }
-
-/*
-async fn deploy_bundle_to_agents_FULL(
-    State(state): State<Arc<PlatformState>>,
-    Json(req): Json<DeployBundleToAgentsRequest>,
-) -> Result<Json<DeployBundleToAgentsResponse>, (StatusCode, String)> {
-    info!("Deploying bundle {} to agents", req.bundle_id);
-
-    // 1. Get the bundle
-    let storage = state.bundle_storage.read();
-    let bundle = storage.get(&req.bundle_id).ok_or_else(|| {
-        warn!("Bundle not found: {}", req.bundle_id);
-        (StatusCode::NOT_FOUND, "Bundle not found".to_string())
-    })?;
-
-    let bundle_bytes = bundle.to_bytes().map_err(|e| {
-        error!("Bundle serialization failed: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Bundle serialization failed: {}", e),
-        )
-    })?;
-
-    let bundle_version = bundle
-        .metadata
-        .policy_version
-        .clone()
-        .unwrap_or_else(|| "1.0.0".to_string());
-    drop(storage);
-
-    // 2. Get agents to deploy to
-    let agents_map = state.agents.read();
-    let target_agents: Vec<(String, String)> = if req.agent_ids.is_empty() {
-        // Deploy to all agents
-        agents_map
-            .iter()
-            .map(|(id, url)| (id.clone(), url.clone()))
-            .collect()
-    } else {
-        // Deploy to specified agents
-        req.agent_ids
-            .iter()
-            .filter_map(|id| agents_map.get(id).map(|url| (id.clone(), url.clone())))
-            .collect()
-    };
-    drop(agents_map);
-
-    if target_agents.is_empty() {
-        warn!("No agents available for deployment");
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "No agents available for deployment".to_string(),
-        ));
-    }
-
-    // 3. Deploy to each agent
-    let client = reqwest::Client::new();
-    let mut results = Vec::new();
-    let mut successful = 0;
-    let mut failed = 0;
-
-    for (agent_id, agent_url) in &target_agents {
-        let deploy_url = format!("{}/api/v1/bundles/deploy", agent_url);
-
-        let deploy_req = serde_json::json!({
-            "bundle": bundle_bytes,
-            "version": bundle_version,
-            "force": req.force,
-        });
-
-        match client.post(&deploy_url).json(&deploy_req).send().await {
-            Ok(response) if response.status().is_success() => {
-                successful += 1;
-                results.push(AgentDeploymentResult {
-                    agent_id: agent_id.clone(),
-                    agent_url: agent_url.clone(),
-                    success: true,
-                    message: "Bundle deployed successfully".to_string(),
-                    deployed_version: Some(bundle_version.clone()),
-                });
-                info!("Bundle deployed successfully to agent {}", agent_id);
-            }
-            Ok(response) => {
-                failed += 1;
-                let error_msg = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
-                results.push(AgentDeploymentResult {
-                    agent_id: agent_id.clone(),
-                    agent_url: agent_url.clone(),
-                    success: false,
-                    message: format!("Deployment failed: {}", error_msg),
-                    deployed_version: None,
-                });
-                warn!("Bundle deployment failed for agent {}: {}", agent_id, error_msg);
-            }
-            Err(e) => {
-                failed += 1;
-                results.push(AgentDeploymentResult {
-                    agent_id: agent_id.clone(),
-                    agent_url: agent_url.clone(),
-                    success: false,
-                    message: format!("Connection error: {}", e),
-                    deployed_version: None,
-                });
-                error!("Failed to connect to agent {}: {}", agent_id, e);
-            }
-        }
-    }
-
-    // 4. Update deployment stats
-    {
-        let mut stats = state.deployment_stats.write();
-        stats.total_deployments += target_agents.len() as u64;
-        stats.successful_deployments += successful as u64;
-        stats.failed_deployments += failed as u64;
-    }
-
-    info!(
-        "Bundle deployment complete: {} successful, {} failed out of {} agents",
-        successful,
-        failed,
-        target_agents.len()
-    );
-
-    Ok(Json(DeployBundleToAgentsResponse {
-        bundle_id: req.bundle_id,
-        total_agents: target_agents.len(),
-        successful,
-        failed,
-        results,
-    }))
-}
-*/

@@ -108,7 +108,7 @@ pub struct EnhancedPolicy {
 
     /// Cached evaluator (not serialized)
     #[serde(skip)]
-    evaluator: Option<Arc<dyn PolicyEvaluator>>,
+    pub evaluator: Option<Arc<dyn PolicyEvaluator>>,
 }
 
 impl EnhancedPolicy {

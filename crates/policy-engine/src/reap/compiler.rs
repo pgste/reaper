@@ -27,7 +27,8 @@ pub fn compile_policy(
         rules.push(compile_rule(rule)?);
     }
 
-    Ok(ReaperDSLEvaluator::new(store, rules, default_decision))
+    let evaluator = ReaperDSLEvaluator::new(store, rules, default_decision);
+    Ok(evaluator)
 }
 
 /// Compile a single rule
@@ -130,6 +131,46 @@ fn compile_comparison(
     op: Operator,
     right: ComparisonRight,
 ) -> Result<DslCondition, ReaperError> {
+    // Special case: check if this is an "action" variable comparison
+    if let ComparisonLeft::Expr(Expr::Variable(var_name)) = &left {
+        if var_name == "action" {
+            // Handle action == "value" comparisons
+            if let ComparisonRight::Value(value) = right {
+                let value_str = match value {
+                    Value::String(s) => s,
+                    Value::Integer(i) => i.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Boolean(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "Action comparisons only support simple literal values"
+                                .to_string(),
+                        })
+                    }
+                };
+                return match op {
+                    Operator::Equal => Ok(DslCondition::ActionEquals { value: value_str }),
+                    Operator::NotEqual => {
+                        Ok(DslCondition::Not(Box::new(DslCondition::ActionEquals {
+                            value: value_str,
+                        })))
+                    }
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "Operator {:?} not supported for action comparisons. Use == or !=.",
+                            op
+                        ),
+                    }),
+                };
+            } else {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "Action comparisons must be against literal values (e.g., action == \"read\")".to_string(),
+                });
+            }
+        }
+    }
+
     // Extract EntityAttr from left - var attributes not supported in compiler
     let left_attr = match left {
         ComparisonLeft::EntityAttr(attr) => attr,
