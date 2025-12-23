@@ -13,8 +13,18 @@ curl -s -X DELETE http://localhost:8181/v1/policies/multilayer > /dev/null 2>&1 
 # Restart Reaper for clean state
 pkill -f "reaper-agent" || true
 sleep 2
-cd /workspaces/reaper
-nohup ./target/release/reaper-agent > /tmp/reaper-agent.log 2>&1 &
+
+# Find reaper-agent binary (works in both codespace and CI)
+if [ -f "./target/release/reaper-agent" ]; then
+    REAPER_BIN="./target/release/reaper-agent"
+elif [ -f "../../target/release/reaper-agent" ]; then
+    REAPER_BIN="../../target/release/reaper-agent"
+else
+    echo "Error: reaper-agent binary not found"
+    exit 1
+fi
+
+nohup $REAPER_BIN > /tmp/reaper-agent.log 2>&1 &
 sleep 3
 
 echo "✓ Cleanup complete"
