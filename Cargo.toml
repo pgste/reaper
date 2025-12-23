@@ -5,10 +5,14 @@ members = [
     "crates/policy-engine",
     "crates/message-queue",
     "crates/metrics",
+    "crates/reaper-sdk",
     "services/reaper-agent",
     "services/reaper-platform",
     "tools/reaper-cli",
     "crates/reaper-ebpf",
+]
+exclude = [
+    "benchmarks/reaper-vs-opa",
 ]
 
 [workspace.dependencies]

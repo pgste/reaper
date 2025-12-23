@@ -53,7 +53,7 @@ pub use compiled_evaluator::CompiledPolicyEvaluator;
 
 pub use data::{
     AttributeValue, Attributes, DataFormat, DataLoader, DataStore, Entity, EntityId, EntityType,
-    IndexStrategy, InternedString, QueryBuilder, StringInterner,
+    IndexStrategy, InternedString, QueryBuilder, StreamingLoader, StreamingStats, StringInterner,
 };
 
 // Re-export entity builder for convenience

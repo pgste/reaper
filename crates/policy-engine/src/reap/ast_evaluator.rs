@@ -872,13 +872,16 @@ impl ReapAstEvaluator {
                 }
 
                 // Regular variable lookup
-                context
-                    .variables
-                    .get(var_name)
-                    .cloned()
-                    .ok_or_else(|| ReaperError::InvalidPolicy {
+                // First check variables, then fall back to request_context
+                if let Some(val) = context.variables.get(var_name) {
+                    Ok(val.clone())
+                } else if let Some(val) = context.request_context.get(var_name) {
+                    Ok(EvalValue::String(val.clone()))
+                } else {
+                    Err(ReaperError::InvalidPolicy {
                         reason: format!("Undefined variable: {}", var_name),
                     })
+                }
             }
 
             Expr::AttributeAccess {

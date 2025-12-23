@@ -110,13 +110,17 @@ reaper/
 │   │   │   ├── data/       # DataStore - multi-index entity storage
 │   │   │   ├── reap/       # ReaperPolicy - format support (.reap/.yaml/.json)
 │   │   │   └── gherkin/    # Cucumber/Gherkin integration
+│   ├── reaper-sdk/         # Client SDK (HTTP + future UDP support)
+│   ├── reaper-ebpf/        # eBPF kernel integration (experimental)
 │   ├── message-queue/      # Async messaging (stub)
 │   └── metrics/            # Performance monitoring (stub)
 ├── services/
 │   ├── reaper-agent/       # Agent service (399 lines)
 │   └── reaper-platform/    # Platform service (620 lines)
-└── tools/
-    └── reaper-cli/         # CLI management tool (150+ lines)
+├── tools/
+│   └── reaper-cli/         # CLI management tool (150+ lines)
+└── benchmarks/
+    └── reaper-vs-opa/      # Reaper vs OPA comparison benchmark
 ```
 
 ### Core Components
@@ -255,6 +259,44 @@ Platform creates/updates policy
 - `crates/policy-engine/examples/test_abac_10k.rs` - ABAC at scale
 - `crates/policy-engine/examples/test_multilayer_10k.rs` - Multilayer policies
 - `crates/policy-engine/examples/memory_volume_test.rs` - Memory profiling
+
+## Benchmarking
+
+### Reaper vs OPA Comparison Benchmark
+
+A comprehensive benchmark suite for comparing Reaper and OPA performance:
+
+**Location**: `benchmarks/reaper-vs-opa/`
+
+**Quick Start**:
+```bash
+cd benchmarks/reaper-vs-opa
+
+# Docker mode (fully automated)
+DOCKER=1 ./run-benchmark.sh
+
+# Local mode (requires services running)
+./run-benchmark.sh --requests 10000 --concurrency 50
+```
+
+**Features**:
+- Equivalent policies in .reap (Reaper) and .rego (OPA) formats
+- RBAC and ABAC scenarios
+- HDR histogram for accurate latency percentiles
+- Multiple output formats (table, JSON, CSV)
+- Docker orchestration for reproducible tests
+- CI integration ready
+
+**Documentation**:
+- `QUICKSTART.md` - Quick start guide
+- `README.md` - Comprehensive documentation
+- `VALIDATION.md` - Build verification report
+
+**Metrics Collected**:
+- Throughput (requests/second)
+- Latency distribution (p50, p95, p99, max)
+- Success rate
+- Performance comparison (Reaper vs OPA)
 
 ## Performance Characteristics
 

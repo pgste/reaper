@@ -1,0 +1,58 @@
+// Attribute-Based Access Control (ABAC) Benchmark Policy
+// Tests attribute matching with clearance levels, departments, and status
+
+policy abac_benchmark {
+    version: "1.0.0",
+    description: "ABAC benchmark - clearance levels and department access",
+
+    default: deny,
+
+    // Deny suspended users immediately (highest priority)
+    rule deny_suspended {
+        deny if user.suspended == true
+    }
+
+    // Admin with high clearance can access everything
+    rule admin_high_clearance {
+        allow if {
+            user.role == "admin" &&
+            user.high_clearance == true
+        }
+    }
+
+    // Same department access with clearance match
+    rule department_clearance {
+        allow if {
+            user.department == resource.department &&
+            user.clearance_level >= resource.clearance_level &&
+            user.status == "active"
+        }
+    }
+
+    // High clearance users can access non-secret resources in their dept
+    rule high_clearance_dept {
+        allow if {
+            user.high_clearance == true &&
+            user.department == resource.department &&
+            resource.classification != "secret" &&
+            action == "read"
+        }
+    }
+
+    // Resource owners can always access (if active)
+    rule owner_access {
+        allow if {
+            user.id == resource.owner_id &&
+            user.status == "active"
+        }
+    }
+
+    // Public resources accessible to active users
+    rule public_access {
+        allow if {
+            resource.classification == "public" &&
+            user.status == "active" &&
+            action == "read"
+        }
+    }
+}
