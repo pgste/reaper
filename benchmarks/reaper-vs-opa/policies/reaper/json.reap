@@ -1,0 +1,120 @@
+// JSON Operations Policy
+// Tests JSON parsing, validation, and manipulation
+
+policy json_operations {
+    version: "1.0",
+    description: "JSON operations for integration testing",
+    default: deny,
+
+    // JSON Parse Check
+    rule valid_json_payload {
+        allow if {
+            user.payload != null &&
+            user.payload.valid == true &&
+            resource == "api_endpoint"
+        }
+    }
+
+    // JSON Path Access Check
+    rule complete_profile_data {
+        allow if {
+            user.profile != null &&
+            user.profile.name != null &&
+            user.profile.email != null &&
+            user.profile.phone != null &&
+            user.profile.address != null &&
+            resource == "user_profile"
+        }
+    }
+
+    // Nested JSON Structure Check
+    rule nested_payment_data {
+        allow if {
+            user.payment != null &&
+            user.payment.card != null &&
+            user.payment.card.number != null &&
+            user.payment.billing_address != null &&
+            user.payment.billing_address.street != null &&
+            resource == "payment"
+        }
+    }
+
+    // JSON Array Check
+    rule order_items_present {
+        allow if {
+            user.order_items != null &&
+            items := user.order_items &&
+            item_count := items.count() &&
+            item_count > 0 &&
+            resource == "order"
+        }
+    }
+
+    // JSON Type Check - validate that fields have correct types
+    rule correct_field_types {
+        allow if {
+            user.form_data != null &&
+            user.form_data.name != null &&
+            user.form_data.age != null &&
+            user.form_data.active != null &&
+            resource == "form_data" &&
+            // Type validation: name should be string, age should be number (>= 0), active should be boolean
+            name_str := user.form_data.name &&
+            age_val := user.form_data.age &&
+            active_val := user.form_data.active &&
+            is_string(name_str) &&
+            is_number(age_val) &&
+            is_bool(active_val)
+        }
+    }
+
+    // JSON String Field
+    rule valid_string_field {
+        allow if {
+            user.name != null &&
+            resource == "text_field" &&
+            user.name_length > 0
+        }
+    }
+
+    // JSON Number Field
+    rule valid_number_field {
+        allow if {
+            user.age != null &&
+            resource == "number_field" &&
+            user.age >= 18
+        }
+    }
+
+    // JSON Boolean Field
+    rule valid_boolean_field {
+        allow if {
+            user.verified != null &&
+            resource == "boolean_field" &&
+            user.verified == true
+        }
+    }
+
+    // JSON Object Field
+    rule valid_object_field {
+        allow if {
+            user.address != null &&
+            user.address.street != null &&
+            user.address.city != null &&
+            resource == "structured_data"
+        }
+    }
+
+    // JSON Merge Check
+    rule merged_data_complete {
+        allow if {
+            user.primary_data != null &&
+            user.primary_data.name != null &&
+            user.primary_data.email != null &&
+            user.secondary_data != null &&
+            user.secondary_data.phone != null &&
+            user.secondary_data.address != null &&
+            resource == "data_merge"
+        }
+    }
+}

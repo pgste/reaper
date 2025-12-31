@@ -18,9 +18,9 @@ POLICY_FILE="policies/opa/${SCENARIO}.rego"
 echo -e "${YELLOW}Deploying to OPA: ${SCENARIO} @ ${SCALE}${NC}"
 
 # Transform entities array to map for O(1) lookups (fair comparison with Reaper)
-# From: {"entities": [{"id": "user1", ...}, ...]}
-# To:   {"user1": {...}, ...}  (no wrapper, load directly into /entities namespace)
-ENTITY_MAP=$(jq '.entities | map({(.id): .}) | add' "$DATA_FILE")
+# From: {"entities": [{"id": "user1", "type": "user", "attributes": {...}}, ...]}
+# To:   {"user1": {type: "user", ...attributes...}, ...}  (flatten attributes into entity)
+ENTITY_MAP=$(jq '.entities | map({(.id): (.attributes + {id: .id, type: .type})}) | add' "$DATA_FILE")
 
 # Load entities as map directly into /v1/data/entities namespace
 echo "$ENTITY_MAP" | curl -s -X PUT "${OPA_URL}/v1/data/entities" \

@@ -65,6 +65,8 @@ struct BenchmarkResult {
     latency_p99_us: f64,
     latency_max_us: f64,
     latency_mean_us: f64,
+    #[serde(default)]
+    memory_mb: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -511,6 +513,7 @@ async fn run_benchmark(
         latency_p99_us: histogram.value_at_quantile(0.99) as f64,
         latency_max_us: histogram.max() as f64,
         latency_mean_us: histogram.mean(),
+        memory_mb: 0.0, // Will be filled in by benchmark.sh script
     };
 
     println!(
@@ -643,6 +646,232 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 expected_decision: None,
             }
         },
+        "math" => {
+            // Math policy: numeric validation rules
+            let resources = [
+                "premium_loan",      // credit_score >= 700
+                "shopping_cart",     // order_total <= budget_limit
+                "featured_listing",  // average_rating >= 4.0
+                "marketplace",       // list_price 1-10000
+                "premium_tier",      // score >= 90
+                "temperature_monitor", // temp -50 to 50
+                "loyalty_reward",    // total_points >= 1000
+                "sale_item",         // discount 0-50%
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("math_user_{}", index % 100000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "regex" => {
+            // Regex policy: pattern validation rules using actual regex::matches()
+            let resources = [
+                "email_service",    // regex::matches(user.email, email_pattern)
+                "phone_service",    // regex::matches(user.phone, phone_pattern)
+                "uuid_service",     // regex::matches(user.uuid, uuid_pattern)
+                "payment_service",  // regex::matches(user.credit_card, cc_pattern)
+                "web_service",      // regex::matches(user.url, url_pattern)
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("regex_user_{}", index % 100000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "time" => {
+            // Time policy: time-based access control
+            let roles = ["employee", "operator", "event_planner", "contractor", "system", "audit_logger", "api_client", "archiver"];
+            let resources = [
+                "api_endpoint",
+                "office_system",
+                "apartment",
+                "production_system",
+                "web_session",
+                "conference_room",
+                "project_files",
+                "timestamp_data",
+                "audit_trail",
+                "rate_limited_endpoint",
+                "data",
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("time_user_{}", index % 100000),
+                    role: roles[index % roles.len()].to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "string" => {
+            // String policy: string method calls (.contains, .startswith, .endswith)
+            let resources = [
+                "internal_docs",     // user.email.endswith("@company.com")
+                "partner_portal",    // user.email.contains("partner")
+                "admin_panel",       // user.username.startswith("admin_")
+                "gov_service",       // user.email.endswith(".gov")
+                "test_environment",  // user.username.contains("test")
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("string_user_{}", index % 100000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "collection" => {
+            // Collection policy: array/set/map operations
+            let resources = [
+                "document",
+                "senior_position",
+                "shared_resource",
+                "content",
+                "system",
+                "invoice",
+                "profile",
+                "email_campaign",
+                "workflow",
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("collection_user_{}", index % 100000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: ["view", "edit", "read"][index % 3].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "comprehension" => {
+            // Comprehension policy: list comprehension rules
+            let resources = [
+                "set_result",
+                "array_result",
+                "object_result",
+                "complex_filter",
+                "nested_result",
+                "transformed_data",
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("comp_user_{}", index % 10000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "json" => {
+            // JSON policy: JSON structure validation
+            let resources = [
+                "api_endpoint",
+                "user_profile",
+                "payment",
+                "order",
+                "form_data",
+                "text_field",
+                "number_field",
+                "boolean_field",
+                "structured_data",
+                "data_merge",
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("json_user_{}", index % 10000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
+        "mega" => {
+            // Mega policy: 105 rules covering all patterns
+            let resources = [
+                // Math
+                "premium_loan", "shopping_cart", "featured_listing", "marketplace_low", "marketplace_medium",
+                "marketplace_high", "bronze_tier", "silver_tier", "gold_tier", "cold_storage", "normal_storage",
+                "warm_storage", "loyalty_basic", "loyalty_premium", "loyalty_elite",
+                // String
+                "admin_access", "manager_access", "user_access", "code_a", "code_b", "code_c",
+                "company_docs", "partner_docs", "external_docs", "admin_panel", "manager_panel", "user_panel",
+                "gov_classified", "mil_classified", "edu_resources",
+                // Regex
+                "email_validation", "phone_validation", "url_validation", "ip_validation", "uuid_validation",
+                // Time
+                "api_endpoint", "office_morning", "office_afternoon", "adult_content", "apartment_access",
+                // Collection
+                "doc_read", "doc_write", "doc_delete", "junior_position", "mid_position", "senior_position",
+                "eng_resource", "admin_resource", "manager_resource",
+                // Comprehension
+                "numbers_gt5", "numbers_gt10", "high_priority", "medium_priority", "active_records",
+                // JSON
+                "api_submit", "profile_basic", "profile_full", "payment_card", "payment_billing",
+            ];
+
+            PolicyRequest {
+                principal: Principal {
+                    id: format!("mega_user_{}", index % 10000),
+                    role: "user".to_string(),
+                    department: None,
+                    clearance: None,
+                    region: None,
+                },
+                action: actions[index % actions.len()].to_string(),
+                resource: resources[index % resources.len()].to_string(),
+                context: None,
+                expected_decision: None,
+            }
+        },
         _ => {
             // Default fallback for unknown scenarios
             let roles = ["admin", "manager", "engineer", "viewer"];
@@ -727,19 +956,21 @@ async fn send_opa_request(
     scenario: &str,
     request: PolicyRequest,
 ) -> Result<DecisionResult> {
-    // For ABAC/ReBAC/Multilayer, OPA expects just the principal ID string, not the full Principal object
-    // because it does entity lookups: user := data.entities[input.principal]
+    // Most scenarios expect just the principal ID string, not the full Principal object
+    // because they do entity lookups: user := data.entities[input.principal]
     let payload = match scenario {
-        "abac" | "rebac" | "multilayer" => json!({
+        // RBAC sends the full Principal object (no entity lookup)
+        "rbac" => json!({
+            "input": request
+        }),
+        // All other scenarios use entity lookup - send just the principal ID
+        _ => json!({
             "input": {
                 "principal": request.principal.id,
                 "action": request.action,
                 "resource": request.resource,
+                "context": request.context,
             }
-        }),
-        // For RBAC, send the full Principal object
-        _ => json!({
-            "input": request
         }),
     };
 

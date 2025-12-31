@@ -2,10 +2,14 @@
 //!
 //! Efficiently load entity data from JSON, YAML, or other formats
 //! into the DataStore with automatic string interning.
+//!
+//! **Optimization**: Arrays of simple scalars (strings, ints, bools) are
+//! automatically converted to Sets for O(1) membership tests.
 
 use super::entity::{AttributeValue, EntityBuilder};
 use super::store::DataStore;
 use reaper_core::ReaperError;
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -236,11 +240,27 @@ pub(crate) fn json_value_to_attribute(
         JsonValue::Bool(b) => Ok(AttributeValue::Bool(b)),
         JsonValue::Null => Ok(AttributeValue::Null),
         JsonValue::Array(arr) => {
-            let items: Result<Vec<_>, _> = arr
-                .into_iter()
-                .map(|v| json_value_to_attribute(v, interner))
-                .collect();
-            Ok(AttributeValue::List(items?))
+            // Check if all elements are simple scalars (string, int, bool)
+            // If so, convert to Set for O(1) membership tests
+            let all_simple = arr.iter().all(|v| {
+                matches!(v, JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_))
+            });
+
+            if all_simple && !arr.is_empty() {
+                // Convert to Set for O(1) membership lookups
+                let mut set = FxHashSet::default();
+                for v in arr {
+                    set.insert(json_value_to_attribute(v, interner)?);
+                }
+                Ok(AttributeValue::Set(set))
+            } else {
+                // Keep as List for arrays with nested objects/arrays or empty arrays
+                let items: Result<Vec<_>, _> = arr
+                    .into_iter()
+                    .map(|v| json_value_to_attribute(v, interner))
+                    .collect();
+                Ok(AttributeValue::List(items?))
+            }
         }
         JsonValue::Object(obj) => {
             let mut map = std::collections::HashMap::new();

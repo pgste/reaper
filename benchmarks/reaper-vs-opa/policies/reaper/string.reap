@@ -1,0 +1,48 @@
+// String Operations Policy
+// Tests actual string method calls in compiled mode
+
+policy string_operations {
+    version: "1.0",
+    description: "String operations for integration testing",
+    default: deny,
+
+    // Email domain check - uses .endswith()
+    rule company_email {
+        allow if {
+            resource == "internal_docs" &&
+            user.email.endswith("@company.com")
+        }
+    }
+
+    // Partner email check - uses .contains()
+    rule partner_email {
+        allow if {
+            resource == "partner_portal" &&
+            user.email.contains("partner")
+        }
+    }
+
+    // Admin username check - uses .startswith()
+    rule admin_user {
+        allow if {
+            resource == "admin_panel" &&
+            user.username.startswith("admin_")
+        }
+    }
+
+    // Government email check - uses .endswith()
+    rule gov_email {
+        allow if {
+            resource == "gov_service" &&
+            user.email.endswith(".gov")
+        }
+    }
+
+    // Test username check - uses .contains()
+    rule test_user {
+        allow if {
+            resource == "test_environment" &&
+            user.username.contains("test")
+        }
+    }
+}
