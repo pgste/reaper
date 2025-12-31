@@ -32,7 +32,7 @@ jobs:
     strategy:
       # Run tests concurrently for different scenarios and scales
       matrix:
-        scenario: [rbac, abac, rebac, multilayer]
+        scenario: [rbac, abac, multilayer, math, regex, string, collection, time, mega]
         scale: [100k]  # Using 100k for realistic performance comparison
       fail-fast: false  # Continue running other tests even if one fails
 
@@ -147,8 +147,8 @@ jobs:
           const path = require('path');
 
           let comment = '## 📊 Benchmark Results (Reaper vs Enterprise OPA)\n\n';
-          comment += '| Scenario | Scale | Engine | RPS | P50 (μs) | P95 (μs) | P99 (μs) | Speedup |\n';
-          comment += '|----------|-------|--------|-----|----------|----------|----------|--------|\n';
+          comment += '| Scenario | Scale | Engine | RPS | P50 (μs) | P95 (μs) | P99 (μs) | Memory (MB) | Speedup | P99 Δ (μs) |\n';
+          comment += '|----------|-------|--------|-----|----------|----------|----------|-------------|---------|------------|\n';
 
           // Read all result files
           const resultsDir = 'all-results';
@@ -181,6 +181,7 @@ jobs:
               const reaper = results[0];
               const opa = results[1];
               const speedup = (reaper.throughput_rps / opa.throughput_rps).toFixed(2);
+              const p99_delta = Math.round(opa.latency_p99_us - reaper.latency_p99_us);
 
               // Reaper row
               comment += `| ${scenario} | ${scale} | Reaper | `;
@@ -188,7 +189,9 @@ jobs:
               comment += `${Math.round(reaper.latency_p50_us)} | `;
               comment += `${Math.round(reaper.latency_p95_us)} | `;
               comment += `${Math.round(reaper.latency_p99_us)} | `;
-              comment += `**${speedup}x** |\n`;
+              comment += `${Math.round(reaper.memory_mb || 0)} | `;
+              comment += `**${speedup}x** | `;
+              comment += `**-${p99_delta}** |\n`;
 
               // OPA row
               comment += `| ${scenario} | ${scale} | Enterprise OPA | `;
@@ -196,7 +199,9 @@ jobs:
               comment += `${Math.round(opa.latency_p50_us)} | `;
               comment += `${Math.round(opa.latency_p95_us)} | `;
               comment += `${Math.round(opa.latency_p99_us)} | `;
-              comment += `1.00x |\n`;
+              comment += `${Math.round(opa.memory_mb || 0)} | `;
+              comment += `1.00x | `;
+              comment += `baseline |\n`;
             }
           }
 
@@ -205,6 +210,8 @@ jobs:
           comment += '- Using [Styra Enterprise OPA](https://github.com/StyraInc/enterprise-opa) (open source) for fair comparison\n';
           comment += '- Tested with **100,000 entities** for realistic performance comparison\n';
           comment += '- All scenarios run concurrently for faster CI feedback\n';
+          comment += '- **P99 Δ**: Latency improvement (negative = Reaper is faster)\n';
+          comment += '- **Memory**: Peak RSS memory usage during benchmark\n';
 
           github.rest.issues.createComment({
             issue_number: context.issue.number,

@@ -4,9 +4,10 @@
 //! Leverages DataStore directly for zero-copy, interned-string-based policies.
 
 use super::{EvaluatorMetadata, PolicyEvaluator};
-use crate::data::{AttributeValue, DataStore, Entity};
+use crate::data::{AttributeValue, DataStore, Entity, InternedString};
 use crate::{PolicyAction, PolicyRequest};
 use reaper_core::ReaperError;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,6 +18,7 @@ use std::sync::Arc;
 /// - Complex ABAC: < 10 µs
 /// - Entity lookups: 20-50 ns (DataStore direct)
 /// - Comparisons: 5-10 ns (interned string IDs)
+/// - Regex matches: ~100-500 ns (pre-compiled patterns)
 ///
 /// Security characteristics:
 /// - Deny-precedence evaluation: All deny rules evaluated before any allow rules
@@ -34,6 +36,15 @@ pub struct ReaperDSLEvaluator {
     allow_rules: Vec<Rule>,
     /// Default decision if no rules match
     default_decision: PolicyAction,
+    /// Pre-compiled regex patterns for O(1) lookup during evaluation
+    /// Uses FxHashMap for faster hashing (no DoS resistance needed for static patterns)
+    regex_cache: Arc<FxHashMap<String, regex::Regex>>,
+    /// Pre-interned strings cache for O(1) lookup during evaluation
+    /// Caches attribute names and string literals to avoid repeated interning
+    interned_cache: Arc<FxHashMap<String, InternedString>>,
+    /// Pre-computed AttributeValue objects for membership tests
+    /// Avoids allocating AttributeValue::String on every membership check
+    membership_cache: Arc<FxHashMap<String, AttributeValue>>,
 }
 
 /// A single policy rule
@@ -47,6 +58,23 @@ pub struct Rule {
     pub decision: PolicyAction,
 }
 
+/// Comparison operators for same-entity attribute comparisons
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttrCompareOp {
+    /// ==
+    Equal,
+    /// !=
+    NotEqual,
+    /// <=
+    LessEqual,
+    /// >=
+    GreaterEqual,
+    /// <
+    Less,
+    /// >
+    Greater,
+}
+
 /// Policy condition (compiled from YAML/DSL)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Condition {
@@ -54,10 +82,28 @@ pub enum Condition {
     Always,
     /// Compare action to literal value
     ActionEquals { value: String },
+    /// Compare resource ID to literal value (for simple resource matching)
+    ResourceIdEquals { value: String },
     /// Compare user attribute to literal value
     UserEquals { attribute: String, value: String },
+    /// Compare user int/float attribute >= literal value
+    UserGreaterEqualLiteral { attribute: String, value: f64 },
+    /// Compare user int/float attribute > literal value
+    UserGreaterLiteral { attribute: String, value: f64 },
+    /// Compare user int/float attribute <= literal value
+    UserLessEqualLiteral { attribute: String, value: f64 },
+    /// Compare user int/float attribute < literal value
+    UserLessLiteral { attribute: String, value: f64 },
     /// Compare resource attribute to literal value
     ResourceEquals { attribute: String, value: String },
+    /// Compare resource int/float attribute >= literal value
+    ResourceGreaterEqualLiteral { attribute: String, value: f64 },
+    /// Compare resource int/float attribute > literal value
+    ResourceGreaterLiteral { attribute: String, value: f64 },
+    /// Compare resource int/float attribute <= literal value
+    ResourceLessEqualLiteral { attribute: String, value: f64 },
+    /// Compare resource int/float attribute < literal value
+    ResourceLessLiteral { attribute: String, value: f64 },
     /// Compare user attribute to resource attribute
     UserEqualsResource {
         user_attr: String,
@@ -72,6 +118,14 @@ pub enum Condition {
     ResourceIntGreater {
         resource_attr: String,
         user_attr: String,
+    },
+    /// Compare two attributes of the same entity: entity.attr1 op entity.attr2
+    /// Works for User, Resource, or Context entities
+    SameEntityAttrCompare {
+        entity_type: EntityType,
+        left_attr: String,
+        right_attr: String,
+        op: AttrCompareOp,
     },
     /// Variable assignment: x := user.role
     /// Stores the value in evaluation context for later use
@@ -102,12 +156,165 @@ pub enum Condition {
         attribute: String,
         variable: String,
     },
+
+    // ============ Function Call Support ============
+
+    /// Regex match: regex::matches(user.email, "pattern")
+    RegexMatches {
+        entity_type: EntityType,
+        attribute: String,
+        pattern: String,
+    },
+
+    /// String contains: user.email.contains("@company.com")
+    StringContains {
+        entity_type: EntityType,
+        attribute: String,
+        substring: String,
+    },
+
+    /// String starts with: user.username.startswith("admin_")
+    StringStartsWith {
+        entity_type: EntityType,
+        attribute: String,
+        prefix: String,
+    },
+
+    /// String ends with: user.email.endswith(".gov")
+    StringEndsWith {
+        entity_type: EntityType,
+        attribute: String,
+        suffix: String,
+    },
+
+    /// Time is after: time::is_after(user.token_expires_at, threshold)
+    TimeIsAfter {
+        entity_type: EntityType,
+        attribute: String,
+        threshold: i64,
+    },
+
+    /// Time is before: time::is_before(user.expires_at, threshold)
+    TimeIsBefore {
+        entity_type: EntityType,
+        attribute: String,
+        threshold: i64,
+    },
+
+    /// Array/Set count comparison: user.skills.count() >= 5
+    CountGreaterEqual {
+        entity_type: EntityType,
+        attribute: String,
+        threshold: usize,
+    },
+
+    /// Array/Set count comparison: user.items.count() > 0
+    CountGreater {
+        entity_type: EntityType,
+        attribute: String,
+        threshold: usize,
+    },
+
+    /// Array/Set count comparison: user.items.count() == 5
+    CountEqual {
+        entity_type: EntityType,
+        attribute: String,
+        threshold: usize,
+    },
+
+    // ============ String Case Methods ============
+
+    /// String lowercase comparison: user.name.lower() == "admin"
+    StringLowerEquals {
+        entity_type: EntityType,
+        attribute: String,
+        value: String,
+    },
+
+    /// String uppercase comparison: user.code.upper() == "ADMIN123"
+    StringUpperEquals {
+        entity_type: EntityType,
+        attribute: String,
+        value: String,
+    },
+
+    // ============ Type Check Functions ============
+
+    /// Type check: is_string(entity.attr)
+    IsString {
+        entity_type: EntityType,
+        attribute: String,
+    },
+
+    /// Type check: is_number(entity.attr)
+    IsNumber {
+        entity_type: EntityType,
+        attribute: String,
+    },
+
+    /// Type check: is_bool(entity.attr)
+    IsBool {
+        entity_type: EntityType,
+        attribute: String,
+    },
+
+    // ============ Set Operations ============
+
+    /// Set intersection count: groups.intersection(["a", "b"]).count() > 0
+    SetIntersectionCountGreater {
+        entity_type: EntityType,
+        attribute: String,
+        values: Vec<String>,
+        threshold: usize,
+    },
+
+    /// Map keys membership: "key" in metadata.keys()
+    MapKeyExists {
+        entity_type: EntityType,
+        attribute: String,
+        key: String,
+    },
+
+    // ============ Comprehension Support ============
+
+    /// Array comprehension with filter and count: [x | x := arr[_]; x.active == true].count() >= N
+    ComprehensionCountGreaterEqual {
+        entity_type: EntityType,
+        attribute: String,
+        filter_attr: String,
+        filter_value: LiteralValue,
+        filter_op: ComprehensionFilterOp,
+        threshold: usize,
+    },
+
+    /// Array comprehension count equals zero: [x | x := arr[_]; x.active == false].count() == 0
+    ComprehensionCountEqual {
+        entity_type: EntityType,
+        attribute: String,
+        filter_attr: String,
+        filter_value: LiteralValue,
+        filter_op: ComprehensionFilterOp,
+        threshold: usize,
+    },
+
     /// AND of multiple conditions
     And(Vec<Condition>),
     /// OR of multiple conditions
     Or(Vec<Condition>),
     /// NOT of a condition
     Not(Box<Condition>),
+}
+
+/// Filter operation for comprehensions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ComprehensionFilterOp {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    LessThan,
+    GreaterEqual,
+    LessEqual,
+    Contains,
 }
 
 /// Entity type for condition evaluation
@@ -155,12 +362,236 @@ impl ReaperDSLEvaluator {
             }
         }
 
+        // Pre-compile all regex patterns for O(1) lookup during evaluation
+        // Uses FxHashMap for faster lookups (no DoS resistance needed for static patterns)
+        let mut regex_cache = FxHashMap::default();
+        for rule in deny_rules.iter().chain(allow_rules.iter()) {
+            Self::collect_regex_patterns(&rule.condition, &mut regex_cache);
+        }
+
+        // Pre-intern all attribute names and string literals for O(1) lookup during evaluation
+        let interner = store.interner();
+        let mut interned_cache = FxHashMap::default();
+        for rule in deny_rules.iter().chain(allow_rules.iter()) {
+            Self::collect_strings_for_interning(&rule.condition, &mut interned_cache, interner);
+        }
+
+        // Pre-compute AttributeValue objects for membership tests
+        // This avoids allocating AttributeValue::String on every membership check
+        let mut membership_cache = FxHashMap::default();
+        for rule in deny_rules.iter().chain(allow_rules.iter()) {
+            Self::collect_membership_values(&rule.condition, &mut membership_cache, interner);
+        }
+
         Self {
             store,
             deny_rules,
             allow_rules,
             default_decision,
+            regex_cache: Arc::new(regex_cache),
+            interned_cache: Arc::new(interned_cache),
+            membership_cache: Arc::new(membership_cache),
         }
+    }
+
+    /// Recursively collect and compile regex patterns from a condition
+    fn collect_regex_patterns(
+        condition: &Condition,
+        cache: &mut FxHashMap<String, regex::Regex>,
+    ) {
+        match condition {
+            Condition::RegexMatches { pattern, .. } => {
+                if !cache.contains_key(pattern) {
+                    if let Ok(re) = regex::Regex::new(pattern) {
+                        cache.insert(pattern.clone(), re);
+                    }
+                }
+            }
+            Condition::And(conditions) | Condition::Or(conditions) => {
+                for c in conditions {
+                    Self::collect_regex_patterns(c, cache);
+                }
+            }
+            Condition::Not(inner) => {
+                Self::collect_regex_patterns(inner, cache);
+            }
+            _ => {} // Other conditions don't have regex patterns
+        }
+    }
+
+    /// Recursively collect and pre-intern all strings from a condition
+    /// This includes attribute names and string literals for O(1) lookup during evaluation
+    fn collect_strings_for_interning(
+        condition: &Condition,
+        cache: &mut FxHashMap<String, InternedString>,
+        interner: &crate::data::StringInterner,
+    ) {
+        // Helper to intern and cache a string
+        let mut intern = |s: &String| {
+            if !cache.contains_key(s) {
+                cache.insert(s.clone(), interner.intern(s));
+            }
+        };
+
+        match condition {
+            Condition::ActionEquals { value } => intern(value),
+            Condition::ResourceIdEquals { value } => intern(value),
+            Condition::UserEquals { attribute, value } => {
+                intern(attribute);
+                intern(value);
+            }
+            Condition::UserGreaterEqualLiteral { attribute, .. }
+            | Condition::UserGreaterLiteral { attribute, .. }
+            | Condition::UserLessEqualLiteral { attribute, .. }
+            | Condition::UserLessLiteral { attribute, .. } => {
+                intern(attribute);
+            }
+            Condition::ResourceEquals { attribute, value } => {
+                intern(attribute);
+                intern(value);
+            }
+            Condition::ResourceGreaterEqualLiteral { attribute, .. }
+            | Condition::ResourceGreaterLiteral { attribute, .. }
+            | Condition::ResourceLessEqualLiteral { attribute, .. }
+            | Condition::ResourceLessLiteral { attribute, .. } => {
+                intern(attribute);
+            }
+            Condition::UserEqualsResource { user_attr, resource_attr } => {
+                intern(user_attr);
+                intern(resource_attr);
+            }
+            Condition::UserIntGreater { user_attr, resource_attr }
+            | Condition::ResourceIntGreater { resource_attr, user_attr } => {
+                intern(user_attr);
+                intern(resource_attr);
+            }
+            Condition::Assignment { variable, attribute, .. } => {
+                intern(variable);
+                intern(attribute);
+            }
+            Condition::MembershipTest { attribute, value, .. } => {
+                intern(attribute);
+                // Also pre-intern the literal value for membership test
+                if let LiteralValue::String(s) = value {
+                    intern(s);
+                }
+            }
+            Condition::IndexedEquals { attribute, value, .. } => {
+                intern(attribute);
+                intern(value);
+            }
+            Condition::EqualsVariable { attribute, variable, .. } => {
+                intern(attribute);
+                intern(variable);
+            }
+            Condition::RegexMatches { attribute, .. } => {
+                intern(attribute);
+            }
+            Condition::StringContains { attribute, substring, .. } => {
+                intern(attribute);
+                intern(substring);
+            }
+            Condition::StringStartsWith { attribute, prefix, .. } => {
+                intern(attribute);
+                intern(prefix);
+            }
+            Condition::StringEndsWith { attribute, suffix, .. } => {
+                intern(attribute);
+                intern(suffix);
+            }
+            Condition::TimeIsAfter { attribute, .. }
+            | Condition::TimeIsBefore { attribute, .. } => {
+                intern(attribute);
+            }
+            Condition::CountGreaterEqual { attribute, .. }
+            | Condition::CountGreater { attribute, .. }
+            | Condition::CountEqual { attribute, .. } => {
+                intern(attribute);
+            }
+            // String case methods
+            Condition::StringLowerEquals { attribute, value, .. }
+            | Condition::StringUpperEquals { attribute, value, .. } => {
+                intern(attribute);
+                intern(value);
+            }
+            // Type check functions
+            Condition::IsString { attribute, .. }
+            | Condition::IsNumber { attribute, .. }
+            | Condition::IsBool { attribute, .. } => {
+                intern(attribute);
+            }
+            // Set operations
+            Condition::SetIntersectionCountGreater { attribute, values, .. } => {
+                intern(attribute);
+                for v in values {
+                    intern(v);
+                }
+            }
+            Condition::MapKeyExists { attribute, key, .. } => {
+                intern(attribute);
+                intern(key);
+            }
+            // Comprehensions
+            Condition::ComprehensionCountGreaterEqual { attribute, filter_attr, .. }
+            | Condition::ComprehensionCountEqual { attribute, filter_attr, .. } => {
+                intern(attribute);
+                intern(filter_attr);
+            }
+            // Same-entity attribute comparisons
+            Condition::SameEntityAttrCompare { left_attr, right_attr, .. } => {
+                intern(left_attr);
+                intern(right_attr);
+            }
+            Condition::And(conditions) | Condition::Or(conditions) => {
+                for c in conditions {
+                    Self::collect_strings_for_interning(c, cache, interner);
+                }
+            }
+            Condition::Not(inner) => {
+                Self::collect_strings_for_interning(inner, cache, interner);
+            }
+            Condition::Always => {}
+        }
+    }
+
+    /// Recursively collect and pre-compute AttributeValue objects for membership tests
+    /// This avoids allocating AttributeValue::String during evaluation
+    /// Only caches String values since Int/Bool are Copy types (no allocation)
+    fn collect_membership_values(
+        condition: &Condition,
+        cache: &mut FxHashMap<String, AttributeValue>,
+        interner: &crate::data::StringInterner,
+    ) {
+        match condition {
+            Condition::MembershipTest { value, .. } => {
+                // Only pre-compute String values (Int/Bool are Copy types)
+                if let LiteralValue::String(s) = value {
+                    if !cache.contains_key(s) {
+                        let interned = interner.intern(s);
+                        cache.insert(s.clone(), AttributeValue::String(interned));
+                    }
+                }
+            }
+            Condition::And(conditions) | Condition::Or(conditions) => {
+                for c in conditions {
+                    Self::collect_membership_values(c, cache, interner);
+                }
+            }
+            Condition::Not(inner) => {
+                Self::collect_membership_values(inner, cache, interner);
+            }
+            _ => {} // Other conditions don't have membership tests
+        }
+    }
+
+    /// Get a pre-interned string from the cache, falling back to interning if not found
+    /// This provides O(1) lookup for strings that were pre-interned at construction time
+    #[inline(always)]
+    fn get_interned(&self, s: &str, interner: &crate::data::StringInterner) -> InternedString {
+        self.interned_cache
+            .get(s)
+            .copied()
+            .unwrap_or_else(|| interner.intern(s))
     }
 
     /// Evaluate a condition against entities
@@ -169,6 +600,7 @@ impl ReaperDSLEvaluator {
     /// - Direct DataStore access (no conversion)
     /// - Interned string comparisons (5ns vs 100ns)
     /// - Zero-copy entity access (Arc)
+    /// - Pre-interned attribute names for O(1) lookup
     /// - Variable context for local bindings
     fn evaluate_condition(
         &self,
@@ -188,12 +620,17 @@ impl ReaperDSLEvaluator {
                 _context.get("action").map(|a| a == value).unwrap_or(false)
             }
 
+            Condition::ResourceIdEquals { value } => {
+                // Resource ID comes from context["resource"]
+                _context.get("resource").map(|r| r == value).unwrap_or(false)
+            }
+
             Condition::UserEquals { attribute, value } => {
-                let attr_key = interner.intern(attribute);
+                let attr_key = self.get_interned(attribute, interner);
 
                 let result = match user.get_attribute(attr_key) {
                     Some(AttributeValue::String(actual)) => {
-                        let expected_value = interner.intern(value);
+                        let expected_value = self.get_interned(value, interner);
                         let matched = *actual == expected_value;
                         tracing::debug!(
                             attribute = %attribute,
@@ -248,12 +685,48 @@ impl ReaperDSLEvaluator {
                 result
             }
 
+            Condition::UserGreaterEqualLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match user.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) >= *value,
+                    Some(AttributeValue::Float(actual)) => *actual >= *value,
+                    _ => false,
+                }
+            }
+
+            Condition::UserGreaterLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match user.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) > *value,
+                    Some(AttributeValue::Float(actual)) => *actual > *value,
+                    _ => false,
+                }
+            }
+
+            Condition::UserLessEqualLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match user.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) <= *value,
+                    Some(AttributeValue::Float(actual)) => *actual <= *value,
+                    _ => false,
+                }
+            }
+
+            Condition::UserLessLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match user.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) < *value,
+                    Some(AttributeValue::Float(actual)) => *actual < *value,
+                    _ => false,
+                }
+            }
+
             Condition::ResourceEquals { attribute, value } => {
-                let attr_key = interner.intern(attribute);
+                let attr_key = self.get_interned(attribute, interner);
 
                 match resource.get_attribute(attr_key) {
                     Some(AttributeValue::String(actual)) => {
-                        let expected_value = interner.intern(value);
+                        let expected_value = self.get_interned(value, interner);
                         *actual == expected_value
                     }
                     Some(AttributeValue::Bool(actual)) => {
@@ -268,12 +741,48 @@ impl ReaperDSLEvaluator {
                 }
             }
 
+            Condition::ResourceGreaterEqualLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match resource.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) >= *value,
+                    Some(AttributeValue::Float(actual)) => *actual >= *value,
+                    _ => false,
+                }
+            }
+
+            Condition::ResourceGreaterLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match resource.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) > *value,
+                    Some(AttributeValue::Float(actual)) => *actual > *value,
+                    _ => false,
+                }
+            }
+
+            Condition::ResourceLessEqualLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match resource.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) <= *value,
+                    Some(AttributeValue::Float(actual)) => *actual <= *value,
+                    _ => false,
+                }
+            }
+
+            Condition::ResourceLessLiteral { attribute, value } => {
+                let attr_key = self.get_interned(attribute, interner);
+                match resource.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(actual)) => (*actual as f64) < *value,
+                    Some(AttributeValue::Float(actual)) => *actual < *value,
+                    _ => false,
+                }
+            }
+
             Condition::UserEqualsResource {
                 user_attr,
                 resource_attr,
             } => {
-                let user_key = interner.intern(user_attr);
-                let resource_key = interner.intern(resource_attr);
+                let user_key = self.get_interned(user_attr, interner);
+                let resource_key = self.get_interned(resource_attr, interner);
 
                 let result = match (
                     user.get_attribute(user_key),
@@ -347,8 +856,8 @@ impl ReaperDSLEvaluator {
                 user_attr,
                 resource_attr,
             } => {
-                let user_key = interner.intern(user_attr);
-                let resource_key = interner.intern(resource_attr);
+                let user_key = self.get_interned(user_attr, interner);
+                let resource_key = self.get_interned(resource_attr, interner);
 
                 match (
                     user.get_attribute(user_key),
@@ -363,14 +872,81 @@ impl ReaperDSLEvaluator {
                 resource_attr,
                 user_attr,
             } => {
-                let user_key = interner.intern(user_attr);
-                let resource_key = interner.intern(resource_attr);
+                let user_key = self.get_interned(user_attr, interner);
+                let resource_key = self.get_interned(resource_attr, interner);
 
                 match (
                     resource.get_attribute(resource_key),
                     user.get_attribute(user_key),
                 ) {
                     (Some(AttributeValue::Int(r)), Some(AttributeValue::Int(u))) => r > u,
+                    _ => false,
+                }
+            }
+
+            // Same-entity attribute comparisons (entity.attr1 op entity.attr2)
+            Condition::SameEntityAttrCompare {
+                entity_type,
+                left_attr,
+                right_attr,
+                op,
+            } => {
+                // Get the entity based on type
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => {
+                        // TODO: Support context entity from DataStore
+                        return false;
+                    }
+                };
+
+                let left_key = self.get_interned(left_attr, interner);
+                let right_key = self.get_interned(right_attr, interner);
+                let left_val = entity.get_attribute(left_key);
+                let right_val = entity.get_attribute(right_key);
+
+                match (left_val, right_val, op) {
+                    // Numeric comparisons (int vs int)
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::LessEqual) => *l <= *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::GreaterEqual) => *l >= *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Less) => *l < *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Greater) => *l > *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Equal) => *l == *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::NotEqual) => *l != *r,
+
+                    // Numeric comparisons (float vs float)
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::LessEqual) => *l <= *r,
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::GreaterEqual) => *l >= *r,
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Less) => *l < *r,
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Greater) => *l > *r,
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Equal) => *l == *r,
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::NotEqual) => *l != *r,
+
+                    // Numeric comparisons (int vs float)
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::LessEqual) => (*l as f64) <= *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::GreaterEqual) => (*l as f64) >= *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Less) => (*l as f64) < *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Greater) => (*l as f64) > *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Equal) => (*l as f64) == *r,
+                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::NotEqual) => (*l as f64) != *r,
+
+                    // Numeric comparisons (float vs int)
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::LessEqual) => *l <= (*r as f64),
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::GreaterEqual) => *l >= (*r as f64),
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Less) => *l < (*r as f64),
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Greater) => *l > (*r as f64),
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Equal) => *l == (*r as f64),
+                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::NotEqual) => *l != (*r as f64),
+
+                    // String equality comparisons
+                    (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::Equal) => l == r,
+                    (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::NotEqual) => l != r,
+
+                    // Boolean equality comparisons
+                    (Some(AttributeValue::Bool(l)), Some(AttributeValue::Bool(r)), AttrCompareOp::Equal) => *l == *r,
+                    (Some(AttributeValue::Bool(l)), Some(AttributeValue::Bool(r)), AttrCompareOp::NotEqual) => *l != *r,
+
                     _ => false,
                 }
             }
@@ -391,7 +967,7 @@ impl ReaperDSLEvaluator {
                     }
                 };
 
-                let attr_key = interner.intern(attribute);
+                let attr_key = self.get_interned(attribute, interner);
 
                 let value = if let Some(idx) = index {
                     // Check for wildcard: role := user.roles[_]
@@ -438,7 +1014,7 @@ impl ReaperDSLEvaluator {
                     EntityType::Context => return false,
                 };
 
-                let attr_key = interner.intern(attribute);
+                let attr_key = self.get_interned(attribute, interner);
                 let collection = if let Some(idx) = index {
                     self.get_indexed_value(entity, attr_key, idx, interner)
                 } else {
@@ -475,13 +1051,13 @@ impl ReaperDSLEvaluator {
                     EntityType::Context => return false,
                 };
 
-                let attr_key = interner.intern(attribute);
+                let attr_key = self.get_interned(attribute, interner);
 
                 // Handle wildcard iteration: user.roles[_] == "admin"
                 if matches!(index, IndexExpr::Wildcard) {
                     // Existential quantification: check if ANY element equals the value
                     if let Some(collection) = entity.get_attribute(attr_key) {
-                        let expected = interner.intern(value);
+                        let expected = self.get_interned(value, interner);
                         match collection {
                             AttributeValue::List(items) => {
                                 // O(n) iteration over list
@@ -504,7 +1080,7 @@ impl ReaperDSLEvaluator {
                     let indexed_val = self.get_indexed_value(entity, attr_key, index, interner);
 
                     if let Some(AttributeValue::String(actual)) = indexed_val {
-                        let expected = interner.intern(value);
+                        let expected = self.get_interned(value, interner);
                         actual == expected
                     } else {
                         false
@@ -523,7 +1099,7 @@ impl ReaperDSLEvaluator {
                     EntityType::Context => return false,
                 };
 
-                let attr_key = interner.intern(attribute);
+                let attr_key = self.get_interned(attribute, interner);
                 let attr_val = entity.get_attribute(attr_key);
                 let var_val = variables.get(variable);
 
@@ -565,6 +1141,422 @@ impl ReaperDSLEvaluator {
             Condition::Not(condition) => {
                 !self.evaluate_condition(condition, user, resource, _context, variables)
             }
+
+            // ============ Function Call Evaluation ============
+
+            Condition::RegexMatches {
+                entity_type,
+                attribute,
+                pattern,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::String(s)) => {
+                        // Resolve interned string to &str for regex matching
+                        if let Some(resolved) = interner.resolve(*s) {
+                            // Use pre-compiled regex from cache for O(1) lookup
+                            self.regex_cache
+                                .get(pattern)
+                                .map(|re| re.is_match(&resolved))
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::StringContains {
+                entity_type,
+                attribute,
+                substring,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                // Use pre-interned attribute key for O(1) lookup
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::String(s)) => {
+                        // Resolve interned string to &str for string operations
+                        if let Some(resolved) = interner.resolve(*s) {
+                            resolved.contains(substring.as_str())
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::StringStartsWith {
+                entity_type,
+                attribute,
+                prefix,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                // Use pre-interned attribute key for O(1) lookup
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::String(s)) => {
+                        // Resolve interned string to &str for string operations
+                        if let Some(resolved) = interner.resolve(*s) {
+                            resolved.starts_with(prefix.as_str())
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::StringEndsWith {
+                entity_type,
+                attribute,
+                suffix,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                // Use pre-interned attribute key for O(1) lookup
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::String(s)) => {
+                        // Resolve interned string to &str for string operations
+                        if let Some(resolved) = interner.resolve(*s) {
+                            resolved.ends_with(suffix.as_str())
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::TimeIsAfter {
+                entity_type,
+                attribute,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(ts)) => *ts > *threshold,
+                    Some(AttributeValue::Float(ts)) => (*ts as i64) > *threshold,
+                    _ => false,
+                }
+            }
+
+            Condition::TimeIsBefore {
+                entity_type,
+                attribute,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::Int(ts)) => *ts < *threshold,
+                    Some(AttributeValue::Float(ts)) => (*ts as i64) < *threshold,
+                    _ => false,
+                }
+            }
+
+            // ============ Collection Count Evaluation ============
+
+            Condition::CountGreaterEqual {
+                entity_type,
+                attribute,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::List(arr)) => arr.len() >= *threshold,
+                    Some(AttributeValue::Set(set)) => set.len() >= *threshold,
+                    _ => false,
+                }
+            }
+
+            Condition::CountGreater {
+                entity_type,
+                attribute,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::List(arr)) => arr.len() > *threshold,
+                    Some(AttributeValue::Set(set)) => set.len() > *threshold,
+                    _ => false,
+                }
+            }
+
+            Condition::CountEqual {
+                entity_type,
+                attribute,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::List(arr)) => arr.len() == *threshold,
+                    Some(AttributeValue::Set(set)) => set.len() == *threshold,
+                    _ => false,
+                }
+            }
+
+            // ============ String Case Methods ============
+
+            Condition::StringLowerEquals {
+                entity_type,
+                attribute,
+                value,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::String(s)) => {
+                        if let Some(resolved) = interner.resolve(*s) {
+                            resolved.to_lowercase() == *value
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::StringUpperEquals {
+                entity_type,
+                attribute,
+                value,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::String(s)) => {
+                        if let Some(resolved) = interner.resolve(*s) {
+                            resolved.to_uppercase() == *value
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+
+            // ============ Type Check Functions ============
+
+            Condition::IsString {
+                entity_type,
+                attribute,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                matches!(entity.get_attribute(attr_key), Some(AttributeValue::String(_)))
+            }
+
+            Condition::IsNumber {
+                entity_type,
+                attribute,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                matches!(
+                    entity.get_attribute(attr_key),
+                    Some(AttributeValue::Int(_)) | Some(AttributeValue::Float(_))
+                )
+            }
+
+            Condition::IsBool {
+                entity_type,
+                attribute,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                matches!(entity.get_attribute(attr_key), Some(AttributeValue::Bool(_)))
+            }
+
+            // ============ Set Operations ============
+
+            Condition::SetIntersectionCountGreater {
+                entity_type,
+                attribute,
+                values,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::Set(set)) => {
+                        // Count how many of `values` are in the entity's set
+                        let count = values.iter().filter(|v| {
+                            let interned = interner.intern(v);
+                            set.contains(&AttributeValue::String(interned))
+                        }).count();
+                        count > *threshold
+                    }
+                    Some(AttributeValue::List(list)) => {
+                        // Convert list to set for intersection
+                        let count = values.iter().filter(|v| {
+                            let interned = interner.intern(v);
+                            list.iter().any(|item| matches!(item, AttributeValue::String(s) if *s == interned))
+                        }).count();
+                        count > *threshold
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::MapKeyExists {
+                entity_type,
+                attribute,
+                key,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::Object(map)) => {
+                        let key_interned = interner.intern(key);
+                        map.contains_key(&key_interned)
+                    }
+                    _ => false,
+                }
+            }
+
+            // ============ Comprehension Support ============
+
+            Condition::ComprehensionCountGreaterEqual {
+                entity_type,
+                attribute,
+                filter_attr,
+                filter_value,
+                filter_op,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                let filter_attr_key = self.get_interned(filter_attr, interner);
+
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::List(items)) => {
+                        let count = items.iter().filter(|item| {
+                            if let AttributeValue::Object(obj) = item {
+                                if let Some(field_val) = obj.get(&filter_attr_key) {
+                                    self.compare_values(field_val, filter_value, filter_op, interner)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        }).count();
+                        count >= *threshold
+                    }
+                    _ => false,
+                }
+            }
+
+            Condition::ComprehensionCountEqual {
+                entity_type,
+                attribute,
+                filter_attr,
+                filter_value,
+                filter_op,
+                threshold,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                let attr_key = self.get_interned(attribute, interner);
+                let filter_attr_key = self.get_interned(filter_attr, interner);
+
+                match entity.get_attribute(attr_key) {
+                    Some(AttributeValue::List(items)) => {
+                        let count = items.iter().filter(|item| {
+                            if let AttributeValue::Object(obj) = item {
+                                if let Some(field_val) = obj.get(&filter_attr_key) {
+                                    self.compare_values(field_val, filter_value, filter_op, interner)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        }).count();
+                        count == *threshold
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -602,7 +1594,7 @@ impl ReaperDSLEvaluator {
     }
 
     /// Check if literal value exists in list
-    /// Performance: O(n) linear search - could optimize by caching as HashSet
+    /// Performance: O(n) linear search (rare case - most collections are Sets now)
     fn value_in_list(
         &self,
         value: &LiteralValue,
@@ -611,7 +1603,8 @@ impl ReaperDSLEvaluator {
     ) -> bool {
         match value {
             LiteralValue::String(s) => {
-                let s_interned = interner.intern(s);
+                // Use pre-interned cache for O(1) lookup
+                let s_interned = self.get_interned(s, interner);
                 items
                     .iter()
                     .any(|item| matches!(item, AttributeValue::String(x) if *x == s_interned))
@@ -626,20 +1619,82 @@ impl ReaperDSLEvaluator {
     }
 
     /// Check if literal value exists in set
-    /// Performance: O(1) HashSet lookup - blazing fast!
+    /// Performance: O(1) FxHashSet lookup with pre-computed AttributeValue - blazing fast!
+    #[inline(always)]
     fn value_in_set(
         &self,
         value: &LiteralValue,
-        items: &std::collections::HashSet<AttributeValue>,
-        interner: &crate::data::StringInterner,
+        items: &rustc_hash::FxHashSet<AttributeValue>,
+        _interner: &crate::data::StringInterner,
     ) -> bool {
         match value {
             LiteralValue::String(s) => {
-                let s_interned = interner.intern(s);
-                items.contains(&AttributeValue::String(s_interned))
+                // Use pre-computed AttributeValue from membership cache
+                // This avoids allocating a new AttributeValue::String on every check
+                if let Some(attr_value) = self.membership_cache.get(s) {
+                    items.contains(attr_value)
+                } else {
+                    // Fallback: compute the value (should not happen if cache is populated)
+                    let s_interned = _interner.intern(s);
+                    items.contains(&AttributeValue::String(s_interned))
+                }
             }
+            // Int and Bool are Copy types - no allocation needed
             LiteralValue::Int(i) => items.contains(&AttributeValue::Int(*i)),
             LiteralValue::Bool(b) => items.contains(&AttributeValue::Bool(*b)),
+        }
+    }
+
+    /// Compare an AttributeValue against a LiteralValue using the given operation
+    /// Used for comprehension filter evaluation
+    #[inline(always)]
+    fn compare_values(
+        &self,
+        attr_val: &AttributeValue,
+        literal: &LiteralValue,
+        op: &ComprehensionFilterOp,
+        interner: &crate::data::StringInterner,
+    ) -> bool {
+        match (attr_val, literal) {
+            (AttributeValue::String(s), LiteralValue::String(ls)) => {
+                if let Some(resolved) = interner.resolve(*s) {
+                    match op {
+                        ComprehensionFilterOp::Equal => &*resolved == ls,
+                        ComprehensionFilterOp::NotEqual => &*resolved != ls,
+                        ComprehensionFilterOp::Contains => resolved.contains(ls.as_str()),
+                        _ => false, // Other ops not valid for strings
+                    }
+                } else {
+                    false
+                }
+            }
+            (AttributeValue::Int(i), LiteralValue::Int(li)) => match op {
+                ComprehensionFilterOp::Equal => *i == *li,
+                ComprehensionFilterOp::NotEqual => *i != *li,
+                ComprehensionFilterOp::GreaterThan => *i > *li,
+                ComprehensionFilterOp::LessThan => *i < *li,
+                ComprehensionFilterOp::GreaterEqual => *i >= *li,
+                ComprehensionFilterOp::LessEqual => *i <= *li,
+                _ => false,
+            },
+            (AttributeValue::Float(f), LiteralValue::Int(li)) => {
+                let lf = *li as f64;
+                match op {
+                    ComprehensionFilterOp::Equal => (*f - lf).abs() < f64::EPSILON,
+                    ComprehensionFilterOp::NotEqual => (*f - lf).abs() >= f64::EPSILON,
+                    ComprehensionFilterOp::GreaterThan => *f > lf,
+                    ComprehensionFilterOp::LessThan => *f < lf,
+                    ComprehensionFilterOp::GreaterEqual => *f >= lf,
+                    ComprehensionFilterOp::LessEqual => *f <= lf,
+                    _ => false,
+                }
+            }
+            (AttributeValue::Bool(b), LiteralValue::Bool(lb)) => match op {
+                ComprehensionFilterOp::Equal => *b == *lb,
+                ComprehensionFilterOp::NotEqual => *b != *lb,
+                _ => false,
+            },
+            _ => false, // Type mismatch
         }
     }
 }
@@ -666,16 +1721,18 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
                 reason: format!("User entity not found: {:?}", user_id),
             })?;
 
-        let resource = self
-            .store
-            .get(resource_id)
-            .ok_or_else(|| ReaperError::EvaluationError {
-                reason: format!("Resource entity not found: {:?}", resource_id),
-            })?;
+        // Resource lookup - if entity doesn't exist, create a temporary entity
+        // This allows simple `resource == "value"` checks to work even without resource entities
+        let resource = self.store.get(resource_id).unwrap_or_else(|| {
+            // Create a minimal entity with just the resource ID for simple resource matching
+            let resource_type = interner.intern("resource");
+            Arc::new(Entity::new(resource_id, resource_type, std::collections::HashMap::new()))
+        });
 
-        // Create evaluation context with action included
+        // Create evaluation context with action and resource included
         let mut eval_context = request.context.clone();
         eval_context.insert("action".to_string(), request.action.clone());
+        eval_context.insert("resource".to_string(), request.resource.clone());
 
         // Variable context for local bindings (scoped to policy evaluation)
         // Performance: HashMap with pre-allocated capacity for common case
@@ -913,7 +1970,7 @@ mod tests {
         let admin_role = interner.intern("admin");
         let user_role = interner.intern("user");
 
-        let mut roles_set = std::collections::HashSet::new();
+        let mut roles_set = rustc_hash::FxHashSet::default();
         roles_set.insert(AttributeValue::String(admin_role));
         roles_set.insert(AttributeValue::String(user_role));
 
@@ -1301,7 +2358,7 @@ mod tests {
         let doc_type = interner.intern("document");
         let roles_key = interner.intern("allowed_roles");
 
-        let mut roles_set = std::collections::HashSet::new();
+        let mut roles_set = rustc_hash::FxHashSet::default();
         roles_set.insert(AttributeValue::String(interner.intern("admin")));
         roles_set.insert(AttributeValue::String(interner.intern("manager")));
         roles_set.insert(AttributeValue::String(interner.intern("developer")));

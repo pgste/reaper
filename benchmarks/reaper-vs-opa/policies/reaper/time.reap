@@ -1,0 +1,146 @@
+// Time-Based Policy Examples
+// Comprehensive integration tests for time/date functions
+
+policy time_based_access {
+    version: "1.0",
+    description: "Time-based access control policies for integration testing",
+    default: deny,
+
+    // Token Expiration Policy
+    // Note: Uses is_after() to avoid unsupported variable assignments
+    rule valid_token_access {
+        allow if {
+            user.token_expires_at != null &&
+            resource == "api_endpoint" &&
+            time::is_after(user.token_expires_at, 1765180000000000000)  // Token must expire after this threshold
+        }
+    }
+
+    // Business Hours Policy (9 AM - 5 PM)
+    rule business_hours_access {
+        allow if {
+            user.role == "employee" &&
+            resource == "office_system" &&
+            
+            user.work_start_time != null &&
+            user.work_end_time != null &&
+            user.work_start_time < 1765185000000000000 &&  // Current time > work_start_time
+            user.work_end_time > 1765185000000000000  // Current time < work_end_time
+        }
+    }
+
+    // Age Verification Policy (21+)
+    // Using pre-computed minimum birthdate (946684800 = 2000-01-01, makes user 25+ years old)
+    rule age_verification {
+        allow if {
+            user.birthdate != null &&
+            resource.requires_age_verification == true &&
+            
+            user.birthdate < 1000000000  // Users born before 2001-09-09 are 23+ years old in 2025
+        }
+    }
+
+    // Lease Expiration Policy
+    rule active_lease_access {
+        allow if {
+            user.lease_end_time != null &&
+            resource == "apartment" &&
+            
+            user.lease_end_time > 1765180000000000000  // Lease must be active past this time
+        }
+    }
+
+    // Maintenance Window Policy (deployments only during window)
+    rule maintenance_window_deployment {
+        allow if {
+            user.role == "operator" &&
+            resource == "production_system" &&
+            
+            resource.maintenance_window_start != null &&
+            resource.maintenance_window_end != null &&
+            resource.maintenance_window_start < 1765185000000000000 &&  // Current time > window start
+            resource.maintenance_window_end > 1765185000000000000  // Current time < window end
+        }
+    }
+
+    // Session Extension with Time Arithmetic
+    rule extended_session {
+        allow if {
+            user.session_start_time != null &&
+            user.session_extension_ns != null &&
+            resource == "web_session" &&
+            
+            user.session_start_time < 1765185000000000000  // Session started before current time
+        }
+    }
+
+    // Future Event Scheduling
+    rule future_event_scheduling {
+        allow if {
+            user.role == "event_planner" &&
+            resource == "conference_room" &&
+            
+            user.event_scheduled_time != null &&
+            user.event_scheduled_time > 1765180000000000000  // Event scheduled in future
+        }
+    }
+
+    // Temporary Access Grant (contractor access for specific period)
+    rule temporary_access_grant {
+        allow if {
+            user.role == "contractor" &&
+            resource == "project_files" &&
+            
+            user.access_grant_start != null &&
+            user.access_grant_end != null &&
+            user.access_grant_start < 1765185000000000000 &&  // Current time > grant start
+            user.access_grant_end > 1765185000000000000  // Current time < grant end
+        }
+    }
+
+    // RFC3339 Timestamp Validation
+    rule timestamp_validation {
+        allow if {
+            user.role == "system" &&
+            resource == "timestamp_data" &&
+            
+            user.has_valid_timestamp == true
+        }
+    }
+
+    // Audit Logging with Formatted Time
+    rule audit_logging {
+        allow if {
+            user.role == "audit_logger" &&
+            resource == "audit_trail" &&
+            
+            user.can_log_audit == true
+        }
+    }
+
+    // Rate Limiting with Time Windows
+    // Simplified: Check if last_request_time is older than a threshold
+    rule rate_limit_check {
+        allow if {
+            user.role == "api_client" &&
+            resource == "rate_limited_endpoint" &&
+            
+            user.last_request_time != null &&
+            user.rate_limit_window_ns != null &&
+            user.last_request_time < 1765186000000000000  // Threshold for rate limit
+        }
+    }
+
+    // Data Retention Policy
+    // Simplified: Check if creation_time is recent enough
+    rule data_retention {
+        allow if {
+            user.role == "archiver" &&
+            resource == "data" &&
+
+            resource.creation_time != null &&
+            resource.retention_period_ns != null &&
+            resource.creation_time >= 1765180000000000000  // Must be created at or after this time
+        }
+    }
+}

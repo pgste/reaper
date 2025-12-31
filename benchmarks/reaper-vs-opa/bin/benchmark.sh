@@ -15,8 +15,8 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # Default values
-SCENARIO="multilayer"
-SCALE="10k"
+SCENARIO="mega"
+SCALE="100k"
 REQUESTS=50000
 CONCURRENCY=50
 MODE="compare"  # compare, reaper-only, opa-only, all
@@ -29,7 +29,7 @@ ${BOLD}Reaper vs OPA Benchmark${NC}
 Usage: $0 [OPTIONS]
 
 OPTIONS:
-    -s, --scenario SCENARIO     Policy scenario: rbac, abac, rebac, multilayer, all (default: multilayer)
+    -s, --scenario SCENARIO     Policy scenario: rbac, abac, multilayer, math, regex, string, collection, time, mega, all (default: mega)
     -n, --scale SCALE          Entity scale: 10k, 100k, both (default: 10k)
     -r, --requests NUM         Number of requests (default: 50000)
     -c, --concurrency NUM      Concurrent requests (default: 50)
@@ -37,14 +37,14 @@ OPTIONS:
     -h, --help                 Show this help
 
 EXAMPLES:
-    # Run multilayer scenario with 10K entities
-    $0 --scenario multilayer --scale 10k
+    # Run mega scenario with 100K entities (default)
+    $0 --scenario mega --scale 100k
 
-    # Run all scenarios with both 10K and 100K entities
-    $0 --scenario all --scale both
+    # Run all scenarios with 100K entities
+    $0 --scenario all --scale 100k
 
-    # Run just RBAC with 100K entities
-    $0 --scenario rbac --scale 100k --requests 100000
+    # Run just math with 100K entities
+    $0 --scenario math --scale 100k --requests 100000
 
     # Run comprehensive test (all scenarios, all scales)
     $0 --mode all
@@ -69,9 +69,9 @@ done
 # Validate inputs
 validate_scenario() {
     local s=$1
-    if [[ ! "$s" =~ ^(rbac|abac|rebac|multilayer|all)$ ]]; then
+    if [[ ! "$s" =~ ^(rbac|abac|rebac|multilayer|math|regex|time|string|collection|comprehension|json|mega|all)$ ]]; then
         echo -e "${RED}✗ Invalid scenario: $s${NC}"
-        echo "Valid: rbac, abac, rebac, multilayer, all"
+        echo "Valid: rbac, abac, rebac, multilayer, math, regex, time, string, collection, comprehension, json, mega, all"
         exit 1
     fi
 }
@@ -136,7 +136,7 @@ run_benchmark() {
     RESULTS_DIR="results/${scale}/${scenario}"
     mkdir -p "$RESULTS_DIR"
 
-    cargo run --release -- \
+    cargo run --release --bin benchmark -- \
         --reaper-url http://localhost:8080 \
         --opa-url http://localhost:8181 \
         --scenario "$scenario" \
@@ -149,6 +149,11 @@ run_benchmark() {
     # Read memory stats from temp file
     read REAPER_MEM_PEAK OPA_MEM_PEAK < "$MEM_FILE"
     rm -f "$MEM_FILE"
+
+    # Inject memory values into results.json
+    jq ".[0].memory_mb = $REAPER_MEM_PEAK | .[1].memory_mb = $OPA_MEM_PEAK" \
+        "$RESULTS_DIR/results.json" > "$RESULTS_DIR/results.tmp.json"
+    mv "$RESULTS_DIR/results.tmp.json" "$RESULTS_DIR/results.json"
 
     # Parse results
     REAPER_RPS=$(jq -r '.[0].throughput_rps' "$RESULTS_DIR/results.json" | awk '{printf "%.0f", $1}')
@@ -234,7 +239,7 @@ main() {
     # Determine which scenarios to run
     SCENARIOS=()
     if [ "$SCENARIO" = "all" ]; then
-        SCENARIOS=("rbac" "abac" "rebac" "multilayer")
+        SCENARIOS=("rbac" "abac" "multilayer" "math" "regex" "string" "collection" "time" "mega")
     else
         SCENARIOS=("$SCENARIO")
     fi

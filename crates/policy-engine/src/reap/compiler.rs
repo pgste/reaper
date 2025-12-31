@@ -2,9 +2,12 @@
 //!
 //! Transforms parsed .reap AST into optimized ReaperDSLEvaluator for sub-microsecond evaluation.
 
-use super::ast::*;
+use super::ast::{
+    AssignmentValue, ComparisonLeft, ComparisonRight, Condition, Decision, Entity, EntityAttr,
+    Expr, MethodName, Operator, Policy, Rule, Value,
+};
 use crate::evaluators::reaper_dsl::{
-    Condition as DslCondition, ReaperDSLEvaluator, Rule as DslRule,
+    AttrCompareOp, Condition as DslCondition, ReaperDSLEvaluator, Rule as DslRule,
 };
 use crate::{data::DataStore, PolicyAction};
 use reaper_core::ReaperError;
@@ -113,16 +116,515 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
             })
         }
 
-        Condition::Expr(_expr) => {
-            // Expression-based conditions (like function calls) not yet supported in compiler
-            Err(ReaperError::InvalidPolicy {
-                reason: "Expression-based conditions (e.g., function calls like is_string(x)) \
-                        are not yet supported in compiled policies. \
-                        Use .reap format with direct evaluation for expression support."
-                    .to_string(),
-            })
+        Condition::Expr(expr) => {
+            // Compile expression-based conditions (function calls, method calls)
+            compile_expr_condition(expr)
         }
     }
+}
+
+/// Compile an expression into a DslCondition
+/// Supports function calls (regex::matches, time::is_after, etc.) and method calls (.contains, .startswith, etc.)
+fn compile_expr_condition(expr: Expr) -> Result<DslCondition, ReaperError> {
+    match expr {
+        Expr::FunctionCall {
+            namespace,
+            function,
+            args,
+        } => compile_function_call(namespace, function, args),
+
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => compile_method_call(*receiver, method, args),
+
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Expression type {:?} is not supported as a standalone condition. \
+                Only function calls (regex::matches, time::is_after) and method calls \
+                (.contains, .startswith, .endswith) are supported.",
+                expr
+            ),
+        }),
+    }
+}
+
+/// Compile a function call expression (e.g., regex::matches(user.email, "pattern"))
+fn compile_function_call(
+    namespace: Option<String>,
+    function: String,
+    args: Vec<Expr>,
+) -> Result<DslCondition, ReaperError> {
+    let ns = namespace.as_deref().unwrap_or("");
+
+    match (ns, function.as_str()) {
+        // regex::matches(entity.attribute, "pattern")
+        ("regex", "matches") => {
+            if args.len() != 2 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "regex::matches requires 2 arguments (attribute, pattern), got {}",
+                        args.len()
+                    ),
+                });
+            }
+
+            let (entity_type, attribute) = extract_entity_attr(&args[0])?;
+            let pattern = extract_string_literal(&args[1])?;
+
+            // Validate regex pattern at compile time
+            if regex::Regex::new(&pattern).is_err() {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("Invalid regex pattern: {}", pattern),
+                });
+            }
+
+            Ok(DslCondition::RegexMatches {
+                entity_type,
+                attribute,
+                pattern,
+            })
+        }
+
+        // time::is_after(entity.attribute, threshold)
+        ("time", "is_after") => {
+            if args.len() != 2 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "time::is_after requires 2 arguments (attribute, threshold), got {}",
+                        args.len()
+                    ),
+                });
+            }
+
+            let (entity_type, attribute) = extract_entity_attr(&args[0])?;
+            let threshold = extract_int_literal(&args[1])?;
+
+            Ok(DslCondition::TimeIsAfter {
+                entity_type,
+                attribute,
+                threshold,
+            })
+        }
+
+        // time::is_before(entity.attribute, threshold)
+        ("time", "is_before") => {
+            if args.len() != 2 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "time::is_before requires 2 arguments (attribute, threshold), got {}",
+                        args.len()
+                    ),
+                });
+            }
+
+            let (entity_type, attribute) = extract_entity_attr(&args[0])?;
+            let threshold = extract_int_literal(&args[1])?;
+
+            Ok(DslCondition::TimeIsBefore {
+                entity_type,
+                attribute,
+                threshold,
+            })
+        }
+
+        // Type check functions: is_string, is_number, is_bool
+        ("", "is_string") => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("is_string requires 1 argument, got {}", args.len()),
+                });
+            }
+            let (entity_type, attribute) = extract_entity_attr(&args[0])?;
+            Ok(DslCondition::IsString {
+                entity_type,
+                attribute,
+            })
+        }
+
+        ("", "is_number") => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("is_number requires 1 argument, got {}", args.len()),
+                });
+            }
+            let (entity_type, attribute) = extract_entity_attr(&args[0])?;
+            Ok(DslCondition::IsNumber {
+                entity_type,
+                attribute,
+            })
+        }
+
+        ("", "is_bool") | ("", "is_boolean") => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("is_bool requires 1 argument, got {}", args.len()),
+                });
+            }
+            let (entity_type, attribute) = extract_entity_attr(&args[0])?;
+            Ok(DslCondition::IsBool {
+                entity_type,
+                attribute,
+            })
+        }
+
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Unsupported function call: {}{}. Supported functions: \
+                regex::matches, time::is_after, time::is_before, is_string, is_number, is_bool",
+                if ns.is_empty() { "" } else { &format!("{}::", ns) },
+                function
+            ),
+        }),
+    }
+}
+
+/// Compile a method call expression (e.g., user.email.contains("@"))
+fn compile_method_call(
+    receiver: Expr,
+    method: MethodName,
+    args: Vec<Expr>,
+) -> Result<DslCondition, ReaperError> {
+    // Extract entity type and attribute from receiver
+    let (entity_type, attribute) = extract_entity_attr(&receiver)?;
+
+    match method {
+        MethodName::Contains => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".contains() requires 1 argument, got {}", args.len()),
+                });
+            }
+            let substring = extract_string_literal(&args[0])?;
+            Ok(DslCondition::StringContains {
+                entity_type,
+                attribute,
+                substring,
+            })
+        }
+
+        MethodName::Startswith => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".startswith() requires 1 argument, got {}", args.len()),
+                });
+            }
+            let prefix = extract_string_literal(&args[0])?;
+            Ok(DslCondition::StringStartsWith {
+                entity_type,
+                attribute,
+                prefix,
+            })
+        }
+
+        MethodName::Endswith => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".endswith() requires 1 argument, got {}", args.len()),
+                });
+            }
+            let suffix = extract_string_literal(&args[0])?;
+            Ok(DslCondition::StringEndsWith {
+                entity_type,
+                attribute,
+                suffix,
+            })
+        }
+
+        MethodName::Matches => {
+            // .matches("pattern") is an alias for regex::matches
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".matches() requires 1 argument, got {}", args.len()),
+                });
+            }
+            let pattern = extract_string_literal(&args[0])?;
+
+            // Validate regex pattern at compile time
+            if regex::Regex::new(&pattern).is_err() {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("Invalid regex pattern: {}", pattern),
+                });
+            }
+
+            Ok(DslCondition::RegexMatches {
+                entity_type,
+                attribute,
+                pattern,
+            })
+        }
+
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Method .{}() is not supported in compiled policies. \
+                Supported methods: .contains(), .startswith(), .endswith(), .matches()",
+                method.as_str()
+            ),
+        }),
+    }
+}
+
+/// Extract entity type and attribute from an expression
+/// Supports: user.attr, resource.attr, context.attr
+/// Also handles Variable("user.email") format from parser
+fn extract_entity_attr(expr: &Expr) -> Result<(crate::evaluators::reaper_dsl::EntityType, String), ReaperError> {
+    use crate::evaluators::reaper_dsl::EntityType;
+
+    match expr {
+        Expr::AttributeAccess { variable, attribute } => {
+            let entity_type = match variable.as_str() {
+                "user" => EntityType::User,
+                "resource" => EntityType::Resource,
+                "context" => EntityType::Context,
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "Unknown entity type '{}'. Expected 'user', 'resource', or 'context'",
+                            variable
+                        ),
+                    })
+                }
+            };
+            Ok((entity_type, attribute.clone()))
+        }
+
+        // Handle Variable("user.email") format - split on dot
+        Expr::Variable(var_name) => {
+            if let Some((entity, attr)) = var_name.split_once('.') {
+                let entity_type = match entity {
+                    "user" => EntityType::User,
+                    "resource" => EntityType::Resource,
+                    "context" => EntityType::Context,
+                    _ => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: format!(
+                                "Unknown entity type '{}'. Expected 'user', 'resource', or 'context'",
+                                entity
+                            ),
+                        })
+                    }
+                };
+                Ok((entity_type, attr.to_string()))
+            } else {
+                Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Variable '{}' is not a valid entity.attribute format",
+                        var_name
+                    ),
+                })
+            }
+        }
+
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Expected entity.attribute access (e.g., user.email), got {:?}",
+                expr
+            ),
+        }),
+    }
+}
+
+/// Extract a string literal from an expression
+fn extract_string_literal(expr: &Expr) -> Result<String, ReaperError> {
+    match expr {
+        Expr::Literal(Value::String(s)) => Ok(s.clone()),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Expected string literal, got {:?}", expr),
+        }),
+    }
+}
+
+/// Extract an integer literal from an expression
+fn extract_int_literal(expr: &Expr) -> Result<i64, ReaperError> {
+    match expr {
+        Expr::Literal(Value::Integer(i)) => Ok(*i),
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!("Expected integer literal, got {:?}", expr),
+        }),
+    }
+}
+
+/// Compile expression comparison: user.skills.count() >= 5, user.name.lower() == "admin"
+fn compile_expr_comparison(
+    expr: Expr,
+    op: Operator,
+    right: ComparisonRight,
+) -> Result<DslCondition, ReaperError> {
+    // Handle method calls like user.skills.count(), user.name.lower()
+    if let Expr::MethodCall { receiver, method, args: _ } = expr {
+        let (entity_type, attribute) = extract_entity_attr(&receiver)?;
+
+        // Handle .count() method - requires integer on right side
+        if method == MethodName::Count {
+            let threshold = match right {
+                ComparisonRight::Value(Value::Integer(i)) => i as usize,
+                ComparisonRight::Value(Value::Float(f)) => f as usize,
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "Method call comparisons (e.g., .count()) require integer literal on right side".to_string(),
+                    })
+                }
+            };
+
+            return match op {
+                Operator::GreaterEqual => Ok(DslCondition::CountGreaterEqual {
+                    entity_type,
+                    attribute,
+                    threshold,
+                }),
+                Operator::GreaterThan => Ok(DslCondition::CountGreater {
+                    entity_type,
+                    attribute,
+                    threshold,
+                }),
+                Operator::Equal => Ok(DslCondition::CountEqual {
+                    entity_type,
+                    attribute,
+                    threshold,
+                }),
+                Operator::LessEqual => {
+                    // count <= N is same as NOT(count > N)
+                    Ok(DslCondition::Not(Box::new(DslCondition::CountGreater {
+                        entity_type,
+                        attribute,
+                        threshold,
+                    })))
+                }
+                Operator::LessThan => {
+                    // count < N is same as NOT(count >= N)
+                    Ok(DslCondition::Not(Box::new(DslCondition::CountGreaterEqual {
+                        entity_type,
+                        attribute,
+                        threshold,
+                    })))
+                }
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!("Operator {:?} not supported for .count() comparisons", op),
+                }),
+            };
+        }
+
+        // Handle .lower() method - user.name.lower() == "admin"
+        if method == MethodName::Lower {
+            let value = match right {
+                ComparisonRight::Value(Value::String(s)) => s,
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: ".lower() comparisons require string literal on right side".to_string(),
+                    })
+                }
+            };
+
+            return match op {
+                Operator::Equal => Ok(DslCondition::StringLowerEquals {
+                    entity_type,
+                    attribute,
+                    value,
+                }),
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringLowerEquals {
+                    entity_type,
+                    attribute,
+                    value,
+                }))),
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!("Operator {:?} not supported for .lower() comparisons. Use == or !=", op),
+                }),
+            };
+        }
+
+        // Handle .upper() method - user.code.upper() == "ADMIN"
+        if method == MethodName::Upper {
+            let value = match right {
+                ComparisonRight::Value(Value::String(s)) => s,
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: ".upper() comparisons require string literal on right side".to_string(),
+                    })
+                }
+            };
+
+            return match op {
+                Operator::Equal => Ok(DslCondition::StringUpperEquals {
+                    entity_type,
+                    attribute,
+                    value,
+                }),
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringUpperEquals {
+                    entity_type,
+                    attribute,
+                    value,
+                }))),
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!("Operator {:?} not supported for .upper() comparisons. Use == or !=", op),
+                }),
+            };
+        }
+
+        return Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Method .{}() is not supported in compiled policy comparisons. \
+                Supported methods: .count(), .lower(), .upper()",
+                method.as_str()
+            ),
+        });
+    }
+
+    Err(ReaperError::InvalidPolicy {
+        reason: "Expression comparisons only support method calls like .count(), .lower(), .upper()".to_string(),
+    })
+}
+
+/// Compile a membership test: "admin" in user.roles
+fn compile_membership_test(
+    left: ComparisonLeft,
+    right: ComparisonRight,
+) -> Result<DslCondition, ReaperError> {
+    // Parser represents "value in collection" as: left=collection, op=In, right=value
+    // So left is the entity attribute (collection) and right is the literal value to search for
+
+    // Extract the entity attribute (collection) from the left side
+    let (entity_type, attribute) = match left {
+        ComparisonLeft::EntityAttr(attr) => {
+            let entity_type = match attr.entity {
+                Entity::User => crate::evaluators::reaper_dsl::EntityType::User,
+                Entity::Resource => crate::evaluators::reaper_dsl::EntityType::Resource,
+                Entity::Context => crate::evaluators::reaper_dsl::EntityType::Context,
+            };
+            (entity_type, attr.attribute)
+        }
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "Left side of 'in' operator should be an entity attribute collection (e.g., user.roles)".to_string(),
+            })
+        }
+    };
+
+    // Extract the literal value from the right side
+    let literal_value = match right {
+        ComparisonRight::Value(value) => match value {
+            Value::String(s) => crate::evaluators::reaper_dsl::LiteralValue::String(s),
+            Value::Integer(i) => crate::evaluators::reaper_dsl::LiteralValue::Int(i),
+            Value::Boolean(b) => crate::evaluators::reaper_dsl::LiteralValue::Bool(b),
+            _ => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "Only string, integer, and boolean literals are supported in membership tests".to_string(),
+                })
+            }
+        },
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "Right side of 'in' operator should be a literal value (e.g., \"admin\" in user.roles)".to_string(),
+            })
+        }
+    };
+
+    Ok(DslCondition::MembershipTest {
+        value: literal_value,
+        entity_type,
+        attribute,
+        index: None, // TODO: Support indexed membership tests like "admin" in user.groups[0].members
+    })
 }
 
 /// Compile a comparison into the appropriate DslCondition variant
@@ -131,10 +633,10 @@ fn compile_comparison(
     op: Operator,
     right: ComparisonRight,
 ) -> Result<DslCondition, ReaperError> {
-    // Special case: check if this is an "action" variable comparison
+    // Special case: check if this is an "action" or "resource" variable comparison
     if let ComparisonLeft::Expr(Expr::Variable(var_name)) = &left {
-        if var_name == "action" {
-            // Handle action == "value" comparisons
+        if var_name == "action" || var_name == "resource" {
+            // Handle action == "value" and resource == "value" comparisons
             if let ComparisonRight::Value(value) = right {
                 let value_str = match value {
                     Value::String(s) => s,
@@ -144,31 +646,41 @@ fn compile_comparison(
                     Value::Null => "null".to_string(),
                     _ => {
                         return Err(ReaperError::InvalidPolicy {
-                            reason: "Action comparisons only support simple literal values"
-                                .to_string(),
+                            reason: format!("{} comparisons only support simple literal values", var_name),
                         })
                     }
                 };
-                return match op {
-                    Operator::Equal => Ok(DslCondition::ActionEquals { value: value_str }),
-                    Operator::NotEqual => {
+                return match (var_name.as_str(), op) {
+                    ("action", Operator::Equal) => Ok(DslCondition::ActionEquals { value: value_str }),
+                    ("action", Operator::NotEqual) => {
                         Ok(DslCondition::Not(Box::new(DslCondition::ActionEquals {
+                            value: value_str,
+                        })))
+                    }
+                    ("resource", Operator::Equal) => Ok(DslCondition::ResourceIdEquals { value: value_str }),
+                    ("resource", Operator::NotEqual) => {
+                        Ok(DslCondition::Not(Box::new(DslCondition::ResourceIdEquals {
                             value: value_str,
                         })))
                     }
                     _ => Err(ReaperError::InvalidPolicy {
                         reason: format!(
-                            "Operator {:?} not supported for action comparisons. Use == or !=.",
-                            op
+                            "Operator {:?} not supported for {} comparisons. Use == or !=.",
+                            op, var_name
                         ),
                     }),
                 };
             } else {
                 return Err(ReaperError::InvalidPolicy {
-                    reason: "Action comparisons must be against literal values (e.g., action == \"read\")".to_string(),
+                    reason: format!("{} comparisons must be against literal values (e.g., {} == \"value\")", var_name, var_name),
                 });
             }
         }
+    }
+
+    // Handle "in" operator for membership tests: "admin" in user.roles
+    if op == Operator::In {
+        return compile_membership_test(left, right);
     }
 
     // Extract EntityAttr from left - var attributes not supported in compiler
@@ -184,12 +696,9 @@ fn compile_comparison(
                 ),
             });
         }
-        ComparisonLeft::Expr(_) => {
-            return Err(ReaperError::InvalidPolicy {
-                reason: "Expression comparisons (e.g., variable.method() == value) are not supported in compiled policies. \
-                    Expressions require direct AST evaluation. \
-                    Use .reap format with AST evaluation for expression support.".to_string(),
-            });
+        ComparisonLeft::Expr(expr) => {
+            // Handle method calls like user.skills.count() >= 5
+            return compile_expr_comparison(expr, op, right);
         }
     };
 
@@ -262,6 +771,47 @@ fn compile_value_comparison(
             })))
         }
 
+        // User numeric comparisons (>=, >, <=, <)
+        (Entity::User, Operator::GreaterEqual) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with >=", value_str),
+            })?;
+            Ok(DslCondition::UserGreaterEqualLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
+        (Entity::User, Operator::GreaterThan) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with >", value_str),
+            })?;
+            Ok(DslCondition::UserGreaterLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
+        (Entity::User, Operator::LessEqual) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with <=", value_str),
+            })?;
+            Ok(DslCondition::UserLessEqualLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
+        (Entity::User, Operator::LessThan) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with <", value_str),
+            })?;
+            Ok(DslCondition::UserLessLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
         // Resource attribute comparisons
         (Entity::Resource, Operator::Equal) => Ok(DslCondition::ResourceEquals {
             attribute: left.attribute,
@@ -273,6 +823,46 @@ fn compile_value_comparison(
                 attribute: left.attribute,
                 value: value_str,
             })))
+        }
+
+        (Entity::Resource, Operator::GreaterEqual) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with >=", value_str),
+            })?;
+            Ok(DslCondition::ResourceGreaterEqualLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
+        (Entity::Resource, Operator::GreaterThan) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with >", value_str),
+            })?;
+            Ok(DslCondition::ResourceGreaterLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
+        (Entity::Resource, Operator::LessEqual) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with <=", value_str),
+            })?;
+            Ok(DslCondition::ResourceLessEqualLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
+        }
+
+        (Entity::Resource, Operator::LessThan) => {
+            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("Cannot compare attribute to non-numeric value '{}' with <", value_str),
+            })?;
+            Ok(DslCondition::ResourceLessLiteral {
+                attribute: left.attribute,
+                value: num_value,
+            })
         }
 
         // Context not yet supported
@@ -370,6 +960,40 @@ fn compile_attr_comparison(
                 resource_attr: right.attribute,
             },
         ))),
+
+        // Same-entity comparisons: entity.attr1 op entity.attr2
+        // Works for User, Resource, or Context entities
+        (left_ent, right_ent, op) if left_ent == right_ent => {
+            let entity_type = match left_ent {
+                Entity::User => crate::evaluators::reaper_dsl::EntityType::User,
+                Entity::Resource => crate::evaluators::reaper_dsl::EntityType::Resource,
+                Entity::Context => crate::evaluators::reaper_dsl::EntityType::Context,
+            };
+
+            let attr_op = match op {
+                Operator::LessEqual => AttrCompareOp::LessEqual,
+                Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
+                Operator::LessThan => AttrCompareOp::Less,
+                Operator::GreaterThan => AttrCompareOp::Greater,
+                Operator::Equal => AttrCompareOp::Equal,
+                Operator::NotEqual => AttrCompareOp::NotEqual,
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "Operator {:?} not supported for same-entity comparisons",
+                            op
+                        ),
+                    })
+                }
+            };
+
+            Ok(DslCondition::SameEntityAttrCompare {
+                entity_type,
+                left_attr: left.attribute,
+                right_attr: right.attribute,
+                op: attr_op,
+            })
+        }
 
         // Unsupported combinations
         _ => Err(ReaperError::InvalidPolicy {
