@@ -9,9 +9,9 @@ name: Reaper CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'claude/**' ]
   pull_request:
-    branches: [ main, develop ]
+  workflow_dispatch:
 
 permissions:
   contents: read
