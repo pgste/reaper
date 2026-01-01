@@ -26,6 +26,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Generate RBAC policy data
+    Rbac,
+    /// Generate ABAC policy data
+    Abac,
+    /// Generate multilayer policy data
+    Multilayer,
     /// Generate math policy data
     Math,
     /// Generate regex policy data
@@ -50,6 +56,9 @@ fn main() -> anyhow::Result<()> {
     println!("Generating {} entities...", cli.count);
 
     let entities = match &cli.command {
+        Commands::Rbac => generate_rbac_data(cli.count),
+        Commands::Abac => generate_abac_data(cli.count),
+        Commands::Multilayer => generate_multilayer_data(cli.count),
         Commands::Math => generate_math_data(cli.count),
         Commands::Regex => generate_regex_data(cli.count),
         Commands::Time => generate_time_data(cli.count),
@@ -71,6 +80,88 @@ fn main() -> anyhow::Result<()> {
     println!("✓ Generated {} entities to {}", cli.count, cli.output);
 
     Ok(())
+}
+
+fn generate_rbac_data(count: usize) -> Vec<Value> {
+    let mut rng = rand::thread_rng();
+    let mut entities = Vec::new();
+
+    let roles = ["admin", "manager", "developer", "viewer", "guest"];
+    let departments = ["engineering", "sales", "hr", "finance", "operations"];
+
+    for i in 0..count {
+        entities.push(json!({
+            "id": format!("user_{}", i),
+            "type": "user",
+            "attributes": {
+                "role": roles.choose(&mut rng).unwrap(),
+                "department": departments.choose(&mut rng).unwrap(),
+                "active": rng.gen_bool(0.9)
+            }
+        }));
+    }
+
+    entities
+}
+
+fn generate_abac_data(count: usize) -> Vec<Value> {
+    let mut rng = rand::thread_rng();
+    let mut entities = Vec::new();
+
+    let departments = ["engineering", "sales", "hr", "finance", "operations"];
+    let clearance_levels = ["public", "internal", "confidential", "secret"];
+
+    for i in 0..count {
+        entities.push(json!({
+            "id": format!("user_{}", i),
+            "type": "user",
+            "attributes": {
+                "department": departments.choose(&mut rng).unwrap(),
+                "clearance": clearance_levels.choose(&mut rng).unwrap(),
+                "years_employed": rng.gen_range(0..20),
+                "has_training": rng.gen_bool(0.7),
+                "active": rng.gen_bool(0.9)
+            }
+        }));
+    }
+
+    entities
+}
+
+fn generate_multilayer_data(count: usize) -> Vec<Value> {
+    let mut rng = rand::thread_rng();
+    let mut entities = Vec::new();
+
+    let roles = ["admin", "manager", "developer", "viewer"];
+    let departments = ["engineering", "sales", "hr", "finance"];
+    let clearance_levels = ["public", "internal", "confidential"];
+    let regions = ["us", "eu", "apac"];
+
+    for i in 0..count {
+        let role_perms: Vec<&str> = match roles.choose(&mut rng).unwrap() {
+            &"admin" => vec!["read", "write", "delete", "admin"],
+            &"manager" => vec!["read", "write", "delete"],
+            &"developer" => vec!["read", "write"],
+            _ => vec!["read"],
+        };
+
+        entities.push(json!({
+            "id": format!("user_{}", i),
+            "type": "user",
+            "attributes": {
+                "role": roles.choose(&mut rng).unwrap(),
+                "department": departments.choose(&mut rng).unwrap(),
+                "clearance": clearance_levels.choose(&mut rng).unwrap(),
+                "region": regions.choose(&mut rng).unwrap(),
+                "permissions": role_perms,
+                "years_employed": rng.gen_range(0..15),
+                "has_mfa": rng.gen_bool(0.8),
+                "active": rng.gen_bool(0.95)
+            }
+        }));
+    }
+
+    entities
 }
 
 fn generate_math_data(count: usize) -> Vec<Value> {

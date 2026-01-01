@@ -24,28 +24,16 @@ permissions:
   id-token: write
 
 jobs:
-  benchmark:
+  # Build once, share artifacts with all benchmark jobs
+  build:
+    name: Build Binaries
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        scenario: [rbac, abac, multilayer, math, regex, string, collection, time, mega]
-        scale: [100k]
-      fail-fast: false
-
-    name: ${{ matrix.scenario }}-${{ matrix.scale }}
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        lfs: true
 
     - name: Set up Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-        override: true
+      uses: dtolnay/rust-toolchain@stable
 
     - name: Cache Cargo dependencies
       uses: actions/cache@v4
@@ -58,6 +46,62 @@ jobs:
           target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+    - name: Build Reaper Agent
+      run: cargo build --release --bin reaper-agent
+
+    - name: Build Benchmark Tools
+      working-directory: benchmarks/reaper-vs-opa
+      run: cargo build --release
+
+    - name: Upload Reaper Agent
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-agent
+        path: target/release/reaper-agent
+
+    - name: Upload Benchmark Binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-tools
+        path: |
+          benchmarks/reaper-vs-opa/target/release/benchmark
+          benchmarks/reaper-vs-opa/target/release/generate-data
+
+  # Run benchmarks in parallel using pre-built binaries
+  benchmark:
+    name: ${{ matrix.scenario }}-${{ matrix.scale }}
+    runs-on: ubuntu-latest
+    needs: build
+
+    strategy:
+      matrix:
+        scenario: [rbac, abac, multilayer, math, regex, string, collection, time, mega]
+        scale: [100k]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        lfs: true
+
+    - name: Download Reaper Agent
+      uses: actions/download-artifact@v4
+      with:
+        name: reaper-agent
+        path: bin/
+
+    - name: Download Benchmark Tools
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-tools
+        path: benchmarks/reaper-vs-opa/bin/
+
+    - name: Make binaries executable
+      run: |
+        chmod +x bin/reaper-agent
+        chmod +x benchmarks/reaper-vs-opa/bin/benchmark
+        chmod +x benchmarks/reaper-vs-opa/bin/generate-data
+
     - name: Install Enterprise OPA
       run: |
         curl -L -o eopa https://github.com/StyraInc/enterprise-opa/releases/latest/download/eopa_Linux_x86_64
@@ -65,16 +109,26 @@ jobs:
         sudo mv eopa /usr/local/bin/opa
         opa version
 
-    - name: Build Reaper Agent
-      run: cargo build --release --bin reaper-agent
-
-    - name: Build Benchmark Tool
+    - name: Verify or Generate Test Data
       working-directory: benchmarks/reaper-vs-opa
-      run: cargo build --release
+      run: |
+        DATA_FILE="data/100k/${{ matrix.scenario }}.json"
+
+        # Check if file exists and is valid JSON (not an LFS pointer)
+        if [ -f "$DATA_FILE" ] && head -1 "$DATA_FILE" | grep -q '"entities"'; then
+          echo "✓ Data file exists and is valid JSON"
+          ENTITY_COUNT=$(jq '.entities | length' "$DATA_FILE")
+          echo "  Contains $ENTITY_COUNT entities"
+        else
+          echo "⚠ Data file missing or is LFS pointer, generating..."
+          mkdir -p data/100k
+          ./bin/generate-data --count 100000 --output "$DATA_FILE" ${{ matrix.scenario }}
+          echo "✓ Generated 100k entities"
+        fi
 
     - name: Start Services
       run: |
-        ./target/release/reaper-agent &
+        ./bin/reaper-agent &
         echo "REAPER_PID=$!" >> $GITHUB_ENV
 
         opa run --server --addr=0.0.0.0:8181 --log-level=error &
@@ -94,7 +148,7 @@ jobs:
         ./bin/deploy-reaper.sh ${{ matrix.scenario }} ${{ matrix.scale }}
         ./bin/deploy-opa.sh ${{ matrix.scenario }} ${{ matrix.scale }}
 
-        ./target/release/benchmark \
+        ./bin/benchmark \
           --scenario ${{ matrix.scenario }} \
           --requests $REQUESTS \
           --concurrency $CONCURRENCY \
