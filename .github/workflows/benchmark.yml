@@ -24,9 +24,9 @@ permissions:
   id-token: write
 
 jobs:
-  # Build once, share artifacts with all benchmark jobs
-  build:
-    name: Build Binaries
+  # Build agent and benchmark tools in parallel
+  build-agent:
+    name: Build Reaper Agent
     runs-on: ubuntu-latest
 
     steps:
@@ -44,20 +44,41 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-agent-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build Reaper Agent
       run: cargo build --release --bin reaper-agent
-
-    - name: Build Benchmark Tools
-      working-directory: benchmarks/reaper-vs-opa
-      run: cargo build --release
 
     - name: Upload Reaper Agent
       uses: actions/upload-artifact@v4
       with:
         name: reaper-agent
         path: target/release/reaper-agent
+
+  build-benchmark:
+    name: Build Benchmark Tools
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build Benchmark Tools
+      working-directory: benchmarks/reaper-vs-opa
+      run: cargo build --release
 
     - name: Upload Benchmark Binaries
       uses: actions/upload-artifact@v4
@@ -71,7 +92,7 @@ jobs:
   benchmark:
     name: ${{ matrix.scenario }}-${{ matrix.scale }}
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build-agent, build-benchmark]
 
     strategy:
       matrix:
