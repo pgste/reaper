@@ -563,14 +563,15 @@ impl ReaperDSLEvaluator {
         interner: &crate::data::StringInterner,
     ) {
         match condition {
-            Condition::MembershipTest { value, .. } => {
+            Condition::MembershipTest { value: LiteralValue::String(s), .. } => {
                 // Only pre-compute String values (Int/Bool are Copy types)
-                if let LiteralValue::String(s) = value {
-                    if !cache.contains_key(s) {
-                        let interned = interner.intern(s);
-                        cache.insert(s.clone(), AttributeValue::String(interned));
-                    }
+                if !cache.contains_key(s) {
+                    let interned = interner.intern(s);
+                    cache.insert(s.clone(), AttributeValue::String(interned));
                 }
+            }
+            Condition::MembershipTest { .. } => {
+                // Int/Bool are Copy types, no pre-computation needed
             }
             Condition::And(conditions) | Condition::Or(conditions) => {
                 for c in conditions {

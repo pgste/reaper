@@ -128,7 +128,10 @@ impl From<&BenchmarkResult> for BenchmarkRow {
             engine: result.engine.clone(),
             scenario: result.scenario.clone(),
             requests: format!("{}/{}", result.successful, result.total_requests),
-            success_rate: format!("{:.2}%", (result.successful as f64 / result.total_requests as f64) * 100.0),
+            success_rate: format!(
+                "{:.2}%",
+                (result.successful as f64 / result.total_requests as f64) * 100.0
+            ),
             allowed: format!("{} ({:.0}%)", result.allowed, allow_pct),
             denied: format!("{} ({:.0}%)", result.denied, deny_pct),
             throughput: format!("{:.0}", result.throughput_rps),
@@ -391,11 +394,7 @@ async fn validate_policy_logic(url: &str, engine: &str, scenario: &str) -> Resul
 
 async fn test_connectivity(url: &str, name: &str) -> Result<()> {
     let client = reqwest::Client::new();
-    let health_url = if name == "Reaper" {
-        format!("{}/health", url)
-    } else {
-        format!("{}/health", url)
-    };
+    let health_url = format!("{}/health", url);
 
     match client.get(&health_url).send().await {
         Ok(resp) if resp.status().is_success() => {
@@ -547,7 +546,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
             PolicyRequest {
                 principal: Principal {
                     id: user_id,
-                    role: "admin".to_string(),  // Not used for entity lookup
+                    role: "admin".to_string(), // Not used for entity lookup
                     department: None,
                     clearance: None,
                     region: None,
@@ -557,7 +556,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "abac" => {
             // ABAC: Format is user_{dept}_{role}_{num}
             let departments = ["engineering", "hr", "finance", "sales", "operations"];
@@ -588,7 +587,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 }),
                 expected_decision: None,
             }
-        },
+        }
         "rebac" => {
             // ReBAC: Format is user_{team}_{num}
             let teams = ["alpha", "beta", "gamma", "delta", "omega"];
@@ -614,11 +613,18 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 }),
                 expected_decision: None,
             }
-        },
+        }
         "multilayer" => {
             // Multilayer: Format is user_{role}_{dept}_{num}
             let departments = ["engineering", "hr", "finance", "executive", "operations"];
-            let roles = ["admin", "executive", "senior", "engineer", "manager", "intern"];
+            let roles = [
+                "admin",
+                "executive",
+                "senior",
+                "engineer",
+                "manager",
+                "intern",
+            ];
             let classifications = ["public", "internal", "confidential", "secret"];
 
             let dept = departments[index % departments.len()];
@@ -645,18 +651,18 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 }),
                 expected_decision: None,
             }
-        },
+        }
         "math" => {
             // Math policy: numeric validation rules
             let resources = [
-                "premium_loan",      // credit_score >= 700
-                "shopping_cart",     // order_total <= budget_limit
-                "featured_listing",  // average_rating >= 4.0
-                "marketplace",       // list_price 1-10000
-                "premium_tier",      // score >= 90
+                "premium_loan",        // credit_score >= 700
+                "shopping_cart",       // order_total <= budget_limit
+                "featured_listing",    // average_rating >= 4.0
+                "marketplace",         // list_price 1-10000
+                "premium_tier",        // score >= 90
                 "temperature_monitor", // temp -50 to 50
-                "loyalty_reward",    // total_points >= 1000
-                "sale_item",         // discount 0-50%
+                "loyalty_reward",      // total_points >= 1000
+                "sale_item",           // discount 0-50%
             ];
 
             PolicyRequest {
@@ -672,15 +678,15 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "regex" => {
             // Regex policy: pattern validation rules using actual regex::matches()
             let resources = [
-                "email_service",    // regex::matches(user.email, email_pattern)
-                "phone_service",    // regex::matches(user.phone, phone_pattern)
-                "uuid_service",     // regex::matches(user.uuid, uuid_pattern)
-                "payment_service",  // regex::matches(user.credit_card, cc_pattern)
-                "web_service",      // regex::matches(user.url, url_pattern)
+                "email_service",   // regex::matches(user.email, email_pattern)
+                "phone_service",   // regex::matches(user.phone, phone_pattern)
+                "uuid_service",    // regex::matches(user.uuid, uuid_pattern)
+                "payment_service", // regex::matches(user.credit_card, cc_pattern)
+                "web_service",     // regex::matches(user.url, url_pattern)
             ];
 
             PolicyRequest {
@@ -696,10 +702,19 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "time" => {
             // Time policy: time-based access control
-            let roles = ["employee", "operator", "event_planner", "contractor", "system", "audit_logger", "api_client", "archiver"];
+            let roles = [
+                "employee",
+                "operator",
+                "event_planner",
+                "contractor",
+                "system",
+                "audit_logger",
+                "api_client",
+                "archiver",
+            ];
             let resources = [
                 "api_endpoint",
                 "office_system",
@@ -727,15 +742,15 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "string" => {
             // String policy: string method calls (.contains, .startswith, .endswith)
             let resources = [
-                "internal_docs",     // user.email.endswith("@company.com")
-                "partner_portal",    // user.email.contains("partner")
-                "admin_panel",       // user.username.startswith("admin_")
-                "gov_service",       // user.email.endswith(".gov")
-                "test_environment",  // user.username.contains("test")
+                "internal_docs",    // user.email.endswith("@company.com")
+                "partner_portal",   // user.email.contains("partner")
+                "admin_panel",      // user.username.startswith("admin_")
+                "gov_service",      // user.email.endswith(".gov")
+                "test_environment", // user.username.contains("test")
             ];
 
             PolicyRequest {
@@ -751,7 +766,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "collection" => {
             // Collection policy: array/set/map operations
             let resources = [
@@ -779,7 +794,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "comprehension" => {
             // Comprehension policy: list comprehension rules
             let resources = [
@@ -804,7 +819,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "json" => {
             // JSON policy: JSON structure validation
             let resources = [
@@ -833,29 +848,76 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         "mega" => {
             // Mega policy: 105 rules covering all patterns
             let resources = [
                 // Math
-                "premium_loan", "shopping_cart", "featured_listing", "marketplace_low", "marketplace_medium",
-                "marketplace_high", "bronze_tier", "silver_tier", "gold_tier", "cold_storage", "normal_storage",
-                "warm_storage", "loyalty_basic", "loyalty_premium", "loyalty_elite",
+                "premium_loan",
+                "shopping_cart",
+                "featured_listing",
+                "marketplace_low",
+                "marketplace_medium",
+                "marketplace_high",
+                "bronze_tier",
+                "silver_tier",
+                "gold_tier",
+                "cold_storage",
+                "normal_storage",
+                "warm_storage",
+                "loyalty_basic",
+                "loyalty_premium",
+                "loyalty_elite",
                 // String
-                "admin_access", "manager_access", "user_access", "code_a", "code_b", "code_c",
-                "company_docs", "partner_docs", "external_docs", "admin_panel", "manager_panel", "user_panel",
-                "gov_classified", "mil_classified", "edu_resources",
+                "admin_access",
+                "manager_access",
+                "user_access",
+                "code_a",
+                "code_b",
+                "code_c",
+                "company_docs",
+                "partner_docs",
+                "external_docs",
+                "admin_panel",
+                "manager_panel",
+                "user_panel",
+                "gov_classified",
+                "mil_classified",
+                "edu_resources",
                 // Regex
-                "email_validation", "phone_validation", "url_validation", "ip_validation", "uuid_validation",
+                "email_validation",
+                "phone_validation",
+                "url_validation",
+                "ip_validation",
+                "uuid_validation",
                 // Time
-                "api_endpoint", "office_morning", "office_afternoon", "adult_content", "apartment_access",
+                "api_endpoint",
+                "office_morning",
+                "office_afternoon",
+                "adult_content",
+                "apartment_access",
                 // Collection
-                "doc_read", "doc_write", "doc_delete", "junior_position", "mid_position", "senior_position",
-                "eng_resource", "admin_resource", "manager_resource",
+                "doc_read",
+                "doc_write",
+                "doc_delete",
+                "junior_position",
+                "mid_position",
+                "senior_position",
+                "eng_resource",
+                "admin_resource",
+                "manager_resource",
                 // Comprehension
-                "numbers_gt5", "numbers_gt10", "high_priority", "medium_priority", "active_records",
+                "numbers_gt5",
+                "numbers_gt10",
+                "high_priority",
+                "medium_priority",
+                "active_records",
                 // JSON
-                "api_submit", "profile_basic", "profile_full", "payment_card", "payment_billing",
+                "api_submit",
+                "profile_basic",
+                "profile_full",
+                "payment_card",
+                "payment_billing",
             ];
 
             PolicyRequest {
@@ -871,7 +933,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
                 context: None,
                 expected_decision: None,
             }
-        },
+        }
         _ => {
             // Default fallback for unknown scenarios
             let roles = ["admin", "manager", "engineer", "viewer"];
@@ -979,7 +1041,7 @@ async fn send_opa_request(
         "abac" => "reaper/abac/allow".to_string(),
         "rebac" => "reaper/rebac/allow".to_string(),
         "multilayer" => "reaper/multilayer/allow".to_string(),
-        _ => format!("reaper/{}/allow", scenario),  // Generic fallback for any scenario
+        _ => format!("reaper/{}/allow", scenario), // Generic fallback for any scenario
     };
 
     let resp = client
@@ -1064,19 +1126,25 @@ fn display_winner(results: &[BenchmarkResult]) {
 
     // Group by scenario
     let scenarios: Vec<&str> = results.iter().map(|r| r.scenario.as_str()).collect();
-    let unique_scenarios: Vec<&str> = scenarios.iter().copied().collect::<std::collections::HashSet<_>>().into_iter().collect();
+    let unique_scenarios: Vec<&str> = scenarios
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
 
     for scenario in unique_scenarios {
-        let scenario_results: Vec<&BenchmarkResult> = results
-            .iter()
-            .filter(|r| r.scenario == scenario)
-            .collect();
+        let scenario_results: Vec<&BenchmarkResult> =
+            results.iter().filter(|r| r.scenario == scenario).collect();
 
         if scenario_results.len() < 2 {
             continue;
         }
 
-        let reaper = scenario_results.iter().find(|r| r.engine == "Reaper").unwrap();
+        let reaper = scenario_results
+            .iter()
+            .find(|r| r.engine == "Reaper")
+            .unwrap();
         let opa = scenario_results.iter().find(|r| r.engine == "OPA").unwrap();
 
         println!("\n{} Scenario:", scenario.bold());

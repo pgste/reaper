@@ -262,7 +262,7 @@ fn calculate_checksum(policy: &Policy) -> u64 {
 
 /// Pre-compilation hints extracted during bundle creation
 /// These allow the agent to optimize loading by pre-allocating and pre-computing
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrecompilationHints {
     /// Strings that should be interned (attribute names, literals, etc.)
     /// Stored as a deduplicated list for efficient bulk interning
@@ -274,17 +274,6 @@ pub struct PrecompilationHints {
     pub total_rules: usize,
     /// Entity IDs referenced in policies (for pre-loading from DataStore)
     pub referenced_entities: Vec<String>,
-}
-
-impl Default for PrecompilationHints {
-    fn default() -> Self {
-        Self {
-            strings_to_intern: Vec::new(),
-            regex_patterns: Vec::new(),
-            total_rules: 0,
-            referenced_entities: Vec::new(),
-        }
-    }
 }
 
 /// Policy package entry - a single policy with its metadata
@@ -347,7 +336,7 @@ impl PolicyPackage {
         let mut hasher = Sha256::new();
         for policy in &policies {
             hasher.update(policy.name.as_bytes());
-            hasher.update(&policy.rules.len().to_le_bytes());
+            hasher.update(policy.rules.len().to_le_bytes());
         }
         let source_hash: [u8; 32] = hasher.finalize().into();
 

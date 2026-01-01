@@ -2,8 +2,8 @@
 // Generates 100k+ entity datasets for all policy scenarios
 
 use clap::{Parser, Subcommand};
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::Write;
@@ -115,7 +115,10 @@ fn generate_math_data(count: usize) -> Vec<Value> {
             }
             7 => {
                 // Discount
-                inner_attrs.insert("discount_percentage".to_string(), json!(rng.gen_range(0..60)));
+                inner_attrs.insert(
+                    "discount_percentage".to_string(),
+                    json!(rng.gen_range(0..60)),
+                );
             }
             _ => unreachable!(),
         }
@@ -134,7 +137,7 @@ fn generate_regex_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
-    let emails = vec![
+    let emails = [
         "user@example.com",
         "admin@company.co.uk",
         "test.user+tag@domain.org",
@@ -142,7 +145,7 @@ fn generate_regex_data(count: usize) -> Vec<Value> {
         "@invalid.com",
     ];
 
-    let phones = vec![
+    let phones = [
         "+1 (555) 123-4567",
         "555-123-4567",
         "(555) 123-4567",
@@ -150,7 +153,7 @@ fn generate_regex_data(count: usize) -> Vec<Value> {
         "12345",
     ];
 
-    let urls = vec![
+    let urls = [
         "https://example.com",
         "http://test.com/path",
         "https://sub.domain.com/path?query=1",
@@ -158,7 +161,7 @@ fn generate_regex_data(count: usize) -> Vec<Value> {
         "ftp://nothttp.com",
     ];
 
-    let ips = vec![
+    let ips = [
         "192.168.1.1",
         "10.0.0.1",
         "255.255.255.255",
@@ -166,7 +169,7 @@ fn generate_regex_data(count: usize) -> Vec<Value> {
         "invalid",
     ];
 
-    let uuids = vec![
+    let uuids = [
         "550e8400-e29b-41d4-a716-446655440000",
         "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
         "invalid-uuid",
@@ -203,7 +206,16 @@ fn generate_time_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
-    let roles = vec!["employee", "operator", "event_planner", "contractor", "system", "audit_logger", "api_client", "archiver"];
+    let roles = [
+        "employee",
+        "operator",
+        "event_planner",
+        "contractor",
+        "system",
+        "audit_logger",
+        "api_client",
+        "archiver",
+    ];
 
     for i in 0..count {
         entities.push(json!({
@@ -249,10 +261,35 @@ fn generate_string_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
-    let names = vec!["John Doe", "JOHN DOE", "john doe", " John Doe ", "Jane Smith"];
-    let codes = vec!["admin123", "ADMIN123", "manager456", "MANAGER456", "user789"];
-    let emails = vec!["user@company.com", "admin@partner.com", "test@external.com", "gov@agency.gov", "mil@military.mil", "edu@university.edu"];
-    let usernames = vec!["admin_john", "mgr_jane", "user_test", "test_user", "operator"];
+    let names = [
+        "John Doe",
+        "JOHN DOE",
+        "john doe",
+        " John Doe ",
+        "Jane Smith",
+    ];
+    let codes = [
+        "admin123",
+        "ADMIN123",
+        "manager456",
+        "MANAGER456",
+        "user789",
+    ];
+    let emails = [
+        "user@company.com",
+        "admin@partner.com",
+        "test@external.com",
+        "gov@agency.gov",
+        "mil@military.mil",
+        "edu@university.edu",
+    ];
+    let usernames = [
+        "admin_john",
+        "mgr_jane",
+        "user_test",
+        "test_user",
+        "operator",
+    ];
 
     for i in 0..count {
         entities.push(json!({
@@ -275,27 +312,52 @@ fn generate_collection_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
-    let permissions = vec!["read", "write", "delete", "admin", "execute"];
-    let skills = vec!["rust", "python", "javascript", "go", "java", "kubernetes", "aws", "terraform"];
-    let groups = vec!["engineering", "platform", "admin", "superadmin", "manager", "director"];
-    let tags = vec!["public", "draft", "review", "internal", "confidential"];
+    let permissions = ["read", "write", "delete", "admin", "execute"];
+    let skills = [
+        "rust",
+        "python",
+        "javascript",
+        "go",
+        "java",
+        "kubernetes",
+        "aws",
+        "terraform",
+    ];
+    let groups = [
+        "engineering",
+        "platform",
+        "admin",
+        "superadmin",
+        "manager",
+        "director",
+    ];
+    let tags = ["public", "draft", "review", "internal", "confidential"];
 
     for i in 0..count {
         let mut inner_attrs = serde_json::Map::new();
 
         // Random permissions (1-4)
         let perm_count = rng.gen_range(1..=4);
-        let user_perms: Vec<_> = permissions.choose_multiple(&mut rng, perm_count).cloned().collect();
+        let user_perms: Vec<_> = permissions
+            .choose_multiple(&mut rng, perm_count)
+            .cloned()
+            .collect();
         inner_attrs.insert("permissions".to_string(), json!(user_perms));
 
         // Random skills (2-7)
         let skill_count = rng.gen_range(2..=7);
-        let user_skills: Vec<_> = skills.choose_multiple(&mut rng, skill_count).cloned().collect();
+        let user_skills: Vec<_> = skills
+            .choose_multiple(&mut rng, skill_count)
+            .cloned()
+            .collect();
         inner_attrs.insert("skills".to_string(), json!(user_skills));
 
         // Random groups (1-3)
         let group_count = rng.gen_range(1..=3);
-        let user_groups: Vec<_> = groups.choose_multiple(&mut rng, group_count).cloned().collect();
+        let user_groups: Vec<_> = groups
+            .choose_multiple(&mut rng, group_count)
+            .cloned()
+            .collect();
         inner_attrs.insert("groups".to_string(), json!(user_groups));
 
         // Random tags (1-3)
@@ -304,7 +366,13 @@ fn generate_collection_data(count: usize) -> Vec<Value> {
         inner_attrs.insert("tags".to_string(), json!(user_tags));
 
         // Roles
-        inner_attrs.insert("roles".to_string(), json!(vec!["user", if rng.gen_bool(0.3) { "admin" } else { "viewer" }]));
+        inner_attrs.insert(
+            "roles".to_string(),
+            json!(vec![
+                "user",
+                if rng.gen_bool(0.3) { "admin" } else { "viewer" }
+            ]),
+        );
 
         // Projects
         let projects: Vec<_> = (0..rng.gen_range(1..4))
@@ -325,7 +393,10 @@ fn generate_collection_data(count: usize) -> Vec<Value> {
             metadata.insert("email".to_string(), json!(format!("user{}@example.com", i)));
         }
         if rng.gen_bool(0.7) {
-            metadata.insert("phone".to_string(), json!(format!("+1-555-{:04}", i % 10000)));
+            metadata.insert(
+                "phone".to_string(),
+                json!(format!("+1-555-{:04}", i % 10000)),
+            );
         }
         inner_attrs.insert("metadata".to_string(), json!(metadata));
 
@@ -340,7 +411,10 @@ fn generate_collection_data(count: usize) -> Vec<Value> {
         let departments: Vec<_> = (0..dept_count)
             .map(|_| {
                 let perm_count = rng.gen_range(1..4);
-                let dept_perms: Vec<_> = permissions.choose_multiple(&mut rng, perm_count).cloned().collect();
+                let dept_perms: Vec<_> = permissions
+                    .choose_multiple(&mut rng, perm_count)
+                    .cloned()
+                    .collect();
                 json!({"name": groups.choose(&mut rng).unwrap(), "permissions": dept_perms})
             })
             .collect();
@@ -360,8 +434,8 @@ fn generate_comprehension_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
-    let priorities = vec!["low", "medium", "high"];
-    let strings = vec!["apple", "banana", "cherry", "date", "elderberry", "fig"];
+    let priorities = ["low", "medium", "high"];
+    let strings = ["apple", "banana", "cherry", "date", "elderberry", "fig"];
 
     for i in 0..count {
         let mut inner_attrs = serde_json::Map::new();
@@ -432,7 +506,10 @@ fn generate_json_data(count: usize) -> Vec<Value> {
         let mut inner_attrs = serde_json::Map::new();
 
         // Payload
-        inner_attrs.insert("payload".to_string(), json!({"valid": rng.gen_bool(0.8), "data": "test"}));
+        inner_attrs.insert(
+            "payload".to_string(),
+            json!({"valid": rng.gen_bool(0.8), "data": "test"}),
+        );
 
         // Profile
         let mut profile = serde_json::Map::new();
@@ -441,7 +518,10 @@ fn generate_json_data(count: usize) -> Vec<Value> {
             profile.insert("email".to_string(), json!(format!("user{}@example.com", i)));
         }
         if rng.gen_bool(0.8) {
-            profile.insert("phone".to_string(), json!(format!("+1-555-{:04}", i % 10000)));
+            profile.insert(
+                "phone".to_string(),
+                json!(format!("+1-555-{:04}", i % 10000)),
+            );
         }
         if rng.gen_bool(0.7) {
             profile.insert("address".to_string(), json!(format!("{} Main St", i)));
@@ -454,7 +534,10 @@ fn generate_json_data(count: usize) -> Vec<Value> {
             payment.insert("card".to_string(), json!({"number": "4111-1111-1111-1111"}));
         }
         if rng.gen_bool(0.7) {
-            payment.insert("billing_address".to_string(), json!({"street": format!("{} Billing St", i), "city": "NYC"}));
+            payment.insert(
+                "billing_address".to_string(),
+                json!({"street": format!("{} Billing St", i), "city": "NYC"}),
+            );
         }
         inner_attrs.insert("payment".to_string(), json!(payment));
 
@@ -465,34 +548,49 @@ fn generate_json_data(count: usize) -> Vec<Value> {
         inner_attrs.insert("order_items".to_string(), json!(order_items));
 
         // Form data
-        inner_attrs.insert("form_data".to_string(), json!({
-            "name": format!("User {}", i),
-            "age": rng.gen_range(18..80),
-            "active": rng.gen_bool(0.8)
-        }));
+        inner_attrs.insert(
+            "form_data".to_string(),
+            json!({
+                "name": format!("User {}", i),
+                "age": rng.gen_range(18..80),
+                "active": rng.gen_bool(0.8)
+            }),
+        );
 
         inner_attrs.insert("name".to_string(), json!(format!("User {}", i)));
-        inner_attrs.insert("name_length".to_string(), json!(format!("User {}", i).len()));
+        inner_attrs.insert(
+            "name_length".to_string(),
+            json!(format!("User {}", i).len()),
+        );
         inner_attrs.insert("age".to_string(), json!(rng.gen_range(18..80)));
         inner_attrs.insert("verified".to_string(), json!(rng.gen_bool(0.7)));
 
         // Address
-        inner_attrs.insert("address".to_string(), json!({
-            "street": format!("{} Main St", i),
-            "city": "New York",
-            "zip": "10001"
-        }));
+        inner_attrs.insert(
+            "address".to_string(),
+            json!({
+                "street": format!("{} Main St", i),
+                "city": "New York",
+                "zip": "10001"
+            }),
+        );
 
         // Primary/Secondary data
-        inner_attrs.insert("primary_data".to_string(), json!({
-            "name": format!("User {}", i),
-            "email": format!("user{}@example.com", i)
-        }));
+        inner_attrs.insert(
+            "primary_data".to_string(),
+            json!({
+                "name": format!("User {}", i),
+                "email": format!("user{}@example.com", i)
+            }),
+        );
 
-        inner_attrs.insert("secondary_data".to_string(), json!({
-            "phone": format!("+1-555-{:04}", i % 10000),
-            "address": format!("{} Main St", i)
-        }));
+        inner_attrs.insert(
+            "secondary_data".to_string(),
+            json!({
+                "phone": format!("+1-555-{:04}", i % 10000),
+                "address": format!("{} Main St", i)
+            }),
+        );
 
         entities.push(json!({
             "id": format!("json_user_{}", i),
@@ -509,10 +607,18 @@ fn generate_mega_data(count: usize) -> Vec<Value> {
     let mut entities = Vec::new();
 
     // Combine all generators for comprehensive testing
-    let roles = vec!["employee", "operator", "event_planner", "contractor", "admin", "manager", "viewer"];
-    let permissions = vec!["read", "write", "delete", "admin", "execute"];
-    let skills = vec!["rust", "python", "javascript", "go", "java"];
-    let groups = vec!["engineering", "platform", "admin", "superadmin", "manager"];
+    let roles = [
+        "employee",
+        "operator",
+        "event_planner",
+        "contractor",
+        "admin",
+        "manager",
+        "viewer",
+    ];
+    let permissions = ["read", "write", "delete", "admin", "execute"];
+    let skills = ["rust", "python", "javascript", "go", "java"];
+    let groups = ["engineering", "platform", "admin", "superadmin", "manager"];
 
     for i in 0..count {
         let mut inner_attrs = serde_json::Map::new();
@@ -527,39 +633,82 @@ fn generate_mega_data(count: usize) -> Vec<Value> {
         inner_attrs.insert("score".to_string(), json!(rng.gen_range(40.0..100.0)));
         inner_attrs.insert("temperature".to_string(), json!(rng.gen_range(-50..50)));
         inner_attrs.insert("total_points".to_string(), json!(rng.gen_range(0..2000)));
-        inner_attrs.insert("discount_percentage".to_string(), json!(rng.gen_range(0..60)));
+        inner_attrs.insert(
+            "discount_percentage".to_string(),
+            json!(rng.gen_range(0..60)),
+        );
 
         // String attributes
-        let names = vec!["admin", "manager", "user"];
+        let names = ["admin", "manager", "user"];
         inner_attrs.insert("name".to_string(), json!(names.choose(&mut rng).unwrap()));
-        inner_attrs.insert("access_code".to_string(), json!(format!("CODE{}", rng.gen_range(100..999))));
+        inner_attrs.insert(
+            "access_code".to_string(),
+            json!(format!("CODE{}", rng.gen_range(100..999))),
+        );
         inner_attrs.insert("email".to_string(), json!(format!("user{}@company.com", i)));
         inner_attrs.insert("username".to_string(), json!(format!("admin_{}", i)));
 
         // Regex attributes
-        inner_attrs.insert("phone".to_string(), json!(format!("+1 (555) {:03}-{:04}", rng.gen_range(100..999), rng.gen_range(1000..9999))));
-        inner_attrs.insert("url".to_string(), json!(format!("https://example{}.com", i)));
-        inner_attrs.insert("ip_address".to_string(), json!(format!("192.168.{}.{}", i % 256, rng.gen_range(1..255))));
+        inner_attrs.insert(
+            "phone".to_string(),
+            json!(format!(
+                "+1 (555) {:03}-{:04}",
+                rng.gen_range(100..999),
+                rng.gen_range(1000..9999)
+            )),
+        );
+        inner_attrs.insert(
+            "url".to_string(),
+            json!(format!("https://example{}.com", i)),
+        );
+        inner_attrs.insert(
+            "ip_address".to_string(),
+            json!(format!("192.168.{}.{}", i % 256, rng.gen_range(1..255))),
+        );
         inner_attrs.insert("uuid".to_string(), json!(uuid::Uuid::new_v4().to_string()));
 
         // Time attributes
-        inner_attrs.insert("token_expires_at".to_string(), json!(1765180000000000000i64 + rng.gen_range(-5000000000000i64..10000000000000i64)));
-        inner_attrs.insert("work_start_time".to_string(), json!(1765185000000000000i64 - rng.gen_range(0..3000000000000i64)));
-        inner_attrs.insert("work_end_time".to_string(), json!(1765185000000000000i64 + rng.gen_range(0..3000000000000i64)));
-        inner_attrs.insert("birthdate".to_string(), json!(rng.gen_range(900000000..1100000000)));
-        inner_attrs.insert("subscription_expires".to_string(), json!(1765180000000000000i64 + rng.gen_range(-2000000000000i64..8000000000000i64)));
+        inner_attrs.insert(
+            "token_expires_at".to_string(),
+            json!(1765180000000000000i64 + rng.gen_range(-5000000000000i64..10000000000000i64)),
+        );
+        inner_attrs.insert(
+            "work_start_time".to_string(),
+            json!(1765185000000000000i64 - rng.gen_range(0..3000000000000i64)),
+        );
+        inner_attrs.insert(
+            "work_end_time".to_string(),
+            json!(1765185000000000000i64 + rng.gen_range(0..3000000000000i64)),
+        );
+        inner_attrs.insert(
+            "birthdate".to_string(),
+            json!(rng.gen_range(900000000..1100000000)),
+        );
+        inner_attrs.insert(
+            "subscription_expires".to_string(),
+            json!(1765180000000000000i64 + rng.gen_range(-2000000000000i64..8000000000000i64)),
+        );
 
         // Collection attributes
         let perm_count = rng.gen_range(1..4);
-        let user_perms: Vec<_> = permissions.choose_multiple(&mut rng, perm_count).cloned().collect();
+        let user_perms: Vec<_> = permissions
+            .choose_multiple(&mut rng, perm_count)
+            .cloned()
+            .collect();
         inner_attrs.insert("permissions".to_string(), json!(user_perms));
 
         let skill_count = rng.gen_range(2..6);
-        let user_skills: Vec<_> = skills.choose_multiple(&mut rng, skill_count).cloned().collect();
+        let user_skills: Vec<_> = skills
+            .choose_multiple(&mut rng, skill_count)
+            .cloned()
+            .collect();
         inner_attrs.insert("skills".to_string(), json!(user_skills));
 
         let group_count = rng.gen_range(1..3);
-        let user_groups: Vec<_> = groups.choose_multiple(&mut rng, group_count).cloned().collect();
+        let user_groups: Vec<_> = groups
+            .choose_multiple(&mut rng, group_count)
+            .cloned()
+            .collect();
         inner_attrs.insert("groups".to_string(), json!(user_groups));
 
         // Comprehension attributes
@@ -567,7 +716,9 @@ fn generate_mega_data(count: usize) -> Vec<Value> {
         inner_attrs.insert("numbers".to_string(), json!(numbers));
 
         let items: Vec<_> = (0..5)
-            .map(|j| json!({"id": j, "priority": if rng.gen_bool(0.5) { "high" } else { "medium" }}))
+            .map(
+                |j| json!({"id": j, "priority": if rng.gen_bool(0.5) { "high" } else { "medium" }}),
+            )
             .collect();
         inner_attrs.insert("items".to_string(), json!(items));
 
@@ -578,11 +729,14 @@ fn generate_mega_data(count: usize) -> Vec<Value> {
 
         // JSON attributes
         inner_attrs.insert("payload".to_string(), json!({"valid": rng.gen_bool(0.8)}));
-        inner_attrs.insert("profile".to_string(), json!({
-            "name": format!("User {}", i),
-            "email": format!("user{}@example.com", i),
-            "phone": format!("+1-555-{:04}", i % 10000)
-        }));
+        inner_attrs.insert(
+            "profile".to_string(),
+            json!({
+                "name": format!("User {}", i),
+                "email": format!("user{}@example.com", i),
+                "phone": format!("+1-555-{:04}", i % 10000)
+            }),
+        );
 
         entities.push(json!({
             "id": format!("mega_user_{}", i),
