@@ -14,7 +14,9 @@ pub use ast::{
     EntityAttr, Expr, Index, Operator, Policy, Rule as ReapRule, Value as ReapValue, VarAttr,
 };
 pub use ast_evaluator::ReapAstEvaluator;
-pub use bundle::{BundleFormat, PolicyBundle};
+pub use bundle::{
+    BundleFormat, PackageMetadata, PolicyBundle, PolicyEntry, PolicyPackage, PrecompilationHints,
+};
 pub use compiler::compile_policy;
 pub use parser::ReapParser;
 pub use yaml_parser::YamlPolicy;

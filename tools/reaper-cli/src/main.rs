@@ -155,6 +155,65 @@ enum Commands {
         #[arg(long, default_value = "table")]
         format: String,
     },
+
+    /// Bundle management commands
+    Bundle {
+        #[command(subcommand)]
+        action: BundleAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BundleAction {
+    /// Show bundle information
+    Info {
+        /// Path to .rbb bundle file
+        file: String,
+    },
+    /// Deploy bundle to agent
+    Deploy {
+        /// Path to .rbb bundle file
+        file: String,
+
+        /// Optional path to JSON data file to load before deploying
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Force deployment even if version already exists
+        #[arg(long)]
+        force: bool,
+    },
+    /// Rollback policy to previous version
+    Rollback {
+        /// Policy ID to rollback
+        policy_id: String,
+
+        /// Target version to rollback to
+        version: String,
+    },
+    /// List versions of a deployed policy
+    Versions {
+        /// Policy ID to list versions for
+        policy_id: String,
+    },
+    /// Create a policy package (.rpp) from multiple policies
+    Package {
+        /// Input policy files (.reap, .yaml, .yml, or .json)
+        #[arg(required = true)]
+        input: Vec<String>,
+
+        /// Output package file (.rpp)
+        #[arg(short, long)]
+        output: String,
+
+        /// Package name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Package version
+        #[arg(short, long, default_value = "1.0.0")]
+        version: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -620,8 +679,272 @@ async fn main() -> anyhow::Result<()> {
             show_recommendations,
             ref format,
         } => handle_analyze_policy(file, check_ebpf, show_recommendations, format)?,
+
+        Commands::Bundle { ref action } => handle_bundle_action(action, &cli, &client).await?,
     }
 
+    Ok(())
+}
+
+/// Handle bundle management commands
+async fn handle_bundle_action(
+    action: &BundleAction,
+    cli: &Cli,
+    client: &Client,
+) -> anyhow::Result<()> {
+    match action {
+        BundleAction::Info { file } => {
+            println!("📦 Bundle Information\n");
+
+            // Read bundle file
+            let bundle_bytes = fs::read(file)
+                .map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
+
+            // Parse bundle
+            let bundle = PolicyBundle::from_bytes(&bundle_bytes)
+                .map_err(|e| anyhow::anyhow!("❌ Invalid bundle format: {:?}", e))?;
+
+            println!("═══════════════════════════════════════════════════════");
+            println!("📋 Metadata:");
+            println!("   • Policy Name: {}", bundle.metadata.policy_name);
+            println!(
+                "   • Version: {}",
+                bundle.metadata.policy_version.as_deref().unwrap_or("unknown")
+            );
+            println!("   • Format Version: {}", bundle.metadata.version);
+            println!("   • Compiled At: {}", bundle.metadata.compiled_at);
+            println!("   • Checksum: {:x}", bundle.metadata.source_checksum);
+            println!();
+            println!("📊 Policy:");
+            println!("   • Rules: {}", bundle.policy.rules.len());
+            println!(
+                "   • Default Decision: {:?}",
+                bundle.policy.default_decision
+            );
+            println!();
+            println!("📝 Rules:");
+            for (i, rule) in bundle.policy.rules.iter().enumerate() {
+                println!("   {}. {} → {:?}", i + 1, rule.name, rule.decision);
+            }
+            println!("═══════════════════════════════════════════════════════");
+        }
+
+        BundleAction::Deploy { file, data, force } => {
+            println!("🚀 Deploying Bundle to Agent\n");
+
+            // Optionally load data first
+            if let Some(data_path) = data {
+                println!("1️⃣  Loading entity data: {}", data_path);
+                let data_content = fs::read_to_string(data_path)
+                    .map_err(|e| anyhow::anyhow!("❌ Failed to read data file: {}", e))?;
+
+                let response = client
+                    .post(format!("{}/api/v1/data", cli.agent_url))
+                    .json(&serde_json::json!({ "data": data_content }))
+                    .send()
+                    .await?;
+
+                if response.status().is_success() {
+                    let result: Value = response.json().await?;
+                    println!(
+                        "   ✅ Loaded {} entities",
+                        result.get("entities_loaded").unwrap_or(&json!(0))
+                    );
+                } else {
+                    anyhow::bail!("❌ Failed to load data: {}", response.status());
+                }
+                println!();
+            }
+
+            // Read and deploy bundle
+            println!(
+                "{}  Deploying bundle: {}",
+                if data.is_some() { "2️⃣" } else { "1️⃣" },
+                file
+            );
+            let bundle_bytes = fs::read(file)
+                .map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
+
+            // Parse bundle for info display
+            let bundle = PolicyBundle::from_bytes(&bundle_bytes)
+                .map_err(|e| anyhow::anyhow!("❌ Invalid bundle format: {:?}", e))?;
+
+            println!("   • Policy: {}", bundle.metadata.policy_name);
+            println!(
+                "   • Version: {}",
+                bundle.metadata.policy_version.as_deref().unwrap_or("unknown")
+            );
+            println!("   • Rules: {}", bundle.policy.rules.len());
+
+            // Send to agent
+            let response = client
+                .post(format!("{}/api/v1/bundles/deploy", cli.agent_url))
+                .json(&serde_json::json!({
+                    "bundle": bundle_bytes,
+                    "version": bundle.metadata.policy_version.as_deref().unwrap_or("1.0.0"),
+                    "force": force
+                }))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                println!();
+                println!("✅ Bundle deployed successfully!");
+                println!(
+                    "   • Policy ID: {}",
+                    result.get("policy_id").unwrap().as_str().unwrap()
+                );
+                println!(
+                    "   • Version: {}",
+                    result.get("version").unwrap().as_str().unwrap()
+                );
+                println!(
+                    "   • Hash: {}",
+                    result.get("bundle_hash").unwrap().as_str().unwrap()
+                );
+            } else {
+                let error_text = response.text().await?;
+                anyhow::bail!("❌ Deployment failed: {}", error_text);
+            }
+        }
+
+        BundleAction::Rollback {
+            policy_id,
+            version,
+        } => {
+            println!("⏪ Rolling back policy {} to version {}\n", policy_id, version);
+            println!("⚠️  Rollback API not yet implemented on agent");
+            // TODO: Implement rollback endpoint on agent
+        }
+
+        BundleAction::Versions { policy_id } => {
+            println!("📜 Version history for policy {}\n", policy_id);
+
+            let response = client
+                .get(format!("{}/api/v1/policies/{}/versions", cli.agent_url, policy_id))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                let versions = result.get("versions").and_then(|v| v.as_array());
+
+                if let Some(versions) = versions {
+                    if versions.is_empty() {
+                        println!("No version history found for this policy.");
+                    } else {
+                        println!("┌──────────┬─────────────────────────────┬──────────────────────────────────┐");
+                        println!("│ Version  │ Deployed At                 │ Bundle Hash                      │");
+                        println!("├──────────┼─────────────────────────────┼──────────────────────────────────┤");
+                        for v in versions {
+                            println!(
+                                "│ {:8} │ {:27} │ {:32}…│",
+                                v.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
+                                v.get("deployed_at").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &v.get("bundle_hash")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .chars()
+                                    .take(32)
+                                    .collect::<String>()
+                            );
+                        }
+                        println!("└──────────┴─────────────────────────────┴──────────────────────────────────┘");
+                        println!("\nTotal: {} version(s)", result.get("total").unwrap_or(&json!(0)));
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to get versions: {}", error_text);
+            }
+        }
+
+        BundleAction::Package {
+            input,
+            output,
+            name,
+            version,
+        } => {
+            use policy_engine::reap::{PolicyPackage, ReaperPolicy};
+
+            println!("📦 Creating Policy Package\n");
+
+            // Parse all input policies
+            let mut policies = Vec::new();
+            for path in input {
+                println!("   • Parsing: {}", path);
+                let policy = ReaperPolicy::from_file_auto(path)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse {}: {:?}", path, e))?;
+                println!("     ✓ {}", policy.name());
+                policies.push(policy);
+            }
+
+            // Create package
+            let package_name = name.clone().unwrap_or_else(|| {
+                std::path::Path::new(output)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "policy-package".to_string())
+            });
+
+            // Convert ReaperPolicy to Policy AST
+            // Note: We need to compile_to_bundle and load to get the AST, but PolicyPackage takes Policy directly
+            // For now, let's parse the files directly to get the AST
+            let mut policy_asts = Vec::new();
+            for path in input {
+                let content = fs::read_to_string(path)?;
+                let ext = std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+
+                let ast = match ext {
+                    "reap" => policy_engine::reap::ReapParser::parse(&content)
+                        .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?,
+                    "yaml" | "yml" => {
+                        let yaml = policy_engine::reap::YamlPolicy::from_yaml(&content)
+                            .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+                        yaml.to_ast()
+                            .map_err(|e| anyhow::anyhow!("Conversion error: {:?}", e))?
+                    }
+                    "json" => {
+                        let yaml = policy_engine::reap::YamlPolicy::from_json(&content)
+                            .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+                        yaml.to_ast()
+                            .map_err(|e| anyhow::anyhow!("Conversion error: {:?}", e))?
+                    }
+                    _ => anyhow::bail!("Unsupported file extension: {}", ext),
+                };
+                policy_asts.push(ast);
+            }
+
+            let package = PolicyPackage::new(package_name.clone(), version.clone(), policy_asts);
+
+            // Write package
+            let bytes = package
+                .to_bytes()
+                .map_err(|e| anyhow::anyhow!("Failed to serialize: {:?}", e))?;
+            fs::write(output, &bytes)?;
+
+            println!();
+            println!("═══════════════════════════════════════════════════════");
+            println!("✅ Package Created Successfully!");
+            println!();
+            println!("📋 Package Metadata:");
+            println!("   • Name: {}", package_name);
+            println!("   • Version: {}", version);
+            println!("   • Policies: {}", package.metadata.policy_count);
+            println!("   • Total Rules: {}", package.hints.total_rules);
+            println!();
+            println!("🔧 Optimization Hints:");
+            println!("   • Strings to pre-intern: {}", package.hints.strings_to_intern.len());
+            println!("   • Regex patterns to cache: {}", package.hints.regex_patterns.len());
+            println!();
+            println!("📦 Output: {} ({} bytes)", output, bytes.len());
+            println!("═══════════════════════════════════════════════════════");
+        }
+    }
     Ok(())
 }
 

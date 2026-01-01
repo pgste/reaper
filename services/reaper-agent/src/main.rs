@@ -345,6 +345,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/policies/deploy", post(deploy_policy))
         .route("/api/v1/policies/compile", post(deploy_compiled_policy))
         .route("/api/v1/policies", get(list_policies))
+        .route("/api/v1/policies/{id}/versions", get(get_policy_versions))
+        .route("/api/v1/policies/{id}/version", get(get_policy_current_version))
         // Bundle deployment (hot-reload with versioning)
         .route("/api/v1/bundles/deploy", post(deploy_bundle))
         // Entity CRUD operations (requires eBPF integration)
@@ -817,6 +819,68 @@ async fn list_policies(State(state): State<Arc<AgentState>>) -> Result<Json<Valu
     })))
 }
 
+/// Get version history for a policy
+#[instrument(skip(state))]
+async fn get_policy_versions(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path(policy_id): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let policy_uuid = Uuid::from_str(&policy_id).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid policy ID: {}", e),
+        )
+    })?;
+
+    let versions = state.policy_engine.list_versions(&policy_uuid);
+
+    let version_list: Vec<Value> = versions
+        .into_iter()
+        .map(|v| {
+            json!({
+                "version": v.version,
+                "deployed_at": chrono::DateTime::<chrono::Utc>::from(v.deployed_at).to_rfc3339(),
+                "bundle_hash": v.bundle_hash.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+                "policy_id": v.policy_id
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "policy_id": policy_id,
+        "versions": version_list,
+        "total": version_list.len()
+    })))
+}
+
+/// Get current version of a policy
+#[instrument(skip(state))]
+async fn get_policy_current_version(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path(policy_id): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let policy_uuid = Uuid::from_str(&policy_id).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid policy ID: {}", e),
+        )
+    })?;
+
+    let version = state.policy_engine.get_version(&policy_uuid).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("No version found for policy {}", policy_id),
+        )
+    })?;
+
+    Ok(Json(json!({
+        "policy_id": policy_id,
+        "version": version.version,
+        "deployed_at": chrono::DateTime::<chrono::Utc>::from(version.deployed_at).to_rfc3339(),
+        "bundle_hash": version.bundle_hash.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    })))
+}
+
 /// Load entity data (JSON) into the agent's DataStore
 #[derive(Debug, Deserialize)]
 struct LoadDataRequest {
@@ -1006,6 +1070,9 @@ async fn deploy_compiled_policy(
 }
 
 /// Deploy a policy bundle (.rbb file) with version tracking
+///
+/// This endpoint deploys bundles using the full ReaperDSL compiler,
+/// preserving all complex conditions, functions, and rule logic.
 #[instrument(skip(state, payload))]
 async fn deploy_bundle(
     State(state): State<Arc<AgentState>>,
@@ -1027,19 +1094,20 @@ async fn deploy_bundle(
     })?;
 
     info!(
-        "Bundle parsed successfully: {} (version: {})",
+        "Bundle parsed successfully: {} (version: {}, rules: {})",
         bundle.metadata.policy_name,
         bundle
             .metadata
             .policy_version
             .as_deref()
-            .unwrap_or("unknown")
+            .unwrap_or("unknown"),
+        bundle.policy.rules.len()
     );
 
-    // 2. Deploy to PolicyEngine with version tracking
+    // 2. Deploy to PolicyEngine with compiled evaluator using the agent's DataStore
     let policy_version = state
         .policy_engine
-        .deploy_bundle(bundle, payload.force)
+        .deploy_bundle_with_store(bundle, state.data_store.clone(), payload.force)
         .map_err(|e| {
             ERRORS_TOTAL
                 .with_label_values(&["bundle_deployment_failed"])
