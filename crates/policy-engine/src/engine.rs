@@ -521,6 +521,93 @@ impl PolicyEngine {
         Ok(policy_version)
     }
 
+    /// Deploy a policy from a .rbb bundle with full ReaperDSL compilation
+    ///
+    /// This method compiles the bundle using the full ReaperDSL compiler,
+    /// preserving all complex conditions, functions, and rule logic.
+    /// This is the recommended method for production bundle deployment.
+    ///
+    /// # Arguments
+    /// * `bundle` - The PolicyBundle to deploy
+    /// * `store` - DataStore containing entity data for the evaluator
+    /// * `force` - If true, skip version validation and allow downgrade
+    ///
+    /// # Returns
+    /// PolicyVersion with deployment metadata including bundle hash
+    #[instrument(skip(self, bundle, store), fields(policy_name = %bundle.policy.name))]
+    pub fn deploy_bundle_with_store(
+        &self,
+        bundle: PolicyBundle,
+        store: Arc<crate::data::DataStore>,
+        force: bool,
+    ) -> Result<PolicyVersion> {
+        let bundle_version = bundle.metadata.policy_version.as_deref().unwrap_or("1.0.0");
+        info!(
+            "Deploying policy bundle with compiled evaluator: {} (version: {})",
+            bundle.metadata.policy_name, bundle_version
+        );
+
+        // 1. Generate bundle hash (SHA-256)
+        let bundle_bytes = bundle.to_bytes().map_err(|e| ReaperError::InvalidPolicy {
+            reason: format!("Failed to serialize bundle: {}", e),
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bundle_bytes);
+        let bundle_hash: [u8; 32] = hasher.finalize().into();
+
+        // 2. Convert bundle to EnhancedPolicy with compiled evaluator
+        let policy = bundle.to_enhanced_policy_with_store(store)?;
+        let policy_id = policy.id;
+        let policy_id_str = policy_id.to_string();
+
+        // 3. Version validation (unless force=true)
+        if !force {
+            if let Some(existing_versions) = self.versions.get(&policy_id) {
+                if !existing_versions.is_empty() {
+                    let last_version = &existing_versions.last().unwrap().version;
+                    if last_version == bundle_version {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: format!(
+                                "Version {} already deployed. Use force=true to redeploy.",
+                                bundle_version
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 4. Deploy the policy (atomic hot-swap)
+        self.deploy_policy(policy)?;
+
+        // 5. Create version metadata
+        let policy_version = PolicyVersion {
+            version: bundle_version.to_string(),
+            deployed_at: SystemTime::now(),
+            bundle_hash,
+            policy_id: policy_id_str.clone(),
+        };
+
+        // 6. Store version in history
+        self.versions
+            .entry(policy_id)
+            .or_default()
+            .push(policy_version.clone());
+
+        // 7. Cache bundle for rollback (key: policy_id:version)
+        let cache_key = format!("{}:{}", policy_id_str, bundle_version);
+        self.bundle_cache.insert(cache_key, bundle.clone());
+
+        info!(
+            "Bundle deployed with compiled evaluator: {} version {} ({} rules)",
+            bundle.metadata.policy_name,
+            bundle_version,
+            bundle.policy.rules.len()
+        );
+
+        Ok(policy_version)
+    }
+
     /// Rollback a policy to a previous version
     ///
     /// This loads the cached bundle for the specified version and re-deploys it.
