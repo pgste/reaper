@@ -269,14 +269,21 @@ fn compile_function_call(
             })
         }
 
-        _ => Err(ReaperError::InvalidPolicy {
-            reason: format!(
-                "Unsupported function call: {}{}. Supported functions: \
-                regex::matches, time::is_after, time::is_before, is_string, is_number, is_bool",
-                if ns.is_empty() { "" } else { &format!("{}::", ns) },
-                function
-            ),
-        }),
+        _ => {
+            let fn_prefix = if ns.is_empty() {
+                String::new()
+            } else {
+                format!("{}::", ns)
+            };
+            Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Unsupported function call: {}{}. Supported functions: \
+                    regex::matches, time::is_after, time::is_before, is_string, is_number, is_bool",
+                    fn_prefix,
+                    function
+                ),
+            })
+        }
     }
 }
 

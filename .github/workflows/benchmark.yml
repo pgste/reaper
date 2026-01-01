@@ -237,12 +237,18 @@ jobs:
           cp -r gh-pages/history/* allure-results/history/ || true
         fi
 
+    - name: Install Allure CLI
+      run: |
+        curl -o allure-2.27.0.tgz -OLs https://repo.maven.apache.org/maven2/io/qameta/allure/allure-commandline/2.27.0/allure-commandline-2.27.0.tgz
+        tar -zxvf allure-2.27.0.tgz
+        sudo mv allure-2.27.0 /opt/allure
+        sudo ln -s /opt/allure/bin/allure /usr/local/bin/allure
+        allure --version
+
     - name: Generate Allure Report
-      uses: simple-elf/allure-report-action@v1.7
-      with:
-        allure_results: allure-results
-        allure_history: allure-history
-        keep_reports: 20
+      run: |
+        mkdir -p allure-history
+        allure generate allure-results --clean -o allure-history
 
     - name: Create summary page
       run: |
