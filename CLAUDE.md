@@ -414,6 +414,82 @@ When adding a new policy language:
 - Agent management in Platform is a placeholder for full implementation
 - Policy versioning is basic - expansion planned
 
+## Architecture Evolution Plan
+
+### 4-Layer Architecture
+
+**Layer 1: Engine** (`crates/policy-engine/`) - Sub-microsecond evaluation core
+- Target: < 500ns p99 latency for compiled policies
+- Optimizations:
+  - Arena allocators (bumpalo) for zero-allocation evaluation loops
+  - Zero-copy request parsing with simd-json
+  - Thread-local caches for regex and string interning
+  - Pre-compiled policy bundles (.rpp) with hints
+  - SIMD string matching for pattern operations
+- Key files: `engine.rs`, `evaluators/reaper_dsl.rs`, `reap/compiler.rs`
+
+**Layer 2: Agent** (`services/reaper-agent/`) - High-throughput enforcement
+- Target: > 200K req/s per agent instance
+- Optimizations:
+  - Thread-per-core runtime (consider glommio/monoio for io_uring)
+  - Connection pooling with keep-alive
+  - Request batching for bulk evaluations
+  - Zero-copy response serialization
+- Key files: `main.rs`, bundle deployment endpoints
+
+**Layer 3: Platform** (`services/reaper-platform/`) - Multi-agent orchestration
+- Responsibilities:
+  - Policy CRUD and versioning
+  - Agent registration and health monitoring
+  - Coordinated policy deployments
+  - Metrics aggregation across fleet
+- Future: Ambient mesh pattern (sidecar-less)
+- Key files: `main.rs`, deployment coordination
+
+**Layer 4: CLI** (`tools/reaper-cli/`) - Developer experience
+- Commands:
+  - `eval` - Local policy evaluation
+  - `bundle` - Create/deploy policy packages
+  - `validate` - Policy validation
+  - `policy` - CRUD via Platform API
+  - `status` / `benchmark` - System diagnostics
+- Key files: `main.rs`
+
+### Bundle System (.rpp)
+
+Multi-policy packages with pre-compilation hints:
+```rust
+PolicyPackage {
+    policies: Vec<Policy>,          // Multiple policy ASTs
+    hints: PrecompilationHints {
+        strings_to_intern: HashSet,  // Pre-intern at load time
+        regex_patterns: HashSet,      // Pre-compile regex cache
+    },
+    metadata: PackageMetadata,
+}
+```
+
+### Performance Targets
+
+| Component | Metric | Target |
+|-----------|--------|--------|
+| Engine (compiled) | p99 latency | < 500ns |
+| Engine (AST) | p99 latency | < 5µs |
+| Agent | Throughput | > 200K req/s |
+| Agent | Memory | < 50MB |
+| Bundle load | Cold start | < 10ms |
+| Hot-swap | Downtime | 0ms |
+
+### Optimization Techniques Reference
+
+1. **Arena Allocators**: Use bumpalo for request-scoped allocations
+2. **Zero-Copy Parsing**: simd-json for request deserialization
+3. **String Interning**: Pre-intern strings at bundle creation, not evaluation
+4. **Regex Caching**: Thread-local RegexSet with pre-compiled patterns
+5. **SIMD Matching**: memchr/stringzilla for pattern matching
+6. **Lock-Free Structures**: DashMap for concurrent policy store
+7. **Atomic Hot-Swap**: Arc-based policy replacement
+
 ## Common Workflows
 
 ### Adding a New Policy Language
