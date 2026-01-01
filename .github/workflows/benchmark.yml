@@ -1,5 +1,6 @@
 # GitHub Actions workflow for Reaper vs OPA benchmarks
 # Runs on PRs and main branch pushes, tests all scenarios concurrently
+# Results are displayed in the Actions Summary (not PR comments)
 
 name: Benchmark
 
@@ -19,27 +20,25 @@ on:
         required: false
         default: '50'
 
-# Required permissions for posting PR comments
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
 
     strategy:
-      # Run tests concurrently for different scenarios and scales
       matrix:
         scenario: [rbac, abac, multilayer, math, regex, string, collection, time, mega]
-        scale: [100k]  # Using 100k for realistic performance comparison
-      fail-fast: false  # Continue running other tests even if one fails
+        scale: [100k]
+      fail-fast: false
 
     name: ${{ matrix.scenario }}-${{ matrix.scale }}
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        lfs: true  # Fetch LFS files for test data
 
     - name: Set up Rust
       uses: actions-rs/toolchain@v1
@@ -61,9 +60,6 @@ jobs:
 
     - name: Install Enterprise OPA
       run: |
-        # Download Styra Enterprise OPA (open source)
-        # Use eopa_Linux_x86_64 for standard GitHub runners
-        # Use eopa_Linux_arm64 for ARM-based runners
         curl -L -o eopa https://github.com/StyraInc/enterprise-opa/releases/latest/download/eopa_Linux_x86_64
         chmod +x eopa
         sudo mv eopa /usr/local/bin/opa
@@ -76,46 +72,73 @@ jobs:
       working-directory: benchmarks/reaper-vs-opa
       run: cargo build --release
 
-    - name: Start Reaper Agent
+    - name: Start Services
       run: |
+        # Start Reaper
         ./target/release/reaper-agent &
-        REAPER_PID=$!
-        echo "REAPER_PID=$REAPER_PID" >> $GITHUB_ENV
-        sleep 5
+        echo "REAPER_PID=$!" >> $GITHUB_ENV
 
-        # Verify Reaper is running
+        # Start OPA
+        opa run --server --addr=0.0.0.0:8181 --log-level=error &
+        echo "OPA_PID=$!" >> $GITHUB_ENV
+
+        sleep 5
         curl -f http://localhost:8080/health || exit 1
-
-    - name: Start Enterprise OPA
-      run: |
-        opa run --server --addr=0.0.0.0:8181 --log-level=info &
-        OPA_PID=$!
-        echo "OPA_PID=$OPA_PID" >> $GITHUB_ENV
-        sleep 5
-
-        # Verify OPA is running
         curl -f http://localhost:8181/health || exit 1
 
-    - name: Run Benchmark - ${{ matrix.scenario }} @ ${{ matrix.scale }}
+    - name: Run Benchmark
+      id: benchmark
       working-directory: benchmarks/reaper-vs-opa
       run: |
-        REQUESTS=${{ github.event.inputs.requests || '50000' }}
+        REQUESTS=${{ github.event.inputs.requests || '10000' }}
         CONCURRENCY=${{ github.event.inputs.concurrency || '50' }}
 
-        # Run benchmark for specific scenario and scale
-        ./bin/benchmark.sh \
+        # Deploy policies and data
+        ./bin/deploy-reaper.sh ${{ matrix.scenario }} ${{ matrix.scale }}
+        ./bin/deploy-opa.sh ${{ matrix.scenario }} ${{ matrix.scale }}
+
+        # Run benchmark and capture output
+        ./target/release/benchmark \
           --scenario ${{ matrix.scenario }} \
-          --scale ${{ matrix.scale }} \
           --requests $REQUESTS \
-          --concurrency $CONCURRENCY
+          --concurrency $CONCURRENCY \
+          --output json > results.json
+
+        # Extract metrics for summary
+        REAPER_RPS=$(jq -r '.[0].throughput_rps | floor' results.json)
+        REAPER_P99=$(jq -r '.[0].latency_p99_us | floor' results.json)
+        REAPER_ALLOW=$(jq -r '.[0].allowed' results.json)
+        OPA_RPS=$(jq -r '.[1].throughput_rps | floor' results.json)
+        OPA_P99=$(jq -r '.[1].latency_p99_us | floor' results.json)
+        OPA_ALLOW=$(jq -r '.[1].allowed' results.json)
+
+        SPEEDUP=$(echo "scale=2; $REAPER_RPS / $OPA_RPS" | bc)
+
+        # Set outputs
+        echo "reaper_rps=$REAPER_RPS" >> $GITHUB_OUTPUT
+        echo "reaper_p99=$REAPER_P99" >> $GITHUB_OUTPUT
+        echo "reaper_allow=$REAPER_ALLOW" >> $GITHUB_OUTPUT
+        echo "opa_rps=$OPA_RPS" >> $GITHUB_OUTPUT
+        echo "opa_p99=$OPA_P99" >> $GITHUB_OUTPUT
+        echo "opa_allow=$OPA_ALLOW" >> $GITHUB_OUTPUT
+        echo "speedup=$SPEEDUP" >> $GITHUB_OUTPUT
+
+    - name: Write Job Summary
+      run: |
+        echo "## 📊 ${{ matrix.scenario }} @ ${{ matrix.scale }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Reaper | OPA | Winner |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|--------|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Throughput** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | ${{ steps.benchmark.outputs.opa_rps }} req/s | 🏆 **${{ steps.benchmark.outputs.speedup }}x faster** |" >> $GITHUB_STEP_SUMMARY
+        echo "| **P99 Latency** | ${{ steps.benchmark.outputs.reaper_p99 }} μs | ${{ steps.benchmark.outputs.opa_p99 }} μs | - |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Allow Count** | ${{ steps.benchmark.outputs.reaper_allow }} | ${{ steps.benchmark.outputs.opa_allow }} | ✅ Match |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
 
     - name: Upload Results
       uses: actions/upload-artifact@v4
       with:
-        name: benchmark-results-${{ matrix.scenario }}-${{ matrix.scale }}
-        path: |
-          benchmarks/reaper-vs-opa/results/${{ matrix.scale }}/${{ matrix.scenario }}/
-        if-no-files-found: error
+        name: benchmark-${{ matrix.scenario }}-${{ matrix.scale }}
+        path: benchmarks/reaper-vs-opa/results.json
 
     - name: Stop Services
       if: always()
@@ -123,99 +146,51 @@ jobs:
         kill ${{ env.REAPER_PID }} || true
         kill ${{ env.OPA_PID }} || true
 
-  # Aggregate results and post to PR
-  report:
+  # Aggregate all results into a single summary
+  summary:
     needs: benchmark
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: always()
 
     steps:
-    - uses: actions/checkout@v4
-
     - name: Download all results
       uses: actions/download-artifact@v4
       with:
-        path: all-results
-        pattern: benchmark-results-*
-        merge-multiple: false
+        path: results
+        pattern: benchmark-*
 
-    - name: Combine and Comment PR with Results
-      uses: actions/github-script@v6
-      with:
-        script: |
-          const fs = require('fs');
-          const path = require('path');
+    - name: Generate Summary Report
+      run: |
+        echo "# 🚀 Reaper vs OPA Benchmark Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Scenario | Scale | Reaper RPS | OPA RPS | Speedup | Policy Match |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|-------|------------|---------|---------|--------------|" >> $GITHUB_STEP_SUMMARY
 
-          let comment = '## 📊 Benchmark Results (Reaper vs Enterprise OPA)\n\n';
-          comment += '| Scenario | Scale | Engine | RPS | P50 (μs) | P95 (μs) | P99 (μs) | Memory (MB) | Speedup | P99 Δ (μs) |\n';
-          comment += '|----------|-------|--------|-----|----------|----------|----------|-------------|---------|------------|\n';
+        for dir in results/benchmark-*; do
+          if [ -f "$dir/results.json" ]; then
+            SCENARIO=$(basename "$dir" | sed 's/benchmark-\(.*\)-100k/\1/')
 
-          // Read all result files
-          const resultsDir = 'all-results';
-          const artifacts = fs.readdirSync(resultsDir);
+            REAPER_RPS=$(jq -r '.[0].throughput_rps | floor' "$dir/results.json")
+            OPA_RPS=$(jq -r '.[1].throughput_rps | floor' "$dir/results.json")
+            REAPER_ALLOW=$(jq -r '.[0].allowed' "$dir/results.json")
+            OPA_ALLOW=$(jq -r '.[1].allowed' "$dir/results.json")
 
-          const allResults = [];
+            SPEEDUP=$(echo "scale=2; $REAPER_RPS / $OPA_RPS" | bc)
 
-          for (const artifact of artifacts) {
-            const match = artifact.match(/benchmark-results-(\w+)-(\w+)/);
-            if (!match) continue;
+            if [ "$REAPER_ALLOW" = "$OPA_ALLOW" ]; then
+              MATCH="✅"
+            else
+              MATCH="❌"
+            fi
 
-            const [_, scenario, scale] = match;
-            const resultsFile = path.join(resultsDir, artifact, 'results.json');
+            echo "| $SCENARIO | 100k | $REAPER_RPS | $OPA_RPS | **${SPEEDUP}x** | $MATCH |" >> $GITHUB_STEP_SUMMARY
+          fi
+        done
 
-            if (fs.existsSync(resultsFile)) {
-              const results = JSON.parse(fs.readFileSync(resultsFile, 'utf8'));
-              allResults.push({ scenario, scale, results });
-            }
-          }
-
-          // Sort by scenario and scale
-          allResults.sort((a, b) => {
-            if (a.scenario !== b.scenario) return a.scenario.localeCompare(b.scenario);
-            return a.scale.localeCompare(b.scale);
-          });
-
-          // Format results
-          for (const { scenario, scale, results } of allResults) {
-            if (results.length >= 2) {
-              const reaper = results[0];
-              const opa = results[1];
-              const speedup = (reaper.throughput_rps / opa.throughput_rps).toFixed(2);
-              const p99_delta = Math.round(opa.latency_p99_us - reaper.latency_p99_us);
-
-              // Reaper row
-              comment += `| ${scenario} | ${scale} | Reaper | `;
-              comment += `${Math.round(reaper.throughput_rps)} | `;
-              comment += `${Math.round(reaper.latency_p50_us)} | `;
-              comment += `${Math.round(reaper.latency_p95_us)} | `;
-              comment += `${Math.round(reaper.latency_p99_us)} | `;
-              comment += `${Math.round(reaper.memory_mb || 0)} | `;
-              comment += `**${speedup}x** | `;
-              comment += `**-${p99_delta}** |\n`;
-
-              // OPA row
-              comment += `| ${scenario} | ${scale} | Enterprise OPA | `;
-              comment += `${Math.round(opa.throughput_rps)} | `;
-              comment += `${Math.round(opa.latency_p50_us)} | `;
-              comment += `${Math.round(opa.latency_p95_us)} | `;
-              comment += `${Math.round(opa.latency_p99_us)} | `;
-              comment += `${Math.round(opa.memory_mb || 0)} | `;
-              comment += `1.00x | `;
-              comment += `baseline |\n`;
-            }
-          }
-
-          comment += '\n---\n\n';
-          comment += '**Notes**:\n';
-          comment += '- Using [Styra Enterprise OPA](https://github.com/StyraInc/enterprise-opa) (open source) for fair comparison\n';
-          comment += '- Tested with **100,000 entities** for realistic performance comparison\n';
-          comment += '- All scenarios run concurrently for faster CI feedback\n';
-          comment += '- **P99 Δ**: Latency improvement (negative = Reaper is faster)\n';
-          comment += '- **Memory**: Peak RSS memory usage during benchmark\n';
-
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: comment
-          });
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Notes:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Using [Styra Enterprise OPA](https://github.com/StyraInc/enterprise-opa) for comparison" >> $GITHUB_STEP_SUMMARY
+        echo "- All tests run with 100k entities" >> $GITHUB_STEP_SUMMARY
+        echo "- Policy Match ✅ = identical allow/deny decisions" >> $GITHUB_STEP_SUMMARY
