@@ -5,6 +5,8 @@ pub mod data;
 pub mod decision_matrix;
 mod engine;
 mod evaluators;
+pub mod arena;
+pub mod fast_parse;
 pub mod gherkin;
 pub mod indexed_engine;
 pub mod optimized_engine;
@@ -12,6 +14,7 @@ pub mod optimizer;
 pub mod partial_evaluation;
 pub mod policy_compilation;
 pub mod reap;
+pub mod regex_cache;
 
 pub use engine::{
     EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage,
@@ -61,3 +64,12 @@ pub use data::entity::EntityBuilder;
 
 // Re-export core types for convenience
 pub use reaper_core::{Policy, PolicyId, PolicyVersion, ReaperError, Result};
+
+// Re-export fast parsing functions (SIMD-accelerated JSON parsing)
+pub use fast_parse::{parse_batch_requests, parse_evaluate_request, parse_policy_request};
+
+// Re-export arena allocator for zero-allocation evaluation
+pub use arena::{
+    arena_stats, prewarm_arena, reset_arena, with_arena, with_arena_reset, ArenaStats,
+    ArenaString, ArenaValue, ArenaVec, EvaluationContext,
+};

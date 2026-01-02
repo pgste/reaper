@@ -276,6 +276,38 @@ pub struct PrecompilationHints {
     pub referenced_entities: Vec<String>,
 }
 
+impl PrecompilationHints {
+    /// Pre-warm the thread-local regex cache with patterns from these hints.
+    ///
+    /// Call this at bundle load time to avoid regex compilation latency
+    /// during the first policy evaluation.
+    ///
+    /// # Returns
+    /// Number of patterns successfully compiled
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let package = PolicyPackage::from_bytes(&bytes)?;
+    /// let count = package.hints.prewarm_regex_cache();
+    /// println!("Pre-compiled {} regex patterns", count);
+    /// ```
+    pub fn prewarm_regex_cache(&self) -> usize {
+        crate::regex_cache::prewarm_patterns_owned(&self.regex_patterns)
+    }
+
+    /// Pre-warm the global (cross-thread) regex cache with patterns from these hints.
+    ///
+    /// Use this when you want compiled regexes available to all threads
+    /// without re-compilation per thread.
+    ///
+    /// # Returns
+    /// Number of patterns successfully compiled
+    pub fn prewarm_global_regex_cache(&self) -> usize {
+        let patterns: Vec<&str> = self.regex_patterns.iter().map(|s| s.as_str()).collect();
+        crate::regex_cache::global::prewarm_patterns(&patterns)
+    }
+}
+
 /// Policy package entry - a single policy with its metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyEntry {
