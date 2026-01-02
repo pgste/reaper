@@ -6,6 +6,7 @@
 use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::data::{AttributeValue, DataStore, Entity, InternedString};
 use crate::{PolicyAction, PolicyRequest};
+use memchr::memmem;
 use reaper_core::ReaperError;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -1189,7 +1190,8 @@ impl ReaperDSLEvaluator {
                     Some(AttributeValue::String(s)) => {
                         // Resolve interned string to &str for string operations
                         if let Some(resolved) = interner.resolve(*s) {
-                            resolved.contains(substring.as_str())
+                            // SIMD-accelerated substring search (2-10x faster than std::contains)
+                            memmem::find(resolved.as_bytes(), substring.as_bytes()).is_some()
                         } else {
                             false
                         }
