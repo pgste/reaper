@@ -14,6 +14,7 @@ pub mod bundle;
 pub mod config;
 pub mod db;
 pub mod domain;
+pub mod metrics;
 pub mod state;
 pub mod storage;
 pub mod sync;

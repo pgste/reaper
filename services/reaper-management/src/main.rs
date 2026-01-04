@@ -21,7 +21,7 @@
 
 use axum::Router;
 use clap::Parser;
-use reaper_management::{api, config::Config, db, storage, AppState};
+use reaper_management::{api, config::Config, db, metrics, storage, AppState};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tracing::info;
 
@@ -53,6 +53,9 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "reaper_management=info,tower_http=info".into()),
         )
         .init();
+
+    // Initialize Prometheus metrics
+    metrics::init_metrics();
 
     let cli = Cli::parse();
 

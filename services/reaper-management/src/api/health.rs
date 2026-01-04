@@ -5,13 +5,14 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    response::Json,
+    response::{Json, Response},
     routing::get,
     Router,
 };
 use serde::Serialize;
 use std::sync::Arc;
 
+use crate::metrics;
 use crate::state::AppState;
 
 /// Health response
@@ -43,6 +44,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
+        .route("/metrics/prometheus", get(prometheus_metrics_handler))
 }
 
 /// Health check handler
@@ -72,11 +74,27 @@ async fn health_handler(
     }))
 }
 
-/// Metrics handler
+/// Metrics handler (JSON format)
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> Json<MetricsResponse> {
+    // Update SSE subscribers metric
+    metrics::SSE_SUBSCRIBERS.set(state.event_tx.receiver_count() as f64);
+
     Json(MetricsResponse {
         uptime_seconds: state.uptime_seconds(),
         database_type: state.db.db_type().to_string(),
         event_subscribers: state.event_tx.receiver_count(),
     })
+}
+
+/// Prometheus metrics handler (text format)
+async fn prometheus_metrics_handler(State(state): State<Arc<AppState>>) -> Response {
+    // Update gauge metrics before encoding
+    metrics::SSE_SUBSCRIBERS.set(state.event_tx.receiver_count() as f64);
+
+    let body = metrics::encode_metrics();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        .body(body.into())
+        .unwrap()
 }
