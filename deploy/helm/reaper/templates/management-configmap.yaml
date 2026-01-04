@@ -1,0 +1,16 @@
+{{- if .Values.management.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "reaper.management.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management
+data:
+  RUST_LOG: "info,reaper_management={{ .Values.management.config.logLevel }}"
+  REAPER_PORT: "3000"
+  REAPER_BIND_ADDRESS: "0.0.0.0"
+  REAPER_STORAGE_TYPE: {{ .Values.management.config.storageType | quote }}
+  REAPER_STORAGE_PATH: {{ .Values.management.config.storagePath | quote }}
+{{- end }}

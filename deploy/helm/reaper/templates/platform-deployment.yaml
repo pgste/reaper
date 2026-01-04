@@ -1,0 +1,94 @@
+{{- if .Values.platform.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "reaper.platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform
+spec:
+  {{- if not .Values.platform.autoscaling.enabled }}
+  replicas: {{ .Values.platform.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "reaper.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: platform
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/metrics/prometheus"
+        {{- with .Values.platform.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "reaper.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: platform
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "reaper.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.platform.podSecurityContext | nindent 8 }}
+      containers:
+        - name: platform
+          image: {{ include "reaper.platform.image" . }}
+          imagePullPolicy: {{ .Values.platform.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: "info,reaper_platform={{ .Values.platform.config.logLevel }}"
+            - name: REAPER_BIND_ADDR
+              value: "0.0.0.0:8081"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.platform.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            {{- toYaml .Values.platform.securityContext | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.platform.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "reaper.platform.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.platform.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.platform.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.platform.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

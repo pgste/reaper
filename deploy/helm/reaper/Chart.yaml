@@ -1,0 +1,24 @@
+apiVersion: v2
+name: reaper
+description: A Helm chart for Reaper - High-performance policy enforcement platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/pgste/reaper
+sources:
+  - https://github.com/pgste/reaper
+keywords:
+  - policy
+  - authorization
+  - access-control
+  - enforcement
+  - rbac
+  - abac
+maintainers:
+  - name: Reaper Team
+    url: https://github.com/pgste/reaper
+dependencies:
+  - name: postgresql
+    version: "14.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

@@ -1,0 +1,16 @@
+{{- if and .Values.platform.enabled .Values.platform.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "reaper.platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform
+spec:
+  minAvailable: {{ .Values.platform.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "reaper.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: platform
+{{- end }}

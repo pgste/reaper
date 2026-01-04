@@ -1,0 +1,34 @@
+{{- if and .Values.management.enabled .Values.management.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "reaper.management.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "reaper.management.fullname" . }}
+  minReplicas: {{ .Values.management.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.management.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.management.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.management.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.management.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.management.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

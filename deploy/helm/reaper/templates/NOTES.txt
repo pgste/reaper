@@ -1,0 +1,109 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+=============================================================================
+REAPER PLATFORM DEPLOYMENT
+=============================================================================
+
+{{- if .Values.management.enabled }}
+
+MANAGEMENT SERVER
+-----------------
+The Reaper Management Server is deployed and accessible at:
+  Service: {{ include "reaper.management.fullname" . }}:{{ .Values.management.service.port }}
+
+To access the Management API locally:
+  kubectl port-forward svc/{{ include "reaper.management.fullname" . }} {{ .Values.management.service.port }}:{{ .Values.management.service.port }}
+  curl http://localhost:{{ .Values.management.service.port }}/health
+
+{{- if .Values.management.ingress.enabled }}
+Ingress is enabled. Access via:
+{{- range .Values.management.ingress.hosts }}
+  http{{ if $.Values.management.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- end }}
+
+{{- end }}
+
+{{- if .Values.platform.enabled }}
+
+PLATFORM (LEGACY)
+-----------------
+The Reaper Platform is deployed and accessible at:
+  Service: {{ include "reaper.platform.fullname" . }}:{{ .Values.platform.service.port }}
+
+To access the Platform API locally:
+  kubectl port-forward svc/{{ include "reaper.platform.fullname" . }} {{ .Values.platform.service.port }}:{{ .Values.platform.service.port }}
+  curl http://localhost:{{ .Values.platform.service.port }}/health
+
+{{- end }}
+
+{{- if .Values.agent.standalone.enabled }}
+
+AGENT (STANDALONE)
+------------------
+The Reaper Agent (standalone mode) is deployed and accessible at:
+  Service: {{ include "reaper.agent.fullname" . }}:{{ .Values.agent.service.port }}
+
+To access the Agent API locally:
+  kubectl port-forward svc/{{ include "reaper.agent.fullname" . }} {{ .Values.agent.service.port }}:{{ .Values.agent.service.port }}
+  curl http://localhost:{{ .Values.agent.service.port }}/health
+
+{{- end }}
+
+{{- if .Values.agent.managed.enabled }}
+
+AGENT (MANAGED)
+---------------
+The Reaper Agent (managed mode) is deployed and connects to:
+  Management Server: {{ .Values.agent.managed.managementUrl | default (printf "http://%s:%d" (include "reaper.management.fullname" .) (.Values.management.service.port | int)) }}
+  Organization: {{ .Values.agent.managed.organization }}
+
+Service: {{ include "reaper.agent.fullname" . }}-managed:{{ .Values.agent.service.port }}
+
+{{- end }}
+
+=============================================================================
+QUICK START
+=============================================================================
+
+1. Create an organization:
+   curl -X POST http://localhost:3000/orgs \
+     -H "Content-Type: application/json" \
+     -d '{"name": "My Org", "slug": "my-org"}'
+
+2. Create a policy:
+   curl -X POST http://localhost:3000/orgs/my-org/policies \
+     -H "Content-Type: application/json" \
+     -d '{"name": "test", "language": "reaper", "content": "allow admin to access /admin"}'
+
+3. Create and promote a bundle:
+   curl -X POST http://localhost:3000/orgs/my-org/bundles \
+     -H "Content-Type: application/json" \
+     -d '{"name": "test-bundle", "policy_ids": ["<policy-id>"]}'
+
+4. Evaluate a policy:
+   curl -X POST http://localhost:8080/api/v1/messages \
+     -H "Content-Type: application/json" \
+     -d '{"principal": "admin", "action": "access", "resource": "/admin"}'
+
+=============================================================================
+DOCUMENTATION
+=============================================================================
+
+For more information, visit:
+  https://github.com/pgste/reaper
+
+{{- if .Values.postgresql.enabled }}
+
+=============================================================================
+DATABASE
+=============================================================================
+
+PostgreSQL is deployed as part of this release.
+  Service: {{ .Release.Name }}-postgresql:5432
+  Database: {{ .Values.postgresql.auth.database }}
+  Username: {{ .Values.postgresql.auth.username }}
+
+{{- end }}
