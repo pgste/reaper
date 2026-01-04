@@ -1,15 +1,20 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::Json,
+    response::{Json, Response},
     routing::{get, post},
     Router,
 };
 use chrono::{DateTime, Utc};
+use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use policy_engine::{
     reap::{Decision, Policy, ReapCondition, ReapRule},
     EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine, PolicyRule,
+};
+use prometheus::{
+    register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Encoder, Gauge,
+    HistogramVec, TextEncoder,
 };
 use reaper_core::{endpoints, ReaperError, BUILD_INFO, VERSION};
 use serde::{Deserialize, Serialize};
@@ -20,6 +25,58 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
+
+// ============================================================================
+// Prometheus Metrics
+// ============================================================================
+
+lazy_static! {
+    /// Total API requests by endpoint and status
+    static ref API_REQUESTS_TOTAL: CounterVec = register_counter_vec!(
+        "reaper_platform_api_requests_total",
+        "Total API requests",
+        &["endpoint", "method", "status"]
+    )
+    .unwrap();
+
+    /// API request duration histogram
+    static ref API_REQUEST_DURATION: HistogramVec = register_histogram_vec!(
+        "reaper_platform_api_request_duration_seconds",
+        "API request duration in seconds",
+        &["endpoint"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    )
+    .unwrap();
+
+    /// Total policies managed
+    static ref POLICIES_TOTAL: Gauge = register_gauge!(
+        "reaper_platform_policies_total",
+        "Total policies managed"
+    )
+    .unwrap();
+
+    /// Total deployments
+    static ref DEPLOYMENTS_TOTAL: CounterVec = register_counter_vec!(
+        "reaper_platform_deployments_total",
+        "Total policy deployments",
+        &["result"]
+    )
+    .unwrap();
+
+    /// Registered agents
+    static ref AGENTS_TOTAL: Gauge = register_gauge!(
+        "reaper_platform_agents_total",
+        "Total registered agents"
+    )
+    .unwrap();
+
+    /// Bundles stored
+    static ref BUNDLES_TOTAL: Gauge = register_gauge!(
+        "reaper_platform_bundles_total",
+        "Total bundles stored"
+    )
+    .unwrap();
+}
 
 #[derive(Clone)]
 struct PlatformState {
@@ -206,6 +263,7 @@ async fn main() -> anyhow::Result<()> {
         // Health and metrics
         .route(endpoints::HEALTH, get(health_check))
         .route(endpoints::METRICS, get(metrics))
+        .route("/metrics/prometheus", get(prometheus_metrics))
         // Policy management
         .route(
             endpoints::API_V1_POLICIES,
@@ -264,6 +322,11 @@ async fn metrics(State(state): State<Arc<PlatformState>>) -> Result<Json<Value>,
     let engine_stats = state.policy_engine.get_stats();
     let deployment_stats = state.deployment_stats.read();
 
+    // Update Prometheus gauges
+    POLICIES_TOTAL.set(engine_stats.total_policies as f64);
+    BUNDLES_TOTAL.set(state.bundle_storage.read().len() as f64);
+    AGENTS_TOTAL.set(state.agents.read().len() as f64);
+
     Ok(Json(json!({
         "service": "reaper-platform",
         "policies": {
@@ -283,6 +346,27 @@ async fn metrics(State(state): State<Arc<PlatformState>>) -> Result<Json<Value>,
         "uptime_seconds": 0, // TODO: Add actual uptime tracking
         "memory_usage_mb": 0, // TODO: Add actual memory tracking
     })))
+}
+
+/// Prometheus metrics endpoint (text format for scraping)
+async fn prometheus_metrics(State(state): State<Arc<PlatformState>>) -> Response {
+    // Update gauges before encoding
+    let engine_stats = state.policy_engine.get_stats();
+    POLICIES_TOTAL.set(engine_stats.total_policies as f64);
+    BUNDLES_TOTAL.set(state.bundle_storage.read().len() as f64);
+    AGENTS_TOTAL.set(state.agents.read().len() as f64);
+
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    let mut buffer = Vec::new();
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+    let body = String::from_utf8(buffer).unwrap();
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        .body(body.into())
+        .unwrap()
 }
 
 #[instrument(skip(state))]

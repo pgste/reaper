@@ -1,0 +1,58 @@
+# =============================================================================
+# Reaper Kubernetes Kustomization
+# =============================================================================
+# Deploy with: kubectl apply -k deploy/kubernetes/
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: reaper
+
+namespace: reaper
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/part-of: reaper-platform
+  app.kubernetes.io/managed-by: kustomize
+
+# Resources to include
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - reaper-management.yaml
+  - reaper-platform.yaml
+  - reaper-agent.yaml
+  - ingress.yaml
+
+# Images - override in overlays for different environments
+images:
+  - name: reaper-management
+    newName: reaper-management
+    newTag: latest
+  - name: reaper-platform
+    newName: reaper-platform
+    newTag: latest
+  - name: reaper-agent
+    newName: reaper-agent
+    newTag: latest
+
+# ConfigMap generator for common configuration
+configMapGenerator:
+  - name: reaper-common-config
+    literals:
+      - RUST_LOG=info
+      - OTEL_ENABLED=true
+
+# Secret generator (for development only - use sealed secrets or external-secrets in production)
+# secretGenerator:
+#   - name: reaper-common-secrets
+#     literals:
+#       - JWT_SECRET=change-me
+
+# Patches for environment-specific customization
+# patches:
+#   - path: patches/production-resources.yaml
+#     target:
+#       kind: Deployment

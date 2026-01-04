@@ -65,6 +65,10 @@ async-trait = "0.1"
 # External API parsing
 jsonpath-rust = "0.7"
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+
 # Optional storage backends
 aws-sdk-s3 = { version = "1.0", optional = true }
 aws-sdk-dynamodb = { version = "1.0", optional = true }

@@ -1,0 +1,111 @@
+# =============================================================================
+# Reaper Ingress - Kubernetes Ingress Configuration
+# =============================================================================
+# Deploy with: kubectl apply -f ingress.yaml
+# Requires: An ingress controller (nginx-ingress, traefik, etc.)
+# =============================================================================
+
+---
+# Ingress for Reaper services
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reaper-ingress
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper
+    app.kubernetes.io/component: ingress
+  annotations:
+    # NGINX Ingress annotations
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # Rate limiting for agent endpoints (high throughput)
+    nginx.ingress.kubernetes.io/limit-rps: "10000"
+    # Enable CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - reaper.example.com
+        - api.reaper.example.com
+        - management.reaper.example.com
+      secretName: reaper-tls
+  rules:
+    # Management Server API
+    - host: management.reaper.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reaper-management
+                port:
+                  number: 3000
+    # Platform API (legacy)
+    - host: api.reaper.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reaper-platform
+                port:
+                  number: 8081
+    # Agent API (for policy evaluation)
+    - host: reaper.example.com
+      http:
+        paths:
+          - path: /api/v1/messages
+            pathType: Prefix
+            backend:
+              service:
+                name: reaper-agent
+                port:
+                  number: 8080
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: reaper-agent
+                port:
+                  number: 8080
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: reaper-agent
+                port:
+                  number: 8080
+
+---
+# Internal Ingress for managed agents (if needed)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reaper-internal-ingress
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper
+    app.kubernetes.io/component: ingress
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Internal only - no external access
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+spec:
+  ingressClassName: nginx-internal
+  rules:
+    - host: reaper-managed.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reaper-agent-managed
+                port:
+                  number: 8080

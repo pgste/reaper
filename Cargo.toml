@@ -12,6 +12,7 @@ members = [
     "services/reaper-management",
     "tools/reaper-cli",
     "crates/reaper-ebpf",
+    "tests/e2e",
 ]
 exclude = [
     "benchmarks/reaper-vs-opa",
@@ -49,6 +50,7 @@ proptest = "1.0"
 cucumber = "0.22.0"
 async-trait = "0.1"
 reqwest = { version = "0.12.26", features = ["json"] }
+futures = "0.3"
 
 # Web framework for API services
 axum = { version = "0.8.7", features = ["json", "tokio"] }
