@@ -30,16 +30,16 @@ use crate::{
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Agent self-registration (uses API key auth)
-        .route("/api/v1/orgs/{org}/agents/register", post(register_agent))
+        .route("/orgs/{org}/agents/register", post(register_agent))
         // Agent listing and details (requires auth)
-        .route("/api/v1/orgs/{org}/agents", get(list_agents))
+        .route("/orgs/{org}/agents", get(list_agents))
         .route(
-            "/api/v1/orgs/{org}/agents/{agent_id}",
+            "/orgs/{org}/agents/{agent_id}",
             get(get_agent).delete(delete_agent),
         )
         // Heartbeat endpoint
         .route(
-            "/api/v1/orgs/{org}/agents/{agent_id}/heartbeat",
+            "/orgs/{org}/agents/{agent_id}/heartbeat",
             post(heartbeat),
         )
 }

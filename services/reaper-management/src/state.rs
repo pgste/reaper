@@ -2,8 +2,10 @@
 //!
 //! Holds shared state accessible to all request handlers.
 
+use crate::bundle::BundleService;
 use crate::config::Config;
 use crate::db::Database;
+use crate::storage::BundleStorage;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -52,6 +54,8 @@ pub struct AppState {
     pub db: Arc<Database>,
     /// Configuration
     pub config: Arc<Config>,
+    /// Bundle service for compilation and promotion
+    pub bundle_service: Arc<BundleService>,
     /// Event broadcaster for SSE
     pub event_tx: broadcast::Sender<ServerEvent>,
     /// Server start time
@@ -60,12 +64,14 @@ pub struct AppState {
 
 impl AppState {
     /// Create new application state
-    pub fn new(db: Arc<Database>, config: Config) -> Self {
+    pub fn new(db: Arc<Database>, config: Config, storage: Arc<dyn BundleStorage>) -> Self {
         let (event_tx, _) = broadcast::channel(1024);
+        let bundle_service = Arc::new(BundleService::new(db.clone(), storage));
 
         Self {
             db,
             config: Arc::new(config),
+            bundle_service,
             event_tx,
             started_at: chrono::Utc::now(),
         }
@@ -103,11 +109,14 @@ impl std::fmt::Debug for AppState {
 mod tests {
     use super::*;
     use crate::config::DatabaseConfig;
+    use crate::storage::FilesystemStorage;
 
     #[tokio::test]
     async fn test_event_broadcast() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
+        let storage_path = temp_dir.path().join("storage");
+        std::fs::create_dir_all(&storage_path).unwrap();
         let url = format!("sqlite:{}", db_path.display());
 
         let db_config = DatabaseConfig {
@@ -117,7 +126,9 @@ mod tests {
         };
 
         let db = Database::new(&db_config).await.unwrap();
-        let state = AppState::new(Arc::new(db), Config::default());
+        db.run_migrations().await.unwrap();
+        let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap()) as Arc<dyn BundleStorage>;
+        let state = AppState::new(Arc::new(db), Config::default(), storage);
 
         let mut rx = state.subscribe_events();
 

@@ -71,6 +71,13 @@ pub struct Bundle {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Update bundle metadata
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateBundle {
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
 /// Bundle-Policy association
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundlePolicy {
