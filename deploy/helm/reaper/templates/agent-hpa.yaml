@@ -1,0 +1,71 @@
+{{- if and .Values.agent.standalone.enabled .Values.agent.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "reaper.agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: standalone
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "reaper.agent.fullname" . }}
+  minReplicas: {{ .Values.agent.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.agent.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.agent.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.agent.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.agent.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.agent.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}
+---
+{{- if and .Values.agent.managed.enabled .Values.agent.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "reaper.agent.fullname" . }}-managed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: managed
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "reaper.agent.fullname" . }}-managed
+  minReplicas: {{ .Values.agent.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.agent.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.agent.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.agent.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.agent.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.agent.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

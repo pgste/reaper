@@ -1,0 +1,37 @@
+{{- if and .Values.agent.standalone.enabled .Values.agent.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "reaper.agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: standalone
+spec:
+  minAvailable: {{ .Values.agent.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "reaper.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+      app.kubernetes.io/mode: standalone
+{{- end }}
+---
+{{- if and .Values.agent.managed.enabled .Values.agent.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "reaper.agent.fullname" . }}-managed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: managed
+spec:
+  minAvailable: {{ .Values.agent.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "reaper.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+      app.kubernetes.io/mode: managed
+{{- end }}

@@ -1,0 +1,19 @@
+{{- if and .Values.management.enabled .Values.management.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "reaper.management.fullname" . }}-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management
+spec:
+  accessModes:
+    {{- toYaml .Values.management.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.management.persistence.size }}
+  {{- if or .Values.management.persistence.storageClass .Values.global.storageClass }}
+  storageClassName: {{ .Values.management.persistence.storageClass | default .Values.global.storageClass }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,302 @@
+# =============================================================================
+# Reaper Helm Chart - Default Values
+# =============================================================================
+
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# =============================================================================
+# Reaper Management Server
+# =============================================================================
+management:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: ghcr.io/pgste/reaper/reaper-management
+    tag: ""  # Defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: management.reaper.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  config:
+    logLevel: info
+    storageType: filesystem
+    storagePath: /var/lib/reaper/storage
+
+  secrets:
+    jwtSecret: ""  # Must be set in production
+    existingSecret: ""  # Use existing secret instead
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+# =============================================================================
+# Reaper Platform (Legacy)
+# =============================================================================
+platform:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: ghcr.io/pgste/reaper/reaper-platform
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8081
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: platform.reaper.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  config:
+    logLevel: info
+
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+# =============================================================================
+# Reaper Agent
+# =============================================================================
+agent:
+  # Standalone mode (connects to Platform)
+  standalone:
+    enabled: true
+    replicaCount: 3
+
+  # Managed mode (connects to Management Server)
+  managed:
+    enabled: false
+    replicaCount: 3
+    managementUrl: ""  # URL to Management Server
+    organization: default
+    apiKey: ""  # API key for authentication
+    existingSecret: ""  # Use existing secret
+
+  image:
+    repository: ghcr.io/pgste/reaper/reaper-agent
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: agent.reaper.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  config:
+    logLevel: info
+
+  openTelemetry:
+    enabled: false
+    endpoint: ""
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+# =============================================================================
+# PostgreSQL (Bitnami subchart)
+# =============================================================================
+postgresql:
+  enabled: true
+  auth:
+    username: reaper
+    password: ""  # Auto-generated if empty
+    database: reaper_management
+    existingSecret: ""
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# =============================================================================
+# Metrics & Monitoring
+# =============================================================================
+metrics:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 15s
+    scrapeTimeout: 10s
+    labels: {}
+
+  prometheusRule:
+    enabled: false
+    namespace: ""
+    labels: {}
+    rules: []
+
+# =============================================================================
+# Network Policies
+# =============================================================================
+networkPolicy:
+  enabled: false
+  ingress:
+    enabled: true
+    namespaceSelector: {}
+    podSelector: {}
+  egress:
+    enabled: true
+    ports:
+      - port: 53
+        protocol: UDP
+      - port: 443
+        protocol: TCP
