@@ -32,6 +32,9 @@ opentelemetry-semantic-conventions = "0.13"
 tracing-opentelemetry = "0.22"
 tempfile = "3.8"
 thiserror = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+hostname = "0.4"
 
 [dev-dependencies]
 criterion = { workspace = true }

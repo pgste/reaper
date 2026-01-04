@@ -52,6 +52,10 @@ pub struct ReaperAgentConfig {
     /// Observability settings
     #[serde(default)]
     pub observability: ObservabilitySettings,
+
+    /// Management plane settings (optional)
+    #[serde(default)]
+    pub management: ManagementSettings,
 }
 
 /// Agent network and identification settings
@@ -159,6 +163,43 @@ pub struct ObservabilitySettings {
     pub otel_endpoint: Option<String>,
 }
 
+/// Management plane settings
+///
+/// When enabled, the agent will connect to a Reaper Management Server
+/// to receive policy bundles and report health status.
+/// When disabled (default), the agent runs standalone using local policies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagementSettings {
+    /// Enable connection to management plane (default: false for standalone mode)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Management server URL (e.g., "http://localhost:8081")
+    pub url: Option<String>,
+
+    /// Organization slug or ID to register with
+    pub org: Option<String>,
+
+    /// API key for authentication with management server
+    pub api_key: Option<String>,
+
+    /// How often to poll for bundle updates (seconds)
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_secs: u64,
+
+    /// How often to send heartbeat (seconds)
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval_secs: u64,
+
+    /// Whether to pull promoted bundle on startup
+    #[serde(default = "default_true")]
+    pub sync_on_startup: bool,
+
+    /// Timeout for HTTP requests to management server (seconds)
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_secs: u64,
+}
+
 // ============================================================================
 // Default Values
 // ============================================================================
@@ -204,6 +245,18 @@ fn default_policy_extensions() -> Vec<String> {
     ]
 }
 
+fn default_poll_interval() -> u64 {
+    30
+}
+
+fn default_heartbeat_interval() -> u64 {
+    30
+}
+
+fn default_request_timeout() -> u64 {
+    10
+}
+
 // ============================================================================
 // Default Implementations
 // ============================================================================
@@ -217,6 +270,7 @@ impl Default for ReaperAgentConfig {
             performance: PerformanceSettings::default(),
             cache: CacheSettings::default(),
             observability: ObservabilitySettings::default(),
+            management: ManagementSettings::default(),
         }
     }
 }
@@ -281,6 +335,21 @@ impl Default for ObservabilitySettings {
             log_level: default_log_level(),
             enable_tracing: false,
             otel_endpoint: None,
+        }
+    }
+}
+
+impl Default for ManagementSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Standalone mode by default
+            url: None,
+            org: None,
+            api_key: None,
+            poll_interval_secs: default_poll_interval(),
+            heartbeat_interval_secs: default_heartbeat_interval(),
+            sync_on_startup: true,
+            request_timeout_secs: default_request_timeout(),
         }
     }
 }
@@ -381,6 +450,35 @@ impl ReaperAgentConfig {
             self.observability.otel_endpoint = Some(val);
             self.observability.enable_tracing = true;
         }
+
+        // Management plane settings
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_ENABLED") {
+            self.management.enabled =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_URL") {
+            self.management.url = Some(val);
+            // Auto-enable management if URL is provided
+            if !self.management.enabled {
+                self.management.enabled = true;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_ORG") {
+            self.management.org = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_API_KEY") {
+            self.management.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_POLL_INTERVAL") {
+            if let Ok(interval) = val.parse() {
+                self.management.poll_interval_secs = interval;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_HEARTBEAT_INTERVAL") {
+            if let Ok(interval) = val.parse() {
+                self.management.heartbeat_interval_secs = interval;
+            }
+        }
     }
 
     /// Validate the configuration
@@ -409,15 +507,44 @@ impl ReaperAgentConfig {
             }
         }
 
+        // Validate management settings if enabled
+        if self.management.enabled {
+            if self.management.url.is_none() {
+                return Err(ConfigError::Validation(
+                    "Management URL is required when management is enabled".to_string(),
+                ));
+            }
+            if self.management.org.is_none() {
+                return Err(ConfigError::Validation(
+                    "Management org is required when management is enabled".to_string(),
+                ));
+            }
+            if self.management.api_key.is_none() {
+                return Err(ConfigError::Validation(
+                    "Management API key is required when management is enabled".to_string(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
     /// Get a summary string for logging
     pub fn summary(&self) -> String {
+        let mgmt_status = if self.management.enabled {
+            format!(
+                "connected to {}",
+                self.management.url.as_deref().unwrap_or("?")
+            )
+        } else {
+            "standalone".to_string()
+        };
+
         format!(
-            "Agent: {}:{}, Cache: {} ({} entries, {}s TTL), Bootstrap: policies={:?}, data={:?}",
+            "Agent: {}:{}, Mode: {}, Cache: {} ({} entries, {}s TTL), Bootstrap: policies={:?}, data={:?}",
             self.agent.bind_address,
             self.agent.port,
+            mgmt_status,
             if self.cache.enabled {
                 "enabled"
             } else {

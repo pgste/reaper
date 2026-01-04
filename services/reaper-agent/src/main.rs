@@ -1,5 +1,6 @@
 mod bootstrap;
 mod cache;
+mod management;
 
 use axum::{
     body::Bytes,
@@ -36,6 +37,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tracing::{error, info, instrument, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -507,6 +509,114 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Initialize management client if enabled
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut management_handle = None;
+
+    if config.management.enabled {
+        info!("Management plane enabled - connecting to {}",
+            config.management.url.as_deref().unwrap_or("?"));
+
+        match management::ManagementClient::new(
+            &config.management,
+            config.agent.name.clone(),
+            VERSION.to_string(),
+        ) {
+            Ok(client) => {
+                let client = Arc::new(client);
+                let policy_engine_for_sync = policy_engine.clone();
+
+                // Create sync service
+                let (sync_service, mut update_rx) = management::SyncService::new(
+                    client.clone(),
+                    config.management.clone(),
+                    Arc::new(policy_engine_for_sync),
+                    shutdown_rx.clone(),
+                );
+
+                // Spawn sync service
+                let sync_handle = tokio::spawn(async move {
+                    sync_service.run().await;
+                });
+                management_handle = Some(sync_handle);
+
+                // Spawn bundle update handler
+                let policy_engine_for_updates = policy_engine.clone();
+                let data_store_for_updates = data_store.clone();
+                tokio::spawn(async move {
+                    while update_rx.changed().await.is_ok() {
+                        if let Some(update) = update_rx.borrow().clone() {
+                            info!(
+                                bundle_id = %update.bundle_id,
+                                checksum = %update.checksum,
+                                size = update.data.len(),
+                                "Received bundle update, deploying..."
+                            );
+
+                            // Parse the management bundle (JSON format)
+                            match serde_json::from_slice::<management::ManagementBundle>(&update.data) {
+                                Ok(bundle) => {
+                                    let mut deployed = 0;
+                                    let mut failed = 0;
+
+                                    for policy_entry in bundle.policies {
+                                        // Create EnhancedPolicy from bundle entry
+                                        let policy_id = Uuid::parse_str(&policy_entry.id)
+                                            .unwrap_or_else(|_| Uuid::new_v4());
+
+                                        let mut policy = EnhancedPolicy::new(
+                                            policy_entry.id.clone(),
+                                            format!("Policy from bundle"),
+                                            vec![], // Rules will be set by content
+                                        );
+                                        policy.id = policy_id;
+                                        policy.version = policy_entry.version as u64;
+                                        policy.content = policy_entry.content.clone();
+
+                                        // Set the language based on what management server provides
+                                        policy.language = match policy_entry.language.as_str() {
+                                            "cedar" => policy_engine::PolicyLanguage::Cedar,
+                                            "simple" => policy_engine::PolicyLanguage::Simple,
+                                            "reaper" | _ => policy_engine::PolicyLanguage::Custom,
+                                        };
+
+                                        if let Err(e) = policy_engine_for_updates.deploy_policy(policy) {
+                                            warn!(
+                                                policy = %policy_entry.id,
+                                                error = %e,
+                                                "Failed to deploy policy from bundle"
+                                            );
+                                            failed += 1;
+                                        } else {
+                                            deployed += 1;
+                                        }
+                                    }
+
+                                    info!(
+                                        bundle_id = %update.bundle_id,
+                                        deployed = deployed,
+                                        failed = failed,
+                                        "Bundle deployment complete"
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to parse management bundle");
+                                }
+                            }
+                        }
+                    }
+                });
+
+                info!("Management sync service started");
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to create management client, running in standalone mode");
+            }
+        }
+    } else {
+        info!("Running in standalone mode (management plane disabled)");
+    }
+
     info!("Reaper Agent initialized - ready to receive policies and data via API");
     info!("  POST /api/v1/data           - Load entity data (JSON)");
     info!("  POST /api/v1/policies/compile - Deploy compiled .reap policy");
@@ -579,6 +689,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Run server
     let result = axum::serve(listener, app).await;
+
+    // Signal shutdown to sync service
+    let _ = shutdown_tx.send(true);
+    if let Some(handle) = management_handle {
+        info!("Waiting for management sync service to shutdown...");
+        let _ = handle.await;
+    }
 
     // Shutdown telemetry gracefully
     info!("Shutting down telemetry...");
