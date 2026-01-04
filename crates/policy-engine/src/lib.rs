@@ -6,6 +6,9 @@ pub mod decision_matrix;
 mod engine;
 mod evaluators;
 pub mod arena;
+pub mod batch;
+pub mod cache_config;
+pub mod decision_cache;
 pub mod fast_parse;
 pub mod gherkin;
 pub mod indexed_engine;
@@ -18,7 +21,7 @@ pub mod regex_cache;
 
 pub use engine::{
     EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage,
-    PolicyRequest, PolicyRule, SimpleAction, SimpleRule,
+    PolicyRequest, PolicyRule, PolicySource, PolicySourceMetadata, SimpleAction, SimpleRule,
 };
 
 pub use evaluators::{
@@ -73,3 +76,12 @@ pub use arena::{
     arena_stats, prewarm_arena, reset_arena, with_arena, with_arena_reset, ArenaStats,
     ArenaString, ArenaValue, ArenaVec, EvaluationContext,
 };
+
+// Re-export decision cache for caching policy decisions
+pub use decision_cache::{CachedEvaluator, DecisionCache, DecisionCacheStats};
+
+// Re-export batch evaluation for parallel request processing
+pub use batch::{BatchEvaluator, BatchResult, BatchStats};
+
+// Re-export cache configuration for environment-based cache setup
+pub use cache_config::{CacheConfig, CacheConfigBuilder};

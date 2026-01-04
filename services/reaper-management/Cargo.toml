@@ -1,0 +1,76 @@
+[package]
+name = "reaper-management"
+version = "0.1.0"
+edition = "2021"
+description = "Reaper Management Server - Multi-tenant policy management with Git/API sources and SSE"
+
+[lib]
+name = "reaper_management"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reaper-management"
+path = "src/main.rs"
+
+[features]
+default = ["storage-filesystem"]
+storage-filesystem = []
+storage-s3 = ["dep:aws-sdk-s3", "dep:aws-config"]
+storage-mongodb = ["dep:mongodb"]
+storage-dynamodb = ["dep:aws-sdk-dynamodb", "dep:aws-config"]
+all-storage = ["storage-s3", "storage-mongodb", "storage-dynamodb"]
+
+[dependencies]
+# Workspace dependencies
+reaper-core = { path = "../../crates/reaper-core" }
+policy-engine = { path = "../../crates/policy-engine" }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+sha2 = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Configuration
+serde_yaml = "0.9"
+clap = { version = "4.0", features = ["derive", "env"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json"] }
+
+# Git integration
+git2 = "0.19"
+
+# Auth
+jsonwebtoken = "9.3"
+rand = { workspace = true }
+hex = "0.4"
+
+# HTTP/SSE
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+async-stream = "0.3"
+async-trait = "0.1"
+
+# External API parsing
+jsonpath-rust = "0.7"
+
+# Optional storage backends
+aws-sdk-s3 = { version = "1.0", optional = true }
+aws-sdk-dynamodb = { version = "1.0", optional = true }
+aws-config = { version = "1.0", optional = true }
+mongodb = { version = "3.1", optional = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = "3.8"
+wiremock = "0.6"
