@@ -35,12 +35,14 @@ CREATE TABLE IF NOT EXISTS policy_sources (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
+    description TEXT,
     source_type TEXT NOT NULL,              -- 'git' or 'api'
     config TEXT NOT NULL,                   -- JSON configuration
-    is_active INTEGER DEFAULT 1,
+    sync_interval_secs INTEGER DEFAULT 300, -- Sync interval in seconds (0 = manual only)
+    sync_status TEXT DEFAULT 'pending',     -- 'pending', 'syncing', 'success', 'failed', 'disabled'
+    is_enabled INTEGER DEFAULT 1,
     last_sync_at TEXT,
     last_sync_commit TEXT,                  -- Git commit hash or API version
-    last_sync_status TEXT,                  -- 'success', 'failed', 'pending'
     last_sync_error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,

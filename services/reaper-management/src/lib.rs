@@ -10,15 +10,19 @@
 
 pub mod api;
 pub mod auth;
+pub mod bundle;
 pub mod config;
 pub mod db;
 pub mod domain;
 pub mod state;
 pub mod storage;
+pub mod sync;
 
+pub use bundle::{BundleError, BundleService};
 pub use config::Config;
 pub use db::{Database, DatabaseError};
 pub use state::AppState;
+pub use sync::SyncService;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

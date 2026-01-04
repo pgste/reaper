@@ -31,18 +31,18 @@ use crate::{
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Token operations
-        .route("/api/v1/auth/token/refresh", post(refresh_token))
+        .route("/auth/token/refresh", post(refresh_token))
         // API key management (requires auth)
         .route(
-            "/api/v1/orgs/{org}/api-keys",
+            "/orgs/{org}/api-keys",
             get(list_api_keys).post(create_api_key),
         )
         .route(
-            "/api/v1/orgs/{org}/api-keys/{key_id}",
+            "/orgs/{org}/api-keys/{key_id}",
             get(get_api_key).delete(delete_api_key),
         )
         .route(
-            "/api/v1/orgs/{org}/api-keys/{key_id}/revoke",
+            "/orgs/{org}/api-keys/{key_id}/revoke",
             post(revoke_api_key),
         )
 }

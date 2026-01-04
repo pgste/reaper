@@ -21,7 +21,7 @@
 
 use axum::Router;
 use clap::Parser;
-use reaper_management::{api, config::Config, db, AppState};
+use reaper_management::{api, config::Config, db, storage, AppState};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tracing::info;
 
@@ -79,8 +79,13 @@ async fn main() -> anyhow::Result<()> {
     info!("Initializing database...");
     let db = db::init_database(&config.database).await?;
 
+    // Initialize storage
+    info!("Initializing storage backend...");
+    let storage = storage::create_storage(&config.storage).await?;
+    info!("Using storage backend: {}", storage.backend_name());
+
     // Create application state
-    let state = AppState::new(db, config.clone());
+    let state = AppState::new(db, config.clone(), storage);
 
     // Build router
     let app = build_router(state);

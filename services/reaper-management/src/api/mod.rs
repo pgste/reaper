@@ -4,11 +4,13 @@
 
 pub mod agents;
 pub mod auth;
+pub mod bundles;
 pub mod error;
 pub mod events;
 pub mod health;
 pub mod orgs;
 pub mod policies;
+pub mod sources;
 pub mod teams;
 
 use axum::Router;
@@ -23,6 +25,8 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
         .merge(auth::routes())
         .merge(agents::routes())
         .merge(events::routes())
+        .merge(sources::routes())
+        .merge(bundles::routes())
 }
 
 /// Build the v1 API routes (kept for backwards compat)

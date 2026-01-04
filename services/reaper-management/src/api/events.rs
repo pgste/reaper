@@ -27,7 +27,7 @@ use crate::{
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // SSE event stream
-        .route("/api/v1/orgs/{org}/events", get(events_stream))
+        .route("/orgs/{org}/events", get(events_stream))
 }
 
 /// SSE event stream for an organization

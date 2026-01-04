@@ -1,0 +1,735 @@
+//! Bundle repository
+//!
+//! Data access layer for policy bundles and their relationships.
+
+use chrono::Utc;
+use sqlx::Row;
+use uuid::Uuid;
+
+use crate::db::{Database, DatabaseError};
+use crate::domain::bundle::{Bundle, BundlePolicy, BundlePromotion, BundleStatus, CreateBundle};
+
+/// Repository for bundle operations
+pub struct BundleRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> BundleRepository<'a> {
+    /// Create a new repository instance
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    /// Create a new bundle
+    pub async fn create(&self, org_id: Uuid, input: &CreateBundle) -> Result<Bundle, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let status = BundleStatus::Draft;
+
+        let sql = r#"
+            INSERT INTO bundles (id, org_id, name, description, version, status, policy_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, '1.0.0', ?, 0, ?, ?)
+        "#;
+
+        sqlx::query(sql)
+            .bind(id.to_string())
+            .bind(org_id.to_string())
+            .bind(&input.name)
+            .bind(&input.description)
+            .bind(status.to_string())
+            .bind(now.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(pool)
+            .await?;
+
+        // Add initial policies if provided
+        if !input.policy_ids.is_empty() {
+            for (idx, policy_id) in input.policy_ids.iter().enumerate() {
+                self.add_policy(id, *policy_id, idx as i32).await?;
+            }
+        }
+
+        self.get_by_id(id)
+            .await?
+            .ok_or_else(|| DatabaseError::NotFound("Bundle not found after creation".to_string()))
+    }
+
+    /// Get a bundle by ID
+    pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Bundle>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
+                   policy_count, created_at, updated_at, compiled_at, promoted_at
+            FROM bundles
+            WHERE id = ?
+        "#;
+
+        let row = sqlx::query(sql)
+            .bind(id.to_string())
+            .fetch_optional(pool)
+            .await?;
+
+        row.map(|r| self.row_to_bundle(&r)).transpose()
+    }
+
+    /// List bundles for an organization
+    pub async fn list_by_org(
+        &self,
+        org_id: Uuid,
+        status_filter: Option<BundleStatus>,
+    ) -> Result<Vec<Bundle>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = if status_filter.is_some() {
+            r#"
+                SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
+                       policy_count, created_at, updated_at, compiled_at, promoted_at
+                FROM bundles
+                WHERE org_id = ? AND status = ?
+                ORDER BY created_at DESC
+            "#
+        } else {
+            r#"
+                SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
+                       policy_count, created_at, updated_at, compiled_at, promoted_at
+                FROM bundles
+                WHERE org_id = ?
+                ORDER BY created_at DESC
+            "#
+        };
+
+        let rows = if let Some(status) = status_filter {
+            sqlx::query(sql)
+                .bind(org_id.to_string())
+                .bind(status.to_string())
+                .fetch_all(pool)
+                .await
+        } else {
+            sqlx::query(sql)
+                .bind(org_id.to_string())
+                .fetch_all(pool)
+                .await
+        }?;
+
+        rows.iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
+    /// Get the currently promoted bundle for an organization
+    pub async fn get_promoted(&self, org_id: Uuid) -> Result<Option<Bundle>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
+                   policy_count, created_at, updated_at, compiled_at, promoted_at
+            FROM bundles
+            WHERE org_id = ? AND status = 'promoted'
+            ORDER BY promoted_at DESC
+            LIMIT 1
+        "#;
+
+        let row = sqlx::query(sql)
+            .bind(org_id.to_string())
+            .fetch_optional(pool)
+            .await?;
+
+        row.map(|r| self.row_to_bundle(&r)).transpose()
+    }
+
+    /// Update bundle status
+    pub async fn update_status(
+        &self,
+        id: Uuid,
+        status: BundleStatus,
+        _promoted_by: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<Bundle, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        // Get current bundle for audit log
+        let bundle = self
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| DatabaseError::NotFound(format!("Bundle {} not found", id)))?;
+
+        let now = Utc::now();
+
+        // Update status with appropriate timestamp
+        let sql = match status {
+            BundleStatus::Compiled => {
+                r#"
+                    UPDATE bundles
+                    SET status = ?, updated_at = ?, compiled_at = ?
+                    WHERE id = ?
+                "#
+            }
+            BundleStatus::Promoted => {
+                r#"
+                    UPDATE bundles
+                    SET status = ?, updated_at = ?, promoted_at = ?
+                    WHERE id = ?
+                "#
+            }
+            _ => {
+                r#"
+                    UPDATE bundles
+                    SET status = ?, updated_at = ?
+                    WHERE id = ?
+                "#
+            }
+        };
+
+        match status {
+            BundleStatus::Compiled | BundleStatus::Promoted => {
+                sqlx::query(sql)
+                    .bind(status.to_string())
+                    .bind(now.to_rfc3339())
+                    .bind(now.to_rfc3339())
+                    .bind(id.to_string())
+                    .execute(pool)
+                    .await
+            }
+            _ => {
+                sqlx::query(sql)
+                    .bind(status.to_string())
+                    .bind(now.to_rfc3339())
+                    .bind(id.to_string())
+                    .execute(pool)
+                    .await
+            }
+        }?;
+
+        // Record promotion history
+        self.record_promotion(id, bundle.status, status, None, notes)
+            .await?;
+
+        self.get_by_id(id)
+            .await?
+            .ok_or_else(|| DatabaseError::NotFound("Bundle not found after update".to_string()))
+    }
+
+    /// Update bundle after compilation
+    pub async fn update_compilation(
+        &self,
+        id: Uuid,
+        storage_key: &str,
+        size_bytes: i64,
+        checksum: &str,
+        policy_count: i32,
+    ) -> Result<Bundle, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let now = Utc::now();
+
+        let sql = r#"
+            UPDATE bundles
+            SET status = 'compiled', storage_key = ?, size_bytes = ?, checksum = ?,
+                policy_count = ?, compiled_at = ?, updated_at = ?
+            WHERE id = ?
+        "#;
+
+        sqlx::query(sql)
+            .bind(storage_key)
+            .bind(size_bytes)
+            .bind(checksum)
+            .bind(policy_count)
+            .bind(now.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .bind(id.to_string())
+            .execute(pool)
+            .await?;
+
+        // Record status change
+        self.record_promotion(id, BundleStatus::Draft, BundleStatus::Compiled, None, None)
+            .await?;
+
+        self.get_by_id(id)
+            .await?
+            .ok_or_else(|| DatabaseError::NotFound("Bundle not found after update".to_string()))
+    }
+
+    /// Update bundle metadata
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: Option<&str>,
+        description: Option<&str>,
+        version: Option<&str>,
+    ) -> Result<Bundle, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let bundle = self
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| DatabaseError::NotFound(format!("Bundle {} not found", id)))?;
+
+        let now = Utc::now();
+        let new_name = name.unwrap_or(&bundle.name);
+        let new_description = description.or(bundle.description.as_deref());
+        let new_version = version.unwrap_or("1.0.0");
+
+        let sql = r#"
+            UPDATE bundles
+            SET name = ?, description = ?, version = ?, updated_at = ?
+            WHERE id = ?
+        "#;
+
+        sqlx::query(sql)
+            .bind(new_name)
+            .bind(new_description)
+            .bind(new_version)
+            .bind(now.to_rfc3339())
+            .bind(id.to_string())
+            .execute(pool)
+            .await?;
+
+        self.get_by_id(id)
+            .await?
+            .ok_or_else(|| DatabaseError::NotFound("Bundle not found after update".to_string()))
+    }
+
+    /// Delete a bundle
+    pub async fn delete(&self, id: Uuid) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = "DELETE FROM bundles WHERE id = ?";
+
+        let result = sqlx::query(sql)
+            .bind(id.to_string())
+            .execute(pool)
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DatabaseError::NotFound(format!("Bundle {} not found", id)));
+        }
+
+        Ok(())
+    }
+
+    /// Add a policy to a bundle
+    pub async fn add_policy(
+        &self,
+        bundle_id: Uuid,
+        policy_id: Uuid,
+        priority: i32,
+    ) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        // Get current policy version
+        let version_sql = "SELECT current_version FROM policies WHERE id = ?";
+        let version: i32 = sqlx::query(version_sql)
+            .bind(policy_id.to_string())
+            .fetch_optional(pool)
+            .await?
+            .map(|r| r.get::<i32, _>("current_version"))
+            .unwrap_or(1);
+
+        let sql = r#"
+            INSERT INTO bundle_policies (id, bundle_id, policy_id, policy_version, priority, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bundle_id, policy_id) DO UPDATE SET
+                policy_version = excluded.policy_version,
+                priority = excluded.priority
+        "#;
+
+        sqlx::query(sql)
+            .bind(id.to_string())
+            .bind(bundle_id.to_string())
+            .bind(policy_id.to_string())
+            .bind(version)
+            .bind(priority)
+            .bind(now.to_rfc3339())
+            .execute(pool)
+            .await?;
+
+        // Update policy count
+        self.update_policy_count(bundle_id).await?;
+
+        Ok(())
+    }
+
+    /// Remove a policy from a bundle
+    pub async fn remove_policy(&self, bundle_id: Uuid, policy_id: Uuid) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = "DELETE FROM bundle_policies WHERE bundle_id = ? AND policy_id = ?";
+
+        sqlx::query(sql)
+            .bind(bundle_id.to_string())
+            .bind(policy_id.to_string())
+            .execute(pool)
+            .await?;
+
+        // Update policy count
+        self.update_policy_count(bundle_id).await?;
+
+        Ok(())
+    }
+
+    /// Get policies in a bundle
+    pub async fn get_policies(&self, bundle_id: Uuid) -> Result<Vec<BundlePolicy>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT bundle_id, policy_id, policy_version, priority
+            FROM bundle_policies
+            WHERE bundle_id = ?
+            ORDER BY priority ASC
+        "#;
+
+        let rows = sqlx::query(sql)
+            .bind(bundle_id.to_string())
+            .fetch_all(pool)
+            .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok(BundlePolicy {
+                    bundle_id: r
+                        .get::<String, _>("bundle_id")
+                        .parse()
+                        .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
+                    policy_id: r
+                        .get::<String, _>("policy_id")
+                        .parse()
+                        .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
+                    policy_version: r.get("policy_version"),
+                    priority: r.get("priority"),
+                })
+            })
+            .collect()
+    }
+
+    /// Get promotion history for a bundle
+    pub async fn get_promotion_history(
+        &self,
+        bundle_id: Uuid,
+    ) -> Result<Vec<BundlePromotion>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT id, bundle_id, from_status, to_status, promoted_by, notes, created_at
+            FROM bundle_promotions
+            WHERE bundle_id = ?
+            ORDER BY created_at DESC
+        "#;
+
+        let rows = sqlx::query(sql)
+            .bind(bundle_id.to_string())
+            .fetch_all(pool)
+            .await?;
+
+        rows.iter()
+            .map(|r| {
+                let from_status: String = r.get("from_status");
+                let to_status: String = r.get("to_status");
+                let created_at: String = r.get("created_at");
+
+                Ok(BundlePromotion {
+                    id: r
+                        .get::<String, _>("id")
+                        .parse()
+                        .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
+                    bundle_id: r
+                        .get::<String, _>("bundle_id")
+                        .parse()
+                        .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
+                    from_status: from_status
+                        .parse()
+                        .unwrap_or(BundleStatus::Draft),
+                    to_status: to_status.parse().unwrap_or(BundleStatus::Draft),
+                    promoted_by: r.get("promoted_by"),
+                    promoted_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    notes: r.get("notes"),
+                })
+            })
+            .collect()
+    }
+
+    /// Record a promotion event
+    async fn record_promotion(
+        &self,
+        bundle_id: Uuid,
+        from_status: BundleStatus,
+        to_status: BundleStatus,
+        promoted_by: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let sql = r#"
+            INSERT INTO bundle_promotions (id, bundle_id, from_status, to_status, promoted_by, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#;
+
+        sqlx::query(sql)
+            .bind(id.to_string())
+            .bind(bundle_id.to_string())
+            .bind(from_status.to_string())
+            .bind(to_status.to_string())
+            .bind(promoted_by)
+            .bind(notes)
+            .bind(now.to_rfc3339())
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Update the policy count for a bundle
+    async fn update_policy_count(&self, bundle_id: Uuid) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let count_sql = "SELECT COUNT(*) as cnt FROM bundle_policies WHERE bundle_id = ?";
+        let count: i32 = sqlx::query(count_sql)
+            .bind(bundle_id.to_string())
+            .fetch_one(pool)
+            .await
+            .map(|r| r.get::<i32, _>("cnt"))?;
+
+        let update_sql = "UPDATE bundles SET policy_count = ?, updated_at = ? WHERE id = ?";
+        sqlx::query(update_sql)
+            .bind(count)
+            .bind(Utc::now().to_rfc3339())
+            .bind(bundle_id.to_string())
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Convert database row to Bundle
+    fn row_to_bundle(&self, row: &sqlx::sqlite::SqliteRow) -> Result<Bundle, DatabaseError> {
+        let id: String = row.get("id");
+        let org_id: String = row.get("org_id");
+        let status: String = row.get("status");
+        let created_at: String = row.get("created_at");
+        let updated_at: String = row.get("updated_at");
+
+        Ok(Bundle {
+            id: id
+                .parse()
+                .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
+            org_id: org_id
+                .parse()
+                .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
+            name: row.get("name"),
+            description: row.get("description"),
+            status: status.parse().unwrap_or(BundleStatus::Draft),
+            storage_key: row.get("storage_key"),
+            size_bytes: row.get("size_bytes"),
+            checksum: row.get("checksum"),
+            policy_count: row.get("policy_count"),
+            created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DatabaseConfig;
+    use tempfile::TempDir;
+
+    async fn setup_db() -> (TempDir, std::sync::Arc<Database>) {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let url = format!("sqlite:{}", db_path.display());
+
+        let config = DatabaseConfig {
+            db_type: "sqlite".to_string(),
+            url,
+            max_connections: 5,
+        };
+
+        let db = Database::new(&config).await.unwrap();
+        db.run_migrations().await.unwrap();
+        (temp_dir, std::sync::Arc::new(db))
+    }
+
+    async fn create_test_org(db: &Database) -> Uuid {
+        let pool = db.sqlite_pool().unwrap();
+        let org_id = Uuid::new_v4();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+        )
+        .bind(org_id.to_string())
+        .bind("Test Org")
+        .bind("test-org")
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+        org_id
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_bundle() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = BundleRepository::new(&db);
+
+        let input = CreateBundle {
+            name: "test-bundle".to_string(),
+            description: Some("Test bundle".to_string()),
+            policy_ids: vec![],
+        };
+
+        let bundle = repo.create(org_id, &input).await.unwrap();
+        assert_eq!(bundle.name, "test-bundle");
+        assert_eq!(bundle.status, BundleStatus::Draft);
+        assert_eq!(bundle.policy_count, 0);
+
+        let retrieved = repo.get_by_id(bundle.id).await.unwrap().unwrap();
+        assert_eq!(retrieved.name, "test-bundle");
+    }
+
+    #[tokio::test]
+    async fn test_list_bundles() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = BundleRepository::new(&db);
+
+        // Create two bundles
+        repo.create(
+            org_id,
+            &CreateBundle {
+                name: "bundle-1".to_string(),
+                description: None,
+                policy_ids: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        repo.create(
+            org_id,
+            &CreateBundle {
+                name: "bundle-2".to_string(),
+                description: None,
+                policy_ids: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        let bundles = repo.list_by_org(org_id, None).await.unwrap();
+        assert_eq!(bundles.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_bundle_status() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = BundleRepository::new(&db);
+
+        let bundle = repo
+            .create(
+                org_id,
+                &CreateBundle {
+                    name: "status-test".to_string(),
+                    description: None,
+                    policy_ids: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        // Compile the bundle
+        let updated = repo
+            .update_compilation(bundle.id, "bundles/test.rbb", 1024, "abc123", 5)
+            .await
+            .unwrap();
+
+        assert_eq!(updated.status, BundleStatus::Compiled);
+        assert_eq!(updated.storage_key, Some("bundles/test.rbb".to_string()));
+        assert_eq!(updated.policy_count, 5);
+
+        // Check promotion history
+        let history = repo.get_promotion_history(bundle.id).await.unwrap();
+        assert!(!history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_bundle() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = BundleRepository::new(&db);
+
+        let bundle = repo
+            .create(
+                org_id,
+                &CreateBundle {
+                    name: "delete-test".to_string(),
+                    description: None,
+                    policy_ids: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        repo.delete(bundle.id).await.unwrap();
+
+        let result = repo.get_by_id(bundle.id).await.unwrap();
+        assert!(result.is_none());
+    }
+}
