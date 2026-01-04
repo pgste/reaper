@@ -33,7 +33,7 @@ anyhow = "1.0"
 uuid = { version = "1.19", features = ["v4", "serde", "js"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive", "env"] }
 
 # Performance-oriented data structures
 dashmap = "6.1.0"

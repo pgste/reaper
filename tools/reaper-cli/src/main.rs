@@ -161,6 +161,20 @@ enum Commands {
         #[command(subcommand)]
         action: BundleAction,
     },
+
+    /// Management plane commands (for centralized management)
+    Management {
+        #[command(subcommand)]
+        action: ManagementAction,
+
+        /// Management server URL
+        #[arg(long, default_value = "http://localhost:3000")]
+        management_url: String,
+
+        /// API key for authentication
+        #[arg(long, env = "REAPER_MANAGEMENT_API_KEY")]
+        api_key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -271,6 +285,87 @@ enum AgentAction {
     Health,
     /// Show agent metrics
     Metrics,
+}
+
+#[derive(Subcommand)]
+enum ManagementAction {
+    /// Check management server health
+    Health,
+
+    /// List organizations
+    Orgs,
+
+    /// List policy sources in an organization
+    Sources {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+    },
+
+    /// List bundles
+    Bundles {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+
+        /// Show only promoted bundles
+        #[arg(long)]
+        promoted: bool,
+    },
+
+    /// Show bundle details
+    BundleInfo {
+        /// Bundle ID
+        id: String,
+    },
+
+    /// List agents registered with management
+    Agents {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+    },
+
+    /// Push a policy to the management server
+    Push {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+
+        /// Policy source name
+        #[arg(short, long)]
+        source: String,
+
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        file: String,
+
+        /// Policy name (defaults to filename)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Policy description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+
+    /// Create and promote a bundle
+    Promote {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+
+        /// Bundle name
+        #[arg(short, long)]
+        name: String,
+
+        /// Policy IDs to include (comma-separated)
+        #[arg(short, long)]
+        policies: String,
+
+        /// Bundle description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
 }
 
 // ============================================================================
@@ -681,6 +776,12 @@ async fn main() -> anyhow::Result<()> {
         } => handle_analyze_policy(file, check_ebpf, show_recommendations, format)?,
 
         Commands::Bundle { ref action } => handle_bundle_action(action, &cli, &client).await?,
+
+        Commands::Management {
+            ref action,
+            ref management_url,
+            ref api_key,
+        } => handle_management_action(action, management_url, api_key.as_deref(), &client).await?,
     }
 
     Ok(())
@@ -1675,6 +1776,354 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
         ))
         .send()
         .await;
+
+    Ok(())
+}
+
+// ============================================================================
+// Management Server Command Handlers
+// ============================================================================
+
+async fn handle_management_action(
+    action: &ManagementAction,
+    management_url: &str,
+    api_key: Option<&str>,
+    client: &Client,
+) -> anyhow::Result<()> {
+    // Build request with optional API key
+    let build_request = |client: &Client, url: &str| {
+        let req = client.get(url);
+        if let Some(key) = api_key {
+            req.header("X-API-Key", key)
+        } else {
+            req
+        }
+    };
+
+    let build_post = |client: &Client, url: &str| {
+        let req = client.post(url);
+        if let Some(key) = api_key {
+            req.header("X-API-Key", key)
+        } else {
+            req
+        }
+    };
+
+    match action {
+        ManagementAction::Health => {
+            println!("🏥 Checking management server health...");
+            let response = client
+                .get(format!("{}/health", management_url))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let health: Value = response.json().await?;
+                println!("✅ Management server is healthy");
+                println!(
+                    "   Service: {}",
+                    health.get("service").and_then(|v| v.as_str()).unwrap_or("reaper-management")
+                );
+                println!(
+                    "   Version: {}",
+                    health.get("version").and_then(|v| v.as_str()).unwrap_or("unknown")
+                );
+                if let Some(status) = health.get("status").and_then(|v| v.as_str()) {
+                    println!("   Status: {}", status);
+                }
+            } else {
+                println!("❌ Management server is unhealthy (status: {})", response.status());
+            }
+        }
+
+        ManagementAction::Orgs => {
+            println!("🏢 Listing organizations...");
+            let response = build_request(client, &format!("{}/api/v1/orgs", management_url))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(orgs) = result.get("organizations").and_then(|v| v.as_array()) {
+                    if orgs.is_empty() {
+                        println!("No organizations found.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬─────────┐");
+                        println!("│ ID                                   │ Name               │ Status  │");
+                        println!("├──────────────────────────────────────┼────────────────────┼─────────┤");
+                        for org in orgs {
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<7} │",
+                                org.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &org.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, org.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                org.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴─────────┘");
+                        println!("\nTotal: {} organization(s)", orgs.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list organizations: {}", error_text);
+            }
+        }
+
+        ManagementAction::Sources { org } => {
+            println!("📁 Listing policy sources for org {}...", org);
+            let response = build_request(client, &format!("{}/api/v1/orgs/{}/sources", management_url, org))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(sources) = result.get("sources").and_then(|v| v.as_array()) {
+                    if sources.is_empty() {
+                        println!("No policy sources found.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬──────────┬─────────┐");
+                        println!("│ ID                                   │ Name               │ Type     │ Status  │");
+                        println!("├──────────────────────────────────────┼────────────────────┼──────────┼─────────┤");
+                        for source in sources {
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<8} │ {:<7} │",
+                                source.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &source.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, source.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                source.get("source_type").and_then(|v| v.as_str()).unwrap_or("?"),
+                                source.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴──────────┴─────────┘");
+                        println!("\nTotal: {} source(s)", sources.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list sources: {}", error_text);
+            }
+        }
+
+        ManagementAction::Bundles { org, promoted } => {
+            println!("📦 Listing bundles for org {}...", org);
+            let url = if *promoted {
+                format!("{}/api/v1/orgs/{}/bundles?status=promoted", management_url, org)
+            } else {
+                format!("{}/api/v1/orgs/{}/bundles", management_url, org)
+            };
+            let response = build_request(client, &url).send().await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(bundles) = result.get("bundles").and_then(|v| v.as_array()) {
+                    if bundles.is_empty() {
+                        println!("No bundles found.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬──────────┬──────────┐");
+                        println!("│ ID                                   │ Name               │ Status   │ Policies │");
+                        println!("├──────────────────────────────────────┼────────────────────┼──────────┼──────────┤");
+                        for bundle in bundles {
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<8} │ {:<8} │",
+                                bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
+                                bundle.get("policy_count").and_then(|v| v.as_i64()).unwrap_or(0)
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴──────────┴──────────┘");
+                        println!("\nTotal: {} bundle(s)", bundles.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list bundles: {}", error_text);
+            }
+        }
+
+        ManagementAction::BundleInfo { id } => {
+            println!("📦 Bundle details for {}...", id);
+            let response = build_request(client, &format!("{}/api/v1/bundles/{}", management_url, id))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(bundle) = result.get("bundle") {
+                    println!("═══════════════════════════════════════════════════════");
+                    println!("📋 Bundle Metadata:");
+                    println!("   • ID: {}", bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!("   • Name: {}", bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!("   • Status: {}", bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!("   • Policies: {}", bundle.get("policy_count").and_then(|v| v.as_i64()).unwrap_or(0));
+                    if let Some(checksum) = bundle.get("checksum").and_then(|v| v.as_str()) {
+                        println!("   • Checksum: {}", checksum);
+                    }
+                    if let Some(size) = bundle.get("compiled_size_bytes").and_then(|v| v.as_i64()) {
+                        println!("   • Size: {} bytes", size);
+                    }
+                    if let Some(promoted_at) = bundle.get("promoted_at").and_then(|v| v.as_str()) {
+                        println!("   • Promoted At: {}", promoted_at);
+                    }
+                    println!("   • Created At: {}", bundle.get("created_at").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!("═══════════════════════════════════════════════════════");
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to get bundle: {}", error_text);
+            }
+        }
+
+        ManagementAction::Agents { org } => {
+            println!("🤖 Listing agents for org {}...", org);
+            let response = build_request(client, &format!("{}/api/v1/orgs/{}/agents", management_url, org))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(agents) = result.get("agents").and_then(|v| v.as_array()) {
+                    if agents.is_empty() {
+                        println!("No agents registered.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬──────────┬─────────────────────┐");
+                        println!("│ ID                                   │ Name               │ Status   │ Last Heartbeat      │");
+                        println!("├──────────────────────────────────────┼────────────────────┼──────────┼─────────────────────┤");
+                        for agent in agents {
+                            let last_hb = agent.get("last_heartbeat_at")
+                                .and_then(|v| v.as_str())
+                                .map(|s| &s[..std::cmp::min(19, s.len())])
+                                .unwrap_or("never");
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<8} │ {:<19} │",
+                                agent.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &agent.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, agent.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                agent.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
+                                last_hb
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴──────────┴─────────────────────┘");
+                        println!("\nTotal: {} agent(s)", agents.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list agents: {}", error_text);
+            }
+        }
+
+        ManagementAction::Push { org, source, file, name, description } => {
+            println!("⬆️  Pushing policy to management server...");
+
+            // Read and parse the policy file
+            if !Path::new(file).exists() {
+                anyhow::bail!("❌ Error: Policy file not found: {}", file);
+            }
+
+            let content = fs::read_to_string(file)
+                .map_err(|e| anyhow::anyhow!("❌ Failed to read policy file: {}", e))?;
+
+            // Detect language from extension
+            let ext = Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("");
+            let language = match ext {
+                "reap" => "reaper",
+                "yaml" | "yml" => "reaper",
+                "json" => "reaper",
+                "cedar" => "cedar",
+                _ => "reaper",
+            };
+
+            let policy_name = name.clone().unwrap_or_else(|| {
+                Path::new(file)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unnamed-policy".to_string())
+            });
+
+            // First, get the source ID
+            let sources_response = build_request(client, &format!("{}/api/v1/orgs/{}/sources", management_url, org))
+                .send()
+                .await?;
+
+            let sources_result: Value = sources_response.json().await?;
+            let source_id = sources_result.get("sources")
+                .and_then(|v| v.as_array())
+                .and_then(|sources| sources.iter().find(|s| s.get("name").and_then(|n| n.as_str()) == Some(source)))
+                .and_then(|s| s.get("id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("❌ Source '{}' not found in organization", source))?;
+
+            // Create the policy
+            let create_body = json!({
+                "name": policy_name,
+                "description": description.clone().unwrap_or_else(|| format!("Pushed from CLI: {}", file)),
+                "content": content,
+                "language": language
+            });
+
+            let response = build_post(client, &format!("{}/api/v1/sources/{}/policies", management_url, source_id))
+                .json(&create_body)
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(policy) = result.get("policy") {
+                    println!("✅ Policy pushed successfully!");
+                    println!("   • ID: {}", policy.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!("   • Name: {}", policy.get("name").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!("   • Version: {}", policy.get("version").and_then(|v| v.as_i64()).unwrap_or(0));
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to push policy: {}", error_text);
+            }
+        }
+
+        ManagementAction::Promote { org, name, policies, description } => {
+            println!("🚀 Creating and promoting bundle...");
+
+            // Parse policy IDs
+            let policy_ids: Vec<&str> = policies.split(',').map(|s| s.trim()).collect();
+
+            // Create bundle
+            let create_body = json!({
+                "name": name,
+                "description": description.clone().unwrap_or_else(|| format!("Bundle with {} policies", policy_ids.len())),
+                "policy_ids": policy_ids
+            });
+
+            let response = build_post(client, &format!("{}/api/v1/orgs/{}/bundles", management_url, org))
+                .json(&create_body)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await?;
+                anyhow::bail!("❌ Failed to create bundle: {}", error_text);
+            }
+
+            let result: Value = response.json().await?;
+            let bundle_id = result.get("bundle")
+                .and_then(|b| b.get("id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("❌ Failed to get bundle ID from response"))?;
+
+            println!("   ✅ Bundle created: {}", bundle_id);
+
+            // Promote the bundle
+            let promote_response = build_post(client, &format!("{}/api/v1/bundles/{}/promote", management_url, bundle_id))
+                .send()
+                .await?;
+
+            if promote_response.status().is_success() {
+                println!("   ✅ Bundle promoted successfully!");
+                println!("   📦 Agents will automatically pull this bundle");
+            } else {
+                let error_text = promote_response.text().await?;
+                println!("   ⚠️  Bundle created but promotion failed: {}", error_text);
+            }
+        }
+    }
 
     Ok(())
 }
