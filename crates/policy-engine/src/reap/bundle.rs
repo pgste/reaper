@@ -218,6 +218,7 @@ impl PolicyBundle {
             created_at: now,
             updated_at: now,
             evaluator: Some(Arc::new(evaluator) as Arc<dyn PolicyEvaluator>),
+            source_metadata: None,
         };
 
         Ok(policy)

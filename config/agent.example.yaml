@@ -1,0 +1,60 @@
+# Reaper Agent Configuration Example
+# Copy to /etc/reaper/agent.yaml or specify with --config
+
+agent:
+  # Agent name for identification
+  name: reaper-agent-001
+  # Port to listen on
+  port: 8080
+  # Address to bind to
+  bind_address: 0.0.0.0
+
+policies:
+  # Directory to load policies from on startup
+  # bootstrap_dir: /etc/reaper/policies
+  # Directory to cache deployed policies
+  # cache_dir: /var/cache/reaper/policies
+  # Watch for file changes and auto-reload
+  watch_for_changes: false
+  # Recognized policy file extensions
+  extensions:
+    - reap
+    - yaml
+    - yml
+    - json
+
+data:
+  # File to load entity data from on startup
+  # bootstrap_file: /etc/reaper/data/entities.json
+  # Directory containing entity data files
+  # bootstrap_dir: /etc/reaper/data
+  # Directory to cache synced entity data
+  # cache_dir: /var/cache/reaper/data
+
+performance:
+  # Target latency for monitoring (microseconds)
+  target_latency_microseconds: 1.0
+  # Number of worker threads (0 = auto-detect)
+  worker_threads: 0
+  # Enable SIMD optimizations
+  enable_simd: true
+
+cache:
+  # Enable decision caching
+  enabled: true
+  # Maximum cached decisions
+  capacity: 10000
+  # TTL for cached decisions (seconds, 0 = no TTL)
+  ttl_seconds: 10
+
+observability:
+  # Enable Prometheus metrics endpoint
+  enable_metrics: true
+  # Use structured JSON logging
+  json_logging: false
+  # Log level: trace, debug, info, warn, error
+  log_level: info
+  # Enable OpenTelemetry tracing
+  enable_tracing: false
+  # OpenTelemetry collector endpoint
+  # otel_endpoint: http://localhost:4317

@@ -63,6 +63,146 @@ impl std::fmt::Display for PolicyLanguage {
     }
 }
 
+/// Policy source - where the policy was loaded from
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PolicySource {
+    /// Loaded from local file on startup
+    File {
+        path: String,
+    },
+    /// Deployed via direct API call
+    Api {
+        client_id: Option<String>,
+    },
+    /// Synchronized from management server
+    SyncClient {
+        server_url: String,
+        server_version: String,
+        team: Option<String>,
+    },
+    /// Default policy created by system
+    Default,
+}
+
+impl std::fmt::Display for PolicySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PolicySource::File { path } => write!(f, "file:{}", path),
+            PolicySource::Api { client_id } => {
+                if let Some(id) = client_id {
+                    write!(f, "api:{}", id)
+                } else {
+                    write!(f, "api")
+                }
+            }
+            PolicySource::SyncClient { server_url, .. } => write!(f, "sync:{}", server_url),
+            PolicySource::Default => write!(f, "default"),
+        }
+    }
+}
+
+/// Metadata about how/when a policy was deployed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicySourceMetadata {
+    /// Where the policy came from
+    pub source: PolicySource,
+    /// When the policy was deployed to this agent
+    pub deployed_at: chrono::DateTime<chrono::Utc>,
+    /// Who/what deployed the policy
+    pub deployed_by: Option<String>,
+    /// Version from the source (server version, file mtime, etc.)
+    pub source_version: Option<String>,
+    /// SHA-256 checksum of the policy content
+    pub checksum: Option<String>,
+}
+
+impl PolicySourceMetadata {
+    /// Create metadata for a file-based policy
+    pub fn from_file(path: impl Into<String>) -> Self {
+        Self {
+            source: PolicySource::File { path: path.into() },
+            deployed_at: chrono::Utc::now(),
+            deployed_by: None,
+            source_version: None,
+            checksum: None,
+        }
+    }
+
+    /// Create metadata for an API-deployed policy
+    pub fn from_api(client_id: Option<String>) -> Self {
+        Self {
+            source: PolicySource::Api { client_id },
+            deployed_at: chrono::Utc::now(),
+            deployed_by: None,
+            source_version: None,
+            checksum: None,
+        }
+    }
+
+    /// Create metadata for a sync client deployment
+    pub fn from_sync_client(
+        server_url: impl Into<String>,
+        server_version: impl Into<String>,
+        team: Option<String>,
+    ) -> Self {
+        Self {
+            source: PolicySource::SyncClient {
+                server_url: server_url.into(),
+                server_version: server_version.into(),
+                team,
+            },
+            deployed_at: chrono::Utc::now(),
+            deployed_by: Some("sync-client".to_string()),
+            source_version: None,
+            checksum: None,
+        }
+    }
+
+    /// Create metadata for a default policy
+    pub fn default_policy() -> Self {
+        Self {
+            source: PolicySource::Default,
+            deployed_at: chrono::Utc::now(),
+            deployed_by: Some("system".to_string()),
+            source_version: None,
+            checksum: None,
+        }
+    }
+
+    /// Set the deployed_by field
+    pub fn with_deployed_by(mut self, deployed_by: impl Into<String>) -> Self {
+        self.deployed_by = Some(deployed_by.into());
+        self
+    }
+
+    /// Set the source version
+    pub fn with_source_version(mut self, version: impl Into<String>) -> Self {
+        self.source_version = Some(version.into());
+        self
+    }
+
+    /// Set the checksum
+    pub fn with_checksum(mut self, checksum: impl Into<String>) -> Self {
+        self.checksum = Some(checksum.into());
+        self
+    }
+
+    /// Calculate and set checksum from content
+    pub fn compute_checksum(&mut self, content: &str) {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let result = hasher.finalize();
+        self.checksum = Some(hex::encode(result));
+    }
+}
+
+impl Default for PolicySourceMetadata {
+    fn default() -> Self {
+        Self::default_policy()
+    }
+}
+
 /// Default priority for policies (lower = higher priority)
 fn default_priority() -> u32 {
     1000
@@ -106,6 +246,10 @@ pub struct EnhancedPolicy {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 
+    /// Source tracking - where/how the policy was deployed
+    #[serde(default)]
+    pub source_metadata: Option<PolicySourceMetadata>,
+
     /// Cached evaluator (not serialized)
     #[serde(skip)]
     pub evaluator: Option<Arc<dyn PolicyEvaluator>>,
@@ -133,6 +277,7 @@ impl EnhancedPolicy {
             created_at: now,
             updated_at: now,
             evaluator: Some(evaluator),
+            source_metadata: None,
         }
     }
 
@@ -168,6 +313,7 @@ impl EnhancedPolicy {
             created_at: now,
             updated_at: now,
             evaluator: Some(evaluator),
+            source_metadata: None,
         })
     }
 
@@ -193,6 +339,7 @@ impl EnhancedPolicy {
             created_at: now,
             updated_at: now,
             evaluator: None,
+            source_metadata: None,
         };
 
         // Build and validate evaluator
@@ -333,6 +480,73 @@ impl EnhancedPolicy {
         } else {
             self.disable_compilation();
         }
+    }
+
+    /// Set the source metadata for this policy
+    pub fn set_source_metadata(&mut self, metadata: PolicySourceMetadata) {
+        self.source_metadata = Some(metadata);
+    }
+
+    /// Get the source metadata for this policy
+    pub fn get_source_metadata(&self) -> Option<&PolicySourceMetadata> {
+        self.source_metadata.as_ref()
+    }
+
+    /// Create source metadata for a file-based policy
+    pub fn set_file_source(&mut self, path: &str, deployed_by: Option<String>) {
+        use sha2::{Digest, Sha256};
+        let checksum = hex::encode(Sha256::digest(self.content.as_bytes()));
+        self.source_metadata = Some(PolicySourceMetadata {
+            source: PolicySource::File {
+                path: path.to_string(),
+            },
+            deployed_at: chrono::Utc::now(),
+            deployed_by,
+            source_version: Some(format!("v{}", self.version)),
+            checksum: Some(checksum),
+        });
+    }
+
+    /// Create source metadata for an API-deployed policy
+    pub fn set_api_source(&mut self, client_id: Option<String>, deployed_by: Option<String>) {
+        use sha2::{Digest, Sha256};
+        let checksum = hex::encode(Sha256::digest(self.content.as_bytes()));
+        self.source_metadata = Some(PolicySourceMetadata {
+            source: PolicySource::Api { client_id },
+            deployed_at: chrono::Utc::now(),
+            deployed_by,
+            source_version: Some(format!("v{}", self.version)),
+            checksum: Some(checksum),
+        });
+    }
+
+    /// Create source metadata for a sync-client deployed policy
+    pub fn set_sync_source(
+        &mut self,
+        server_url: &str,
+        server_version: &str,
+        team: Option<String>,
+        deployed_by: Option<String>,
+    ) {
+        use sha2::{Digest, Sha256};
+        let checksum = hex::encode(Sha256::digest(self.content.as_bytes()));
+        self.source_metadata = Some(PolicySourceMetadata {
+            source: PolicySource::SyncClient {
+                server_url: server_url.to_string(),
+                server_version: server_version.to_string(),
+                team,
+            },
+            deployed_at: chrono::Utc::now(),
+            deployed_by,
+            source_version: Some(format!("v{}", self.version)),
+            checksum: Some(checksum),
+        });
+    }
+
+    /// Compute checksum of policy content
+    pub fn compute_checksum(&self) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(self.content.as_bytes()))
     }
 }
 

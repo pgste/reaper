@@ -8,6 +8,8 @@ members = [
     "crates/reaper-sdk",
     "services/reaper-agent",
     "services/reaper-platform",
+    "services/reaper-sync",
+    "services/reaper-management",
     "tools/reaper-cli",
     "crates/reaper-ebpf",
 ]

@@ -1,9 +1,11 @@
 pub mod agent;
+pub mod config;
 pub mod error;
 pub mod platform;
 pub mod policy;
 
 pub use agent::{Agent, AgentConfig, AgentId, AgentStatus};
+pub use config::{ConfigError, ReaperAgentConfig};
 pub use error::{ReaperError, Result};
 pub use platform::{AgentRegistry, Platform, PlatformConfig};
 pub use policy::{Policy, PolicyEngine, PolicyId, PolicyVersion};

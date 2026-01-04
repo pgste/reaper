@@ -1,0 +1,74 @@
+# Reaper Sync Client Configuration Example
+# Copy to /etc/reaper/sync.yaml or specify with --config
+
+sync:
+  # Management server configuration
+  server:
+    # URL of the Reaper Platform management server
+    url: http://localhost:8081
+    # API version to use
+    api_version: v1
+    # HTTP timeout in seconds
+    timeout_seconds: 30
+
+  # Authentication configuration
+  auth:
+    # Authentication type: none, token, mtls
+    auth_type: none
+    # Bearer token for token auth (or use REAPER_AUTH_TOKEN env var)
+    # token: your-api-token
+    # Path to token file (alternative to inline token)
+    # token_file: /etc/reaper/token
+    # For mTLS authentication:
+    # cert_file: /etc/reaper/certs/client.crt
+    # key_file: /etc/reaper/certs/client.key
+    # ca_file: /etc/reaper/certs/ca.crt
+
+  # Scope configuration - which policies to sync
+  scope:
+    # Teams to sync policies for (empty = all teams)
+    teams: []
+    # Environments to include (empty = all)
+    environments: []
+    # Regions to include (empty = all)
+    regions: []
+    # Specific policy IDs to sync (empty = all in scope)
+    policy_ids: []
+
+  # Sync behavior configuration
+  behavior:
+    # Sync mode: active (push changes), passive (monitor only)
+    mode: active
+    # Poll interval in seconds
+    poll_interval_seconds: 30
+    # Maximum policies to fetch per batch
+    batch_size: 100
+    # Maximum retry attempts on failure
+    retry_max_attempts: 3
+    # Backoff between retries in seconds
+    retry_backoff_seconds: 5
+    # Sync immediately on startup
+    sync_on_start: true
+
+  # Target agent configuration
+  agent:
+    # URL of the Reaper Agent to deploy to
+    url: http://localhost:8080
+    # Health check interval in seconds
+    health_check_interval_seconds: 10
+    # HTTP timeout for agent calls in seconds
+    timeout_seconds: 10
+
+  # Local policy cache configuration
+  cache:
+    # Enable local caching of synced policies
+    enabled: false
+    # Cache directory path
+    # dir: /var/cache/reaper/sync
+
+  # Metrics configuration
+  metrics:
+    # Enable metrics collection
+    enabled: false
+    # Prometheus metrics endpoint port
+    # port: 9090
