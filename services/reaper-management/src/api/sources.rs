@@ -32,10 +32,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/orgs/{org}/sources/{source_id}",
             get(get_source).put(update_source).delete(delete_source),
         )
-        .route(
-            "/orgs/{org}/sources/{source_id}/sync",
-            post(trigger_sync),
-        )
+        .route("/orgs/{org}/sources/{source_id}/sync", post(trigger_sync))
 }
 
 /// Policy source summary for API responses
@@ -190,7 +187,9 @@ async fn create_source(
     Json(request): Json<CreateSourceRequest>,
 ) -> ApiResult<(StatusCode, Json<SourceSummary>)> {
     if !user.has_permission(Scope::PolicyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing policy:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing policy:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -244,7 +243,9 @@ async fn update_source(
     Json(request): Json<UpdateSourceRequest>,
 ) -> ApiResult<Json<SourceSummary>> {
     if !user.has_permission(Scope::PolicyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing policy:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing policy:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -299,7 +300,9 @@ async fn delete_source(
     Path((org, source_id)): Path<(String, Uuid)>,
 ) -> ApiResult<StatusCode> {
     if !user.has_permission(Scope::PolicyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing policy:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing policy:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -335,7 +338,9 @@ async fn trigger_sync(
     Path((org, source_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<SyncResponse>> {
     if !user.has_permission(Scope::PolicyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing policy:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing policy:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);

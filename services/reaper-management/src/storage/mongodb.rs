@@ -22,11 +22,7 @@ pub struct MongoDbStorage {
 
 impl MongoDbStorage {
     /// Create a new MongoDB storage
-    pub async fn new(
-        uri: &str,
-        database: &str,
-        collection: &str,
-    ) -> Result<Self, StorageError> {
+    pub async fn new(uri: &str, database: &str, collection: &str) -> Result<Self, StorageError> {
         let client_options = ClientOptions::parse(uri)
             .await
             .map_err(|e| StorageError::Config(format!("MongoDB connection failed: {}", e)))?;
@@ -144,9 +140,9 @@ impl BundleStorage for MongoDbStorage {
             .await
             .map_err(|e| StorageError::Operation(format!("MongoDB cursor error: {}", e)))?
         {
-            let doc = cursor
-                .deserialize_current()
-                .map_err(|e| StorageError::Operation(format!("MongoDB deserialize error: {}", e)))?;
+            let doc = cursor.deserialize_current().map_err(|e| {
+                StorageError::Operation(format!("MongoDB deserialize error: {}", e))
+            })?;
 
             bundles.push(BundleInfo {
                 key: doc.key,

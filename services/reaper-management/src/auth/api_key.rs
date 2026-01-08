@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::db::{Database, DatabaseError};
 use super::scopes::Scope;
+use crate::db::{Database, DatabaseError};
 
 /// API key prefix (for identification)
 pub const API_KEY_PREFIX: &str = "rpr_";
@@ -300,8 +300,7 @@ impl<'a> ApiKeyRepository<'a> {
             .map_err(|e| DatabaseError::Config(format!("Invalid org UUID: {}", e)))?;
 
         let scopes_str: String = row.get("scopes");
-        let scopes: Vec<String> =
-            serde_json::from_str(&scopes_str).unwrap_or_else(|_| vec![]);
+        let scopes: Vec<String> = serde_json::from_str(&scopes_str).unwrap_or_else(|_| vec![]);
 
         let expires_at: Option<String> = row.get("expires_at");
         let expires_at = expires_at
@@ -385,7 +384,9 @@ mod tests {
 
     #[test]
     fn test_key_format_validation() {
-        assert!(ApiKeyGenerator::validate_format("rpr_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
+        assert!(ApiKeyGenerator::validate_format(
+            "rpr_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
         assert!(!ApiKeyGenerator::validate_format("invalid"));
         assert!(!ApiKeyGenerator::validate_format("rpr_short"));
     }

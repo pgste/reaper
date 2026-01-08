@@ -94,10 +94,7 @@ async fn main() -> anyhow::Result<()> {
     let app = build_router(state);
 
     // Start server
-    let addr = SocketAddr::new(
-        config.server.bind_address.parse()?,
-        config.server.port,
-    );
+    let addr = SocketAddr::new(config.server.bind_address.parse()?, config.server.port);
 
     info!("Starting Reaper Management Server on {}", addr);
 

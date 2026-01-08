@@ -21,7 +21,11 @@ impl<'a> BundleRepository<'a> {
     }
 
     /// Create a new bundle
-    pub async fn create(&self, org_id: Uuid, input: &CreateBundle) -> Result<Bundle, DatabaseError> {
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        input: &CreateBundle,
+    ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -320,10 +324,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = "DELETE FROM bundles WHERE id = ?";
 
-        let result = sqlx::query(sql)
-            .bind(id.to_string())
-            .execute(pool)
-            .await?;
+        let result = sqlx::query(sql).bind(id.to_string()).execute(pool).await?;
 
         if result.rows_affected() == 0 {
             return Err(DatabaseError::NotFound(format!("Bundle {} not found", id)));
@@ -381,7 +382,11 @@ impl<'a> BundleRepository<'a> {
     }
 
     /// Remove a policy from a bundle
-    pub async fn remove_policy(&self, bundle_id: Uuid, policy_id: Uuid) -> Result<(), DatabaseError> {
+    pub async fn remove_policy(
+        &self,
+        bundle_id: Uuid,
+        policy_id: Uuid,
+    ) -> Result<(), DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -475,9 +480,7 @@ impl<'a> BundleRepository<'a> {
                         .get::<String, _>("bundle_id")
                         .parse()
                         .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
-                    from_status: from_status
-                        .parse()
-                        .unwrap_or(BundleStatus::Draft),
+                    from_status: from_status.parse().unwrap_or(BundleStatus::Draft),
                     to_status: to_status.parse().unwrap_or(BundleStatus::Draft),
                     promoted_by: r.get("promoted_by"),
                     promoted_at: chrono::DateTime::parse_from_rfc3339(&created_at)

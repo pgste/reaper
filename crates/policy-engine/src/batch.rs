@@ -185,7 +185,10 @@ where
     }
 
     /// Evaluate a batch and return statistics
-    pub fn evaluate_with_stats(&self, requests: &[PolicyRequest]) -> (Vec<BatchResult>, BatchStats) {
+    pub fn evaluate_with_stats(
+        &self,
+        requests: &[PolicyRequest],
+    ) -> (Vec<BatchResult>, BatchStats) {
         let start = Instant::now();
         let results = self.evaluate_all(requests);
         let total_duration = start.elapsed();

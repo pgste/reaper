@@ -342,7 +342,7 @@ async fn then_decision_should_be(world: &mut PolicyWorld, expected_decision: Str
     assert_eq!(actual_decision, expected_decision);
 }
 
-#[then(regex = r"^the evaluation should complete in under (d+) nanoseconds$")]
+#[then(regex = r"^the evaluation should complete in under (\d+) nanoseconds$")]
 async fn then_evaluation_under_nanoseconds(world: &mut PolicyWorld, max_ns: u64) {
     let evaluation_time = world
         .evaluation_time_ns
@@ -369,7 +369,7 @@ async fn then_response_includes_timing(world: &mut PolicyWorld) {
 }
 
 // Policy versioning steps
-#[given(regex = r#"^a policy named "([^"]*)" exists with version (d+)$"#)]
+#[given(regex = r#"^a policy named "([^"]*)" exists with version (\d+)$"#)]
 async fn given_policy_exists_with_version(world: &mut PolicyWorld, name: String, version: u64) {
     when_create_policy(world, name, "allow".to_string(), "*".to_string()).await;
     assert_eq!(world.policy_version.unwrap(), version);
@@ -412,7 +412,7 @@ async fn when_update_policy_rules(world: &mut PolicyWorld) {
     }
 }
 
-#[then(regex = r"^the policy version should increment to (d+)$")]
+#[then(regex = r"^the policy version should increment to (\d+)$")]
 async fn then_policy_version_increments(world: &mut PolicyWorld, expected_version: u64) {
     assert_eq!(world.policy_version.unwrap(), expected_version);
 }

@@ -2,6 +2,7 @@
 //!
 //! Client for communicating with the Reaper management server (platform)
 //! to fetch policies and entity data.
+#![allow(dead_code)]
 
 use crate::config::SyncConfig;
 use reqwest::{header, Client};
@@ -131,10 +132,7 @@ impl ServerClient {
     }
 
     /// Add authentication headers to a request
-    fn add_auth_headers(
-        &self,
-        request: reqwest::RequestBuilder,
-    ) -> reqwest::RequestBuilder {
+    fn add_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.auth_token {
             Some(token) => request.header(header::AUTHORIZATION, format!("Bearer {}", token)),
             None => request,
@@ -205,7 +203,10 @@ impl ServerClient {
         }
 
         let policy: PolicyDetail = response.json().await?;
-        debug!("Received policy: {} (version {})", policy.name, policy.version);
+        debug!(
+            "Received policy: {} (version {})",
+            policy.name, policy.version
+        );
 
         Ok(policy)
     }

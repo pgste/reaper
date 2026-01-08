@@ -48,8 +48,8 @@ make bdd
 cargo test --workspace --test '*bdd*'
 
 # Run specific BDD test file
-cargo test --test policy_bdd_tests
 cargo test --test gherkin_tests
+cargo test --test platform_bdd_tests
 
 # Run benchmarks
 make bench
@@ -65,7 +65,7 @@ cargo test --lib <test_name>
 cargo test -p policy-engine --lib <test_name>
 
 # Run a specific BDD scenario
-cargo test --test policy_bdd_tests -- --name "scenario_name"
+cargo test --test gherkin_tests -- --name "scenario_name"
 ```
 
 ### Code Quality
@@ -102,25 +102,36 @@ make release VERSION=major
 ```
 reaper/
 ├── crates/
-│   ├── reaper-core/        # Core types, traits (95 lines)
-│   ├── policy-engine/      # Policy evaluation engine (1200+ lines)
+│   ├── reaper-core/        # Core types, traits
+│   ├── policy-engine/      # Policy evaluation engine
 │   │   ├── src/
-│   │   │   ├── engine.rs   # PolicyEngine - lock-free store (500 lines)
+│   │   │   ├── engine.rs   # PolicyEngine - lock-free store
 │   │   │   ├── evaluators/ # SimplePolicyEvaluator, CedarPolicyEvaluator, ReaperDSLEvaluator
 │   │   │   ├── data/       # DataStore - multi-index entity storage
 │   │   │   ├── reap/       # ReaperPolicy - format support (.reap/.yaml/.json)
 │   │   │   └── gherkin/    # Cucumber/Gherkin integration
 │   ├── reaper-sdk/         # Client SDK (HTTP + future UDP support)
-│   ├── reaper-ebpf/        # eBPF kernel integration (experimental)
-│   ├── message-queue/      # Async messaging (stub)
-│   └── metrics/            # Performance monitoring (stub)
+│   └── reaper-ebpf/        # eBPF kernel integration (experimental)
 ├── services/
-│   ├── reaper-agent/       # Agent service (399 lines)
-│   └── reaper-platform/    # Platform service (620 lines)
+│   ├── reaper-agent/       # Agent service - enforcement layer
+│   ├── reaper-platform/    # Platform service - management layer
+│   ├── reaper-management/  # Multi-tenant management server
+│   └── reaper-sync/        # Policy synchronization client
 ├── tools/
-│   └── reaper-cli/         # CLI management tool (150+ lines)
-└── benchmarks/
-    └── reaper-vs-opa/      # Reaper vs OPA comparison benchmark
+│   └── reaper-cli/         # CLI management tool
+├── deploy/
+│   ├── kubernetes/         # Raw K8s manifests
+│   └── helm/reaper/        # Helm chart
+├── docs/                   # Organized documentation
+│   ├── getting-started/
+│   ├── concepts/
+│   ├── architecture/
+│   ├── deployment/
+│   ├── performance/
+│   └── archive/            # Historical development notes
+├── benchmarks/
+│   └── reaper-vs-opa/      # Reaper vs OPA comparison benchmark
+└── deprecated/             # Deprecated code (message-queue stub)
 ```
 
 ### Core Components
@@ -243,10 +254,7 @@ Platform creates/updates policy
 
 ### Test Files by Component
 - `crates/reaper-core/tests/reaper_bdd_tests.rs` - Core BDD tests
-- `crates/policy-engine/tests/policy_bdd_tests.rs` - Policy engine BDD
 - `crates/policy-engine/tests/gherkin_tests.rs` - Full Gherkin/Cucumber integration
-- `crates/message-queue/tests/message_queue_bdd_tests.rs` - Async messaging tests
-- `services/reaper-agent/tests/agent_bdd_tests.rs` - Agent BDD tests
 - `services/reaper-platform/tests/platform_bdd_tests.rs` - Platform BDD tests
 
 ### Gherkin Feature Files
@@ -410,9 +418,9 @@ When adding a new policy language:
 - The workspace uses Rust 2021 edition
 - All crates share dependencies via workspace.dependencies in root Cargo.toml
 - BDD tests use `harness = false` in Cargo.toml [[test]] sections
-- message-queue and metrics crates are currently stubs for future functionality
-- Agent management in Platform is a placeholder for full implementation
-- Policy versioning is basic - expansion planned
+- Deprecated stubs (message-queue) are in `deprecated/` folder
+- Agent observability uses Prometheus + OpenTelemetry directly
+- eBPF integration is experimental but functional
 
 ## Architecture Evolution Plan
 

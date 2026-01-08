@@ -18,6 +18,7 @@ pub enum SyncError {
     #[error("Agent error: {0}")]
     Agent(#[from] AgentClientError),
     #[error("Sync failed: {0}")]
+    #[allow(dead_code)]
     SyncFailed(String),
 }
 
@@ -261,7 +262,11 @@ impl SyncEngine {
         info!("Syncing {} entities to agent", entities.len());
 
         // Sync to agent
-        match self.agent_client.sync_data(entities.clone(), replace_all).await {
+        match self
+            .agent_client
+            .sync_data(entities.clone(), replace_all)
+            .await
+        {
             Ok(response) => {
                 let mut result = SyncResult::success(0, 0);
                 result.entities_synced = response.inserted;

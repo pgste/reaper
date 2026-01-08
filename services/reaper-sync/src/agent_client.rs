@@ -2,6 +2,7 @@
 //!
 //! Client for communicating with the Reaper Agent to deploy policies
 //! and sync entity data.
+#![allow(dead_code)]
 
 use crate::config::SyncConfig;
 use crate::server_client::PolicyDetail;
@@ -153,12 +154,7 @@ impl AgentClient {
             }),
         };
 
-        let response = self
-            .http_client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.http_client.post(&url).json(&request).send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -194,10 +190,7 @@ impl AgentClient {
         entities: Vec<serde_json::Value>,
         replace_all: bool,
     ) -> Result<SyncDataResponse, AgentClientError> {
-        let url = format!(
-            "{}/api/v1/data/sync",
-            self.agent_url.trim_end_matches('/')
-        );
+        let url = format!("{}/api/v1/data/sync", self.agent_url.trim_end_matches('/'));
 
         debug!(
             "Syncing {} entities to agent (replace_all={})",
@@ -251,10 +244,7 @@ impl AgentClient {
     /// List policies currently deployed on the agent
     #[instrument(skip(self))]
     pub async fn list_policies(&self) -> Result<AgentPolicyListResponse, AgentClientError> {
-        let url = format!(
-            "{}/api/v1/policies",
-            self.agent_url.trim_end_matches('/')
-        );
+        let url = format!("{}/api/v1/policies", self.agent_url.trim_end_matches('/'));
 
         let response = self.http_client.get(&url).send().await?;
 
@@ -270,7 +260,10 @@ impl AgentClient {
 
         let list_response: AgentPolicyListResponse = response.json().await?;
 
-        debug!("Agent has {} policies deployed", list_response.policies.len());
+        debug!(
+            "Agent has {} policies deployed",
+            list_response.policies.len()
+        );
 
         Ok(list_response)
     }
@@ -284,10 +277,16 @@ impl AgentClient {
                     return true;
                 }
                 Ok(false) => {
-                    debug!("Agent health check returned false, attempt {}/{}", attempt, max_attempts);
+                    debug!(
+                        "Agent health check returned false, attempt {}/{}",
+                        attempt, max_attempts
+                    );
                 }
                 Err(e) => {
-                    debug!("Agent health check failed: {}, attempt {}/{}", e, attempt, max_attempts);
+                    debug!(
+                        "Agent health check failed: {}, attempt {}/{}",
+                        e, attempt, max_attempts
+                    );
                 }
             }
 

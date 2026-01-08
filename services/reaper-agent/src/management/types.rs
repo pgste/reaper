@@ -1,4 +1,5 @@
 //! Types for management plane communication
+#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -179,7 +179,7 @@ async fn test_e2e_organization_lifecycle() {
     skip_if_no_services!();
 
     let client = TestClient::new();
-    let slug = format!("e2e-org-{}", Uuid::new_v4().to_string()[..8].to_string());
+    let slug = format!("e2e-org-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization
     let response = client
@@ -240,10 +240,7 @@ async fn test_e2e_full_policy_deployment() {
     skip_if_no_services!();
 
     let client = TestClient::new();
-    let slug = format!(
-        "e2e-deploy-{}",
-        Uuid::new_v4().to_string()[..8].to_string()
-    );
+    let slug = format!("e2e-deploy-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Step 1: Create organization
     let response = client
@@ -294,7 +291,10 @@ async fn test_e2e_full_policy_deployment() {
 
     // Step 4: Compile bundle
     let response = client
-        .management_post(&format!("/orgs/{}/bundles/{}/compile", slug, bundle_id), json!({}))
+        .management_post(
+            &format!("/orgs/{}/bundles/{}/compile", slug, bundle_id),
+            json!({}),
+        )
         .await
         .unwrap();
     assert!(response.status().is_success());
@@ -303,7 +303,10 @@ async fn test_e2e_full_policy_deployment() {
 
     // Step 5: Stage bundle
     let response = client
-        .management_post(&format!("/orgs/{}/bundles/{}/stage", slug, bundle_id), json!({}))
+        .management_post(
+            &format!("/orgs/{}/bundles/{}/stage", slug, bundle_id),
+            json!({}),
+        )
         .await
         .unwrap();
     assert!(response.status().is_success());
@@ -357,7 +360,7 @@ async fn test_e2e_agent_registration_flow() {
     skip_if_no_services!();
 
     let client = TestClient::new();
-    let slug = format!("e2e-agent-{}", Uuid::new_v4().to_string()[..8].to_string());
+    let slug = format!("e2e-agent-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization
     let response = client
@@ -387,9 +390,7 @@ async fn test_e2e_agent_registration_flow() {
     assert!(response.status().is_success() || response.status().as_u16() == 401);
 
     // Cleanup
-    let _ = client
-        .management_delete(&format!("/orgs/{}", org_id))
-        .await;
+    let _ = client.management_delete(&format!("/orgs/{}", org_id)).await;
 }
 
 // =============================================================================
@@ -401,10 +402,7 @@ async fn test_e2e_policy_source_management() {
     skip_if_no_services!();
 
     let client = TestClient::new();
-    let slug = format!(
-        "e2e-source-{}",
-        Uuid::new_v4().to_string()[..8].to_string()
-    );
+    let slug = format!("e2e-source-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization
     let response = client
@@ -430,9 +428,7 @@ async fn test_e2e_policy_source_management() {
     assert!(response.status().is_success() || response.status().as_u16() == 401);
 
     // Cleanup
-    let _ = client
-        .management_delete(&format!("/orgs/{}", org_id))
-        .await;
+    let _ = client.management_delete(&format!("/orgs/{}", org_id)).await;
 }
 
 // =============================================================================
@@ -487,10 +483,7 @@ async fn test_e2e_events_endpoint() {
     skip_if_no_services!();
 
     let test_client = TestClient::new();
-    let slug = format!(
-        "e2e-events-{}",
-        Uuid::new_v4().to_string()[..8].to_string()
-    );
+    let slug = format!("e2e-events-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization for events test
     let response = test_client
@@ -561,7 +554,7 @@ async fn test_e2e_error_handling() {
 async fn test_e2e_concurrent_requests() {
     skip_if_no_services!();
 
-    let client = TestClient::new();
+    let _client = TestClient::new();
 
     // Send multiple health checks concurrently
     let futures: Vec<_> = (0..10)

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Main configuration structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -22,20 +22,6 @@ pub struct Config {
     pub bundles: BundlesConfig,
     #[serde(default)]
     pub events: EventsConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            database: DatabaseConfig::default(),
-            storage: StorageConfig::default(),
-            auth: AuthConfig::default(),
-            sources: SourcesConfig::default(),
-            bundles: BundlesConfig::default(),
-            events: EventsConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -268,21 +254,12 @@ fn default_jwt_expiry_hours() -> u64 {
 }
 
 /// Policy sources configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SourcesConfig {
     #[serde(default)]
     pub git: GitSourceConfig,
     #[serde(default)]
     pub api: ApiSourceConfig,
-}
-
-impl Default for SourcesConfig {
-    fn default() -> Self {
-        Self {
-            git: GitSourceConfig::default(),
-            api: ApiSourceConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

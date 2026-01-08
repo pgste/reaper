@@ -162,8 +162,14 @@ mod tests {
 
     #[test]
     fn test_agent_status_parsing() {
-        assert_eq!("active".parse::<AgentStatus>().unwrap(), AgentStatus::Active);
-        assert_eq!("inactive".parse::<AgentStatus>().unwrap(), AgentStatus::Inactive);
+        assert_eq!(
+            "active".parse::<AgentStatus>().unwrap(),
+            AgentStatus::Active
+        );
+        assert_eq!(
+            "inactive".parse::<AgentStatus>().unwrap(),
+            AgentStatus::Inactive
+        );
         assert!("unknown".parse::<AgentStatus>().is_err());
     }
 

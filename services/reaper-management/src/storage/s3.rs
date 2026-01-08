@@ -30,7 +30,10 @@ impl S3Storage {
 
         let client = Client::new(&config);
 
-        info!("Initialized S3 storage: bucket={}, region={}", bucket, region);
+        info!(
+            "Initialized S3 storage: bucket={}, region={}",
+            bucket, region
+        );
 
         Ok(Self {
             client,
@@ -89,7 +92,9 @@ impl BundleStorage for S3Storage {
             .put_object()
             .bucket(&self.bucket)
             .key(&metadata_key)
-            .body(aws_sdk_s3::primitives::ByteStream::from(metadata_json.into_bytes()))
+            .body(aws_sdk_s3::primitives::ByteStream::from(
+                metadata_json.into_bytes(),
+            ))
             .content_type("application/json")
             .send()
             .await
@@ -201,7 +206,10 @@ impl BundleStorage for S3Storage {
             (None, None) => String::new(),
         };
 
-        debug!("Listing bundles from S3: s3://{}/{}", self.bucket, search_prefix);
+        debug!(
+            "Listing bundles from S3: s3://{}/{}",
+            self.bucket, search_prefix
+        );
 
         let mut bundles = Vec::new();
         let mut continuation_token: Option<String> = None;

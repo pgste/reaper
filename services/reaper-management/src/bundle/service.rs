@@ -179,7 +179,10 @@ impl BundleService {
         // Get policy versions
         let mut policy_versions = Vec::new();
         for bp in &bundle_policies {
-            if let Some(pv) = policy_repo.get_version(bp.policy_id, bp.policy_version).await? {
+            if let Some(pv) = policy_repo
+                .get_version(bp.policy_id, bp.policy_version)
+                .await?
+            {
                 policy_versions.push(pv);
             }
         }
@@ -237,7 +240,12 @@ impl BundleService {
 
         let repo = BundleRepository::new(&self.db);
         let updated = repo
-            .update_status(bundle_id, BundleStatus::Staged, None, Some("Staged for testing"))
+            .update_status(
+                bundle_id,
+                BundleStatus::Staged,
+                None,
+                Some("Staged for testing"),
+            )
             .await?;
 
         info!(bundle_id = %bundle_id, "Bundle staged");
@@ -302,7 +310,11 @@ impl BundleService {
     }
 
     /// Deprecate a bundle
-    pub async fn deprecate(&self, bundle_id: Uuid, notes: Option<&str>) -> Result<Bundle, BundleError> {
+    pub async fn deprecate(
+        &self,
+        bundle_id: Uuid,
+        notes: Option<&str>,
+    ) -> Result<Bundle, BundleError> {
         let bundle = self.get(bundle_id).await?;
 
         if !bundle.can_deprecate() {
@@ -330,11 +342,9 @@ impl BundleService {
             .as_ref()
             .ok_or_else(|| BundleError::Validation("Bundle not compiled".to_string()))?;
 
-        let stored = self
-            .storage
-            .get(storage_key)
-            .await?
-            .ok_or_else(|| BundleError::NotFound(format!("Bundle data not found: {}", storage_key)))?;
+        let stored = self.storage.get(storage_key).await?.ok_or_else(|| {
+            BundleError::NotFound(format!("Bundle data not found: {}", storage_key))
+        })?;
 
         debug!(
             bundle_id = %bundle_id,
@@ -369,7 +379,8 @@ mod tests {
         let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();
 
-        let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap()) as Arc<dyn BundleStorage>;
+        let storage =
+            Arc::new(FilesystemStorage::new(&storage_path).unwrap()) as Arc<dyn BundleStorage>;
 
         (temp_dir, Arc::new(db), storage)
     }

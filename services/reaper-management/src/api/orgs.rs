@@ -20,8 +20,8 @@ use crate::{
     state::AppState,
 };
 
-use super::teams;
 use super::policies;
+use super::teams;
 
 /// Build organization routes
 pub fn routes() -> Router<Arc<AppState>> {
@@ -210,7 +210,8 @@ fn is_valid_slug(slug: &str) -> bool {
         return false;
     }
 
-    slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    slug.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !slug.starts_with('-')
         && !slug.ends_with('-')
 }

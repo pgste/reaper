@@ -88,7 +88,9 @@ pub fn get_or_compile(pattern: &str) -> Option<Regex> {
 /// * `false` - Pattern is invalid or doesn't match
 #[inline]
 pub fn matches(pattern: &str, text: &str) -> bool {
-    get_or_compile(pattern).map(|re| re.is_match(text)).unwrap_or(false)
+    get_or_compile(pattern)
+        .map(|re| re.is_match(text))
+        .unwrap_or(false)
 }
 
 /// Pre-warm the thread-local cache with patterns.
@@ -179,8 +181,9 @@ pub fn cache_stats() -> CacheStats {
 
         // Rough estimate: each Regex is ~200-500 bytes depending on pattern
         // Plus the string key (~24 bytes + string content)
-        let estimated_memory_bytes = cache.iter()
-            .map(|(k, _)| k.len() + 24 + 300)  // key + overhead + regex estimate
+        let estimated_memory_bytes = cache
+            .keys()
+            .map(|k| k.len() + 24 + 300) // key + overhead + regex estimate
             .sum();
 
         CacheStats {

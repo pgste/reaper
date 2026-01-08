@@ -127,7 +127,8 @@ mod tests {
 
         let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();
-        let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap()) as Arc<dyn BundleStorage>;
+        let storage =
+            Arc::new(FilesystemStorage::new(&storage_path).unwrap()) as Arc<dyn BundleStorage>;
         let state = AppState::new(Arc::new(db), Config::default(), storage);
 
         let mut rx = state.subscribe_events();

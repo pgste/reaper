@@ -211,10 +211,10 @@ impl SyncConfig {
 
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self, ConfigError> {
-        let server_url =
-            std::env::var("REAPER_SERVER_URL").unwrap_or_else(|_| "http://localhost:8081".to_string());
-        let agent_url =
-            std::env::var("REAPER_AGENT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let server_url = std::env::var("REAPER_SERVER_URL")
+            .unwrap_or_else(|_| "http://localhost:8081".to_string());
+        let agent_url = std::env::var("REAPER_AGENT_URL")
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
         let teams: Vec<String> = std::env::var("REAPER_TEAMS")
             .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
             .unwrap_or_default();

@@ -27,7 +27,7 @@ pub const ENV_PREFIX: &str = "REAPER";
 // ============================================================================
 
 /// Complete agent configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReaperAgentConfig {
     /// Agent identification and network settings
     #[serde(default)]
@@ -96,7 +96,7 @@ pub struct PolicySettings {
 }
 
 /// Entity data settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DataSettings {
     /// File to load bootstrap entity data from
     pub bootstrap_file: Option<PathBuf>,
@@ -261,20 +261,6 @@ fn default_request_timeout() -> u64 {
 // Default Implementations
 // ============================================================================
 
-impl Default for ReaperAgentConfig {
-    fn default() -> Self {
-        Self {
-            agent: AgentSettings::default(),
-            policies: PolicySettings::default(),
-            data: DataSettings::default(),
-            performance: PerformanceSettings::default(),
-            cache: CacheSettings::default(),
-            observability: ObservabilitySettings::default(),
-            management: ManagementSettings::default(),
-        }
-    }
-}
-
 impl Default for AgentSettings {
     fn default() -> Self {
         Self {
@@ -293,16 +279,6 @@ impl Default for PolicySettings {
             cache_dir: None,
             watch_for_changes: false,
             extensions: default_policy_extensions(),
-        }
-    }
-}
-
-impl Default for DataSettings {
-    fn default() -> Self {
-        Self {
-            bootstrap_file: None,
-            bootstrap_dir: None,
-            cache_dir: None,
         }
     }
 }
@@ -364,15 +340,12 @@ impl ReaperAgentConfig {
         let content = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::FileRead(path.clone(), e.to_string()))?;
 
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("yaml");
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("yaml");
 
         match ext {
             "json" => serde_json::from_str(&content)
                 .map_err(|e| ConfigError::Parse(format!("JSON parse error: {}", e))),
-            "yaml" | "yml" | _ => serde_yaml::from_str(&content)
+            _ => serde_yaml::from_str(&content)
                 .map_err(|e| ConfigError::Parse(format!("YAML parse error: {}", e))),
         }
     }
@@ -424,8 +397,7 @@ impl ReaperAgentConfig {
 
         // Cache settings (using existing env vars for compatibility)
         if let Ok(val) = std::env::var("REAPER_CACHE_ENABLED") {
-            self.cache.enabled =
-                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+            self.cache.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
         if let Ok(val) = std::env::var("REAPER_CACHE_CAPACITY") {
             if let Ok(capacity) = val.parse() {

@@ -80,11 +80,7 @@ impl BundleStorage for FilesystemStorage {
 
         fs::write(&metadata_path, metadata_json).await?;
 
-        info!(
-            "Stored bundle: {} ({} bytes)",
-            key,
-            data.len()
-        );
+        info!("Stored bundle: {} ({} bytes)", key, data.len());
 
         Ok(())
     }
@@ -165,7 +161,9 @@ impl FilesystemStorage {
         &'a self,
         path: &'a Path,
         prefix: Option<&'a str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<BundleInfo>, StorageError>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<BundleInfo>, StorageError>> + Send + 'a>,
+    > {
         Box::pin(async move {
             let mut bundles = Vec::new();
 
@@ -196,7 +194,9 @@ impl FilesystemStorage {
                     let metadata_path = self.metadata_path(&key);
                     if metadata_path.exists() {
                         if let Ok(metadata_json) = fs::read_to_string(&metadata_path).await {
-                            if let Ok(stored) = serde_json::from_str::<StoredMetadata>(&metadata_json) {
+                            if let Ok(stored) =
+                                serde_json::from_str::<StoredMetadata>(&metadata_json)
+                            {
                                 bundles.push(BundleInfo {
                                     key,
                                     size_bytes: stored.size_bytes,

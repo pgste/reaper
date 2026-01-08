@@ -19,6 +19,7 @@ pub enum BootstrapError {
     #[error("Data loading error: {0}")]
     DataLoad(String),
     #[error("Directory not found: {0}")]
+    #[allow(dead_code)]
     DirectoryNotFound(PathBuf),
 }
 
@@ -72,18 +73,19 @@ pub async fn load_bootstrap_policies(
         let ext = path.extension().and_then(|s| s.to_str());
 
         match ext {
-            Some("reap") => {
-                match load_reap_policy(&path, engine, data_store.clone()).await {
-                    Ok(policy_name) => {
-                        info!("Loaded bootstrap .reap policy: {} from {:?}", policy_name, path);
-                        result.policies_loaded += 1;
-                    }
-                    Err(e) => {
-                        warn!("Failed to load .reap policy from {:?}: {}", path, e);
-                        result.policies_failed += 1;
-                    }
+            Some("reap") => match load_reap_policy(&path, engine, data_store.clone()).await {
+                Ok(policy_name) => {
+                    info!(
+                        "Loaded bootstrap .reap policy: {} from {:?}",
+                        policy_name, path
+                    );
+                    result.policies_loaded += 1;
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to load .reap policy from {:?}: {}", path, e);
+                    result.policies_failed += 1;
+                }
+            },
             Some("yaml") | Some("yml") | Some("json") => {
                 match load_declarative_policy(&path, engine).await {
                     Ok(policy_name) => {
@@ -296,13 +298,10 @@ mod tests {
         let engine = PolicyEngine::new();
         let data_store = Arc::new(DataStore::new());
 
-        let result = load_bootstrap_policies(
-            &engine,
-            data_store,
-            Some(temp_dir.path().to_path_buf()),
-        )
-        .await
-        .unwrap();
+        let result =
+            load_bootstrap_policies(&engine, data_store, Some(temp_dir.path().to_path_buf()))
+                .await
+                .unwrap();
 
         assert_eq!(result.policies_loaded, 0);
         assert_eq!(result.policies_failed, 0);

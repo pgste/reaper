@@ -40,7 +40,9 @@ async fn events_stream(
     let organization = resolve_org(&org_repo, &org).await?;
 
     // Verify user belongs to this org
-    if user.org_id != organization.id && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin]) {
+    if user.org_id != organization.id
+        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
+    {
         return Err(ApiError::Forbidden(
             "Cannot access events for other organizations".to_string(),
         ));

@@ -52,7 +52,8 @@ impl BundleStorage for DynamoDbStorage {
         // Check size limit (400KB for DynamoDB items)
         if data.len() > 350_000 {
             return Err(StorageError::Operation(
-                "Bundle too large for DynamoDB (max ~350KB). Consider using S3 storage.".to_string(),
+                "Bundle too large for DynamoDB (max ~350KB). Consider using S3 storage."
+                    .to_string(),
             ));
         }
 
@@ -65,7 +66,10 @@ impl BundleStorage for DynamoDbStorage {
             .put_item()
             .table_name(&self.table_name)
             .item("pk", AttributeValue::S(key.to_string()))
-            .item("data", AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(data.to_vec())))
+            .item(
+                "data",
+                AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(data.to_vec())),
+            )
             .item("metadata", AttributeValue::S(metadata_json))
             .item("created_at", AttributeValue::S(now))
             .item("size_bytes", AttributeValue::N(data.len().to_string()))
@@ -73,11 +77,7 @@ impl BundleStorage for DynamoDbStorage {
             .await
             .map_err(|e| StorageError::Operation(format!("DynamoDB put failed: {}", e)))?;
 
-        info!(
-            "Stored bundle to DynamoDB: {} ({} bytes)",
-            key,
-            data.len()
-        );
+        info!("Stored bundle to DynamoDB: {} ({} bytes)", key, data.len());
 
         Ok(())
     }
@@ -191,13 +191,15 @@ impl BundleStorage for DynamoDbStorage {
                         .get("metadata")
                         .and_then(|v| v.as_s().ok())
                         .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or_else(|| BundleMetadata::new(
-                            uuid::Uuid::nil(),
-                            uuid::Uuid::nil(),
-                            "unknown".to_string(),
-                            0,
-                            "".to_string(),
-                        ));
+                        .unwrap_or_else(|| {
+                            BundleMetadata::new(
+                                uuid::Uuid::nil(),
+                                uuid::Uuid::nil(),
+                                "unknown".to_string(),
+                                0,
+                                "".to_string(),
+                            )
+                        });
 
                     bundles.push(BundleInfo {
                         key,
