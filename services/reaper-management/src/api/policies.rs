@@ -24,15 +24,15 @@ use crate::{
 /// Build policy routes (nested under orgs)
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/orgs/{org}/policies", get(list_policies).post(create_policy))
+        .route(
+            "/orgs/{org}/policies",
+            get(list_policies).post(create_policy),
+        )
         .route(
             "/orgs/{org}/policies/{policy}",
             get(get_policy).put(update_policy).delete(delete_policy),
         )
-        .route(
-            "/orgs/{org}/policies/{policy}/versions",
-            get(list_versions),
-        )
+        .route("/orgs/{org}/policies/{policy}/versions", get(list_versions))
         .route(
             "/orgs/{org}/policies/{policy}/versions/{version}",
             get(get_version),
@@ -131,7 +131,9 @@ async fn create_policy(
     }
 
     if request.content.is_empty() {
-        return Err(ApiError::BadRequest("Policy content is required".to_string()));
+        return Err(ApiError::BadRequest(
+            "Policy content is required".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -250,7 +252,9 @@ async fn list_versions(
         })
         .collect();
 
-    Ok(Json(ListVersionsResponse { versions: summaries }))
+    Ok(Json(ListVersionsResponse {
+        versions: summaries,
+    }))
 }
 
 /// Get a specific version of a policy

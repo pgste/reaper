@@ -11,6 +11,7 @@ use axum::{
     Router,
 };
 use cache::PolicyCache;
+use clap::Parser;
 use lazy_static::lazy_static;
 use opentelemetry::{global, trace::TraceContextExt, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
@@ -27,8 +28,7 @@ use prometheus::{
     register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Encoder, Gauge,
     HistogramVec, TextEncoder,
 };
-use clap::Parser;
-use reaper_core::{endpoints, config::ReaperAgentConfig, BUILD_INFO, VERSION};
+use reaper_core::{config::ReaperAgentConfig, endpoints, BUILD_INFO, VERSION};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -159,10 +159,16 @@ impl std::fmt::Debug for AgentState {
             .field("policy_engine", &self.policy_engine)
             .field("data_store", &"DataStore")
             .field("stats", &"AgentStats")
-            .field("decision_cache", &self.decision_cache.as_ref().map(|_| "DecisionCache"))
+            .field(
+                "decision_cache",
+                &self.decision_cache.as_ref().map(|_| "DecisionCache"),
+            )
             .field("cache_config", &self.cache_config)
             .field("agent_config", &self.agent_config)
-            .field("policy_cache", &self.policy_cache.as_ref().map(|_| "PolicyCache"))
+            .field(
+                "policy_cache",
+                &self.policy_cache.as_ref().map(|_| "PolicyCache"),
+            )
             .finish()
     }
 }
@@ -421,10 +427,7 @@ async fn main() -> anyhow::Result<()> {
         .build();
     let decision_cache = cache_config.build_cache_arc();
 
-    info!(
-        "Decision cache: {}",
-        cache_config.summary()
-    );
+    info!("Decision cache: {}", cache_config.summary());
 
     // Load bootstrap data first (needed for policy compilation)
     if config.data.bootstrap_file.is_some() || config.data.bootstrap_dir.is_some() {
@@ -483,7 +486,10 @@ async fn main() -> anyhow::Result<()> {
                         for mut policy in policies {
                             // Build evaluator for cached policy using get_evaluator (builds if needed)
                             if let Err(e) = policy.get_evaluator() {
-                                warn!("Failed to build evaluator for cached policy {}: {}", policy.name, e);
+                                warn!(
+                                    "Failed to build evaluator for cached policy {}: {}",
+                                    policy.name, e
+                                );
                                 continue;
                             }
                             if let Err(e) = policy_engine.deploy_policy(policy.clone()) {
@@ -514,8 +520,10 @@ async fn main() -> anyhow::Result<()> {
     let mut management_handle = None;
 
     if config.management.enabled {
-        info!("Management plane enabled - connecting to {}",
-            config.management.url.as_deref().unwrap_or("?"));
+        info!(
+            "Management plane enabled - connecting to {}",
+            config.management.url.as_deref().unwrap_or("?")
+        );
 
         match management::ManagementClient::new(
             &config.management,
@@ -542,7 +550,7 @@ async fn main() -> anyhow::Result<()> {
 
                 // Spawn bundle update handler
                 let policy_engine_for_updates = policy_engine.clone();
-                let data_store_for_updates = data_store.clone();
+                let _data_store_for_updates = data_store.clone();
                 tokio::spawn(async move {
                     while update_rx.changed().await.is_ok() {
                         if let Some(update) = update_rx.borrow().clone() {
@@ -554,7 +562,9 @@ async fn main() -> anyhow::Result<()> {
                             );
 
                             // Parse the management bundle (JSON format)
-                            match serde_json::from_slice::<management::ManagementBundle>(&update.data) {
+                            match serde_json::from_slice::<management::ManagementBundle>(
+                                &update.data,
+                            ) {
                                 Ok(bundle) => {
                                     let mut deployed = 0;
                                     let mut failed = 0;
@@ -566,7 +576,7 @@ async fn main() -> anyhow::Result<()> {
 
                                         let mut policy = EnhancedPolicy::new(
                                             policy_entry.id.clone(),
-                                            format!("Policy from bundle"),
+                                            "Policy from bundle".to_string(),
                                             vec![], // Rules will be set by content
                                         );
                                         policy.id = policy_id;
@@ -577,10 +587,12 @@ async fn main() -> anyhow::Result<()> {
                                         policy.language = match policy_entry.language.as_str() {
                                             "cedar" => policy_engine::PolicyLanguage::Cedar,
                                             "simple" => policy_engine::PolicyLanguage::Simple,
-                                            "reaper" | _ => policy_engine::PolicyLanguage::Custom,
+                                            _ => policy_engine::PolicyLanguage::Custom,
                                         };
 
-                                        if let Err(e) = policy_engine_for_updates.deploy_policy(policy) {
+                                        if let Err(e) =
+                                            policy_engine_for_updates.deploy_policy(policy)
+                                        {
                                             warn!(
                                                 policy = %policy_entry.id,
                                                 error = %e,
@@ -652,7 +664,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/policies/compile", post(deploy_compiled_policy))
         .route("/api/v1/policies", get(list_policies))
         .route("/api/v1/policies/{id}/versions", get(get_policy_versions))
-        .route("/api/v1/policies/{id}/version", get(get_policy_current_version))
+        .route(
+            "/api/v1/policies/{id}/version",
+            get(get_policy_current_version),
+        )
         // Bundle deployment (hot-reload with versioning)
         .route("/api/v1/bundles/deploy", post(deploy_bundle))
         // Entity CRUD operations (requires eBPF integration)
@@ -1102,7 +1117,10 @@ async fn fast_evaluate_policy(
     };
 
     // Extract fields efficiently
-    let principal = value.get("principal").and_then(|v| v.as_str()).unwrap_or("");
+    let principal = value
+        .get("principal")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let resource = value.get("resource").and_then(|v| v.as_str()).unwrap_or("");
     let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("");
     let policy_id_opt = value.get("policy_id").and_then(|v| v.as_str());
@@ -1164,7 +1182,12 @@ async fn fast_evaluate_policy(
         }
     } else {
         // Evaluate all policies
-        state.policy_engine.list_policies().iter().map(|p| p.id).collect()
+        state
+            .policy_engine
+            .list_policies()
+            .iter()
+            .map(|p| p.id)
+            .collect()
     };
 
     // Build request
@@ -1514,12 +1537,8 @@ async fn get_policy_versions(
     State(state): State<Arc<AgentState>>,
     axum::extract::Path(policy_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let policy_uuid = Uuid::from_str(&policy_id).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid policy ID: {}", e),
-        )
-    })?;
+    let policy_uuid = Uuid::from_str(&policy_id)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid policy ID: {}", e)))?;
 
     let versions = state.policy_engine.list_versions(&policy_uuid);
 
@@ -1548,19 +1567,18 @@ async fn get_policy_current_version(
     State(state): State<Arc<AgentState>>,
     axum::extract::Path(policy_id): axum::extract::Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let policy_uuid = Uuid::from_str(&policy_id).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid policy ID: {}", e),
-        )
-    })?;
+    let policy_uuid = Uuid::from_str(&policy_id)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid policy ID: {}", e)))?;
 
-    let version = state.policy_engine.get_version(&policy_uuid).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            format!("No version found for policy {}", policy_id),
-        )
-    })?;
+    let version = state
+        .policy_engine
+        .get_version(&policy_uuid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("No version found for policy {}", policy_id),
+            )
+        })?;
 
     Ok(Json(json!({
         "policy_id": policy_id,
@@ -1703,6 +1721,7 @@ struct SyncEntityData {
 
 /// Source information for tracking where the sync came from
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SyncSource {
     /// Source type: "sync-client", "api", "file"
     #[serde(rename = "type")]
@@ -1735,7 +1754,17 @@ async fn sync_data(
     State(state): State<Arc<AgentState>>,
     Json(payload): Json<SyncDataRequest>,
 ) -> Result<Json<SyncDataResponse>, (StatusCode, String)> {
-    let source_info = payload.source.as_ref().map(|s| format!("{} ({})", s.source_type, s.server_url.as_deref().unwrap_or("local"))).unwrap_or_else(|| "api".to_string());
+    let source_info = payload
+        .source
+        .as_ref()
+        .map(|s| {
+            format!(
+                "{} ({})",
+                s.source_type,
+                s.server_url.as_deref().unwrap_or("local")
+            )
+        })
+        .unwrap_or_else(|| "api".to_string());
 
     info!(
         "Syncing entity data: {} entities, replace_all={}, source={}",
@@ -1781,7 +1810,11 @@ async fn sync_data(
     );
 
     Ok(Json(SyncDataResponse {
-        status: if failed == 0 { "success".to_string() } else { "partial".to_string() },
+        status: if failed == 0 {
+            "success".to_string()
+        } else {
+            "partial".to_string()
+        },
         inserted,
         failed,
         replaced: payload.replace_all,
@@ -1838,9 +1871,7 @@ fn json_to_attribute_value(
                 Err(format!("Unsupported number format: {}", n))
             }
         }
-        serde_json::Value::String(s) => {
-            Ok(AttributeValue::String(interner.intern(s)))
-        }
+        serde_json::Value::String(s) => Ok(AttributeValue::String(interner.intern(s))),
         serde_json::Value::Array(arr) => {
             let items: Result<Vec<_>, _> = arr
                 .iter()

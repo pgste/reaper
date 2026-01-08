@@ -798,8 +798,8 @@ async fn handle_bundle_action(
             println!("📦 Bundle Information\n");
 
             // Read bundle file
-            let bundle_bytes = fs::read(file)
-                .map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
+            let bundle_bytes =
+                fs::read(file).map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
 
             // Parse bundle
             let bundle = PolicyBundle::from_bytes(&bundle_bytes)
@@ -810,7 +810,11 @@ async fn handle_bundle_action(
             println!("   • Policy Name: {}", bundle.metadata.policy_name);
             println!(
                 "   • Version: {}",
-                bundle.metadata.policy_version.as_deref().unwrap_or("unknown")
+                bundle
+                    .metadata
+                    .policy_version
+                    .as_deref()
+                    .unwrap_or("unknown")
             );
             println!("   • Format Version: {}", bundle.metadata.version);
             println!("   • Compiled At: {}", bundle.metadata.compiled_at);
@@ -863,8 +867,8 @@ async fn handle_bundle_action(
                 if data.is_some() { "2️⃣" } else { "1️⃣" },
                 file
             );
-            let bundle_bytes = fs::read(file)
-                .map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
+            let bundle_bytes =
+                fs::read(file).map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
 
             // Parse bundle for info display
             let bundle = PolicyBundle::from_bytes(&bundle_bytes)
@@ -873,7 +877,11 @@ async fn handle_bundle_action(
             println!("   • Policy: {}", bundle.metadata.policy_name);
             println!(
                 "   • Version: {}",
-                bundle.metadata.policy_version.as_deref().unwrap_or("unknown")
+                bundle
+                    .metadata
+                    .policy_version
+                    .as_deref()
+                    .unwrap_or("unknown")
             );
             println!("   • Rules: {}", bundle.policy.rules.len());
 
@@ -910,11 +918,11 @@ async fn handle_bundle_action(
             }
         }
 
-        BundleAction::Rollback {
-            policy_id,
-            version,
-        } => {
-            println!("⏪ Rolling back policy {} to version {}\n", policy_id, version);
+        BundleAction::Rollback { policy_id, version } => {
+            println!(
+                "⏪ Rolling back policy {} to version {}\n",
+                policy_id, version
+            );
             println!("⚠️  Rollback API not yet implemented on agent");
             // TODO: Implement rollback endpoint on agent
         }
@@ -923,7 +931,10 @@ async fn handle_bundle_action(
             println!("📜 Version history for policy {}\n", policy_id);
 
             let response = client
-                .get(format!("{}/api/v1/policies/{}/versions", cli.agent_url, policy_id))
+                .get(format!(
+                    "{}/api/v1/policies/{}/versions",
+                    cli.agent_url, policy_id
+                ))
                 .send()
                 .await?;
 
@@ -952,7 +963,10 @@ async fn handle_bundle_action(
                             );
                         }
                         println!("└──────────┴─────────────────────────────┴──────────────────────────────────┘");
-                        println!("\nTotal: {} version(s)", result.get("total").unwrap_or(&json!(0)));
+                        println!(
+                            "\nTotal: {} version(s)",
+                            result.get("total").unwrap_or(&json!(0))
+                        );
                     }
                 }
             } else {
@@ -1039,8 +1053,14 @@ async fn handle_bundle_action(
             println!("   • Total Rules: {}", package.hints.total_rules);
             println!();
             println!("🔧 Optimization Hints:");
-            println!("   • Strings to pre-intern: {}", package.hints.strings_to_intern.len());
-            println!("   • Regex patterns to cache: {}", package.hints.regex_patterns.len());
+            println!(
+                "   • Strings to pre-intern: {}",
+                package.hints.strings_to_intern.len()
+            );
+            println!(
+                "   • Regex patterns to cache: {}",
+                package.hints.regex_patterns.len()
+            );
             println!();
             println!("📦 Output: {} ({} bytes)", output, bytes.len());
             println!("═══════════════════════════════════════════════════════");
@@ -1822,17 +1842,26 @@ async fn handle_management_action(
                 println!("✅ Management server is healthy");
                 println!(
                     "   Service: {}",
-                    health.get("service").and_then(|v| v.as_str()).unwrap_or("reaper-management")
+                    health
+                        .get("service")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("reaper-management")
                 );
                 println!(
                     "   Version: {}",
-                    health.get("version").and_then(|v| v.as_str()).unwrap_or("unknown")
+                    health
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
                 );
                 if let Some(status) = health.get("status").and_then(|v| v.as_str()) {
                     println!("   Status: {}", status);
                 }
             } else {
-                println!("❌ Management server is unhealthy (status: {})", response.status());
+                println!(
+                    "❌ Management server is unhealthy (status: {})",
+                    response.status()
+                );
             }
         }
 
@@ -1855,7 +1884,14 @@ async fn handle_management_action(
                             println!(
                                 "│ {:<36} │ {:<18} │ {:<7} │",
                                 org.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
-                                &org.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, org.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                &org.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        org.get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
                                 org.get("status").and_then(|v| v.as_str()).unwrap_or("?")
                             );
                         }
@@ -1871,9 +1907,12 @@ async fn handle_management_action(
 
         ManagementAction::Sources { org } => {
             println!("📁 Listing policy sources for org {}...", org);
-            let response = build_request(client, &format!("{}/api/v1/orgs/{}/sources", management_url, org))
-                .send()
-                .await?;
+            let response = build_request(
+                client,
+                &format!("{}/api/v1/orgs/{}/sources", management_url, org),
+            )
+            .send()
+            .await?;
 
             if response.status().is_success() {
                 let result: Value = response.json().await?;
@@ -1888,8 +1927,19 @@ async fn handle_management_action(
                             println!(
                                 "│ {:<36} │ {:<18} │ {:<8} │ {:<7} │",
                                 source.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
-                                &source.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, source.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
-                                source.get("source_type").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &source.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        source
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
+                                source
+                                    .get("source_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("?"),
                                 source.get("status").and_then(|v| v.as_str()).unwrap_or("?")
                             );
                         }
@@ -1906,7 +1956,10 @@ async fn handle_management_action(
         ManagementAction::Bundles { org, promoted } => {
             println!("📦 Listing bundles for org {}...", org);
             let url = if *promoted {
-                format!("{}/api/v1/orgs/{}/bundles?status=promoted", management_url, org)
+                format!(
+                    "{}/api/v1/orgs/{}/bundles?status=promoted",
+                    management_url, org
+                )
             } else {
                 format!("{}/api/v1/orgs/{}/bundles", management_url, org)
             };
@@ -1925,9 +1978,20 @@ async fn handle_management_action(
                             println!(
                                 "│ {:<36} │ {:<18} │ {:<8} │ {:<8} │",
                                 bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
-                                &bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                &bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        bundle
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
                                 bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
-                                bundle.get("policy_count").and_then(|v| v.as_i64()).unwrap_or(0)
+                                bundle
+                                    .get("policy_count")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0)
                             );
                         }
                         println!("└──────────────────────────────────────┴────────────────────┴──────────┴──────────┘");
@@ -1942,19 +2006,35 @@ async fn handle_management_action(
 
         ManagementAction::BundleInfo { id } => {
             println!("📦 Bundle details for {}...", id);
-            let response = build_request(client, &format!("{}/api/v1/bundles/{}", management_url, id))
-                .send()
-                .await?;
+            let response =
+                build_request(client, &format!("{}/api/v1/bundles/{}", management_url, id))
+                    .send()
+                    .await?;
 
             if response.status().is_success() {
                 let result: Value = response.json().await?;
                 if let Some(bundle) = result.get("bundle") {
                     println!("═══════════════════════════════════════════════════════");
                     println!("📋 Bundle Metadata:");
-                    println!("   • ID: {}", bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
-                    println!("   • Name: {}", bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?"));
-                    println!("   • Status: {}", bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?"));
-                    println!("   • Policies: {}", bundle.get("policy_count").and_then(|v| v.as_i64()).unwrap_or(0));
+                    println!(
+                        "   • ID: {}",
+                        bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Name: {}",
+                        bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Status: {}",
+                        bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Policies: {}",
+                        bundle
+                            .get("policy_count")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0)
+                    );
                     if let Some(checksum) = bundle.get("checksum").and_then(|v| v.as_str()) {
                         println!("   • Checksum: {}", checksum);
                     }
@@ -1964,7 +2044,13 @@ async fn handle_management_action(
                     if let Some(promoted_at) = bundle.get("promoted_at").and_then(|v| v.as_str()) {
                         println!("   • Promoted At: {}", promoted_at);
                     }
-                    println!("   • Created At: {}", bundle.get("created_at").and_then(|v| v.as_str()).unwrap_or("?"));
+                    println!(
+                        "   • Created At: {}",
+                        bundle
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                    );
                     println!("═══════════════════════════════════════════════════════");
                 }
             } else {
@@ -1975,9 +2061,12 @@ async fn handle_management_action(
 
         ManagementAction::Agents { org } => {
             println!("🤖 Listing agents for org {}...", org);
-            let response = build_request(client, &format!("{}/api/v1/orgs/{}/agents", management_url, org))
-                .send()
-                .await?;
+            let response = build_request(
+                client,
+                &format!("{}/api/v1/orgs/{}/agents", management_url, org),
+            )
+            .send()
+            .await?;
 
             if response.status().is_success() {
                 let result: Value = response.json().await?;
@@ -1989,14 +2078,23 @@ async fn handle_management_action(
                         println!("│ ID                                   │ Name               │ Status   │ Last Heartbeat      │");
                         println!("├──────────────────────────────────────┼────────────────────┼──────────┼─────────────────────┤");
                         for agent in agents {
-                            let last_hb = agent.get("last_heartbeat_at")
+                            let last_hb = agent
+                                .get("last_heartbeat_at")
                                 .and_then(|v| v.as_str())
                                 .map(|s| &s[..std::cmp::min(19, s.len())])
                                 .unwrap_or("never");
                             println!(
                                 "│ {:<36} │ {:<18} │ {:<8} │ {:<19} │",
                                 agent.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
-                                &agent.get("name").and_then(|v| v.as_str()).unwrap_or("?")[..std::cmp::min(18, agent.get("name").and_then(|v| v.as_str()).unwrap_or("?").len())],
+                                &agent.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        agent
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
                                 agent.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
                                 last_hb
                             );
@@ -2011,7 +2109,13 @@ async fn handle_management_action(
             }
         }
 
-        ManagementAction::Push { org, source, file, name, description } => {
+        ManagementAction::Push {
+            org,
+            source,
+            file,
+            name,
+            description,
+        } => {
             println!("⬆️  Pushing policy to management server...");
 
             // Read and parse the policy file
@@ -2023,7 +2127,10 @@ async fn handle_management_action(
                 .map_err(|e| anyhow::anyhow!("❌ Failed to read policy file: {}", e))?;
 
             // Detect language from extension
-            let ext = Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("");
+            let ext = Path::new(file)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
             let language = match ext {
                 "reap" => "reaper",
                 "yaml" | "yml" => "reaper",
@@ -2040,17 +2147,27 @@ async fn handle_management_action(
             });
 
             // First, get the source ID
-            let sources_response = build_request(client, &format!("{}/api/v1/orgs/{}/sources", management_url, org))
-                .send()
-                .await?;
+            let sources_response = build_request(
+                client,
+                &format!("{}/api/v1/orgs/{}/sources", management_url, org),
+            )
+            .send()
+            .await?;
 
             let sources_result: Value = sources_response.json().await?;
-            let source_id = sources_result.get("sources")
+            let source_id = sources_result
+                .get("sources")
                 .and_then(|v| v.as_array())
-                .and_then(|sources| sources.iter().find(|s| s.get("name").and_then(|n| n.as_str()) == Some(source)))
+                .and_then(|sources| {
+                    sources
+                        .iter()
+                        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some(source))
+                })
                 .and_then(|s| s.get("id"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("❌ Source '{}' not found in organization", source))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("❌ Source '{}' not found in organization", source)
+                })?;
 
             // Create the policy
             let create_body = json!({
@@ -2060,18 +2177,30 @@ async fn handle_management_action(
                 "language": language
             });
 
-            let response = build_post(client, &format!("{}/api/v1/sources/{}/policies", management_url, source_id))
-                .json(&create_body)
-                .send()
-                .await?;
+            let response = build_post(
+                client,
+                &format!("{}/api/v1/sources/{}/policies", management_url, source_id),
+            )
+            .json(&create_body)
+            .send()
+            .await?;
 
             if response.status().is_success() {
                 let result: Value = response.json().await?;
                 if let Some(policy) = result.get("policy") {
                     println!("✅ Policy pushed successfully!");
-                    println!("   • ID: {}", policy.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
-                    println!("   • Name: {}", policy.get("name").and_then(|v| v.as_str()).unwrap_or("?"));
-                    println!("   • Version: {}", policy.get("version").and_then(|v| v.as_i64()).unwrap_or(0));
+                    println!(
+                        "   • ID: {}",
+                        policy.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Name: {}",
+                        policy.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Version: {}",
+                        policy.get("version").and_then(|v| v.as_i64()).unwrap_or(0)
+                    );
                 }
             } else {
                 let error_text = response.text().await?;
@@ -2079,7 +2208,12 @@ async fn handle_management_action(
             }
         }
 
-        ManagementAction::Promote { org, name, policies, description } => {
+        ManagementAction::Promote {
+            org,
+            name,
+            policies,
+            description,
+        } => {
             println!("🚀 Creating and promoting bundle...");
 
             // Parse policy IDs
@@ -2092,10 +2226,13 @@ async fn handle_management_action(
                 "policy_ids": policy_ids
             });
 
-            let response = build_post(client, &format!("{}/api/v1/orgs/{}/bundles", management_url, org))
-                .json(&create_body)
-                .send()
-                .await?;
+            let response = build_post(
+                client,
+                &format!("{}/api/v1/orgs/{}/bundles", management_url, org),
+            )
+            .json(&create_body)
+            .send()
+            .await?;
 
             if !response.status().is_success() {
                 let error_text = response.text().await?;
@@ -2103,7 +2240,8 @@ async fn handle_management_action(
             }
 
             let result: Value = response.json().await?;
-            let bundle_id = result.get("bundle")
+            let bundle_id = result
+                .get("bundle")
                 .and_then(|b| b.get("id"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("❌ Failed to get bundle ID from response"))?;
@@ -2111,9 +2249,12 @@ async fn handle_management_action(
             println!("   ✅ Bundle created: {}", bundle_id);
 
             // Promote the bundle
-            let promote_response = build_post(client, &format!("{}/api/v1/bundles/{}/promote", management_url, bundle_id))
-                .send()
-                .await?;
+            let promote_response = build_post(
+                client,
+                &format!("{}/api/v1/bundles/{}/promote", management_url, bundle_id),
+            )
+            .send()
+            .await?;
 
             if promote_response.status().is_success() {
                 println!("   ✅ Bundle promoted successfully!");

@@ -13,9 +13,9 @@ pub mod policies;
 pub mod sources;
 pub mod teams;
 
+use crate::state::AppState;
 use axum::Router;
 use std::sync::Arc;
-use crate::state::AppState;
 
 /// Build the API router with all routes
 pub fn build_api_router() -> Router<Arc<AppState>> {
@@ -32,6 +32,5 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
 /// Build the v1 API routes (kept for backwards compat)
 #[allow(dead_code)]
 fn api_v1_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .merge(orgs::routes())
+    Router::new().merge(orgs::routes())
 }

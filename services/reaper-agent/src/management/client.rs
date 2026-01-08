@@ -1,4 +1,5 @@
 //! HTTP client for Reaper Management Server
+#![allow(dead_code)]
 
 use reqwest::Client;
 use sha2::{Digest, Sha256};
@@ -13,7 +14,7 @@ use reaper_core::config::ManagementSettings;
 use super::types::*;
 
 /// State of the management connection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConnectionState {
     /// Agent ID assigned by management server
     pub agent_id: Option<Uuid>,
@@ -25,18 +26,6 @@ pub struct ConnectionState {
     pub current_bundle_id: Option<Uuid>,
     /// Currently deployed bundle checksum
     pub current_bundle_checksum: Option<String>,
-}
-
-impl Default for ConnectionState {
-    fn default() -> Self {
-        Self {
-            agent_id: None,
-            token: None,
-            token_expires_at: None,
-            current_bundle_id: None,
-            current_bundle_checksum: None,
-        }
-    }
 }
 
 /// HTTP client for communicating with Reaper Management Server
@@ -59,7 +48,11 @@ pub struct ManagementClient {
 
 impl ManagementClient {
     /// Create a new management client from configuration
-    pub fn new(config: &ManagementSettings, agent_name: String, agent_version: String) -> ManagementResult<Self> {
+    pub fn new(
+        config: &ManagementSettings,
+        agent_name: String,
+        agent_version: String,
+    ) -> ManagementResult<Self> {
         let base_url = config
             .url
             .as_ref()
@@ -120,9 +113,7 @@ impl ManagementClient {
     pub async fn register(&self) -> ManagementResult<AgentInfo> {
         let url = format!("{}/orgs/{}/agents/register", self.base_url, self.org);
 
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok());
+        let hostname = hostname::get().ok().and_then(|h| h.into_string().ok());
 
         let request = RegisterAgentRequest {
             name: self.agent_name.clone(),
@@ -173,11 +164,12 @@ impl ManagementClient {
     }
 
     /// Send a heartbeat to the management server
-    pub async fn heartbeat(&self, metrics: Option<AgentMetrics>) -> ManagementResult<HeartbeatResponse> {
+    pub async fn heartbeat(
+        &self,
+        metrics: Option<AgentMetrics>,
+    ) -> ManagementResult<HeartbeatResponse> {
         let state = self.state.read().await;
-        let agent_id = state
-            .agent_id
-            .ok_or(ManagementError::NotRegistered)?;
+        let agent_id = state.agent_id.ok_or(ManagementError::NotRegistered)?;
         let token = state
             .token
             .as_ref()
@@ -266,9 +258,10 @@ impl ManagementClient {
             });
         }
 
-        let bundle: BundleInfo = response.json().await.map_err(|e| {
-            ManagementError::Parse(format!("Failed to parse bundle info: {}", e))
-        })?;
+        let bundle: BundleInfo = response
+            .json()
+            .await
+            .map_err(|e| ManagementError::Parse(format!("Failed to parse bundle info: {}", e)))?;
 
         debug!(bundle_id = %bundle.id, name = %bundle.name, "Found promoted bundle");
         Ok(Some(bundle))

@@ -188,11 +188,17 @@ async fn main() -> Result<()> {
 
         // Optionally sync entities
         if args.sync_entities {
-            info!("Syncing entity data (replace_all={})", args.replace_entities);
+            info!(
+                "Syncing entity data (replace_all={})",
+                args.replace_entities
+            );
             let entity_result = engine.sync_entities(args.replace_entities).await;
 
             if entity_result.success {
-                info!("Entity sync complete: {} entities", entity_result.entities_synced);
+                info!(
+                    "Entity sync complete: {} entities",
+                    entity_result.entities_synced
+                );
             } else {
                 error!("Entity sync failed: {:?}", entity_result.error);
             }

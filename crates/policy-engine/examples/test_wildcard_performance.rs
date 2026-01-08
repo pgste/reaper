@@ -7,7 +7,8 @@
 ///
 /// Target: All operations should remain < 1µs for typical policy scenarios
 use policy_engine::{reaper_dsl::*, EntityBuilder, PolicyAction, PolicyEvaluator, PolicyRequest};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -273,7 +274,7 @@ fn test_wildcard_set() {
     let doc_type = interner.intern("document");
     let roles_key = interner.intern("allowed_roles");
 
-    let mut roles_set = HashSet::new();
+    let mut roles_set = FxHashSet::default();
     for i in 0..100 {
         roles_set.insert(policy_engine::AttributeValue::String(
             interner.intern(&format!("role_{}", i)),

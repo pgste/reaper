@@ -119,7 +119,11 @@ impl GitSyncer {
     }
 
     /// Update the repository (fetch and checkout)
-    fn update_repo(&self, repo: &git2::Repository, config: &GitConfig) -> Result<String, GitSyncError> {
+    fn update_repo(
+        &self,
+        repo: &git2::Repository,
+        config: &GitConfig,
+    ) -> Result<String, GitSyncError> {
         let mut remote = repo.find_remote("origin")?;
 
         // Set up authentication for fetch
@@ -144,7 +148,10 @@ impl GitSyncer {
         let commit_id = commit.id().to_string();
 
         // Checkout the commit
-        repo.checkout_tree(commit.as_object(), Some(&mut git2::build::CheckoutBuilder::new().force()))?;
+        repo.checkout_tree(
+            commit.as_object(),
+            Some(&mut git2::build::CheckoutBuilder::new().force()),
+        )?;
         repo.set_head(&branch_ref)?;
 
         debug!("Checked out commit {}", commit_id);
@@ -153,7 +160,11 @@ impl GitSyncer {
     }
 
     /// Find policy files matching the patterns
-    fn find_policy_files(&self, repo_path: &Path, config: &GitConfig) -> Result<Vec<PolicyFile>, GitSyncError> {
+    fn find_policy_files(
+        &self,
+        repo_path: &Path,
+        config: &GitConfig,
+    ) -> Result<Vec<PolicyFile>, GitSyncError> {
         let base_path = if let Some(path) = &config.path {
             repo_path.join(path)
         } else {
@@ -166,7 +177,9 @@ impl GitSyncer {
             let glob_pattern = format!("{}/{}", base_path.display(), pattern);
             debug!("Searching for files matching: {}", glob_pattern);
 
-            for entry in glob::glob(&glob_pattern).map_err(|e| GitSyncError::Pattern(e.to_string()))? {
+            for entry in
+                glob::glob(&glob_pattern).map_err(|e| GitSyncError::Pattern(e.to_string()))?
+            {
                 match entry {
                     Ok(path) => {
                         if path.is_file() {

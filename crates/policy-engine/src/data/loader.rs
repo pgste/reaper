@@ -243,7 +243,10 @@ pub(crate) fn json_value_to_attribute(
             // Check if all elements are simple scalars (string, int, bool)
             // If so, convert to Set for O(1) membership tests
             let all_simple = arr.iter().all(|v| {
-                matches!(v, JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_))
+                matches!(
+                    v,
+                    JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_)
+                )
             });
 
             if all_simple && !arr.is_empty() {

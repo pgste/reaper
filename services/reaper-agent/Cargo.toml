@@ -7,8 +7,6 @@ description = "Reaper Agent - High-performance policy enforcement"
 [dependencies]
 reaper-core = { path = "../../crates/reaper-core" }
 policy-engine = { path = "../../crates/policy-engine" }
-message-queue = { path = "../../crates/message-queue" }
-metrics = { path = "../../crates/metrics" }
 axum = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -44,8 +42,4 @@ hyper = { workspace = true }
 
 [[bench]]
 name = "agent_bench"
-harness = false
-
-[[test]]
-name = "agent_bdd_tests"
 harness = false

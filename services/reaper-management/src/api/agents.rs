@@ -16,11 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
-    auth::{
-        jwt::JwtManager,
-        middleware::RequireAuth,
-        scopes::Scope,
-    },
+    auth::{jwt::JwtManager, middleware::RequireAuth, scopes::Scope},
     db::repositories::{AgentRepository, OrganizationRepository},
     domain::agent::{Agent, RegisterAgent},
     state::AppState,
@@ -38,10 +34,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_agent).delete(delete_agent),
         )
         // Heartbeat endpoint
-        .route(
-            "/orgs/{org}/agents/{agent_id}/heartbeat",
-            post(heartbeat),
-        )
+        .route("/orgs/{org}/agents/{agent_id}/heartbeat", post(heartbeat))
 }
 
 /// Request to register an agent
@@ -191,8 +184,8 @@ async fn register_agent(
         .validate(&token)
         .map_err(|e| ApiError::Internal(format!("Token validation failed: {}", e)))?;
 
-    let expires_at = chrono::DateTime::from_timestamp(claims.exp, 0)
-        .unwrap_or_else(chrono::Utc::now);
+    let expires_at =
+        chrono::DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(chrono::Utc::now);
 
     Ok((
         StatusCode::CREATED,

@@ -302,8 +302,14 @@ mod tests {
 
     #[test]
     fn test_sync_status_parsing() {
-        assert_eq!("pending".parse::<SyncStatus>().unwrap(), SyncStatus::Pending);
-        assert_eq!("success".parse::<SyncStatus>().unwrap(), SyncStatus::Success);
+        assert_eq!(
+            "pending".parse::<SyncStatus>().unwrap(),
+            SyncStatus::Pending
+        );
+        assert_eq!(
+            "success".parse::<SyncStatus>().unwrap(),
+            SyncStatus::Success
+        );
         assert_eq!("failed".parse::<SyncStatus>().unwrap(), SyncStatus::Failed);
     }
 

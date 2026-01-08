@@ -41,10 +41,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/orgs/{org}/api-keys/{key_id}",
             get(get_api_key).delete(delete_api_key),
         )
-        .route(
-            "/orgs/{org}/api-keys/{key_id}/revoke",
-            post(revoke_api_key),
-        )
+        .route("/orgs/{org}/api-keys/{key_id}/revoke", post(revoke_api_key))
 }
 
 /// Response for listing API keys
@@ -130,8 +127,8 @@ async fn refresh_token(
         .validate(&new_token)
         .map_err(|e| ApiError::Internal(format!("Token validation failed: {}", e)))?;
 
-    let expires_at = chrono::DateTime::from_timestamp(claims.exp, 0)
-        .unwrap_or_else(chrono::Utc::now);
+    let expires_at =
+        chrono::DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(chrono::Utc::now);
 
     Ok(Json(TokenResponse {
         token: new_token,
@@ -165,7 +162,9 @@ async fn list_api_keys(
 
     let summaries: Vec<ApiKeySummary> = keys.into_iter().map(|k| k.into()).collect();
 
-    Ok(Json(ListApiKeysResponse { api_keys: summaries }))
+    Ok(Json(ListApiKeysResponse {
+        api_keys: summaries,
+    }))
 }
 
 /// Create a new API key
@@ -177,7 +176,9 @@ async fn create_api_key(
 ) -> ApiResult<(StatusCode, Json<ApiKeyCreated>)> {
     // Check permissions
     if !user.has_permission(Scope::ApiKeyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing apikey:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing apikey:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -199,7 +200,7 @@ async fn create_api_key(
     } else {
         // Validate that all requested scopes are valid
         for scope in &request.scopes {
-            if Scope::from_str(scope).is_none() {
+            if Scope::parse(scope).is_none() {
                 return Err(ApiError::BadRequest(format!("Invalid scope: {}", scope)));
             }
         }
@@ -262,7 +263,9 @@ async fn revoke_api_key(
 ) -> ApiResult<StatusCode> {
     // Check permissions
     if !user.has_permission(Scope::ApiKeyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing apikey:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing apikey:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -300,7 +303,9 @@ async fn delete_api_key(
 ) -> ApiResult<StatusCode> {
     // Check permissions
     if !user.has_permission(Scope::ApiKeyWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden("Missing apikey:write scope".to_string()));
+        return Err(ApiError::Forbidden(
+            "Missing apikey:write scope".to_string(),
+        ));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);

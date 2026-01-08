@@ -68,13 +68,9 @@ impl std::fmt::Display for PolicyLanguage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PolicySource {
     /// Loaded from local file on startup
-    File {
-        path: String,
-    },
+    File { path: String },
     /// Deployed via direct API call
-    Api {
-        client_id: Option<String>,
-    },
+    Api { client_id: Option<String> },
     /// Synchronized from management server
     SyncClient {
         server_url: String,

@@ -123,10 +123,22 @@ mod tests {
 
     #[test]
     fn test_policy_language_parsing() {
-        assert_eq!("simple".parse::<PolicyLanguage>().unwrap(), PolicyLanguage::Simple);
-        assert_eq!("cedar".parse::<PolicyLanguage>().unwrap(), PolicyLanguage::Cedar);
-        assert_eq!("reaper".parse::<PolicyLanguage>().unwrap(), PolicyLanguage::Reaper);
-        assert_eq!("reap".parse::<PolicyLanguage>().unwrap(), PolicyLanguage::Reaper);
+        assert_eq!(
+            "simple".parse::<PolicyLanguage>().unwrap(),
+            PolicyLanguage::Simple
+        );
+        assert_eq!(
+            "cedar".parse::<PolicyLanguage>().unwrap(),
+            PolicyLanguage::Cedar
+        );
+        assert_eq!(
+            "reaper".parse::<PolicyLanguage>().unwrap(),
+            PolicyLanguage::Reaper
+        );
+        assert_eq!(
+            "reap".parse::<PolicyLanguage>().unwrap(),
+            PolicyLanguage::Reaper
+        );
         assert!("unknown".parse::<PolicyLanguage>().is_err());
     }
 

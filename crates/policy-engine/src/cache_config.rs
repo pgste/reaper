@@ -241,9 +241,7 @@ pub mod global {
 
     /// Get or create the global shared cache
     pub fn cache() -> Option<&'static Arc<DecisionCache>> {
-        CACHE
-            .get_or_init(|| config().build_cache_arc())
-            .as_ref()
+        CACHE.get_or_init(|| config().build_cache_arc()).as_ref()
     }
 
     /// Check if the global cache is enabled
@@ -271,7 +269,10 @@ mod tests {
         let config = CacheConfig::default();
         assert!(config.enabled);
         assert_eq!(config.capacity, DEFAULT_CACHE_CAPACITY);
-        assert_eq!(config.ttl, Some(Duration::from_secs(DEFAULT_CACHE_TTL_SECS)));
+        assert_eq!(
+            config.ttl,
+            Some(Duration::from_secs(DEFAULT_CACHE_TTL_SECS))
+        );
     }
 
     #[test]
@@ -296,20 +297,14 @@ mod tests {
 
     #[test]
     fn test_builder_no_ttl() {
-        let config = CacheConfig::builder()
-            .capacity(1000)
-            .no_ttl()
-            .build();
+        let config = CacheConfig::builder().capacity(1000).no_ttl().build();
 
         assert!(config.ttl.is_none());
     }
 
     #[test]
     fn test_build_cache() {
-        let config = CacheConfig::builder()
-            .capacity(100)
-            .ttl_secs(60)
-            .build();
+        let config = CacheConfig::builder().capacity(100).ttl_secs(60).build();
 
         let cache = config.build_cache();
         assert!(cache.is_some());
@@ -317,35 +312,25 @@ mod tests {
 
     #[test]
     fn test_build_cache_disabled() {
-        let config = CacheConfig::builder()
-            .enabled(false)
-            .build();
+        let config = CacheConfig::builder().enabled(false).build();
 
         assert!(config.build_cache().is_none());
     }
 
     #[test]
     fn test_build_cache_zero_capacity() {
-        let config = CacheConfig::builder()
-            .capacity(0)
-            .build();
+        let config = CacheConfig::builder().capacity(0).build();
 
         assert!(config.build_cache().is_none());
     }
 
     #[test]
     fn test_summary() {
-        let enabled = CacheConfig::builder()
-            .capacity(10000)
-            .ttl_secs(10)
-            .build();
+        let enabled = CacheConfig::builder().capacity(10000).ttl_secs(10).build();
         assert!(enabled.summary().contains("10000 entries"));
         assert!(enabled.summary().contains("10s TTL"));
 
-        let no_ttl = CacheConfig::builder()
-            .capacity(5000)
-            .no_ttl()
-            .build();
+        let no_ttl = CacheConfig::builder().capacity(5000).no_ttl().build();
         assert!(no_ttl.summary().contains("no TTL"));
 
         let disabled = CacheConfig::disabled();
@@ -364,7 +349,10 @@ mod tests {
         let config = CacheConfig::from_env();
         assert!(config.enabled);
         assert_eq!(config.capacity, DEFAULT_CACHE_CAPACITY);
-        assert_eq!(config.ttl, Some(Duration::from_secs(DEFAULT_CACHE_TTL_SECS)));
+        assert_eq!(
+            config.ttl,
+            Some(Duration::from_secs(DEFAULT_CACHE_TTL_SECS))
+        );
     }
 
     #[test]

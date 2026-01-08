@@ -214,7 +214,10 @@ impl ApiSyncer {
     }
 
     /// Get policies from the last sync (re-fetches from API)
-    pub async fn get_policies(&self, source: &PolicySource) -> Result<Vec<ApiPolicy>, ApiSyncError> {
+    pub async fn get_policies(
+        &self,
+        source: &PolicySource,
+    ) -> Result<Vec<ApiPolicy>, ApiSyncError> {
         let config = source
             .api_config()
             .ok_or_else(|| ApiSyncError::Config("Invalid API configuration".to_string()))?;
@@ -314,7 +317,10 @@ mod tests {
         let policy = syncer.parse_policy(&data, 0).unwrap();
         assert_eq!(policy.name, "auth-policy");
         assert_eq!(policy.language, "cedar");
-        assert_eq!(policy.description, Some("Admin authentication policy".to_string()));
+        assert_eq!(
+            policy.description,
+            Some("Admin authentication policy".to_string())
+        );
         assert_eq!(policy.version, Some("1.2.3".to_string()));
     }
 

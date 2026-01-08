@@ -38,8 +38,10 @@ pub struct ReaperDSLEvaluator {
     /// Default decision if no rules match
     default_decision: PolicyAction,
     /// Pre-compiled regex patterns for O(1) lookup during evaluation
+    #[allow(dead_code)]
     regex_cache: Arc<FxHashMap<String, regex::Regex>>,
     /// Pre-computed AttributeValue objects for membership tests
+    #[allow(dead_code)]
     membership_cache: Arc<FxHashMap<String, AttributeValue>>,
 }
 
@@ -154,7 +156,6 @@ pub enum Condition {
     },
 
     // ============ Function Call Support ============
-
     /// Regex match: regex::matches(user.email, "pattern")
     RegexMatches {
         entity_type: EntityType,
@@ -219,7 +220,6 @@ pub enum Condition {
     },
 
     // ============ String Case Methods ============
-
     /// String lowercase comparison: user.name.lower() == "admin"
     StringLowerEquals {
         entity_type: EntityType,
@@ -235,7 +235,6 @@ pub enum Condition {
     },
 
     // ============ Type Check Functions ============
-
     /// Type check: is_string(entity.attr)
     IsString {
         entity_type: EntityType,
@@ -255,7 +254,6 @@ pub enum Condition {
     },
 
     // ============ Set Operations ============
-
     /// Set intersection count: groups.intersection(["a", "b"]).count() > 0
     SetIntersectionCountGreater {
         entity_type: EntityType,
@@ -272,7 +270,6 @@ pub enum Condition {
     },
 
     // ============ Comprehension Support ============
-
     /// Array comprehension with filter and count: [x | x := arr[_]; x.active == true].count() >= N
     ComprehensionCountGreaterEqual {
         entity_type: EntityType,
@@ -307,21 +304,64 @@ pub enum Condition {
 #[derive(Debug, Clone)]
 pub enum CompiledCondition {
     Always,
-    ActionEquals { value: InternedString },
-    ResourceIdEquals { value: InternedString },
-    UserEquals { attribute: InternedString, value: InternedString },
-    UserGreaterEqualLiteral { attribute: InternedString, value: f64 },
-    UserGreaterLiteral { attribute: InternedString, value: f64 },
-    UserLessEqualLiteral { attribute: InternedString, value: f64 },
-    UserLessLiteral { attribute: InternedString, value: f64 },
-    ResourceEquals { attribute: InternedString, value: InternedString },
-    ResourceGreaterEqualLiteral { attribute: InternedString, value: f64 },
-    ResourceGreaterLiteral { attribute: InternedString, value: f64 },
-    ResourceLessEqualLiteral { attribute: InternedString, value: f64 },
-    ResourceLessLiteral { attribute: InternedString, value: f64 },
-    UserEqualsResource { user_attr: InternedString, resource_attr: InternedString },
-    UserIntGreater { user_attr: InternedString, resource_attr: InternedString },
-    ResourceIntGreater { resource_attr: InternedString, user_attr: InternedString },
+    ActionEquals {
+        value: InternedString,
+    },
+    ResourceIdEquals {
+        value: InternedString,
+    },
+    UserEquals {
+        attribute: InternedString,
+        value: InternedString,
+    },
+    UserGreaterEqualLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    UserGreaterLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    UserLessEqualLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    UserLessLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    ResourceEquals {
+        attribute: InternedString,
+        value: InternedString,
+    },
+    ResourceGreaterEqualLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    ResourceGreaterLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    ResourceLessEqualLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    ResourceLessLiteral {
+        attribute: InternedString,
+        value: f64,
+    },
+    UserEqualsResource {
+        user_attr: InternedString,
+        resource_attr: InternedString,
+    },
+    UserIntGreater {
+        user_attr: InternedString,
+        resource_attr: InternedString,
+    },
+    ResourceIntGreater {
+        resource_attr: InternedString,
+        user_attr: InternedString,
+    },
     SameEntityAttrCompare {
         entity_type: EntityType,
         left_attr: InternedString,
@@ -596,12 +636,10 @@ impl ReaperDSLEvaluator {
                     value: *value,
                 }
             }
-            Condition::UserLessLiteral { attribute, value } => {
-                CompiledCondition::UserLessLiteral {
-                    attribute: interner.intern(attribute),
-                    value: *value,
-                }
-            }
+            Condition::UserLessLiteral { attribute, value } => CompiledCondition::UserLessLiteral {
+                attribute: interner.intern(attribute),
+                value: *value,
+            },
             Condition::ResourceEquals { attribute, value } => CompiledCondition::ResourceEquals {
                 attribute: interner.intern(attribute),
                 value: interner.intern(value),
@@ -905,10 +943,7 @@ impl ReaperDSLEvaluator {
     }
 
     /// Recursively collect and compile regex patterns from a condition
-    fn collect_regex_patterns(
-        condition: &Condition,
-        cache: &mut FxHashMap<String, regex::Regex>,
-    ) {
+    fn collect_regex_patterns(condition: &Condition, cache: &mut FxHashMap<String, regex::Regex>) {
         match condition {
             Condition::RegexMatches { pattern, .. } => {
                 if !cache.contains_key(pattern) {
@@ -931,6 +966,7 @@ impl ReaperDSLEvaluator {
 
     /// Recursively collect and pre-intern all strings from a condition
     /// This includes attribute names and string literals for O(1) lookup during evaluation
+    #[allow(dead_code)]
     fn collect_strings_for_interning(
         condition: &Condition,
         cache: &mut FxHashMap<String, InternedString>,
@@ -966,46 +1002,75 @@ impl ReaperDSLEvaluator {
             | Condition::ResourceLessLiteral { attribute, .. } => {
                 intern(attribute);
             }
-            Condition::UserEqualsResource { user_attr, resource_attr } => {
+            Condition::UserEqualsResource {
+                user_attr,
+                resource_attr,
+            } => {
                 intern(user_attr);
                 intern(resource_attr);
             }
-            Condition::UserIntGreater { user_attr, resource_attr }
-            | Condition::ResourceIntGreater { resource_attr, user_attr } => {
+            Condition::UserIntGreater {
+                user_attr,
+                resource_attr,
+            }
+            | Condition::ResourceIntGreater {
+                resource_attr,
+                user_attr,
+            } => {
                 intern(user_attr);
                 intern(resource_attr);
             }
-            Condition::Assignment { variable, attribute, .. } => {
+            Condition::Assignment {
+                variable,
+                attribute,
+                ..
+            } => {
                 intern(variable);
                 intern(attribute);
             }
-            Condition::MembershipTest { attribute, value, .. } => {
+            Condition::MembershipTest {
+                attribute, value, ..
+            } => {
                 intern(attribute);
                 // Also pre-intern the literal value for membership test
                 if let LiteralValue::String(s) = value {
                     intern(s);
                 }
             }
-            Condition::IndexedEquals { attribute, value, .. } => {
+            Condition::IndexedEquals {
+                attribute, value, ..
+            } => {
                 intern(attribute);
                 intern(value);
             }
-            Condition::EqualsVariable { attribute, variable, .. } => {
+            Condition::EqualsVariable {
+                attribute,
+                variable,
+                ..
+            } => {
                 intern(attribute);
                 intern(variable);
             }
             Condition::RegexMatches { attribute, .. } => {
                 intern(attribute);
             }
-            Condition::StringContains { attribute, substring, .. } => {
+            Condition::StringContains {
+                attribute,
+                substring,
+                ..
+            } => {
                 intern(attribute);
                 intern(substring);
             }
-            Condition::StringStartsWith { attribute, prefix, .. } => {
+            Condition::StringStartsWith {
+                attribute, prefix, ..
+            } => {
                 intern(attribute);
                 intern(prefix);
             }
-            Condition::StringEndsWith { attribute, suffix, .. } => {
+            Condition::StringEndsWith {
+                attribute, suffix, ..
+            } => {
                 intern(attribute);
                 intern(suffix);
             }
@@ -1019,8 +1084,12 @@ impl ReaperDSLEvaluator {
                 intern(attribute);
             }
             // String case methods
-            Condition::StringLowerEquals { attribute, value, .. }
-            | Condition::StringUpperEquals { attribute, value, .. } => {
+            Condition::StringLowerEquals {
+                attribute, value, ..
+            }
+            | Condition::StringUpperEquals {
+                attribute, value, ..
+            } => {
                 intern(attribute);
                 intern(value);
             }
@@ -1031,7 +1100,9 @@ impl ReaperDSLEvaluator {
                 intern(attribute);
             }
             // Set operations
-            Condition::SetIntersectionCountGreater { attribute, values, .. } => {
+            Condition::SetIntersectionCountGreater {
+                attribute, values, ..
+            } => {
                 intern(attribute);
                 for v in values {
                     intern(v);
@@ -1042,13 +1113,25 @@ impl ReaperDSLEvaluator {
                 intern(key);
             }
             // Comprehensions
-            Condition::ComprehensionCountGreaterEqual { attribute, filter_attr, .. }
-            | Condition::ComprehensionCountEqual { attribute, filter_attr, .. } => {
+            Condition::ComprehensionCountGreaterEqual {
+                attribute,
+                filter_attr,
+                ..
+            }
+            | Condition::ComprehensionCountEqual {
+                attribute,
+                filter_attr,
+                ..
+            } => {
                 intern(attribute);
                 intern(filter_attr);
             }
             // Same-entity attribute comparisons
-            Condition::SameEntityAttrCompare { left_attr, right_attr, .. } => {
+            Condition::SameEntityAttrCompare {
+                left_attr,
+                right_attr,
+                ..
+            } => {
                 intern(left_attr);
                 intern(right_attr);
             }
@@ -1073,7 +1156,10 @@ impl ReaperDSLEvaluator {
         interner: &crate::data::StringInterner,
     ) {
         match condition {
-            Condition::MembershipTest { value: LiteralValue::String(s), .. } => {
+            Condition::MembershipTest {
+                value: LiteralValue::String(s),
+                ..
+            } => {
                 // Only pre-compute String values (Int/Bool are Copy types)
                 if !cache.contains_key(s) {
                     let interned = interner.intern(s);
@@ -1097,6 +1183,7 @@ impl ReaperDSLEvaluator {
 
     /// Get a string interned, used by the legacy evaluate_condition path
     /// For the fast path, use evaluate_compiled_condition with pre-interned CompiledCondition
+    #[allow(dead_code)]
     #[inline(always)]
     fn get_interned(&self, s: &str, interner: &crate::data::StringInterner) -> InternedString {
         interner.intern(s)
@@ -1122,28 +1209,42 @@ impl ReaperDSLEvaluator {
 
             CompiledCondition::ActionEquals { value } => {
                 // Resolve the pre-interned value to compare with context string
-                _context.get("action").map(|a| {
-                    interner.resolve(*value).map(|v| a.as_str() == &*v).unwrap_or(false)
-                }).unwrap_or(false)
+                _context
+                    .get("action")
+                    .map(|a| {
+                        interner
+                            .resolve(*value)
+                            .map(|v| a.as_str() == &*v)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
             }
 
             CompiledCondition::ResourceIdEquals { value } => {
                 // Resolve the pre-interned value to compare with context string
-                _context.get("resource").map(|r| {
-                    interner.resolve(*value).map(|v| r.as_str() == &*v).unwrap_or(false)
-                }).unwrap_or(false)
+                _context
+                    .get("resource")
+                    .map(|r| {
+                        interner
+                            .resolve(*value)
+                            .map(|v| r.as_str() == &*v)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
             }
 
             CompiledCondition::UserEquals { attribute, value } => {
                 // attribute and value are already interned - direct O(1) comparison
                 match user.get_attribute(*attribute) {
                     Some(AttributeValue::String(actual)) => *actual == *value,
-                    Some(AttributeValue::Bool(actual)) => {
-                        interner.resolve(*value).map(|v| &*v == actual.to_string().as_str()).unwrap_or(false)
-                    }
-                    Some(AttributeValue::Int(actual)) => {
-                        interner.resolve(*value).map(|v| &*v == actual.to_string().as_str()).unwrap_or(false)
-                    }
+                    Some(AttributeValue::Bool(actual)) => interner
+                        .resolve(*value)
+                        .map(|v| &*v == actual.to_string().as_str())
+                        .unwrap_or(false),
+                    Some(AttributeValue::Int(actual)) => interner
+                        .resolve(*value)
+                        .map(|v| &*v == actual.to_string().as_str())
+                        .unwrap_or(false),
                     _ => false,
                 }
             }
@@ -1183,12 +1284,14 @@ impl ReaperDSLEvaluator {
             CompiledCondition::ResourceEquals { attribute, value } => {
                 match resource.get_attribute(*attribute) {
                     Some(AttributeValue::String(actual)) => *actual == *value,
-                    Some(AttributeValue::Bool(actual)) => {
-                        interner.resolve(*value).map(|v| &*v == actual.to_string().as_str()).unwrap_or(false)
-                    }
-                    Some(AttributeValue::Int(actual)) => {
-                        interner.resolve(*value).map(|v| &*v == actual.to_string().as_str()).unwrap_or(false)
-                    }
+                    Some(AttributeValue::Bool(actual)) => interner
+                        .resolve(*value)
+                        .map(|v| &*v == actual.to_string().as_str())
+                        .unwrap_or(false),
+                    Some(AttributeValue::Int(actual)) => interner
+                        .resolve(*value)
+                        .map(|v| &*v == actual.to_string().as_str())
+                        .unwrap_or(false),
                     _ => false,
                 }
             }
@@ -1225,7 +1328,10 @@ impl ReaperDSLEvaluator {
                 }
             }
 
-            CompiledCondition::UserEqualsResource { user_attr, resource_attr } => {
+            CompiledCondition::UserEqualsResource {
+                user_attr,
+                resource_attr,
+            } => {
                 match (
                     user.get_attribute(*user_attr),
                     resource.get_attribute(*resource_attr),
@@ -1237,7 +1343,10 @@ impl ReaperDSLEvaluator {
                 }
             }
 
-            CompiledCondition::UserIntGreater { user_attr, resource_attr } => {
+            CompiledCondition::UserIntGreater {
+                user_attr,
+                resource_attr,
+            } => {
                 match (
                     user.get_attribute(*user_attr),
                     resource.get_attribute(*resource_attr),
@@ -1247,7 +1356,10 @@ impl ReaperDSLEvaluator {
                 }
             }
 
-            CompiledCondition::ResourceIntGreater { resource_attr, user_attr } => {
+            CompiledCondition::ResourceIntGreater {
+                resource_attr,
+                user_attr,
+            } => {
                 match (
                     resource.get_attribute(*resource_attr),
                     user.get_attribute(*user_attr),
@@ -1274,44 +1386,156 @@ impl ReaperDSLEvaluator {
 
                 match (left_val, right_val, op) {
                     // Numeric comparisons (int vs int)
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::LessEqual) => *l <= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::GreaterEqual) => *l >= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Less) => *l < *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Greater) => *l > *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Equal) => *l == *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::NotEqual) => *l != *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => *l <= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => *l >= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Less,
+                    ) => *l < *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Greater,
+                    ) => *l > *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != *r,
 
                     // Float vs float
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::LessEqual) => *l <= *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::GreaterEqual) => *l >= *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Less) => *l < *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Greater) => *l > *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Equal) => *l == *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::NotEqual) => *l != *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => *l <= *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => *l >= *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Less,
+                    ) => *l < *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Greater,
+                    ) => *l > *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != *r,
 
                     // Int vs float
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::LessEqual) => (*l as f64) <= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::GreaterEqual) => (*l as f64) >= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Less) => (*l as f64) < *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Greater) => (*l as f64) > *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Equal) => (*l as f64) == *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::NotEqual) => (*l as f64) != *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => (*l as f64) <= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => (*l as f64) >= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Less,
+                    ) => (*l as f64) < *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Greater,
+                    ) => (*l as f64) > *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Equal,
+                    ) => (*l as f64) == *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => (*l as f64) != *r,
 
                     // Float vs int
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::LessEqual) => *l <= (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::GreaterEqual) => *l >= (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Less) => *l < (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Greater) => *l > (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Equal) => *l == (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::NotEqual) => *l != (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => *l <= (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => *l >= (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Less,
+                    ) => *l < (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Greater,
+                    ) => *l > (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != (*r as f64),
 
                     // String equality
-                    (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::Equal) => l == r,
-                    (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::NotEqual) => l != r,
+                    (
+                        Some(AttributeValue::String(l)),
+                        Some(AttributeValue::String(r)),
+                        AttrCompareOp::Equal,
+                    ) => l == r,
+                    (
+                        Some(AttributeValue::String(l)),
+                        Some(AttributeValue::String(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => l != r,
 
                     // Bool equality
-                    (Some(AttributeValue::Bool(l)), Some(AttributeValue::Bool(r)), AttrCompareOp::Equal) => *l == *r,
-                    (Some(AttributeValue::Bool(l)), Some(AttributeValue::Bool(r)), AttrCompareOp::NotEqual) => *l != *r,
+                    (
+                        Some(AttributeValue::Bool(l)),
+                        Some(AttributeValue::Bool(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == *r,
+                    (
+                        Some(AttributeValue::Bool(l)),
+                        Some(AttributeValue::Bool(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != *r,
 
                     _ => false,
                 }
@@ -1349,7 +1573,10 @@ impl ReaperDSLEvaluator {
 
                 if let Some(val) = value {
                     // Resolve variable name for HashMap key
-                    let var_name = interner.resolve(*variable).map(|s| s.to_string()).unwrap_or_default();
+                    let var_name = interner
+                        .resolve(*variable)
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
                     variables.insert(var_name, val);
                     true
                 } else {
@@ -1377,12 +1604,8 @@ impl ReaperDSLEvaluator {
 
                 if let Some(coll) = collection {
                     match &coll {
-                        AttributeValue::List(items) => {
-                            self.compiled_value_in_list(value, items)
-                        }
-                        AttributeValue::Set(items) => {
-                            self.compiled_value_in_set(value, items)
-                        }
+                        AttributeValue::List(items) => self.compiled_value_in_list(value, items),
+                        AttributeValue::Set(items) => self.compiled_value_in_set(value, items),
                         _ => false,
                     }
                 } else {
@@ -1405,11 +1628,9 @@ impl ReaperDSLEvaluator {
                 if matches!(index, IndexExpr::Wildcard) {
                     if let Some(collection) = entity.get_attribute(*attribute) {
                         match collection {
-                            AttributeValue::List(items) => {
-                                items.iter().any(|item| {
-                                    matches!(item, AttributeValue::String(s) if *s == *value)
-                                })
-                            }
+                            AttributeValue::List(items) => items.iter().any(
+                                |item| matches!(item, AttributeValue::String(s) if *s == *value),
+                            ),
                             AttributeValue::Set(items) => {
                                 let expected_val = AttributeValue::String(*value);
                                 items.contains(&expected_val)
@@ -1420,7 +1641,8 @@ impl ReaperDSLEvaluator {
                         false
                     }
                 } else {
-                    let indexed_val = self.get_indexed_value_compiled(entity, *attribute, index, interner);
+                    let indexed_val =
+                        self.get_indexed_value_compiled(entity, *attribute, index, interner);
                     matches!(indexed_val, Some(AttributeValue::String(actual)) if actual == *value)
                 }
             }
@@ -1449,24 +1671,19 @@ impl ReaperDSLEvaluator {
                 }
             }
 
-            CompiledCondition::And(conditions) => {
-                conditions.iter().all(|c| {
-                    self.evaluate_compiled_condition(c, user, resource, _context, variables)
-                })
-            }
+            CompiledCondition::And(conditions) => conditions
+                .iter()
+                .all(|c| self.evaluate_compiled_condition(c, user, resource, _context, variables)),
 
-            CompiledCondition::Or(conditions) => {
-                conditions.iter().any(|c| {
-                    self.evaluate_compiled_condition(c, user, resource, _context, variables)
-                })
-            }
+            CompiledCondition::Or(conditions) => conditions
+                .iter()
+                .any(|c| self.evaluate_compiled_condition(c, user, resource, _context, variables)),
 
             CompiledCondition::Not(condition) => {
                 !self.evaluate_compiled_condition(condition, user, resource, _context, variables)
             }
 
             // ============ Function Call Evaluation ============
-
             CompiledCondition::RegexMatches {
                 entity_type,
                 attribute,
@@ -1592,7 +1809,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Collection Count Evaluation ============
-
             CompiledCondition::CountGreaterEqual {
                 entity_type,
                 attribute,
@@ -1645,7 +1861,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ String Case Methods ============
-
             CompiledCondition::StringLowerEquals {
                 entity_type,
                 attribute,
@@ -1691,7 +1906,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Type Check Functions ============
-
             CompiledCondition::IsString {
                 entity_type,
                 attribute,
@@ -1701,7 +1915,10 @@ impl ReaperDSLEvaluator {
                     EntityType::Resource => resource,
                     EntityType::Context => return false,
                 };
-                matches!(entity.get_attribute(*attribute), Some(AttributeValue::String(_)))
+                matches!(
+                    entity.get_attribute(*attribute),
+                    Some(AttributeValue::String(_))
+                )
             }
 
             CompiledCondition::IsNumber {
@@ -1728,11 +1945,13 @@ impl ReaperDSLEvaluator {
                     EntityType::Resource => resource,
                     EntityType::Context => return false,
                 };
-                matches!(entity.get_attribute(*attribute), Some(AttributeValue::Bool(_)))
+                matches!(
+                    entity.get_attribute(*attribute),
+                    Some(AttributeValue::Bool(_))
+                )
             }
 
             // ============ Set Operations ============
-
             CompiledCondition::SetIntersectionCountGreater {
                 entity_type,
                 attribute,
@@ -1746,15 +1965,21 @@ impl ReaperDSLEvaluator {
                 };
                 match entity.get_attribute(*attribute) {
                     Some(AttributeValue::Set(set)) => {
-                        let count = values.iter().filter(|v| {
-                            set.contains(&AttributeValue::String(**v))
-                        }).count();
+                        let count = values
+                            .iter()
+                            .filter(|v| set.contains(&AttributeValue::String(**v)))
+                            .count();
                         count > *threshold
                     }
                     Some(AttributeValue::List(list)) => {
-                        let count = values.iter().filter(|v| {
-                            list.iter().any(|item| matches!(item, AttributeValue::String(s) if *s == **v))
-                        }).count();
+                        let count = values
+                            .iter()
+                            .filter(|v| {
+                                list.iter().any(
+                                    |item| matches!(item, AttributeValue::String(s) if *s == **v),
+                                )
+                            })
+                            .count();
                         count > *threshold
                     }
                     _ => false,
@@ -1778,7 +2003,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Comprehension Support ============
-
             CompiledCondition::ComprehensionCountGreaterEqual {
                 entity_type,
                 attribute,
@@ -1794,17 +2018,25 @@ impl ReaperDSLEvaluator {
                 };
                 match entity.get_attribute(*attribute) {
                     Some(AttributeValue::List(items)) => {
-                        let count = items.iter().filter(|item| {
-                            if let AttributeValue::Object(obj) = item {
-                                if let Some(field_val) = obj.get(filter_attr) {
-                                    self.compare_compiled_values(field_val, filter_value, filter_op, interner)
+                        let count = items
+                            .iter()
+                            .filter(|item| {
+                                if let AttributeValue::Object(obj) = item {
+                                    if let Some(field_val) = obj.get(filter_attr) {
+                                        self.compare_compiled_values(
+                                            field_val,
+                                            filter_value,
+                                            filter_op,
+                                            interner,
+                                        )
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                false
-                            }
-                        }).count();
+                            })
+                            .count();
                         count >= *threshold
                     }
                     _ => false,
@@ -1826,17 +2058,25 @@ impl ReaperDSLEvaluator {
                 };
                 match entity.get_attribute(*attribute) {
                     Some(AttributeValue::List(items)) => {
-                        let count = items.iter().filter(|item| {
-                            if let AttributeValue::Object(obj) = item {
-                                if let Some(field_val) = obj.get(filter_attr) {
-                                    self.compare_compiled_values(field_val, filter_value, filter_op, interner)
+                        let count = items
+                            .iter()
+                            .filter(|item| {
+                                if let AttributeValue::Object(obj) = item {
+                                    if let Some(field_val) = obj.get(filter_attr) {
+                                        self.compare_compiled_values(
+                                            field_val,
+                                            filter_value,
+                                            filter_op,
+                                            interner,
+                                        )
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                false
-                            }
-                        }).count();
+                            })
+                            .count();
                         count == *threshold
                     }
                     _ => false,
@@ -1874,23 +2114,31 @@ impl ReaperDSLEvaluator {
 
     /// Check if compiled literal value is in list
     #[inline]
-    fn compiled_value_in_list(&self, value: &CompiledLiteralValue, items: &[AttributeValue]) -> bool {
+    fn compiled_value_in_list(
+        &self,
+        value: &CompiledLiteralValue,
+        items: &[AttributeValue],
+    ) -> bool {
         match value {
-            CompiledLiteralValue::String(s) => {
-                items.iter().any(|item| matches!(item, AttributeValue::String(actual) if *actual == *s))
-            }
-            CompiledLiteralValue::Int(i) => {
-                items.iter().any(|item| matches!(item, AttributeValue::Int(actual) if *actual == *i))
-            }
-            CompiledLiteralValue::Bool(b) => {
-                items.iter().any(|item| matches!(item, AttributeValue::Bool(actual) if *actual == *b))
-            }
+            CompiledLiteralValue::String(s) => items
+                .iter()
+                .any(|item| matches!(item, AttributeValue::String(actual) if *actual == *s)),
+            CompiledLiteralValue::Int(i) => items
+                .iter()
+                .any(|item| matches!(item, AttributeValue::Int(actual) if *actual == *i)),
+            CompiledLiteralValue::Bool(b) => items
+                .iter()
+                .any(|item| matches!(item, AttributeValue::Bool(actual) if *actual == *b)),
         }
     }
 
     /// Check if compiled literal value is in set
     #[inline]
-    fn compiled_value_in_set(&self, value: &CompiledLiteralValue, items: &FxHashSet<AttributeValue>) -> bool {
+    fn compiled_value_in_set(
+        &self,
+        value: &CompiledLiteralValue,
+        items: &FxHashSet<AttributeValue>,
+    ) -> bool {
         match value {
             CompiledLiteralValue::String(s) => items.contains(&AttributeValue::String(*s)),
             CompiledLiteralValue::Int(i) => items.contains(&AttributeValue::Int(*i)),
@@ -1909,25 +2157,71 @@ impl ReaperDSLEvaluator {
     ) -> bool {
         match (field_val, filter_value, filter_op) {
             // String comparisons
-            (AttributeValue::String(f), CompiledLiteralValue::String(v), ComprehensionFilterOp::Equal) => *f == *v,
-            (AttributeValue::String(f), CompiledLiteralValue::String(v), ComprehensionFilterOp::NotEqual) => *f != *v,
-            (AttributeValue::String(f), CompiledLiteralValue::String(v), ComprehensionFilterOp::Contains) => {
-                if let (Some(field_str), Some(value_str)) = (interner.resolve(*f), interner.resolve(*v)) {
+            (
+                AttributeValue::String(f),
+                CompiledLiteralValue::String(v),
+                ComprehensionFilterOp::Equal,
+            ) => *f == *v,
+            (
+                AttributeValue::String(f),
+                CompiledLiteralValue::String(v),
+                ComprehensionFilterOp::NotEqual,
+            ) => *f != *v,
+            (
+                AttributeValue::String(f),
+                CompiledLiteralValue::String(v),
+                ComprehensionFilterOp::Contains,
+            ) => {
+                if let (Some(field_str), Some(value_str)) =
+                    (interner.resolve(*f), interner.resolve(*v))
+                {
                     field_str.contains(&*value_str)
                 } else {
                     false
                 }
             }
             // Int comparisons
-            (AttributeValue::Int(f), CompiledLiteralValue::Int(v), ComprehensionFilterOp::Equal) => *f == *v,
-            (AttributeValue::Int(f), CompiledLiteralValue::Int(v), ComprehensionFilterOp::NotEqual) => *f != *v,
-            (AttributeValue::Int(f), CompiledLiteralValue::Int(v), ComprehensionFilterOp::GreaterThan) => *f > *v,
-            (AttributeValue::Int(f), CompiledLiteralValue::Int(v), ComprehensionFilterOp::LessThan) => *f < *v,
-            (AttributeValue::Int(f), CompiledLiteralValue::Int(v), ComprehensionFilterOp::GreaterEqual) => *f >= *v,
-            (AttributeValue::Int(f), CompiledLiteralValue::Int(v), ComprehensionFilterOp::LessEqual) => *f <= *v,
+            (
+                AttributeValue::Int(f),
+                CompiledLiteralValue::Int(v),
+                ComprehensionFilterOp::Equal,
+            ) => *f == *v,
+            (
+                AttributeValue::Int(f),
+                CompiledLiteralValue::Int(v),
+                ComprehensionFilterOp::NotEqual,
+            ) => *f != *v,
+            (
+                AttributeValue::Int(f),
+                CompiledLiteralValue::Int(v),
+                ComprehensionFilterOp::GreaterThan,
+            ) => *f > *v,
+            (
+                AttributeValue::Int(f),
+                CompiledLiteralValue::Int(v),
+                ComprehensionFilterOp::LessThan,
+            ) => *f < *v,
+            (
+                AttributeValue::Int(f),
+                CompiledLiteralValue::Int(v),
+                ComprehensionFilterOp::GreaterEqual,
+            ) => *f >= *v,
+            (
+                AttributeValue::Int(f),
+                CompiledLiteralValue::Int(v),
+                ComprehensionFilterOp::LessEqual,
+            ) => *f <= *v,
             // Bool comparisons
-            (AttributeValue::Bool(f), CompiledLiteralValue::Bool(v), ComprehensionFilterOp::Equal) => *f == *v,
-            (AttributeValue::Bool(f), CompiledLiteralValue::Bool(v), ComprehensionFilterOp::NotEqual) => *f != *v,
+            (
+                AttributeValue::Bool(f),
+                CompiledLiteralValue::Bool(v),
+                ComprehensionFilterOp::Equal,
+            ) => *f == *v,
+            (
+                AttributeValue::Bool(f),
+                CompiledLiteralValue::Bool(v),
+                ComprehensionFilterOp::NotEqual,
+            ) => *f != *v,
             _ => false,
         }
     }
@@ -1940,6 +2234,7 @@ impl ReaperDSLEvaluator {
     /// - Zero-copy entity access (Arc)
     /// - Pre-interned attribute names for O(1) lookup
     /// - Variable context for local bindings
+    #[allow(dead_code)]
     fn evaluate_condition(
         &self,
         condition: &Condition,
@@ -1960,7 +2255,10 @@ impl ReaperDSLEvaluator {
 
             Condition::ResourceIdEquals { value } => {
                 // Resource ID comes from context["resource"]
-                _context.get("resource").map(|r| r == value).unwrap_or(false)
+                _context
+                    .get("resource")
+                    .map(|r| r == value)
+                    .unwrap_or(false)
             }
 
             Condition::UserEquals { attribute, value } => {
@@ -2246,44 +2544,156 @@ impl ReaperDSLEvaluator {
 
                 match (left_val, right_val, op) {
                     // Numeric comparisons (int vs int)
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::LessEqual) => *l <= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::GreaterEqual) => *l >= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Less) => *l < *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Greater) => *l > *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Equal) => *l == *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Int(r)), AttrCompareOp::NotEqual) => *l != *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => *l <= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => *l >= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Less,
+                    ) => *l < *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Greater,
+                    ) => *l > *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != *r,
 
                     // Numeric comparisons (float vs float)
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::LessEqual) => *l <= *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::GreaterEqual) => *l >= *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Less) => *l < *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Greater) => *l > *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Equal) => *l == *r,
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Float(r)), AttrCompareOp::NotEqual) => *l != *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => *l <= *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => *l >= *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Less,
+                    ) => *l < *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Greater,
+                    ) => *l > *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == *r,
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != *r,
 
                     // Numeric comparisons (int vs float)
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::LessEqual) => (*l as f64) <= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::GreaterEqual) => (*l as f64) >= *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Less) => (*l as f64) < *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Greater) => (*l as f64) > *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::Equal) => (*l as f64) == *r,
-                    (Some(AttributeValue::Int(l)), Some(AttributeValue::Float(r)), AttrCompareOp::NotEqual) => (*l as f64) != *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => (*l as f64) <= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => (*l as f64) >= *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Less,
+                    ) => (*l as f64) < *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Greater,
+                    ) => (*l as f64) > *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::Equal,
+                    ) => (*l as f64) == *r,
+                    (
+                        Some(AttributeValue::Int(l)),
+                        Some(AttributeValue::Float(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => (*l as f64) != *r,
 
                     // Numeric comparisons (float vs int)
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::LessEqual) => *l <= (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::GreaterEqual) => *l >= (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Less) => *l < (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Greater) => *l > (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::Equal) => *l == (*r as f64),
-                    (Some(AttributeValue::Float(l)), Some(AttributeValue::Int(r)), AttrCompareOp::NotEqual) => *l != (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::LessEqual,
+                    ) => *l <= (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::GreaterEqual,
+                    ) => *l >= (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Less,
+                    ) => *l < (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Greater,
+                    ) => *l > (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == (*r as f64),
+                    (
+                        Some(AttributeValue::Float(l)),
+                        Some(AttributeValue::Int(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != (*r as f64),
 
                     // String equality comparisons
-                    (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::Equal) => l == r,
-                    (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::NotEqual) => l != r,
+                    (
+                        Some(AttributeValue::String(l)),
+                        Some(AttributeValue::String(r)),
+                        AttrCompareOp::Equal,
+                    ) => l == r,
+                    (
+                        Some(AttributeValue::String(l)),
+                        Some(AttributeValue::String(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => l != r,
 
                     // Boolean equality comparisons
-                    (Some(AttributeValue::Bool(l)), Some(AttributeValue::Bool(r)), AttrCompareOp::Equal) => *l == *r,
-                    (Some(AttributeValue::Bool(l)), Some(AttributeValue::Bool(r)), AttrCompareOp::NotEqual) => *l != *r,
+                    (
+                        Some(AttributeValue::Bool(l)),
+                        Some(AttributeValue::Bool(r)),
+                        AttrCompareOp::Equal,
+                    ) => *l == *r,
+                    (
+                        Some(AttributeValue::Bool(l)),
+                        Some(AttributeValue::Bool(r)),
+                        AttrCompareOp::NotEqual,
+                    ) => *l != *r,
 
                     _ => false,
                 }
@@ -2481,7 +2891,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Function Call Evaluation ============
-
             Condition::RegexMatches {
                 entity_type,
                 attribute,
@@ -2623,7 +3032,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Collection Count Evaluation ============
-
             Condition::CountGreaterEqual {
                 entity_type,
                 attribute,
@@ -2679,7 +3087,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ String Case Methods ============
-
             Condition::StringLowerEquals {
                 entity_type,
                 attribute,
@@ -2727,7 +3134,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Type Check Functions ============
-
             Condition::IsString {
                 entity_type,
                 attribute,
@@ -2738,7 +3144,10 @@ impl ReaperDSLEvaluator {
                     EntityType::Context => return false,
                 };
                 let attr_key = self.get_interned(attribute, interner);
-                matches!(entity.get_attribute(attr_key), Some(AttributeValue::String(_)))
+                matches!(
+                    entity.get_attribute(attr_key),
+                    Some(AttributeValue::String(_))
+                )
             }
 
             Condition::IsNumber {
@@ -2767,11 +3176,13 @@ impl ReaperDSLEvaluator {
                     EntityType::Context => return false,
                 };
                 let attr_key = self.get_interned(attribute, interner);
-                matches!(entity.get_attribute(attr_key), Some(AttributeValue::Bool(_)))
+                matches!(
+                    entity.get_attribute(attr_key),
+                    Some(AttributeValue::Bool(_))
+                )
             }
 
             // ============ Set Operations ============
-
             Condition::SetIntersectionCountGreater {
                 entity_type,
                 attribute,
@@ -2787,10 +3198,13 @@ impl ReaperDSLEvaluator {
                 match entity.get_attribute(attr_key) {
                     Some(AttributeValue::Set(set)) => {
                         // Count how many of `values` are in the entity's set
-                        let count = values.iter().filter(|v| {
-                            let interned = interner.intern(v);
-                            set.contains(&AttributeValue::String(interned))
-                        }).count();
+                        let count = values
+                            .iter()
+                            .filter(|v| {
+                                let interned = interner.intern(v);
+                                set.contains(&AttributeValue::String(interned))
+                            })
+                            .count();
                         count > *threshold
                     }
                     Some(AttributeValue::List(list)) => {
@@ -2826,7 +3240,6 @@ impl ReaperDSLEvaluator {
             }
 
             // ============ Comprehension Support ============
-
             Condition::ComprehensionCountGreaterEqual {
                 entity_type,
                 attribute,
@@ -2845,17 +3258,25 @@ impl ReaperDSLEvaluator {
 
                 match entity.get_attribute(attr_key) {
                     Some(AttributeValue::List(items)) => {
-                        let count = items.iter().filter(|item| {
-                            if let AttributeValue::Object(obj) = item {
-                                if let Some(field_val) = obj.get(&filter_attr_key) {
-                                    self.compare_values(field_val, filter_value, filter_op, interner)
+                        let count = items
+                            .iter()
+                            .filter(|item| {
+                                if let AttributeValue::Object(obj) = item {
+                                    if let Some(field_val) = obj.get(&filter_attr_key) {
+                                        self.compare_values(
+                                            field_val,
+                                            filter_value,
+                                            filter_op,
+                                            interner,
+                                        )
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                false
-                            }
-                        }).count();
+                            })
+                            .count();
                         count >= *threshold
                     }
                     _ => false,
@@ -2880,17 +3301,25 @@ impl ReaperDSLEvaluator {
 
                 match entity.get_attribute(attr_key) {
                     Some(AttributeValue::List(items)) => {
-                        let count = items.iter().filter(|item| {
-                            if let AttributeValue::Object(obj) = item {
-                                if let Some(field_val) = obj.get(&filter_attr_key) {
-                                    self.compare_values(field_val, filter_value, filter_op, interner)
+                        let count = items
+                            .iter()
+                            .filter(|item| {
+                                if let AttributeValue::Object(obj) = item {
+                                    if let Some(field_val) = obj.get(&filter_attr_key) {
+                                        self.compare_values(
+                                            field_val,
+                                            filter_value,
+                                            filter_op,
+                                            interner,
+                                        )
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                false
-                            }
-                        }).count();
+                            })
+                            .count();
                         count == *threshold
                     }
                     _ => false,
@@ -2901,6 +3330,7 @@ impl ReaperDSLEvaluator {
 
     /// Get indexed value from attribute (bracket notation)
     /// Performance: ~10-50ns depending on collection size
+    #[allow(dead_code)]
     fn get_indexed_value(
         &self,
         entity: &Entity,
@@ -2934,6 +3364,7 @@ impl ReaperDSLEvaluator {
 
     /// Check if literal value exists in list
     /// Performance: O(n) linear search (rare case - most collections are Sets now)
+    #[allow(dead_code)]
     fn value_in_list(
         &self,
         value: &LiteralValue,
@@ -2959,6 +3390,7 @@ impl ReaperDSLEvaluator {
 
     /// Check if literal value exists in set
     /// Performance: O(1) FxHashSet lookup with pre-computed AttributeValue - blazing fast!
+    #[allow(dead_code)]
     #[inline(always)]
     fn value_in_set(
         &self,
@@ -2986,6 +3418,7 @@ impl ReaperDSLEvaluator {
 
     /// Compare an AttributeValue against a LiteralValue using the given operation
     /// Used for comprehension filter evaluation
+    #[allow(dead_code)]
     #[inline(always)]
     fn compare_values(
         &self,
@@ -3065,7 +3498,11 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         let resource = self.store.get(resource_id).unwrap_or_else(|| {
             // Create a minimal entity with just the resource ID for simple resource matching
             let resource_type = interner.intern("resource");
-            Arc::new(Entity::new(resource_id, resource_type, std::collections::HashMap::new()))
+            Arc::new(Entity::new(
+                resource_id,
+                resource_type,
+                std::collections::HashMap::new(),
+            ))
         });
 
         // Create evaluation context with action and resource included
@@ -3175,7 +3612,10 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         let total_rules = self.compiled_deny_rules.len() + self.compiled_allow_rules.len();
         let mut extra = std::collections::HashMap::new();
         extra.insert("rule_count".to_string(), total_rules.to_string());
-        extra.insert("deny_rules".to_string(), self.compiled_deny_rules.len().to_string());
+        extra.insert(
+            "deny_rules".to_string(),
+            self.compiled_deny_rules.len().to_string(),
+        );
         extra.insert(
             "allow_rules".to_string(),
             self.compiled_allow_rules.len().to_string(),

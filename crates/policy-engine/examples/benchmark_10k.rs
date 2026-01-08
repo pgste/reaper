@@ -39,7 +39,9 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
     let loader = DataLoader::new(store.clone());
 
     let load_start = Instant::now();
-    loader.load_json(&data_content).expect("Failed to load data");
+    loader
+        .load_json(&data_content)
+        .expect("Failed to load data");
     let load_duration = load_start.elapsed();
 
     let stats = store.stats();
@@ -64,14 +66,22 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
         .get_by_type(user_type)
         .iter()
         .take(100)
-        .map(|e| interner.resolve_str(e.id).unwrap_or_else(|| "unknown".to_string()))
+        .map(|e| {
+            interner
+                .resolve_str(e.id)
+                .unwrap_or_else(|| "unknown".to_string())
+        })
         .collect();
 
     let resource_ids: Vec<String> = store
         .get_by_type(resource_type)
         .iter()
         .take(100)
-        .map(|e| interner.resolve_str(e.id).unwrap_or_else(|| "unknown".to_string()))
+        .map(|e| {
+            interner
+                .resolve_str(e.id)
+                .unwrap_or_else(|| "unknown".to_string())
+        })
         .collect();
 
     if user_ids.is_empty() {
@@ -181,10 +191,7 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
         "    Second pass (hot): {:.0} ops/sec",
         iterations as f64 / second_pass.as_secs_f64()
     );
-    println!(
-        "    Cache hit rate: {:.1}%",
-        cache_stats.hit_rate * 100.0
-    );
+    println!("    Cache hit rate: {:.1}%", cache_stats.hit_rate * 100.0);
 
     // ============ PARALLEL BATCH BENCHMARK ============
     println!("\n  --- Parallel Batch Evaluation ---");
@@ -233,10 +240,7 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
         "    Second batch (hot): {:.0} ops/sec",
         iterations as f64 / second_batch.as_secs_f64()
     );
-    println!(
-        "    Cache hit rate: {:.1}%",
-        cache_stats.hit_rate * 100.0
-    );
+    println!("    Cache hit rate: {:.1}%", cache_stats.hit_rate * 100.0);
 }
 
 fn main() {

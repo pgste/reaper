@@ -95,9 +95,9 @@ make cli
 
 ### Supporting Components
 
-- **Message Queue** - Reliable async communication between components
-- **Metrics** - Performance monitoring and compliance reporting
 - **Reaper CLI** - Command-line interface for policy management
+- **Reaper SDK** - Client library for application integration
+- **Reaper eBPF** - Kernel-level policy enforcement (experimental)
 
 ### Architecture Documentation
 

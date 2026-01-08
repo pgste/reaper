@@ -3,15 +3,13 @@ resolver = "2"
 members = [
     "crates/reaper-core",
     "crates/policy-engine",
-    "crates/message-queue",
-    "crates/metrics",
     "crates/reaper-sdk",
+    "crates/reaper-ebpf",
     "services/reaper-agent",
     "services/reaper-platform",
     "services/reaper-sync",
     "services/reaper-management",
     "tools/reaper-cli",
-    "crates/reaper-ebpf",
     "tests/e2e",
 ]
 exclude = [

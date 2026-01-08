@@ -52,12 +52,24 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(add_policies).delete(remove_policies),
         )
         // Bundle workflow
-        .route("/orgs/{org}/bundles/{bundle_id}/compile", post(compile_bundle))
+        .route(
+            "/orgs/{org}/bundles/{bundle_id}/compile",
+            post(compile_bundle),
+        )
         .route("/orgs/{org}/bundles/{bundle_id}/stage", post(stage_bundle))
-        .route("/orgs/{org}/bundles/{bundle_id}/promote", post(promote_bundle))
-        .route("/orgs/{org}/bundles/{bundle_id}/deprecate", post(deprecate_bundle))
+        .route(
+            "/orgs/{org}/bundles/{bundle_id}/promote",
+            post(promote_bundle),
+        )
+        .route(
+            "/orgs/{org}/bundles/{bundle_id}/deprecate",
+            post(deprecate_bundle),
+        )
         // Bundle download
-        .route("/orgs/{org}/bundles/{bundle_id}/download", get(download_bundle))
+        .route(
+            "/orgs/{org}/bundles/{bundle_id}/download",
+            get(download_bundle),
+        )
         // Get promoted bundle
         .route("/orgs/{org}/bundles/promoted", get(get_promoted_bundle))
 }
@@ -198,10 +210,7 @@ async fn deprecate_bundle(
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
     let _org_id = parse_org_id(&org, &state).await?;
-    let bundle = state
-        .bundle_service
-        .deprecate(bundle_id, None)
-        .await?;
+    let bundle = state.bundle_service.deprecate(bundle_id, None).await?;
     Ok(Json(bundle))
 }
 
@@ -266,7 +275,9 @@ impl From<crate::bundle::BundleError> for ApiError {
             BundleError::InvalidTransition(action, status) => {
                 ApiError::BadRequest(format!("Cannot {} bundle in {} state", action, status))
             }
-            BundleError::Compilation(e) => ApiError::BadRequest(format!("Compilation error: {}", e)),
+            BundleError::Compilation(e) => {
+                ApiError::BadRequest(format!("Compilation error: {}", e))
+            }
             BundleError::Storage(e) => ApiError::Internal(format!("Storage error: {}", e)),
             BundleError::Database(e) => ApiError::from(e),
             BundleError::NoPolicies => ApiError::BadRequest("Bundle has no policies".to_string()),

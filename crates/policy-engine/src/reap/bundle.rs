@@ -211,7 +211,10 @@ impl PolicyBundle {
                     self.metadata.source_checksum.to_string(),
                 );
                 m.insert("compiled".to_string(), "true".to_string());
-                m.insert("rules_count".to_string(), self.policy.rules.len().to_string());
+                m.insert(
+                    "rules_count".to_string(),
+                    self.policy.rules.len().to_string(),
+                );
                 m
             },
             priority: 100,
@@ -577,7 +580,11 @@ fn extract_hints_from_expr(
         Expr::Literal(Value::String(s)) => {
             strings.insert(s.clone());
         }
-        Expr::FunctionCall { namespace, function, args } => {
+        Expr::FunctionCall {
+            namespace,
+            function,
+            args,
+        } => {
             if let Some(ns) = namespace {
                 strings.insert(ns.clone());
             }
@@ -592,7 +599,11 @@ fn extract_hints_from_expr(
                 extract_hints_from_expr(arg, strings, regex_patterns);
             }
         }
-        Expr::MethodCall { receiver, method: _, args } => {
+        Expr::MethodCall {
+            receiver,
+            method: _,
+            args,
+        } => {
             extract_hints_from_expr(receiver, strings, regex_patterns);
             for arg in args {
                 extract_hints_from_expr(arg, strings, regex_patterns);
@@ -601,11 +612,18 @@ fn extract_hints_from_expr(
         Expr::Variable(var) => {
             strings.insert(var.clone());
         }
-        Expr::AttributeAccess { variable, attribute } => {
+        Expr::AttributeAccess {
+            variable,
+            attribute,
+        } => {
             strings.insert(variable.clone());
             strings.insert(attribute.clone());
         }
-        Expr::IndexedAccess { variable, attribute, .. } => {
+        Expr::IndexedAccess {
+            variable,
+            attribute,
+            ..
+        } => {
             strings.insert(variable.clone());
             strings.insert(attribute.clone());
         }

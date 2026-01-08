@@ -18,6 +18,7 @@ pub enum PolicyCacheError {
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("Cache directory not found: {0}")]
+    #[allow(dead_code)]
     DirectoryNotFound(PathBuf),
 }
 
@@ -120,10 +121,7 @@ impl CachedPolicy {
         let source_metadata = self.source_metadata.as_ref().map(|sm| {
             let source = match sm.source_type.as_str() {
                 "file" => {
-                    let path = sm.source_details["path"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string();
+                    let path = sm.source_details["path"].as_str().unwrap_or("").to_string();
                     policy_engine::PolicySource::File { path }
                 }
                 "api" => {
@@ -250,6 +248,7 @@ impl PolicyCache {
     }
 
     /// Delete a policy from the cache
+    #[allow(dead_code)]
     pub async fn delete_policy(&self, policy_id: &Uuid) -> Result<(), PolicyCacheError> {
         let filename = format!("{}.json", policy_id);
         let path = self.cache_dir.join(filename);
@@ -263,6 +262,7 @@ impl PolicyCache {
     }
 
     /// Clear all cached policies
+    #[allow(dead_code)]
     pub async fn clear(&self) -> Result<usize, PolicyCacheError> {
         let mut count = 0;
 
@@ -288,6 +288,7 @@ impl PolicyCache {
     }
 
     /// Get cache statistics
+    #[allow(dead_code)]
     pub async fn stats(&self) -> Result<CacheStats, PolicyCacheError> {
         let mut policy_count = 0;
         let mut total_size = 0u64;
@@ -316,6 +317,7 @@ impl PolicyCache {
 
 /// Cache statistics
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CacheStats {
     pub policy_count: usize,
     pub total_size_bytes: u64,
@@ -333,11 +335,8 @@ mod tests {
         let cache = PolicyCache::new(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a test policy
-        let policy = EnhancedPolicy::new(
-            "test-policy".to_string(),
-            "Test policy".to_string(),
-            vec![],
-        );
+        let policy =
+            EnhancedPolicy::new("test-policy".to_string(), "Test policy".to_string(), vec![]);
 
         // Save to cache
         cache.save_policy(&policy).await.unwrap();
@@ -353,11 +352,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache = PolicyCache::new(temp_dir.path().to_path_buf()).unwrap();
 
-        let policy = EnhancedPolicy::new(
-            "test-policy".to_string(),
-            "Test policy".to_string(),
-            vec![],
-        );
+        let policy =
+            EnhancedPolicy::new("test-policy".to_string(), "Test policy".to_string(), vec![]);
 
         cache.save_policy(&policy).await.unwrap();
         cache.delete_policy(&policy.id).await.unwrap();
@@ -371,11 +367,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache = PolicyCache::new(temp_dir.path().to_path_buf()).unwrap();
 
-        let policy = EnhancedPolicy::new(
-            "test-policy".to_string(),
-            "Test policy".to_string(),
-            vec![],
-        );
+        let policy =
+            EnhancedPolicy::new("test-policy".to_string(), "Test policy".to_string(), vec![]);
 
         cache.save_policy(&policy).await.unwrap();
 

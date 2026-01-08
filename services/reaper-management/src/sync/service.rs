@@ -9,8 +9,8 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
-use crate::db::Database;
 use crate::db::repositories::PolicySourceRepository;
+use crate::db::Database;
 use crate::domain::source::{PolicySource, SourceType, SyncResult, SyncStatus};
 
 use super::api::{ApiSyncError, ApiSyncer};

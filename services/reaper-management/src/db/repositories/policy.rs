@@ -179,7 +179,11 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// Update a policy (optionally creates new version if content provided)
-    pub async fn update(&self, id: Uuid, input: UpdatePolicy) -> Result<Option<Policy>, DatabaseError> {
+    pub async fn update(
+        &self,
+        id: Uuid,
+        input: UpdatePolicy,
+    ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -277,11 +281,12 @@ impl<'a> PolicyRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let row: (i32,) =
-            sqlx::query_as("SELECT COALESCE(MAX(version), 0) FROM policy_versions WHERE policy_id = ?")
-                .bind(policy_id.to_string())
-                .fetch_one(pool)
-                .await?;
+        let row: (i32,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(version), 0) FROM policy_versions WHERE policy_id = ?",
+        )
+        .bind(policy_id.to_string())
+        .fetch_one(pool)
+        .await?;
 
         Ok(row.0)
     }

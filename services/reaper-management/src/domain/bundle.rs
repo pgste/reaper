@@ -171,8 +171,14 @@ mod tests {
 
     #[test]
     fn test_bundle_status_parsing() {
-        assert_eq!("draft".parse::<BundleStatus>().unwrap(), BundleStatus::Draft);
-        assert_eq!("promoted".parse::<BundleStatus>().unwrap(), BundleStatus::Promoted);
+        assert_eq!(
+            "draft".parse::<BundleStatus>().unwrap(),
+            BundleStatus::Draft
+        );
+        assert_eq!(
+            "promoted".parse::<BundleStatus>().unwrap(),
+            BundleStatus::Promoted
+        );
         assert!("invalid".parse::<BundleStatus>().is_err());
     }
 

@@ -45,11 +45,10 @@ use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_policy_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError> {
     // Use sonic-rs for SIMD-accelerated parsing
-    let value: sonic_rs::Value = sonic_rs::from_slice(bytes).map_err(|e| {
-        ReaperError::InvalidPolicy {
+    let value: sonic_rs::Value =
+        sonic_rs::from_slice(bytes).map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("JSON parse error: {}", e),
-        }
-    })?;
+        })?;
 
     // Extract fields with efficient accessors
     let resource = value
@@ -114,11 +113,10 @@ pub fn parse_policy_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError> 
 /// * `bytes` - Raw JSON bytes with format: {"principal": "...", "resource": "...", "action": "...", "context": {...}}
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_evaluate_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError> {
-    let value: sonic_rs::Value = sonic_rs::from_slice(bytes).map_err(|e| {
-        ReaperError::InvalidPolicy {
+    let value: sonic_rs::Value =
+        sonic_rs::from_slice(bytes).map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("JSON parse error: {}", e),
-        }
-    })?;
+        })?;
 
     let principal = value
         .get("principal")
@@ -190,9 +188,10 @@ pub fn parse_evaluate_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError
         context: HashMap<String, String>,
     }
 
-    let req: EvalRequest = serde_json::from_slice(bytes).map_err(|e| ReaperError::InvalidPolicy {
-        reason: format!("JSON parse error: {}", e),
-    })?;
+    let req: EvalRequest =
+        serde_json::from_slice(bytes).map_err(|e| ReaperError::InvalidPolicy {
+            reason: format!("JSON parse error: {}", e),
+        })?;
 
     let mut context = req.context;
     context.insert("principal".to_string(), req.principal);
@@ -210,11 +209,10 @@ pub fn parse_evaluate_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError
 /// Uses lazy iteration to avoid allocating the full vector upfront.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_batch_requests(bytes: &[u8]) -> Result<Vec<PolicyRequest>, ReaperError> {
-    let array: sonic_rs::Value = sonic_rs::from_slice(bytes).map_err(|e| {
-        ReaperError::InvalidPolicy {
+    let array: sonic_rs::Value =
+        sonic_rs::from_slice(bytes).map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("JSON parse error: {}", e),
-        }
-    })?;
+        })?;
 
     let arr = array.as_array().ok_or_else(|| ReaperError::InvalidPolicy {
         reason: "Expected JSON array".to_string(),

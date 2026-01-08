@@ -20,11 +20,7 @@ impl<'a> TeamRepository<'a> {
     }
 
     /// Create a new team
-    pub async fn create(
-        &self,
-        org_id: Uuid,
-        input: CreateTeam,
-    ) -> Result<Team, DatabaseError> {
+    pub async fn create(&self, org_id: Uuid, input: CreateTeam) -> Result<Team, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -161,11 +157,7 @@ impl<'a> TeamRepository<'a> {
     }
 
     /// Update a team
-    pub async fn update(
-        &self,
-        id: Uuid,
-        input: UpdateTeam,
-    ) -> Result<Option<Team>, DatabaseError> {
+    pub async fn update(&self, id: Uuid, input: UpdateTeam) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()

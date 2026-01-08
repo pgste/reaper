@@ -72,7 +72,7 @@ impl Scope {
     }
 
     /// Parse a scope from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "agent:register" => Some(Self::AgentRegister),
             "agent:read" => Some(Self::AgentRead),
@@ -152,10 +152,7 @@ impl Permission {
 
     /// Create from string list
     pub fn from_strings(scope_strs: &[String]) -> Self {
-        let scopes = scope_strs
-            .iter()
-            .filter_map(|s| Scope::from_str(s))
-            .collect();
+        let scopes = scope_strs.iter().filter_map(|s| Scope::parse(s)).collect();
         Self { scopes }
     }
 
@@ -197,9 +194,9 @@ mod tests {
 
     #[test]
     fn test_scope_parsing() {
-        assert_eq!(Scope::from_str("agent:register"), Some(Scope::AgentRegister));
-        assert_eq!(Scope::from_str("admin"), Some(Scope::Admin));
-        assert_eq!(Scope::from_str("invalid"), None);
+        assert_eq!(Scope::parse("agent:register"), Some(Scope::AgentRegister));
+        assert_eq!(Scope::parse("admin"), Some(Scope::Admin));
+        assert_eq!(Scope::parse("invalid"), None);
     }
 
     #[test]

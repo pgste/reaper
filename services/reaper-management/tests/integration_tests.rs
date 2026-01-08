@@ -49,10 +49,12 @@ async fn setup_test_env() -> TestEnv {
         as Arc<dyn reaper_management::storage::BundleStorage>;
 
     // Create config with JWT secret for testing
-    let mut config = Config::default();
-    config.auth = AuthConfig {
-        jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
-        ..AuthConfig::default()
+    let config = Config {
+        auth: AuthConfig {
+            jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
+            ..AuthConfig::default()
+        },
+        ..Config::default()
     };
 
     let state = AppState::new(db.clone(), config, storage);
@@ -133,7 +135,12 @@ async fn test_health_endpoint() {
 
     let response = env
         .app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -176,7 +183,7 @@ async fn test_organization_crud() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = parse_body(response).await;
-    assert!(body["organizations"].as_array().unwrap().len() >= 1);
+    assert!(!body["organizations"].as_array().unwrap().is_empty());
 
     // Update organization
     let update_req = json_request(

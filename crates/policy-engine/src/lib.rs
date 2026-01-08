@@ -1,14 +1,14 @@
 pub use reaper_core;
 
-pub mod compiled_evaluator;
-pub mod data;
-pub mod decision_matrix;
-mod engine;
-mod evaluators;
 pub mod arena;
 pub mod batch;
 pub mod cache_config;
+pub mod compiled_evaluator;
+pub mod data;
 pub mod decision_cache;
+pub mod decision_matrix;
+mod engine;
+mod evaluators;
 pub mod fast_parse;
 pub mod gherkin;
 pub mod indexed_engine;
@@ -73,8 +73,8 @@ pub use fast_parse::{parse_batch_requests, parse_evaluate_request, parse_policy_
 
 // Re-export arena allocator for zero-allocation evaluation
 pub use arena::{
-    arena_stats, prewarm_arena, reset_arena, with_arena, with_arena_reset, ArenaStats,
-    ArenaString, ArenaValue, ArenaVec, EvaluationContext,
+    arena_stats, prewarm_arena, reset_arena, with_arena, with_arena_reset, ArenaStats, ArenaString,
+    ArenaValue, ArenaVec, EvaluationContext,
 };
 
 // Re-export decision cache for caching policy decisions

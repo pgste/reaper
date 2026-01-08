@@ -12,12 +12,12 @@ use serde::Serialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::state::AppState;
 use super::{
     api_key::{ApiKey, ApiKeyRepository},
     jwt::{Claims, JwtManager},
     scopes::{Permission, Scope},
 };
+use crate::state::AppState;
 
 /// Header name for API key authentication
 pub const API_KEY_HEADER: &str = "X-API-Key";
@@ -167,7 +167,8 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
 
             Err(AuthError {
                 error: "unauthorized".to_string(),
-                message: "Authentication required. Provide X-API-Key header or Bearer token.".to_string(),
+                message: "Authentication required. Provide X-API-Key header or Bearer token."
+                    .to_string(),
             }
             .into_response())
         }
@@ -197,7 +198,9 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
                 if let Ok(api_key_str) = api_key_value.to_str() {
                     let repo = ApiKeyRepository::new(&db);
                     if let Ok(Some(api_key)) = repo.validate(api_key_str).await {
-                        return Ok(OptionalAuth(Some(AuthenticatedUser::from_api_key(&api_key))));
+                        return Ok(OptionalAuth(Some(AuthenticatedUser::from_api_key(
+                            &api_key,
+                        ))));
                     }
                 }
             }
@@ -234,6 +237,7 @@ pub struct RequireScope;
 
 impl RequireScope {
     /// Check if authenticated user has the required scope
+    #[allow(clippy::result_large_err)]
     pub fn check(user: &AuthenticatedUser, scope: Scope) -> Result<(), Response> {
         if user.has_permission(scope) {
             return Ok(());

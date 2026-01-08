@@ -279,8 +279,7 @@ fn compile_function_call(
                 reason: format!(
                     "Unsupported function call: {}{}. Supported functions: \
                     regex::matches, time::is_after, time::is_before, is_string, is_number, is_bool",
-                    fn_prefix,
-                    function
+                    fn_prefix, function
                 ),
             })
         }
@@ -375,11 +374,16 @@ fn compile_method_call(
 /// Extract entity type and attribute from an expression
 /// Supports: user.attr, resource.attr, context.attr
 /// Also handles Variable("user.email") format from parser
-fn extract_entity_attr(expr: &Expr) -> Result<(crate::evaluators::reaper_dsl::EntityType, String), ReaperError> {
+fn extract_entity_attr(
+    expr: &Expr,
+) -> Result<(crate::evaluators::reaper_dsl::EntityType, String), ReaperError> {
     use crate::evaluators::reaper_dsl::EntityType;
 
     match expr {
-        Expr::AttributeAccess { variable, attribute } => {
+        Expr::AttributeAccess {
+            variable,
+            attribute,
+        } => {
             let entity_type = match variable.as_str() {
                 "user" => EntityType::User,
                 "resource" => EntityType::Resource,
@@ -406,9 +410,9 @@ fn extract_entity_attr(expr: &Expr) -> Result<(crate::evaluators::reaper_dsl::En
                     _ => {
                         return Err(ReaperError::InvalidPolicy {
                             reason: format!(
-                                "Unknown entity type '{}'. Expected 'user', 'resource', or 'context'",
-                                entity
-                            ),
+                            "Unknown entity type '{}'. Expected 'user', 'resource', or 'context'",
+                            entity
+                        ),
                         })
                     }
                 };
@@ -459,7 +463,12 @@ fn compile_expr_comparison(
     right: ComparisonRight,
 ) -> Result<DslCondition, ReaperError> {
     // Handle method calls like user.skills.count(), user.name.lower()
-    if let Expr::MethodCall { receiver, method, args: _ } = expr {
+    if let Expr::MethodCall {
+        receiver,
+        method,
+        args: _,
+    } = expr
+    {
         let (entity_type, attribute) = extract_entity_attr(&receiver)?;
 
         // Handle .count() method - requires integer on right side
@@ -500,11 +509,13 @@ fn compile_expr_comparison(
                 }
                 Operator::LessThan => {
                     // count < N is same as NOT(count >= N)
-                    Ok(DslCondition::Not(Box::new(DslCondition::CountGreaterEqual {
-                        entity_type,
-                        attribute,
-                        threshold,
-                    })))
+                    Ok(DslCondition::Not(Box::new(
+                        DslCondition::CountGreaterEqual {
+                            entity_type,
+                            attribute,
+                            threshold,
+                        },
+                    )))
                 }
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!("Operator {:?} not supported for .count() comparisons", op),
@@ -518,7 +529,8 @@ fn compile_expr_comparison(
                 ComparisonRight::Value(Value::String(s)) => s,
                 _ => {
                     return Err(ReaperError::InvalidPolicy {
-                        reason: ".lower() comparisons require string literal on right side".to_string(),
+                        reason: ".lower() comparisons require string literal on right side"
+                            .to_string(),
                     })
                 }
             };
@@ -529,13 +541,18 @@ fn compile_expr_comparison(
                     attribute,
                     value,
                 }),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringLowerEquals {
-                    entity_type,
-                    attribute,
-                    value,
-                }))),
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(
+                    DslCondition::StringLowerEquals {
+                        entity_type,
+                        attribute,
+                        value,
+                    },
+                ))),
                 _ => Err(ReaperError::InvalidPolicy {
-                    reason: format!("Operator {:?} not supported for .lower() comparisons. Use == or !=", op),
+                    reason: format!(
+                        "Operator {:?} not supported for .lower() comparisons. Use == or !=",
+                        op
+                    ),
                 }),
             };
         }
@@ -546,7 +563,8 @@ fn compile_expr_comparison(
                 ComparisonRight::Value(Value::String(s)) => s,
                 _ => {
                     return Err(ReaperError::InvalidPolicy {
-                        reason: ".upper() comparisons require string literal on right side".to_string(),
+                        reason: ".upper() comparisons require string literal on right side"
+                            .to_string(),
                     })
                 }
             };
@@ -557,13 +575,18 @@ fn compile_expr_comparison(
                     attribute,
                     value,
                 }),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringUpperEquals {
-                    entity_type,
-                    attribute,
-                    value,
-                }))),
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(
+                    DslCondition::StringUpperEquals {
+                        entity_type,
+                        attribute,
+                        value,
+                    },
+                ))),
                 _ => Err(ReaperError::InvalidPolicy {
-                    reason: format!("Operator {:?} not supported for .upper() comparisons. Use == or !=", op),
+                    reason: format!(
+                        "Operator {:?} not supported for .upper() comparisons. Use == or !=",
+                        op
+                    ),
                 }),
             };
         }
@@ -578,7 +601,9 @@ fn compile_expr_comparison(
     }
 
     Err(ReaperError::InvalidPolicy {
-        reason: "Expression comparisons only support method calls like .count(), .lower(), .upper()".to_string(),
+        reason:
+            "Expression comparisons only support method calls like .count(), .lower(), .upper()"
+                .to_string(),
     })
 }
 
@@ -653,23 +678,28 @@ fn compile_comparison(
                     Value::Null => "null".to_string(),
                     _ => {
                         return Err(ReaperError::InvalidPolicy {
-                            reason: format!("{} comparisons only support simple literal values", var_name),
+                            reason: format!(
+                                "{} comparisons only support simple literal values",
+                                var_name
+                            ),
                         })
                     }
                 };
                 return match (var_name.as_str(), op) {
-                    ("action", Operator::Equal) => Ok(DslCondition::ActionEquals { value: value_str }),
+                    ("action", Operator::Equal) => {
+                        Ok(DslCondition::ActionEquals { value: value_str })
+                    }
                     ("action", Operator::NotEqual) => {
                         Ok(DslCondition::Not(Box::new(DslCondition::ActionEquals {
                             value: value_str,
                         })))
                     }
-                    ("resource", Operator::Equal) => Ok(DslCondition::ResourceIdEquals { value: value_str }),
-                    ("resource", Operator::NotEqual) => {
-                        Ok(DslCondition::Not(Box::new(DslCondition::ResourceIdEquals {
-                            value: value_str,
-                        })))
+                    ("resource", Operator::Equal) => {
+                        Ok(DslCondition::ResourceIdEquals { value: value_str })
                     }
+                    ("resource", Operator::NotEqual) => Ok(DslCondition::Not(Box::new(
+                        DslCondition::ResourceIdEquals { value: value_str },
+                    ))),
                     _ => Err(ReaperError::InvalidPolicy {
                         reason: format!(
                             "Operator {:?} not supported for {} comparisons. Use == or !=.",
@@ -679,7 +709,10 @@ fn compile_comparison(
                 };
             } else {
                 return Err(ReaperError::InvalidPolicy {
-                    reason: format!("{} comparisons must be against literal values (e.g., {} == \"value\")", var_name, var_name),
+                    reason: format!(
+                        "{} comparisons must be against literal values (e.g., {} == \"value\")",
+                        var_name, var_name
+                    ),
                 });
             }
         }
@@ -780,9 +813,14 @@ fn compile_value_comparison(
 
         // User numeric comparisons (>=, >, <=, <)
         (Entity::User, Operator::GreaterEqual) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with >=", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with >=",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::UserGreaterEqualLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -790,9 +828,14 @@ fn compile_value_comparison(
         }
 
         (Entity::User, Operator::GreaterThan) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with >", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with >",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::UserGreaterLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -800,9 +843,14 @@ fn compile_value_comparison(
         }
 
         (Entity::User, Operator::LessEqual) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with <=", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with <=",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::UserLessEqualLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -810,9 +858,14 @@ fn compile_value_comparison(
         }
 
         (Entity::User, Operator::LessThan) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with <", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with <",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::UserLessLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -833,9 +886,14 @@ fn compile_value_comparison(
         }
 
         (Entity::Resource, Operator::GreaterEqual) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with >=", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with >=",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::ResourceGreaterEqualLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -843,9 +901,14 @@ fn compile_value_comparison(
         }
 
         (Entity::Resource, Operator::GreaterThan) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with >", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with >",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::ResourceGreaterLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -853,9 +916,14 @@ fn compile_value_comparison(
         }
 
         (Entity::Resource, Operator::LessEqual) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with <=", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with <=",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::ResourceLessEqualLiteral {
                 attribute: left.attribute,
                 value: num_value,
@@ -863,9 +931,14 @@ fn compile_value_comparison(
         }
 
         (Entity::Resource, Operator::LessThan) => {
-            let num_value = value_str.parse::<f64>().map_err(|_| ReaperError::InvalidPolicy {
-                reason: format!("Cannot compare attribute to non-numeric value '{}' with <", value_str),
-            })?;
+            let num_value = value_str
+                .parse::<f64>()
+                .map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Cannot compare attribute to non-numeric value '{}' with <",
+                        value_str
+                    ),
+                })?;
             Ok(DslCondition::ResourceLessLiteral {
                 attribute: left.attribute,
                 value: num_value,

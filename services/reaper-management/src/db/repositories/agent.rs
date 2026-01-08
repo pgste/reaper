@@ -29,8 +29,7 @@ impl<'a> AgentRepository<'a> {
 
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let labels_json =
-            serde_json::to_string(&input.labels).unwrap_or_else(|_| "{}".to_string());
+        let labels_json = serde_json::to_string(&input.labels).unwrap_or_else(|_| "{}".to_string());
 
         sqlx::query(
             r#"
@@ -187,14 +186,15 @@ impl<'a> AgentRepository<'a> {
 
         let now = Utc::now().to_rfc3339();
 
-        let result =
-            sqlx::query("UPDATE agents SET last_heartbeat_at = ?, status = ?, updated_at = ? WHERE id = ?")
-                .bind(&now)
-                .bind(AgentStatus::Active.to_string())
-                .bind(&now)
-                .bind(id.to_string())
-                .execute(pool)
-                .await?;
+        let result = sqlx::query(
+            "UPDATE agents SET last_heartbeat_at = ?, status = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(AgentStatus::Active.to_string())
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -218,7 +218,10 @@ impl<'a> AgentRepository<'a> {
     }
 
     /// Mark stale agents as inactive (no heartbeat within threshold)
-    pub async fn mark_stale_inactive(&self, threshold: DateTime<Utc>) -> Result<usize, DatabaseError> {
+    pub async fn mark_stale_inactive(
+        &self,
+        threshold: DateTime<Utc>,
+    ) -> Result<usize, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -264,7 +267,9 @@ impl<'a> AgentRepository<'a> {
             .map_err(|e| DatabaseError::Config(format!("Invalid org UUID: {}", e)))?;
 
         let status_str: String = row.get("status");
-        let status = status_str.parse::<AgentStatus>().unwrap_or(AgentStatus::Pending);
+        let status = status_str
+            .parse::<AgentStatus>()
+            .unwrap_or(AgentStatus::Pending);
 
         let labels_str: String = row.get("labels");
         let labels = serde_json::from_str(&labels_str).unwrap_or_else(|_| serde_json::json!({}));

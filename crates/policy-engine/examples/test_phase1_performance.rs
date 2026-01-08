@@ -8,7 +8,8 @@ use policy_engine::reaper_dsl::{
     Condition, EntityType, IndexExpr, LiteralValue, ReaperDSLEvaluator, Rule,
 };
 use policy_engine::{EntityBuilder, PolicyAction, PolicyEvaluator, PolicyRequest};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -112,7 +113,7 @@ fn test_membership_set_performance() {
     let user_type = interner.intern("User");
     let roles_key = interner.intern("roles");
 
-    let mut roles_set = HashSet::new();
+    let mut roles_set = FxHashSet::default();
     for i in 0..100 {
         let role = interner.intern(&format!("role_{}", i));
         roles_set.insert(AttributeValue::String(role));
@@ -464,7 +465,7 @@ fn test_complex_policy_performance() {
 
     // Roles set
     let admin_role = interner.intern("admin");
-    let mut roles_set = HashSet::new();
+    let mut roles_set = FxHashSet::default();
     roles_set.insert(AttributeValue::String(admin_role));
 
     // Permissions list

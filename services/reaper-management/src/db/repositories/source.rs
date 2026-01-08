@@ -35,8 +35,7 @@ impl<'a> PolicySourceRepository<'a> {
 
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let config_json =
-            serde_json::to_string(&input.config).unwrap_or_else(|_| "{}".to_string());
+        let config_json = serde_json::to_string(&input.config).unwrap_or_else(|_| "{}".to_string());
 
         sqlx::query(
             r#"
@@ -198,11 +197,7 @@ impl<'a> PolicySourceRepository<'a> {
     }
 
     /// Update policy source
-    pub async fn update(
-        &self,
-        id: Uuid,
-        input: UpdatePolicySource,
-    ) -> Result<bool, DatabaseError> {
+    pub async fn update(&self, id: Uuid, input: UpdatePolicySource) -> Result<bool, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -233,7 +228,11 @@ impl<'a> PolicySourceRepository<'a> {
 
         if let Some(is_enabled) = input.is_enabled {
             updates.push("is_enabled = ?");
-            bindings.push(if is_enabled { "1".to_string() } else { "0".to_string() });
+            bindings.push(if is_enabled {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            });
         }
 
         if updates.is_empty() {
@@ -243,7 +242,10 @@ impl<'a> PolicySourceRepository<'a> {
         updates.push("updated_at = ?");
         bindings.push(Utc::now().to_rfc3339());
 
-        let sql = format!("UPDATE policy_sources SET {} WHERE id = ?", updates.join(", "));
+        let sql = format!(
+            "UPDATE policy_sources SET {} WHERE id = ?",
+            updates.join(", ")
+        );
 
         let mut query = sqlx::query(&sql);
         for binding in &bindings {
@@ -315,7 +317,9 @@ impl<'a> PolicySourceRepository<'a> {
             .map_err(|e| DatabaseError::Config(format!("Invalid org UUID: {}", e)))?;
 
         let source_type_str: String = row.get("source_type");
-        let source_type = source_type_str.parse::<SourceType>().unwrap_or(SourceType::Git);
+        let source_type = source_type_str
+            .parse::<SourceType>()
+            .unwrap_or(SourceType::Git);
 
         let config_str: String = row.get("config");
         let config = serde_json::from_str(&config_str).unwrap_or_else(|_| serde_json::json!({}));
@@ -473,14 +477,9 @@ mod tests {
         assert_eq!(updated.sync_status, SyncStatus::Syncing);
 
         // Update to success with commit
-        repo.update_sync_status(
-            source.id,
-            SyncStatus::Success,
-            None,
-            Some("abc123"),
-        )
-        .await
-        .unwrap();
+        repo.update_sync_status(source.id, SyncStatus::Success, None, Some("abc123"))
+            .await
+            .unwrap();
 
         let updated = repo.get_by_id(source.id).await.unwrap().unwrap();
         assert_eq!(updated.sync_status, SyncStatus::Success);
