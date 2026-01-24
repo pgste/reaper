@@ -347,6 +347,35 @@ impl<'a> PolicyRepository<'a> {
         }
     }
 
+    /// Get the latest version for a policy
+    pub async fn get_latest_version(
+        &self,
+        policy_id: Uuid,
+    ) -> Result<Option<PolicyVersion>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, policy_id, version, content, content_hash, source_commit, created_at
+            FROM policy_versions
+            WHERE policy_id = ?
+            ORDER BY version DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(policy_id.to_string())
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(self.row_to_version(row)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Convert a database row to a Policy
     fn row_to_policy(&self, row: sqlx::sqlite::SqliteRow) -> Result<Policy, DatabaseError> {
         let id_str: String = row.get("id");

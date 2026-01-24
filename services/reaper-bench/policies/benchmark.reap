@@ -1,0 +1,52 @@
+// Benchmark RBAC Policy
+//
+// This policy is designed for performance benchmarking.
+// Produces approximately 60% allow, 40% deny decisions.
+
+policy benchmark_rbac {
+    version: "1.0.0",
+    default: deny,
+
+    // Admin users can do anything
+    rule admin_access {
+        allow if user.role == "admin"
+    }
+
+    // Engineers can read, write, and update (but not delete)
+    rule engineer_read {
+        allow if {
+            user.role == "engineer" &&
+            action == "read"
+        }
+    }
+
+    rule engineer_write {
+        allow if {
+            user.role == "engineer" &&
+            action == "write"
+        }
+    }
+
+    rule engineer_update {
+        allow if {
+            user.role == "engineer" &&
+            action == "update"
+        }
+    }
+
+    // Viewers can only read
+    rule viewer_access {
+        allow if {
+            user.role == "viewer" &&
+            action == "read"
+        }
+    }
+
+    // Marketing department has limited access to reports
+    rule marketing_access {
+        allow if {
+            user.department == "marketing" &&
+            action == "read"
+        }
+    }
+}

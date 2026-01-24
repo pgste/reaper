@@ -19,7 +19,7 @@ use crate::{
     auth::{jwt::JwtManager, middleware::RequireAuth, scopes::Scope},
     db::repositories::{AgentRepository, OrganizationRepository},
     domain::agent::{Agent, RegisterAgent},
-    state::AppState,
+    state::{AppState, ServerEvent},
 };
 
 /// Build agent routes
@@ -99,7 +99,7 @@ pub struct HeartbeatRequest {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
-    pub metrics: Option<serde_json::Value>,
+    pub metrics: Option<crate::domain::agent::AgentMetrics>,
 }
 
 /// Heartbeat response
@@ -186,6 +186,14 @@ async fn register_agent(
 
     let expires_at =
         chrono::DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(chrono::Utc::now);
+
+    // Broadcast agent registered event
+    state.broadcast_event(ServerEvent::AgentRegistered {
+        agent_id: agent.id,
+        agent_name: agent.name.clone(),
+        org_id: organization.id,
+        namespace_id: None, // Agents are org-wide, namespace subscriptions are separate
+    });
 
     Ok((
         StatusCode::CREATED,
@@ -308,7 +316,7 @@ async fn heartbeat(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, agent_id)): Path<(String, Uuid)>,
-    Json(_request): Json<HeartbeatRequest>,
+    Json(request): Json<HeartbeatRequest>,
 ) -> ApiResult<Json<HeartbeatResponse>> {
     let org_repo = OrganizationRepository::new(&state.db);
     let organization = resolve_org(&org_repo, &org).await?;
@@ -332,8 +340,19 @@ async fn heartbeat(
         return Err(ApiError::NotFound("Agent not found".to_string()));
     }
 
-    // Update heartbeat
+    // Update heartbeat timestamp
     agent_repo.update_heartbeat(agent_id).await?;
+
+    // Store metrics if provided
+    if let Some(ref metrics) = request.metrics {
+        if let Err(e) = agent_repo.update_metrics(agent_id, metrics).await {
+            tracing::warn!(
+                agent_id = %agent_id,
+                error = %e,
+                "Failed to store agent metrics"
+            );
+        }
+    }
 
     Ok(Json(HeartbeatResponse {
         acknowledged: true,

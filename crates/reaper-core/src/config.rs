@@ -56,6 +56,10 @@ pub struct ReaperAgentConfig {
     /// Management plane settings (optional)
     #[serde(default)]
     pub management: ManagementSettings,
+
+    /// TLS/mTLS settings
+    #[serde(default)]
+    pub tls: TlsSettings,
 }
 
 /// Agent network and identification settings
@@ -161,6 +165,12 @@ pub struct ObservabilitySettings {
 
     /// OpenTelemetry collector endpoint
     pub otel_endpoint: Option<String>,
+
+    /// Enable enhanced metrics (HDR histogram for percentiles, CPU/memory monitoring)
+    /// When disabled (default), these expensive operations are skipped.
+    /// Enable with REAPER_ENHANCED_METRICS=true for detailed metrics.
+    #[serde(default)]
+    pub enable_enhanced_metrics: bool,
 }
 
 /// Management plane settings
@@ -198,6 +208,31 @@ pub struct ManagementSettings {
     /// Timeout for HTTP requests to management server (seconds)
     #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,
+}
+
+/// TLS/mTLS settings for secure connections
+///
+/// Enables HTTPS with optional mutual TLS authentication.
+/// When `require_client_cert` is true, clients must present valid certificates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsSettings {
+    /// Enable TLS (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to server certificate file (PEM format)
+    pub cert_file: Option<PathBuf>,
+
+    /// Path to server private key file (PEM format)
+    pub key_file: Option<PathBuf>,
+
+    /// Path to CA certificate for client verification (PEM format)
+    /// Required when `require_client_cert` is true
+    pub ca_file: Option<PathBuf>,
+
+    /// Require client certificate (mTLS mode)
+    #[serde(default)]
+    pub require_client_cert: bool,
 }
 
 // ============================================================================
@@ -311,6 +346,7 @@ impl Default for ObservabilitySettings {
             log_level: default_log_level(),
             enable_tracing: false,
             otel_endpoint: None,
+            enable_enhanced_metrics: false, // Off by default for performance
         }
     }
 }
@@ -326,6 +362,18 @@ impl Default for ManagementSettings {
             heartbeat_interval_secs: default_heartbeat_interval(),
             sync_on_startup: true,
             request_timeout_secs: default_request_timeout(),
+        }
+    }
+}
+
+impl Default for TlsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_file: None,
+            key_file: None,
+            ca_file: None,
+            require_client_cert: false,
         }
     }
 }
@@ -422,6 +470,10 @@ impl ReaperAgentConfig {
             self.observability.otel_endpoint = Some(val);
             self.observability.enable_tracing = true;
         }
+        if let Ok(val) = std::env::var("REAPER_ENHANCED_METRICS") {
+            self.observability.enable_enhanced_metrics =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // Management plane settings
         if let Ok(val) = std::env::var("REAPER_MANAGEMENT_ENABLED") {
@@ -450,6 +502,24 @@ impl ReaperAgentConfig {
             if let Ok(interval) = val.parse() {
                 self.management.heartbeat_interval_secs = interval;
             }
+        }
+
+        // TLS settings
+        if let Ok(val) = std::env::var("REAPER_TLS_ENABLED") {
+            self.tls.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_TLS_CERT") {
+            self.tls.cert_file = Some(PathBuf::from(val));
+        }
+        if let Ok(val) = std::env::var("REAPER_TLS_KEY") {
+            self.tls.key_file = Some(PathBuf::from(val));
+        }
+        if let Ok(val) = std::env::var("REAPER_TLS_CA") {
+            self.tls.ca_file = Some(PathBuf::from(val));
+        }
+        if let Ok(val) = std::env::var("REAPER_TLS_REQUIRE_CLIENT_CERT") {
+            self.tls.require_client_cert =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
     }
 

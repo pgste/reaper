@@ -14,8 +14,10 @@ use uuid::Uuid;
 
 use super::{
     api_key::{ApiKey, ApiKeyRepository},
+    jwks::{extract_issuer_from_token, JwksClaims, JwksConfigRepository},
     jwt::{Claims, JwtManager},
     scopes::{Permission, Scope},
+    users::{SessionRepository, UserOrgRepository},
 };
 use crate::state::AppState;
 
@@ -66,6 +68,25 @@ impl AuthenticatedUser {
         })
     }
 
+    /// Create from JWKS-validated claims
+    ///
+    /// The org_id is provided by the JWKS configuration (not from the token),
+    /// since the configuration is scoped to an organization.
+    pub fn from_jwks_claims(claims: &JwksClaims, org_id: Uuid) -> Self {
+        // Combine groups and roles for permission mapping
+        let mut scopes: Vec<String> = claims.groups.clone();
+        scopes.extend(claims.roles.clone());
+
+        Self {
+            id: claims.sub.clone(),
+            org_id,
+            permissions: Permission::from_strings(&scopes),
+            auth_method: AuthMethod::Jwt {
+                token_id: claims.jti.clone().unwrap_or_default(),
+            },
+        }
+    }
+
     /// Check if user has a specific permission
     pub fn has_permission(&self, scope: Scope) -> bool {
         self.permissions.has(scope)
@@ -106,6 +127,7 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
         let auth_header = parts.headers.get(AUTHORIZATION).cloned();
         let db = state.db.clone();
         let config = state.config.clone();
+        let jwks_validator = state.jwks_validator.clone();
 
         async move {
             // Try API key first
@@ -142,7 +164,46 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
                 })?;
 
                 if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                    // Get JWT manager
+                    // First, try session token (rst_ prefix for user sessions)
+                    if token.starts_with("rst_") {
+                        let session_repo = SessionRepository::new(&db);
+                        match session_repo.find_by_token(token).await {
+                            Ok(Some(session)) => {
+                                // Get user's first org membership for permissions
+                                let user_org_repo = UserOrgRepository::new(&db);
+                                if let Ok(memberships) =
+                                    user_org_repo.get_user_orgs(session.user_id).await
+                                {
+                                    if let Some(first_membership) = memberships.first() {
+                                        // Convert org role to scopes
+                                        let scopes = role_to_scopes(first_membership.role);
+                                        return Ok(RequireAuth(AuthenticatedUser {
+                                            id: session.user_id.to_string(),
+                                            org_id: first_membership.org_id,
+                                            permissions: Permission::from_strings(&scopes),
+                                            auth_method: AuthMethod::Jwt {
+                                                token_id: session.id.to_string(),
+                                            },
+                                        }));
+                                    }
+                                }
+                                // User has no org memberships - still authenticated but limited
+                                return Err(AuthError {
+                                    error: "no_org".to_string(),
+                                    message: "User has no organization memberships".to_string(),
+                                }
+                                .into_response());
+                            }
+                            Ok(None) => {
+                                tracing::debug!("Session token not found");
+                            }
+                            Err(e) => {
+                                tracing::debug!("Session validation failed: {}", e);
+                            }
+                        }
+                    }
+
+                    // Second, try shared-secret JWT (internal tokens from agent registration)
                     if let Some(ref jwt_secret) = config.auth.jwt_secret {
                         let manager = JwtManager::with_secret(
                             jwt_secret,
@@ -158,8 +219,58 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
                                 }
                             }
                             Err(e) => {
-                                tracing::debug!("JWT validation failed: {}", e);
+                                tracing::debug!("Shared-secret JWT validation failed: {}", e);
                             }
+                        }
+                    }
+
+                    // Second, try JWKS validation (external IdP tokens)
+                    if let Some(ref validator) = jwks_validator {
+                        // Extract issuer from token to find the right JWKS config
+                        if let Some(issuer) = extract_issuer_from_token(token) {
+                            let repo = JwksConfigRepository::new(&db);
+
+                            // Find JWKS configs matching this issuer
+                            match repo.find_by_issuer(&issuer).await {
+                                Ok(configs) => {
+                                    // Try each matching config until one succeeds
+                                    for jwks_config in configs {
+                                        match validator.validate(&jwks_config, token).await {
+                                            Ok(claims) => {
+                                                tracing::debug!(
+                                                    issuer = %issuer,
+                                                    org_id = %jwks_config.org_id,
+                                                    subject = %claims.sub,
+                                                    "JWKS authentication successful"
+                                                );
+                                                return Ok(RequireAuth(
+                                                    AuthenticatedUser::from_jwks_claims(
+                                                        &claims,
+                                                        jwks_config.org_id,
+                                                    ),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                tracing::debug!(
+                                                    issuer = %issuer,
+                                                    config_id = %jwks_config.id,
+                                                    error = %e,
+                                                    "JWKS validation failed, trying next config"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        issuer = %issuer,
+                                        error = %e,
+                                        "Failed to look up JWKS configs by issuer"
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::debug!("Could not extract issuer from token for JWKS validation");
                         }
                     }
                 }
@@ -191,6 +302,7 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
         let auth_header = parts.headers.get(AUTHORIZATION).cloned();
         let db = state.db.clone();
         let config = state.config.clone();
+        let jwks_validator = state.jwks_validator.clone();
 
         async move {
             // Try API key first
@@ -209,6 +321,30 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
             if let Some(auth_header_value) = auth_header {
                 if let Ok(auth_str) = auth_header_value.to_str() {
                     if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                        // First, try session token (rst_ prefix)
+                        if token.starts_with("rst_") {
+                            let session_repo = SessionRepository::new(&db);
+                            if let Ok(Some(session)) = session_repo.find_by_token(token).await {
+                                let user_org_repo = UserOrgRepository::new(&db);
+                                if let Ok(memberships) =
+                                    user_org_repo.get_user_orgs(session.user_id).await
+                                {
+                                    if let Some(first_membership) = memberships.first() {
+                                        let scopes = role_to_scopes(first_membership.role);
+                                        return Ok(OptionalAuth(Some(AuthenticatedUser {
+                                            id: session.user_id.to_string(),
+                                            org_id: first_membership.org_id,
+                                            permissions: Permission::from_strings(&scopes),
+                                            auth_method: AuthMethod::Jwt {
+                                                token_id: session.id.to_string(),
+                                            },
+                                        })));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Second, try shared-secret JWT
                         if let Some(ref jwt_secret) = config.auth.jwt_secret {
                             let manager = JwtManager::with_secret(
                                 jwt_secret,
@@ -220,6 +356,27 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
                             if let Ok(claims) = manager.validate(token) {
                                 if let Some(user) = AuthenticatedUser::from_claims(&claims) {
                                     return Ok(OptionalAuth(Some(user)));
+                                }
+                            }
+                        }
+
+                        // Third, try JWKS validation
+                        if let Some(ref validator) = jwks_validator {
+                            if let Some(issuer) = extract_issuer_from_token(token) {
+                                let repo = JwksConfigRepository::new(&db);
+                                if let Ok(configs) = repo.find_by_issuer(&issuer).await {
+                                    for jwks_config in configs {
+                                        if let Ok(claims) =
+                                            validator.validate(&jwks_config, token).await
+                                        {
+                                            return Ok(OptionalAuth(Some(
+                                                AuthenticatedUser::from_jwks_claims(
+                                                    &claims,
+                                                    jwks_config.org_id,
+                                                ),
+                                            )));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -247,6 +404,40 @@ impl RequireScope {
             message: format!("Missing required scope: {}", scope),
         }
         .into_response())
+    }
+}
+
+/// Convert an OrgRole to a list of permission scope strings
+fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
+    use super::users::OrgRole;
+    match role {
+        OrgRole::Owner => vec![
+            "admin".to_string(), // Full access
+        ],
+        OrgRole::Admin => vec![
+            "org:admin".to_string(),
+            "agent:read".to_string(),
+            "agent:write".to_string(),
+            "policy:read".to_string(),
+            "policy:write".to_string(),
+            "bundle:read".to_string(),
+            "bundle:write".to_string(),
+            "apikey:read".to_string(),
+            "apikey:write".to_string(),
+        ],
+        OrgRole::Developer => vec![
+            "agent:read".to_string(),
+            "agent:write".to_string(),
+            "policy:read".to_string(),
+            "policy:write".to_string(),
+            "bundle:read".to_string(),
+            "bundle:write".to_string(),
+        ],
+        OrgRole::Viewer => vec![
+            "agent:read".to_string(),
+            "policy:read".to_string(),
+            "bundle:read".to_string(),
+        ],
     }
 }
 

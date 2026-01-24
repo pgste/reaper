@@ -1,40 +1,61 @@
-# syntax=docker/dockerfile:1
+# =============================================================================
+# Reaper Agent Dockerfile
+# =============================================================================
+# Multi-stage build for minimal production image
+#
+# Build: docker build -t reaper-agent -f services/reaper-agent/Dockerfile .
+# Run:   docker run -p 8080:8080 reaper-agent
+# =============================================================================
 
-# Multi-stage build for minimal final image size
-FROM rust:1.75-alpine AS builder
+# -----------------------------------------------------------------------------
+# Stage 1: Build
+# -----------------------------------------------------------------------------
+FROM rust:1.83-slim-bookworm AS builder
 
 # Install build dependencies
-RUN apk add --no-cache musl-dev
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create working directory
-WORKDIR /build
+WORKDIR /app
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
-COPY crates/ ./crates/
-COPY services/ ./services/
-COPY tools/ ./tools/
+COPY crates/ crates/
+COPY services/ services/
+COPY tools/ tools/
+COPY tests/ tests/
 
-# Build release binary
-RUN cargo build --release --bin reaper-agent
+# Build only the agent service in release mode
+RUN cargo build --release -p reaper-agent
 
-# Runtime stage - minimal image
-FROM alpine:3.19
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime
+# -----------------------------------------------------------------------------
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates wget
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN adduser -D -u 1000 reaper
+# Create non-root user (UID 1000)
+RUN useradd -r -u 1000 -s /bin/false reaper
+
+# Create directories
+RUN mkdir -p /data /policies /var/log/reaper && \
+    chown -R reaper:reaper /data /policies /var/log/reaper
+
+WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/reaper-agent /usr/local/bin/reaper-agent
+COPY --from=builder /app/target/release/reaper-agent /app/reaper-agent
 
 # Set ownership
-RUN chown reaper:reaper /usr/local/bin/reaper-agent
-
-# Create data directory
-RUN mkdir -p /data /policies && chown -R reaper:reaper /data /policies
+RUN chown -R reaper:reaper /app
 
 # Switch to non-root user
 USER reaper
@@ -43,11 +64,18 @@ USER reaper
 EXPOSE 8080
 
 # Health check
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
 
-# Set working directory
-WORKDIR /app
+# Default environment variables
+ENV RUST_LOG=info,reaper_agent=info
+ENV REAPER_BIND_ADDR=0.0.0.0:8080
+
+# Labels for metadata
+LABEL org.opencontainers.image.title="Reaper Agent"
+LABEL org.opencontainers.image.description="High-performance policy enforcement agent"
+LABEL org.opencontainers.image.source="https://github.com/reaper-policy/reaper"
+LABEL com.reaper.service="agent"
 
 # Run the agent
-ENTRYPOINT ["/usr/local/bin/reaper-agent"]
+ENTRYPOINT ["/app/reaper-agent"]

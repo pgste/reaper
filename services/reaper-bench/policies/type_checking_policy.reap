@@ -1,0 +1,140 @@
+// Type Checking and Validation Policy
+// Tests type checking functions and validation patterns
+// NOTE: Type checking functions may need implementation
+
+policy type_checking {
+    version: "1.0",
+    description: "Type checking and validation for Day 5 testing",
+    default: deny,
+
+    // String type check (approximation using method availability)
+    rule string_validation {
+        allow if {
+            user.data != null &&
+            resource.type == "string_check" &&
+            // Check if data has string methods (can call count())
+            has_length := user.data.count() &&
+            has_length != null
+        }
+    }
+
+    // Number type check (using comparison)
+    rule number_validation {
+        allow if {
+            user.value != null &&
+            resource.type == "number_check" &&
+            // Check if value is numeric by comparing
+            is_positive_or_zero := user.value >= 0 &&
+            is_positive_or_zero != null
+        }
+    }
+
+    // Array type check (using comprehension)
+    rule array_validation {
+        allow if {
+            user.items != null &&
+            resource.type == "array_check" &&
+            // Check if items can be iterated
+            first_items := [item | item := user.items[_]] &&
+            first_items != null
+        }
+    }
+
+    // Object type check (checking for properties)
+    rule object_validation {
+        allow if {
+            user.config != null &&
+            resource.type == "object_check" &&
+            // Check if config has object-like properties
+            has_properties := user.config.name != null &&
+            has_properties == true
+        }
+    }
+
+    // Boolean type check (direct comparison)
+    rule boolean_validation {
+        allow if {
+            user.enabled != null &&
+            resource.type == "bool_check" &&
+            // Check if it's a boolean by comparing to true or false
+            ((user.enabled == true) || (user.enabled == false))
+        }
+    }
+
+    // Multiple type checks (schema validation)
+    rule schema_validation {
+        allow if {
+            user.name != null &&
+            user.age != null &&
+            user.active != null &&
+            resource.type == "schema_check" &&
+            // Validate schema: name is string, age is number, active is bool
+            has_name_length := user.name.count() &&
+            has_name_length > 0 &&
+            age_is_numeric := user.age >= 0 &&
+            // For boolean validation, just check it's not null (simplification)
+            age_is_numeric
+        }
+    }
+
+    // Type assertion for safe operation
+    rule guarded_operation {
+        allow if {
+            user.input != null &&
+            resource.type == "guarded_op" &&
+            // Ensure input is a valid number before operation
+            is_number := user.input >= 0 &&
+            result := user.input > 0 &&
+            is_number && result
+        }
+    }
+
+    // Value constraint validation
+    rule constraint_check {
+        allow if {
+            user.quantity != null &&
+            resource.type == "constrained_value" &&
+            // Validate range: 1 <= quantity <= 100
+            in_range := user.quantity >= 1 && user.quantity <= 100 &&
+            in_range == true
+        }
+    }
+
+    // Format validation (string pattern)
+    rule format_validation {
+        allow if {
+            user.email != null &&
+            resource.type == "formatted_data" &&
+            // Check if email contains @ symbol
+            has_at := user.email.contains("@") &&
+            has_at == true
+        }
+    }
+
+    // Null check
+    rule null_safety {
+        allow if {
+            resource.type == "nullable_field" &&
+            // Ensure field is not null
+            user.required_field != null &&
+            value_exists := user.required_field != "" &&
+            value_exists == true
+        }
+    }
+
+    // Combined type and value validation
+    rule complex_validation {
+        allow if {
+            user.score != null &&
+            user.name != null &&
+            resource.type == "complex_validation" &&
+            // Type check: score is number, name is string
+            score_is_number := user.score >= 0 &&
+            name_has_length := user.name.count() > 0 &&
+            // Value check: score >= 50, name length >= 3
+            score_valid := user.score >= 50 &&
+            name_valid := user.name.count() >= 3 &&
+            score_is_number && name_has_length && score_valid && name_valid
+        }
+    }
+}

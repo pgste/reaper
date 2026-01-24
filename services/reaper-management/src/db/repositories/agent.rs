@@ -303,6 +303,114 @@ impl<'a> AgentRepository<'a> {
             updated_at,
         })
     }
+
+    /// Update agent metrics (upsert into agent_metrics_latest)
+    pub async fn update_metrics(
+        &self,
+        agent_id: Uuid,
+        metrics: &crate::domain::agent::AgentMetrics,
+    ) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let now = Utc::now().to_rfc3339();
+
+        let sql = r#"
+            INSERT INTO agent_metrics_latest (
+                agent_id, requests_total, requests_per_second,
+                latency_p50_us, latency_p99_us, decisions_allow, decisions_deny,
+                memory_bytes, current_bundle_id, current_bundle_version, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                requests_total = excluded.requests_total,
+                requests_per_second = excluded.requests_per_second,
+                latency_p50_us = excluded.latency_p50_us,
+                latency_p99_us = excluded.latency_p99_us,
+                decisions_allow = excluded.decisions_allow,
+                decisions_deny = excluded.decisions_deny,
+                memory_bytes = excluded.memory_bytes,
+                current_bundle_id = excluded.current_bundle_id,
+                current_bundle_version = excluded.current_bundle_version,
+                updated_at = excluded.updated_at
+        "#;
+
+        sqlx::query(sql)
+            .bind(agent_id.to_string())
+            .bind(metrics.requests_total as i64)
+            .bind(metrics.requests_per_second)
+            .bind(metrics.p50_latency_us)
+            .bind(metrics.p99_latency_us)
+            .bind(metrics.decisions_allow as i64)
+            .bind(metrics.decisions_deny as i64)
+            .bind(metrics.memory_bytes as i64)
+            .bind(metrics.current_bundle_id.map(|id| id.to_string()))
+            .bind(&metrics.current_bundle_version)
+            .bind(&now)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get latest metrics for an agent
+    pub async fn get_metrics(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<Option<crate::domain::agent::AgentMetrics>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT requests_total, requests_per_second, latency_p50_us, latency_p99_us,
+                   decisions_allow, decisions_deny, memory_bytes,
+                   current_bundle_id, current_bundle_version
+            FROM agent_metrics_latest
+            WHERE agent_id = ?
+        "#;
+
+        let row = sqlx::query(sql)
+            .bind(agent_id.to_string())
+            .fetch_optional(pool)
+            .await?;
+
+        Ok(row.map(|r| {
+            let current_bundle_id: Option<String> = r.get("current_bundle_id");
+            crate::domain::agent::AgentMetrics {
+                requests_total: r.get::<i64, _>("requests_total") as u64,
+                requests_per_second: r.get("requests_per_second"),
+                avg_latency_us: 0.0, // Computed from p50
+                p50_latency_us: r.get("latency_p50_us"),
+                p99_latency_us: r.get("latency_p99_us"),
+                memory_bytes: r.get::<i64, _>("memory_bytes") as u64,
+                cpu_percent: 0.0, // Not stored
+                decisions_allow: r.get::<i64, _>("decisions_allow") as u64,
+                decisions_deny: r.get::<i64, _>("decisions_deny") as u64,
+                uptime_seconds: 0, // Not stored
+                current_bundle_id: current_bundle_id.and_then(|s| Uuid::parse_str(&s).ok()),
+                current_bundle_version: r.get("current_bundle_version"),
+            }
+        }))
+    }
+
+    /// Get all agents with their latest metrics for an organization
+    pub async fn list_with_metrics(
+        &self,
+        org_id: Uuid,
+    ) -> Result<Vec<(Agent, Option<crate::domain::agent::AgentMetrics>)>, DatabaseError> {
+        let agents = self.list_by_org(org_id).await?;
+        let mut results = Vec::with_capacity(agents.len());
+
+        for agent in agents {
+            let metrics = self.get_metrics(agent.id).await?;
+            results.push((agent, metrics));
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]

@@ -314,6 +314,9 @@ impl ReapAstEvaluator {
     }
 
     /// Compare two values for equality
+    /// Supports existential quantification: when comparing an array to a scalar,
+    /// returns true if ANY element in the array equals the scalar.
+    /// This enables wildcard iteration syntax like `user.desk_ids[_] == resource.desk_id`
     fn values_equal(&self, a: &EvalValue, b: &EvalValue) -> bool {
         match (a, b) {
             (EvalValue::String(a), EvalValue::String(b)) => a == b,
@@ -321,6 +324,16 @@ impl ReapAstEvaluator {
             (EvalValue::Float(a), EvalValue::Float(b)) => (a - b).abs() < f64::EPSILON,
             (EvalValue::Boolean(a), EvalValue::Boolean(b)) => a == b,
             (EvalValue::Null, EvalValue::Null) => true,
+            // Existential quantification: array[_] == scalar
+            // Returns true if ANY element in the array equals the scalar
+            (EvalValue::Array(arr), scalar) | (EvalValue::Set(arr), scalar) => {
+                arr.iter().any(|item| self.values_equal(item, scalar))
+            }
+            // Existential quantification: scalar == array[_]
+            // Returns true if ANY element in the array equals the scalar
+            (scalar, EvalValue::Array(arr)) | (scalar, EvalValue::Set(arr)) => {
+                arr.iter().any(|item| self.values_equal(scalar, item))
+            }
             _ => false,
         }
     }

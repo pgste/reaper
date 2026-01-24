@@ -102,3 +102,40 @@ impl IntoResponse for ApiError {
 
 /// Result type alias for API handlers
 pub type ApiResult<T> = Result<T, ApiError>;
+
+// Error conversions
+impl From<crate::auth::users::UserError> for ApiError {
+    fn from(e: crate::auth::users::UserError) -> Self {
+        use crate::auth::users::UserError;
+        match e {
+            UserError::NotFound => ApiError::NotFound("User not found".to_string()),
+            UserError::EmailExists => ApiError::Conflict("Email already exists".to_string()),
+            UserError::InvalidCredentials => {
+                ApiError::Unauthorized("Invalid credentials".to_string())
+            }
+            UserError::SessionExpired => ApiError::Unauthorized("Session expired".to_string()),
+            UserError::SessionNotFound => ApiError::Unauthorized("Session not found".to_string()),
+            UserError::AccountSuspended => ApiError::Forbidden("Account suspended".to_string()),
+            UserError::EmailNotVerified => {
+                ApiError::Forbidden("Email not verified".to_string())
+            }
+            UserError::InvalidToken => ApiError::BadRequest("Invalid token".to_string()),
+            UserError::TokenExpired => ApiError::BadRequest("Token expired".to_string()),
+            UserError::PasswordHash(msg) => ApiError::Internal(format!("Password error: {}", msg)),
+            UserError::Database(e) => ApiError::Internal(format!("Database error: {}", e)),
+        }
+    }
+}
+
+impl From<crate::audit::AuditError> for ApiError {
+    fn from(e: crate::audit::AuditError) -> Self {
+        ApiError::Internal(format!("Audit error: {}", e))
+    }
+}
+
+impl From<sqlx::Error> for ApiError {
+    fn from(e: sqlx::Error) -> Self {
+        tracing::error!("SQLx error: {}", e);
+        ApiError::Internal("Database error".to_string())
+    }
+}

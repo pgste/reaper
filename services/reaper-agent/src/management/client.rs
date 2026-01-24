@@ -365,6 +365,16 @@ impl ManagementClient {
         state.current_bundle_id = Some(bundle_id);
         state.current_bundle_checksum = Some(checksum);
     }
+
+    /// Get current bundle info synchronously (for metrics collection)
+    /// Returns (bundle_id, bundle_version/checksum)
+    pub fn get_current_bundle_sync(&self) -> (Option<Uuid>, Option<String>) {
+        // Use try_read to avoid blocking, return None if lock is contended
+        match self.state.try_read() {
+            Ok(state) => (state.current_bundle_id, state.current_bundle_checksum.clone()),
+            Err(_) => (None, None),
+        }
+    }
 }
 
 impl std::fmt::Debug for ManagementClient {

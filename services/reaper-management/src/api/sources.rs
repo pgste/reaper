@@ -410,6 +410,28 @@ fn validate_source_config(
                 ));
             }
         }
+        SourceType::S3 => {
+            // Must have bucket and region
+            if config.get("bucket").and_then(|v| v.as_str()).is_none() {
+                return Err(ApiError::Validation(
+                    "S3 source requires 'bucket' in config".to_string(),
+                ));
+            }
+            if config.get("region").and_then(|v| v.as_str()).is_none() {
+                return Err(ApiError::Validation(
+                    "S3 source requires 'region' in config".to_string(),
+                ));
+            }
+        }
+        SourceType::BundleUrl => {
+            // BundleUrl can work without base_url (webhook-only mode)
+            // But if checksum verification is enabled, it needs the algorithm
+            if config.get("verify_checksum") == Some(&serde_json::Value::Bool(true)) {
+                if config.get("checksum_algorithm").is_none() {
+                    // Default is sha256, so this is fine
+                }
+            }
+        }
     }
     Ok(())
 }

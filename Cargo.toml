@@ -9,6 +9,7 @@ members = [
     "services/reaper-platform",
     "services/reaper-sync",
     "services/reaper-management",
+    "services/reaper-bench",
     "tools/reaper-cli",
     "tests/e2e",
 ]
@@ -45,7 +46,7 @@ criterion = { version = "0.8.1", features = ["html_reports"] }
 proptest = "1.0"
 
 # BDD Testing
-cucumber = "0.22.0"
+cucumber = "0.21"
 async-trait = "0.1"
 reqwest = { version = "0.12.26", features = ["json"] }
 futures = "0.3"

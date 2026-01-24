@@ -5,8 +5,9 @@
 //! - Polling for bundle updates
 //! - Automatic bundle deployment
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -15,6 +16,7 @@ use reaper_core::config::ManagementSettings;
 
 use super::client::ManagementClient;
 use super::types::{AgentMetrics, ManagementError};
+use crate::AgentStats;
 
 /// Bundle update notification
 #[derive(Debug, Clone)]
@@ -29,6 +31,10 @@ pub struct SyncService {
     client: Arc<ManagementClient>,
     config: ManagementSettings,
     policy_engine: Arc<PolicyEngine>,
+    /// Agent statistics for metrics collection
+    stats: Arc<AgentStats>,
+    /// Agent start time for uptime calculation
+    started_at: Instant,
     /// Channel to send bundle updates
     update_tx: watch::Sender<Option<BundleUpdate>>,
     /// Channel to receive shutdown signal
@@ -41,6 +47,8 @@ impl SyncService {
         client: Arc<ManagementClient>,
         config: ManagementSettings,
         policy_engine: Arc<PolicyEngine>,
+        stats: Arc<AgentStats>,
+        started_at: Instant,
         shutdown_rx: watch::Receiver<bool>,
     ) -> (Self, watch::Receiver<Option<BundleUpdate>>) {
         let (update_tx, update_rx) = watch::channel(None);
@@ -49,6 +57,8 @@ impl SyncService {
             client,
             config,
             policy_engine,
+            stats,
+            started_at,
             update_tx,
             shutdown_rx,
         };
@@ -151,16 +161,57 @@ impl SyncService {
 
     /// Collect current agent metrics
     fn collect_metrics(&self) -> AgentMetrics {
-        let policy_count = self.policy_engine.list_policies().len();
+        // Get request stats
+        let requests_total = self.stats.requests_processed.load(Ordering::Relaxed);
+        let total_eval_time_ns = self.stats.total_evaluation_time_ns.load(Ordering::Relaxed);
 
-        // TODO: Get actual metrics from prometheus/stats
+        // Calculate uptime
+        let uptime_seconds = self.started_at.elapsed().as_secs();
+
+        // Calculate requests per second (avoid division by zero)
+        let requests_per_second = if uptime_seconds > 0 {
+            requests_total as f64 / uptime_seconds as f64
+        } else {
+            0.0
+        };
+
+        // Calculate average latency (avoid division by zero)
+        let avg_latency_us = if requests_total > 0 {
+            (total_eval_time_ns as f64 / requests_total as f64) / 1000.0 // ns to µs
+        } else {
+            0.0
+        };
+
+        // Get accurate p50 and p99 from HDR histogram
+        let p50_latency_us = self.stats.get_latency_percentile_us(50.0);
+        let p99_latency_us = self.stats.get_latency_percentile_us(99.0);
+
+        // Get memory usage from sysinfo (cross-platform)
+        let memory_bytes = self.stats.get_memory_bytes();
+
+        // Get CPU usage from sysinfo (cross-platform)
+        let cpu_percent = self.stats.get_cpu_percent();
+
+        // Get real allow/deny decision counts
+        let decisions_allow = self.stats.decisions_allow.load(Ordering::Relaxed);
+        let decisions_deny = self.stats.decisions_deny.load(Ordering::Relaxed);
+
+        // Get current bundle info from client
+        let (current_bundle_id, current_bundle_version) = self.client.get_current_bundle_sync();
+
         AgentMetrics {
-            requests_per_second: 0.0,
-            avg_latency_us: 0.0,
-            p99_latency_us: 0.0,
-            policy_count,
-            memory_bytes: None,
-            cache_hit_rate: None,
+            requests_total,
+            requests_per_second,
+            avg_latency_us,
+            p50_latency_us,
+            p99_latency_us,
+            memory_bytes,
+            cpu_percent,
+            decisions_allow,
+            decisions_deny,
+            uptime_seconds,
+            current_bundle_id,
+            current_bundle_version,
         }
     }
 
