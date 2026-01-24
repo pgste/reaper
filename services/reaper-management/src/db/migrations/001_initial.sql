@@ -196,18 +196,17 @@ CREATE TABLE IF NOT EXISTS jwks_configs (
     org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     jwks_url TEXT NOT NULL,                  -- URL to fetch JWKS
-    issuer TEXT,                             -- Expected issuer claim
+    issuer TEXT NOT NULL,                    -- Expected issuer claim
     audience TEXT,                           -- Expected audience claim
-    cache_ttl_seconds INTEGER DEFAULT 3600,
-    last_fetched_at TEXT,
-    cached_keys TEXT,                        -- Cached JWKS JSON
     is_active INTEGER DEFAULT 1,
+    cache_ttl_secs INTEGER DEFAULT 3600,     -- How long to cache JWKS keys
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(org_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_jwks_configs_org ON jwks_configs(org_id);
+CREATE INDEX IF NOT EXISTS idx_jwks_configs_issuer ON jwks_configs(issuer);
 
 -- Data Sources: Configuration for entity data notifications (not data itself)
 CREATE TABLE IF NOT EXISTS data_sources (

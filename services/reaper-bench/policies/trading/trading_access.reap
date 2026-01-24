@@ -1,0 +1,86 @@
+// Trading Desk Access Control Policy
+//
+// This policy controls trader access to books based on:
+// 1. Trader must exist and be active
+// 2. Trader must have access to the desk
+// 3. Desk must allow the asset type
+// 4. Trader must be mapped to the specific book
+//
+// Data Model:
+// - Trader: { id, name, status, desk_ids[] }
+// - Desk: { id, name, asset_types[] }
+// - Book: { id, name, asset_type, desk_id }
+// - TraderBookMapping: { trader_id, book_ids[] }
+
+policy trading_access {
+    version: "1.0.0",
+    default: deny,
+
+    // Rule 1: Deny suspended traders immediately
+    rule deny_suspended_traders {
+        deny if user.status == "suspended"
+    }
+
+    // Rule 2: Deny inactive traders
+    rule deny_inactive_traders {
+        deny if user.status == "inactive"
+    }
+
+    // Rule 3: Allow trader to view their assigned books
+    // The trader must have desk access and be mapped to the book
+    rule trader_view_book {
+        allow if {
+            action == "view" &&
+            user.status == "active" &&
+            user.desk_ids[_] == resource.desk_id
+        }
+    }
+
+    // Rule 4: Allow trader to trade on their assigned books
+    rule trader_trade_book {
+        allow if {
+            action == "trade" &&
+            user.status == "active" &&
+            user.desk_ids[_] == resource.desk_id &&
+            user.role == "trader"
+        }
+    }
+
+    // Rule 5: Allow desk heads to view all books on their desk
+    rule desk_head_view {
+        allow if {
+            action == "view" &&
+            user.status == "active" &&
+            user.role == "desk_head" &&
+            user.desk_ids[_] == resource.desk_id
+        }
+    }
+
+    // Rule 6: Allow desk heads to trade on all books on their desk
+    rule desk_head_trade {
+        allow if {
+            action == "trade" &&
+            user.status == "active" &&
+            user.role == "desk_head" &&
+            user.desk_ids[_] == resource.desk_id
+        }
+    }
+
+    // Rule 7: Allow risk managers to view any book
+    rule risk_manager_view {
+        allow if {
+            action == "view" &&
+            user.status == "active" &&
+            user.role == "risk_manager"
+        }
+    }
+
+    // Rule 8: Compliance can view any book
+    rule compliance_view {
+        allow if {
+            action == "view" &&
+            user.status == "active" &&
+            user.role == "compliance"
+        }
+    }
+}

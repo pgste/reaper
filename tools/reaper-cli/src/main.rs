@@ -14,9 +14,32 @@ use policy_engine::{
     PolicyRequest, ReaperPolicy,
 };
 
-// eBPF command handlers
+// eBPF command handlers (Linux only)
+#[cfg(target_os = "linux")]
 mod ebpf_commands;
+#[cfg(target_os = "linux")]
 use ebpf_commands::{handle_analyze_policy, handle_validate_data};
+
+// Stub implementations for non-Linux platforms
+#[cfg(not(target_os = "linux"))]
+fn handle_validate_data(
+    _file: &str,
+    _check_ebpf: bool,
+    _format: &str,
+    _custom_schemas: Option<&str>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("eBPF commands are only available on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn handle_analyze_policy(
+    _file: &str,
+    _check_ebpf: bool,
+    _show_recommendations: bool,
+    _format: &str,
+) -> anyhow::Result<()> {
+    anyhow::bail!("eBPF commands are only available on Linux")
+}
 
 #[derive(Parser)]
 #[command(name = "reaper")]
@@ -174,6 +197,52 @@ enum Commands {
         /// API key for authentication
         #[arg(long, env = "REAPER_MANAGEMENT_API_KEY")]
         api_key: Option<String>,
+    },
+
+    /// Test a single policy assertion (returns exit code 0 for pass, 1 for fail)
+    Test {
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        #[arg(short, long)]
+        policy: String,
+
+        /// Path to JSON data file
+        #[arg(short, long)]
+        data: String,
+
+        /// Principal (user) ID
+        #[arg(long)]
+        principal: String,
+
+        /// Action to evaluate
+        #[arg(short, long)]
+        action: String,
+
+        /// Resource ID
+        #[arg(short, long)]
+        resource: String,
+
+        /// Expected decision (allow or deny)
+        #[arg(short, long)]
+        expect: String,
+
+        /// Show detailed output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Run a test suite from a YAML file
+    TestSuite {
+        /// Path to test suite YAML file
+        #[arg(short, long)]
+        file: String,
+
+        /// Show detailed output for each test
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Stop on first failure
+        #[arg(long)]
+        fail_fast: bool,
     },
 }
 
@@ -724,6 +793,214 @@ fn handle_validate(
 }
 
 // ============================================================================
+// Test Command Handlers
+// ============================================================================
+
+/// Test case definition for test suite YAML files
+#[derive(serde::Deserialize, Debug)]
+struct TestCase {
+    name: String,
+    policy: String,
+    data: String,
+    principal: String,
+    action: String,
+    resource: String,
+    expect: String,
+}
+
+/// Test suite definition
+#[derive(serde::Deserialize, Debug)]
+struct TestSuiteDefinition {
+    tests: Vec<TestCase>,
+}
+
+/// Handle: reaper test
+fn handle_test(
+    policy_path: &str,
+    data_path: &str,
+    principal: &str,
+    action: &str,
+    resource: &str,
+    expect: &str,
+    verbose: bool,
+) -> anyhow::Result<bool> {
+    // Validate expected value
+    let expected_decision = match expect.to_lowercase().as_str() {
+        "allow" => EngineAction::Allow,
+        "deny" => EngineAction::Deny,
+        _ => anyhow::bail!(
+            "Invalid expected decision: '{}'. Must be 'allow' or 'deny'",
+            expect
+        ),
+    };
+
+    // Validate inputs
+    if !Path::new(policy_path).exists() {
+        anyhow::bail!("Policy file not found: {}", policy_path);
+    }
+    if !Path::new(data_path).exists() {
+        anyhow::bail!("Data file not found: {}", data_path);
+    }
+
+    // Load and parse policy
+    let policy = ReaperPolicy::from_file_auto(policy_path)
+        .map_err(|e| anyhow::anyhow!("Failed to parse policy: {:?}", e))?;
+
+    // Load data
+    let data_content = fs::read_to_string(data_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read data file: {}", e))?;
+
+    let store = DataStore::new();
+    let loader = DataLoader::new(store.clone());
+    let _entity_count = loader
+        .load_json(&data_content)
+        .map_err(|e| anyhow::anyhow!("Failed to load data: {:?}", e))?;
+
+    // Build evaluator
+    let store = Arc::new(store);
+    let evaluator = policy
+        .build(store.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to build evaluator: {:?}", e))?;
+
+    // Evaluate
+    let mut context = HashMap::new();
+    context.insert("principal".to_string(), principal.to_string());
+
+    let request = PolicyRequest {
+        resource: resource.to_string(),
+        action: action.to_string(),
+        context,
+    };
+
+    let eval_start = Instant::now();
+    let actual_decision = evaluator
+        .evaluate(&request)
+        .map_err(|e| anyhow::anyhow!("Evaluation failed: {:?}", e))?;
+    let eval_time = eval_start.elapsed();
+
+    // Compare result
+    let passed = actual_decision == expected_decision;
+
+    if verbose {
+        println!("Test: {} {} {} -> {}", principal, action, resource, expect);
+        println!("  Policy: {}", policy_path);
+        println!("  Expected: {:?}", expected_decision);
+        println!("  Actual:   {:?}", actual_decision);
+        println!("  Time:     {:?}", eval_time);
+        if passed {
+            println!("  Result:   PASS");
+        } else {
+            println!("  Result:   FAIL");
+        }
+    } else if passed {
+        println!(
+            "PASS: {} {} {} -> {:?}",
+            principal, action, resource, actual_decision
+        );
+    } else {
+        println!(
+            "FAIL: {} {} {} -> {:?} (expected {:?})",
+            principal, action, resource, actual_decision, expected_decision
+        );
+    }
+
+    Ok(passed)
+}
+
+/// Handle: reaper test-suite
+fn handle_test_suite(suite_path: &str, verbose: bool, fail_fast: bool) -> anyhow::Result<bool> {
+    // Load test suite
+    if !Path::new(suite_path).exists() {
+        anyhow::bail!("Test suite file not found: {}", suite_path);
+    }
+
+    let content = fs::read_to_string(suite_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read test suite: {}", e))?;
+
+    let suite: TestSuiteDefinition = serde_yaml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse test suite YAML: {}", e))?;
+
+    println!(
+        "Running {} test(s) from {}\n",
+        suite.tests.len(),
+        suite_path
+    );
+    println!("═══════════════════════════════════════════════════════════════");
+
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut failures: Vec<String> = Vec::new();
+    let start_time = Instant::now();
+
+    for test in &suite.tests {
+        if verbose {
+            println!("\nTest: {}", test.name);
+        }
+
+        match handle_test(
+            &test.policy,
+            &test.data,
+            &test.principal,
+            &test.action,
+            &test.resource,
+            &test.expect,
+            verbose,
+        ) {
+            Ok(true) => {
+                passed += 1;
+                if !verbose {
+                    println!("  PASS: {}", test.name);
+                }
+            }
+            Ok(false) => {
+                failed += 1;
+                failures.push(test.name.clone());
+                if !verbose {
+                    println!("  FAIL: {}", test.name);
+                }
+                if fail_fast {
+                    println!("\nStopping on first failure (--fail-fast)");
+                    break;
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                failures.push(format!("{}: {}", test.name, e));
+                if !verbose {
+                    println!("  ERROR: {} - {}", test.name, e);
+                } else {
+                    println!("  ERROR: {}", e);
+                }
+                if fail_fast {
+                    println!("\nStopping on first failure (--fail-fast)");
+                    break;
+                }
+            }
+        }
+    }
+
+    let total_time = start_time.elapsed();
+    println!("\n═══════════════════════════════════════════════════════════════");
+    println!(
+        "Results: {} passed, {} failed ({:?})",
+        passed, failed, total_time
+    );
+
+    if !failures.is_empty() {
+        println!("\nFailed tests:");
+        for f in &failures {
+            println!("  - {}", f);
+        }
+    }
+
+    if failed == 0 {
+        println!("\nAll tests passed!");
+    }
+
+    Ok(failed == 0)
+}
+
+// ============================================================================
 // Platform/Agent Command Handlers
 // ============================================================================
 
@@ -782,6 +1059,32 @@ async fn main() -> anyhow::Result<()> {
             ref management_url,
             ref api_key,
         } => handle_management_action(action, management_url, api_key.as_deref(), &client).await?,
+
+        Commands::Test {
+            ref policy,
+            ref data,
+            ref principal,
+            ref action,
+            ref resource,
+            ref expect,
+            verbose,
+        } => {
+            let passed = handle_test(policy, data, principal, action, resource, expect, verbose)?;
+            if !passed {
+                std::process::exit(1);
+            }
+        }
+
+        Commands::TestSuite {
+            ref file,
+            verbose,
+            fail_fast,
+        } => {
+            let all_passed = handle_test_suite(file, verbose, fail_fast)?;
+            if !all_passed {
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())

@@ -19,6 +19,7 @@ use crate::{
     db::repositories::{OrganizationRepository, PolicyRepository},
     domain::policy::{CreatePolicy, Policy, PolicyLanguage, PolicyVersion, UpdatePolicy},
     state::AppState,
+    validation::{PolicyValidationResult, ValidationService},
 };
 
 /// Build policy routes (nested under orgs)
@@ -29,8 +30,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(list_policies).post(create_policy),
         )
         .route(
+            "/orgs/{org}/policies/validate",
+            axum::routing::post(validate_policy_content),
+        )
+        .route(
             "/orgs/{org}/policies/{policy}",
             get(get_policy).put(update_policy).delete(delete_policy),
+        )
+        .route(
+            "/orgs/{org}/policies/{policy}/validate",
+            axum::routing::post(validate_policy),
         )
         .route("/orgs/{org}/policies/{policy}/versions", get(list_versions))
         .route(
@@ -274,6 +283,62 @@ async fn get_version(
         .ok_or_else(|| ApiError::NotFound(format!("Version {} not found", version)))?;
 
     Ok(Json(version))
+}
+
+/// Request to validate policy content (preview before saving)
+#[derive(Debug, Deserialize)]
+pub struct ValidatePolicyContentRequest {
+    #[serde(default)]
+    pub language: PolicyLanguage,
+    pub content: String,
+}
+
+/// Validate an existing policy by ID
+async fn validate_policy(
+    State(state): State<Arc<AppState>>,
+    Path((org, policy_ref)): Path<(String, String)>,
+) -> ApiResult<Json<PolicyValidationResult>> {
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, &org).await?;
+
+    let policy_repo = PolicyRepository::new(&state.db);
+    let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
+
+    let validation_service = ValidationService::new(state.db.clone());
+    let result = validation_service
+        .validate_policy(policy.id, None)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Validation error: {}", e)))?;
+
+    Ok(Json(result))
+}
+
+/// Validate policy content before saving (preview)
+async fn validate_policy_content(
+    State(state): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    Json(request): Json<ValidatePolicyContentRequest>,
+) -> ApiResult<Json<PolicyValidationResult>> {
+    let org_repo = OrganizationRepository::new(&state.db);
+    let _organization = resolve_org(&org_repo, &org).await?;
+
+    if request.content.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Policy content is required".to_string(),
+        ));
+    }
+
+    let validation_service = ValidationService::new(state.db.clone());
+    let result = validation_service
+        .validate_content(
+            Uuid::nil(), // Preview has no ID yet
+            "preview",
+            request.language,
+            &request.content,
+        )
+        .map_err(|e| ApiError::Internal(format!("Validation error: {}", e)))?;
+
+    Ok(Json(result))
 }
 
 /// Resolve policy by ID or name

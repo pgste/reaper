@@ -14,6 +14,10 @@ pub enum SourceType {
     Git,
     /// External HTTP API source
     Api,
+    /// S3 bucket source
+    S3,
+    /// Bundle URL source (webhook-triggered)
+    BundleUrl,
 }
 
 impl Default for SourceType {
@@ -27,6 +31,8 @@ impl std::fmt::Display for SourceType {
         match self {
             Self::Git => write!(f, "git"),
             Self::Api => write!(f, "api"),
+            Self::S3 => write!(f, "s3"),
+            Self::BundleUrl => write!(f, "bundle_url"),
         }
     }
 }
@@ -38,6 +44,8 @@ impl std::str::FromStr for SourceType {
         match s.to_lowercase().as_str() {
             "git" => Ok(Self::Git),
             "api" => Ok(Self::Api),
+            "s3" => Ok(Self::S3),
+            "bundle_url" | "bundleurl" => Ok(Self::BundleUrl),
             _ => Err(format!("Unknown source type: {}", s)),
         }
     }
@@ -190,6 +198,112 @@ impl Default for ApiConfig {
     }
 }
 
+/// S3 source configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3Config {
+    /// S3 bucket name
+    pub bucket: String,
+    /// AWS region (e.g., "us-east-1")
+    pub region: String,
+    /// Prefix within bucket (folder path)
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// File patterns to include (glob)
+    #[serde(default = "default_s3_patterns")]
+    pub patterns: Vec<String>,
+    /// AWS access key ID (optional if using IAM role)
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    /// AWS secret access key (optional if using IAM role)
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    /// Use IAM role for authentication (default: true)
+    #[serde(default = "default_use_iam_role")]
+    pub use_iam_role: bool,
+    /// Custom S3 endpoint URL (for S3-compatible services)
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    /// Whether to fetch .rbb bundles directly (skip compilation)
+    #[serde(default)]
+    pub bundle_mode: bool,
+}
+
+fn default_s3_patterns() -> Vec<String> {
+    vec!["**/*.reap".to_string(), "**/*.yaml".to_string()]
+}
+
+fn default_use_iam_role() -> bool {
+    true
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            bucket: String::new(),
+            region: "us-east-1".to_string(),
+            prefix: None,
+            patterns: default_s3_patterns(),
+            access_key_id: None,
+            secret_access_key: None,
+            use_iam_role: true,
+            endpoint_url: None,
+            bundle_mode: false,
+        }
+    }
+}
+
+/// Bundle URL source configuration (webhook-triggered)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleUrlConfig {
+    /// Base URL for bundle downloads (optional, if bundles always come from webhooks)
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Expected checksum algorithm ("sha256", "md5")
+    #[serde(default = "default_checksum_algorithm")]
+    pub checksum_algorithm: String,
+    /// Webhook secret for HMAC validation
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    /// Authentication header name for bundle download
+    #[serde(default)]
+    pub auth_header: Option<String>,
+    /// Authentication token for bundle download
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    /// Timeout for bundle download in seconds
+    #[serde(default = "default_download_timeout")]
+    pub download_timeout_secs: u32,
+    /// Whether to verify bundle checksum
+    #[serde(default = "default_verify_checksum")]
+    pub verify_checksum: bool,
+}
+
+fn default_checksum_algorithm() -> String {
+    "sha256".to_string()
+}
+
+fn default_download_timeout() -> u32 {
+    60
+}
+
+fn default_verify_checksum() -> bool {
+    true
+}
+
+impl Default for BundleUrlConfig {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            checksum_algorithm: default_checksum_algorithm(),
+            webhook_secret: None,
+            auth_header: None,
+            auth_token: None,
+            download_timeout_secs: default_download_timeout(),
+            verify_checksum: true,
+        }
+    }
+}
+
 /// Policy source entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicySource {
@@ -224,6 +338,24 @@ impl PolicySource {
     /// Get API configuration if this is an API source
     pub fn api_config(&self) -> Option<ApiConfig> {
         if self.source_type == SourceType::Api {
+            serde_json::from_value(self.config.clone()).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Get S3 configuration if this is an S3 source
+    pub fn s3_config(&self) -> Option<S3Config> {
+        if self.source_type == SourceType::S3 {
+            serde_json::from_value(self.config.clone()).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Get Bundle URL configuration if this is a BundleUrl source
+    pub fn bundle_url_config(&self) -> Option<BundleUrlConfig> {
+        if self.source_type == SourceType::BundleUrl {
             serde_json::from_value(self.config.clone()).ok()
         } else {
             None
@@ -297,7 +429,33 @@ mod tests {
     fn test_source_type_parsing() {
         assert_eq!("git".parse::<SourceType>().unwrap(), SourceType::Git);
         assert_eq!("api".parse::<SourceType>().unwrap(), SourceType::Api);
+        assert_eq!("s3".parse::<SourceType>().unwrap(), SourceType::S3);
+        assert_eq!(
+            "bundle_url".parse::<SourceType>().unwrap(),
+            SourceType::BundleUrl
+        );
+        assert_eq!(
+            "bundleurl".parse::<SourceType>().unwrap(),
+            SourceType::BundleUrl
+        );
         assert!("invalid".parse::<SourceType>().is_err());
+    }
+
+    #[test]
+    fn test_s3_config_default() {
+        let config = S3Config::default();
+        assert_eq!(config.region, "us-east-1");
+        assert!(config.use_iam_role);
+        assert!(!config.bundle_mode);
+        assert!(config.patterns.contains(&"**/*.reap".to_string()));
+    }
+
+    #[test]
+    fn test_bundle_url_config_default() {
+        let config = BundleUrlConfig::default();
+        assert_eq!(config.checksum_algorithm, "sha256");
+        assert_eq!(config.download_timeout_secs, 60);
+        assert!(config.verify_checksum);
     }
 
     #[test]

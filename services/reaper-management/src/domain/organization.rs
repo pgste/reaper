@@ -43,6 +43,20 @@ pub struct UpdateOrganization {
 }
 
 impl Organization {
+    /// Create a new organization
+    pub fn new(name: String, slug: String) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            slug,
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
     /// Check if organization has a specific setting
     pub fn has_setting(&self, key: &str) -> bool {
         self.settings.get(key).is_some()

@@ -1,0 +1,19 @@
+{
+  "entities": [
+    {"id": "admin_alice", "type": "User", "attributes": {"id": "admin_alice", "role": "admin", "department": "engineering"}},
+    {"id": "admin_bob", "type": "User", "attributes": {"id": "admin_bob", "role": "admin", "department": "operations"}},
+    {"id": "manager_carol", "type": "User", "attributes": {"id": "manager_carol", "role": "manager", "department": "engineering"}},
+    {"id": "manager_dave", "type": "User", "attributes": {"id": "manager_dave", "role": "manager", "department": "sales"}},
+    {"id": "engineer_eve", "type": "User", "attributes": {"id": "engineer_eve", "role": "engineer", "department": "engineering"}},
+    {"id": "engineer_frank", "type": "User", "attributes": {"id": "engineer_frank", "role": "engineer", "department": "engineering"}},
+    {"id": "viewer_grace", "type": "User", "attributes": {"id": "viewer_grace", "role": "viewer", "department": "marketing"}},
+    {"id": "viewer_henry", "type": "User", "attributes": {"id": "viewer_henry", "role": "viewer", "department": "sales"}},
+    {"id": "marketing_iris", "type": "User", "attributes": {"id": "marketing_iris", "role": "viewer", "department": "marketing"}},
+    {"id": "guest_jack", "type": "User", "attributes": {"id": "guest_jack", "role": "guest", "department": "external"}},
+    {"id": "report_001", "type": "Resource", "attributes": {"id": "report_001", "type": "report", "owner_id": "engineer_eve", "department": "engineering"}},
+    {"id": "report_002", "type": "Resource", "attributes": {"id": "report_002", "type": "report", "owner_id": "manager_carol", "department": "engineering"}},
+    {"id": "api_data", "type": "Resource", "attributes": {"id": "api_data", "type": "api", "owner_id": "admin_alice", "department": "engineering"}},
+    {"id": "dashboard", "type": "Resource", "attributes": {"id": "dashboard", "type": "dashboard", "owner_id": "viewer_grace", "department": "marketing"}},
+    {"id": "sales_data", "type": "Resource", "attributes": {"id": "sales_data", "type": "data", "owner_id": "manager_dave", "department": "sales"}}
+  ]
+}

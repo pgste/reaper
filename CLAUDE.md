@@ -27,6 +27,29 @@ make platform           # Run only Reaper Platform on port 8081
 make cli                # Build the CLI tool
 ```
 
+### Docker Deployment
+```bash
+# Just the agent (standalone enforcement)
+docker compose --profile engine up -d
+
+# Agent + Platform (simple management)
+docker compose --profile platform up -d
+
+# Enterprise stack (Agent + Management + PostgreSQL)
+docker compose --profile management up -d
+
+# Full stack with observability (Prometheus, Grafana, Tempo, Loki)
+docker compose --profile full --profile observability up -d
+```
+
+| Profile | Services | Use Case |
+|---------|----------|----------|
+| `engine` | Agent | Simple policy enforcement |
+| `platform` | Agent, Platform | Basic management |
+| `management` | Agent, Management, PostgreSQL | Enterprise with centralized control |
+| `observability` | Prometheus, Grafana, Tempo, Loki | Monitoring stack |
+| `full` | All core services | Complete deployment |
+
 ### Development Workflow
 ```bash
 make dev                # Auto-reload on changes (cargo watch)
@@ -124,14 +147,14 @@ reaper/
 │   └── helm/reaper/        # Helm chart
 ├── docs/                   # Organized documentation
 │   ├── getting-started/
-│   ├── concepts/
+│   ├── concepts/           # Bundle format, event-driven loading
 │   ├── architecture/
-│   ├── deployment/
+│   ├── deployment/         # Operations guide, deployment patterns
 │   ├── performance/
-│   └── archive/            # Historical development notes
+│   └── HISTORY.md          # Historical milestones
 ├── benchmarks/
 │   └── reaper-vs-opa/      # Reaper vs OPA comparison benchmark
-└── deprecated/             # Deprecated code (message-queue stub)
+└── test-data/              # Test policies and data files
 ```
 
 ### Core Components
@@ -209,11 +232,54 @@ GET    /api/v1/agents/:id          # Get agent details (placeholder)
 ### Agent API (Port 8080)
 ```
 GET    /health                      # Health check
+GET    /ready                       # Readiness check
+GET    /live                        # Liveness check
 GET    /metrics                     # Agent performance metrics
 POST   /api/v1/messages            # Evaluate policy request
 POST   /api/v1/policies/deploy     # Deploy policy (from platform)
 GET    /api/v1/policies            # List active policies
+
+# Decision Logging (OPA-style audit logs)
+GET    /api/v1/decisions           # Query recent decisions (paginated)
+GET    /api/v1/decisions/stats     # Decision statistics
+GET    /api/v1/decisions/stream    # SSE stream of decisions (real-time)
+POST   /api/v1/decisions/export    # Export to file (NDJSON format)
 ```
+
+## Decision Logging (OPA-style Audit)
+
+Reaper provides structured decision logging for audit, compliance, and observability.
+
+### Configuration
+```bash
+REAPER_DECISION_LOG_ENABLED=true         # Enable decision logging
+REAPER_DECISION_LOG_CAPACITY=10000       # Ring buffer capacity
+REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson
+```
+
+### Decision Log Entry Format
+```json
+{
+  "timestamp": "2024-01-15T10:30:00Z",
+  "decision_id": "uuid",
+  "principal": "alice",
+  "action": "read",
+  "resource": "/api/data",
+  "decision": "allow",
+  "policy_id": "uuid",
+  "policy_name": "data-access",
+  "evaluation_time_ns": 450,
+  "agent_id": "agent-1"
+}
+```
+
+### Core Components
+- **DecisionLogEntry** (`crates/policy-engine/src/decision_log.rs`) - Structured log entry
+- **DecisionBuffer** (`crates/policy-engine/src/decision_buffer.rs`) - Lock-free ring buffer
+- **Agent Endpoints** - Query, stream, and export decisions
+
+### SIEM Integration
+Decision logs use NDJSON format, compatible with Splunk, Elasticsearch, Datadog, and Sumo Logic.
 
 ## Data Flow Patterns
 
@@ -359,8 +425,21 @@ When adding a new policy language:
 ./target/debug/reaper-cli eval --policy <file> --data <json> \
     --principal <id> --action <action> --resource <resource>
 
+# Policy testing (CI/CD integration)
+./target/debug/reaper-cli test --policy <file> --data <json> \
+    --principal <id> --action <action> --resource <resource> \
+    --expect <allow|deny> [--verbose]
+
+# Batch test suite (YAML format)
+./target/debug/reaper-cli test-suite --file tests.yaml [--fail-fast]
+
 # Policy compilation to binary bundle
 ./target/debug/reaper-cli compile <input-files> --output bundle.rbb
+
+# Bundle operations
+./target/debug/reaper-cli bundle info <bundle.rbb>
+./target/debug/reaper-cli bundle deploy <bundle.rbb> [--data <json>] [--force]
+./target/debug/reaper-cli bundle validate <bundle.rbb>
 
 # Policy validation
 ./target/debug/reaper-cli validate <policy-file> [--data <json>]
@@ -374,6 +453,26 @@ When adding a new policy language:
 # System status
 ./target/debug/reaper-cli status
 ./target/debug/reaper-cli benchmark [--requests 1000]
+```
+
+### Test Suite Format (YAML)
+```yaml
+tests:
+  - name: "Admin can access dashboard"
+    policy: "policies/admin.reap"
+    data: "data/entities.json"
+    principal: "admin_alice"
+    action: "access"
+    resource: "/admin/dashboard"
+    expect: allow
+
+  - name: "Viewer cannot delete"
+    policy: "policies/rbac.reap"
+    data: "data/entities.json"
+    principal: "viewer_bob"
+    action: "delete"
+    resource: "/api/data"
+    expect: deny
 ```
 
 ## Core Dependencies
@@ -398,7 +497,11 @@ When adding a new policy language:
     - ARCHITECTURE_SUMMARY.md - Executive summary (start here!)
     - REAPER_CLIENT_SEPARATION.md - Client/server separation design
     - FILE_REFERENCE.md - Complete file reference
+  - **concepts/** - Core concepts and formats
+    - BUNDLE_FORMAT.md - .rbb binary bundle specification
+    - EVENT_DRIVEN_LOADING.md - SSE-based policy sync
   - **deployment/** - Deployment patterns and guides
+    - OPERATIONS_GUIDE.md - Production operations (health, metrics, troubleshooting)
     - DEPLOYMENT_PATTERNS.md - Standalone, Integrated, Embedded patterns
     - SIDECAR_DEPLOYMENT.md - Sidecar deployment guide
   - **performance/** - Performance optimization documentation
@@ -411,16 +514,17 @@ When adding a new policy language:
   - **development/** - Implementation plans and guides
     - IMPLEMENTATION_PLAN.md - Roadmap for sync client and server
     - YAML_FORMAT.md - YAML policy format specification
-    - EXPLORATION_REPORT.md - Codebase exploration
+  - **HISTORY.md** - Historical milestones and lessons learned
 
 ## Development Notes
 
 - The workspace uses Rust 2021 edition
 - All crates share dependencies via workspace.dependencies in root Cargo.toml
 - BDD tests use `harness = false` in Cargo.toml [[test]] sections
-- Deprecated stubs (message-queue) are in `deprecated/` folder
 - Agent observability uses Prometheus + OpenTelemetry directly
-- eBPF integration is experimental but functional
+- eBPF integration is experimental (Linux only)
+- Decision logging provides OPA-style audit trails
+- Docker profiles enable flexible deployment patterns
 
 ## Architecture Evolution Plan
 
@@ -457,6 +561,8 @@ When adding a new policy language:
 **Layer 4: CLI** (`tools/reaper-cli/`) - Developer experience
 - Commands:
   - `eval` - Local policy evaluation
+  - `test` - Single policy assertion (CI/CD integration)
+  - `test-suite` - Batch test execution from YAML
   - `bundle` - Create/deploy policy packages
   - `validate` - Policy validation
   - `policy` - CRUD via Platform API

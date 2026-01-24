@@ -1,0 +1,14 @@
+{
+  "entities": [
+    {"id": "owner_alice", "type": "User", "attributes": {"id": "owner_alice", "role": "manager", "team_id": "team_alpha", "team_role": "lead", "department": "engineering", "is_senior_manager": true, "group_id": "group_1", "group_member": true}},
+    {"id": "member_bob", "type": "User", "attributes": {"id": "member_bob", "role": "engineer", "team_id": "team_alpha", "team_role": "member", "department": "engineering", "is_senior_manager": false, "group_id": "group_1", "group_member": true}},
+    {"id": "pending_carol", "type": "User", "attributes": {"id": "pending_carol", "role": "engineer", "team_id": "team_alpha", "team_role": "pending", "department": "engineering", "is_senior_manager": false, "group_id": "group_1", "group_member": false}},
+    {"id": "other_dave", "type": "User", "attributes": {"id": "other_dave", "role": "engineer", "team_id": "team_beta", "team_role": "member", "department": "sales", "is_senior_manager": false, "group_id": "group_2", "group_member": true}},
+    {"id": "manager_eve", "type": "User", "attributes": {"id": "manager_eve", "role": "manager", "team_id": "team_beta", "team_role": "lead", "department": "sales", "is_senior_manager": true, "group_id": "group_2", "group_member": true}},
+    {"id": "collaborator_frank", "type": "User", "attributes": {"id": "collaborator_frank", "role": "consultant", "team_id": "external", "team_role": "none", "department": "external", "is_senior_manager": false, "group_member": false}},
+    {"id": "team_doc_1", "type": "Resource", "attributes": {"id": "team_doc_1", "type": "document", "owner_id": "owner_alice", "team_id": "team_alpha", "department": "engineering", "owner_department": "engineering", "shared_with_user": "collaborator_frank", "collaborator_id": "collaborator_frank", "collaboration_status": "active", "inherit_permissions": false, "group_id": "group_1", "public_in_dept": true}},
+    {"id": "team_doc_2", "type": "Resource", "attributes": {"id": "team_doc_2", "type": "document", "owner_id": "member_bob", "team_id": "team_alpha", "department": "engineering", "owner_department": "engineering", "parent_owner_id": "owner_alice", "inherit_permissions": true, "group_id": "group_1", "public_in_dept": false}},
+    {"id": "sales_doc", "type": "Resource", "attributes": {"id": "sales_doc", "type": "document", "owner_id": "other_dave", "team_id": "team_beta", "department": "sales", "owner_department": "sales", "shared_with_user": "owner_alice", "inherit_permissions": false, "group_id": "group_2", "public_in_dept": true}},
+    {"id": "private_doc", "type": "Resource", "attributes": {"id": "private_doc", "type": "document", "owner_id": "manager_eve", "team_id": "team_beta", "department": "sales", "owner_department": "sales", "inherit_permissions": false, "public_in_dept": false}}
+  ]
+}

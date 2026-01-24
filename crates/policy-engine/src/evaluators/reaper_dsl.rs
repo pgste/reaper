@@ -117,6 +117,18 @@ pub enum Condition {
         resource_attr: String,
         user_attr: String,
     },
+    /// Wildcard iteration: user.attr[_] == resource.attr
+    /// Existential quantification - true if ANY element in user's array equals resource's scalar
+    UserWildcardEqualsResourceAttr {
+        user_attr: String,
+        resource_attr: String,
+    },
+    /// Wildcard iteration: resource.attr[_] == user.attr
+    /// Existential quantification - true if ANY element in resource's array equals user's scalar
+    ResourceWildcardEqualsUserAttr {
+        resource_attr: String,
+        user_attr: String,
+    },
     /// Compare two attributes of the same entity: entity.attr1 op entity.attr2
     /// Works for User, Resource, or Context entities
     SameEntityAttrCompare {
@@ -359,6 +371,14 @@ pub enum CompiledCondition {
         resource_attr: InternedString,
     },
     ResourceIntGreater {
+        resource_attr: InternedString,
+        user_attr: InternedString,
+    },
+    UserWildcardEqualsResourceAttr {
+        user_attr: InternedString,
+        resource_attr: InternedString,
+    },
+    ResourceWildcardEqualsUserAttr {
         resource_attr: InternedString,
         user_attr: InternedString,
     },
@@ -689,6 +709,20 @@ impl ReaperDSLEvaluator {
                 resource_attr: interner.intern(resource_attr),
                 user_attr: interner.intern(user_attr),
             },
+            Condition::UserWildcardEqualsResourceAttr {
+                user_attr,
+                resource_attr,
+            } => CompiledCondition::UserWildcardEqualsResourceAttr {
+                user_attr: interner.intern(user_attr),
+                resource_attr: interner.intern(resource_attr),
+            },
+            Condition::ResourceWildcardEqualsUserAttr {
+                resource_attr,
+                user_attr,
+            } => CompiledCondition::ResourceWildcardEqualsUserAttr {
+                resource_attr: interner.intern(resource_attr),
+                user_attr: interner.intern(user_attr),
+            },
             Condition::SameEntityAttrCompare {
                 entity_type,
                 left_attr,
@@ -1014,6 +1048,14 @@ impl ReaperDSLEvaluator {
                 resource_attr,
             }
             | Condition::ResourceIntGreater {
+                resource_attr,
+                user_attr,
+            }
+            | Condition::UserWildcardEqualsResourceAttr {
+                user_attr,
+                resource_attr,
+            }
+            | Condition::ResourceWildcardEqualsUserAttr {
                 resource_attr,
                 user_attr,
             } => {
@@ -1365,6 +1407,74 @@ impl ReaperDSLEvaluator {
                     user.get_attribute(*user_attr),
                 ) {
                     (Some(AttributeValue::Int(r)), Some(AttributeValue::Int(u))) => r > u,
+                    _ => false,
+                }
+            }
+
+            // Wildcard iteration: user.attr[_] == resource.attr
+            // Existential quantification: true if ANY element in user's array equals resource's scalar
+            CompiledCondition::UserWildcardEqualsResourceAttr {
+                user_attr,
+                resource_attr,
+            } => {
+                let resource_val = resource.get_attribute(*resource_attr);
+                let user_collection = user.get_attribute(*user_attr);
+
+                match (user_collection, resource_val) {
+                    // List contains string
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::String(s) if *s == *expected))
+                    }
+                    // Set contains string (O(1) lookup)
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::String(expected))) => {
+                        items.contains(&AttributeValue::String(*expected))
+                    }
+                    // List contains int
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::Int(i) if *i == *expected))
+                    }
+                    // Set contains int
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::Int(expected))) => {
+                        items.contains(&AttributeValue::Int(*expected))
+                    }
+                    _ => false,
+                }
+            }
+
+            // Wildcard iteration: resource.attr[_] == user.attr
+            // Existential quantification: true if ANY element in resource's array equals user's scalar
+            CompiledCondition::ResourceWildcardEqualsUserAttr {
+                resource_attr,
+                user_attr,
+            } => {
+                let user_val = user.get_attribute(*user_attr);
+                let resource_collection = resource.get_attribute(*resource_attr);
+
+                match (resource_collection, user_val) {
+                    // List contains string
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::String(s) if *s == *expected))
+                    }
+                    // Set contains string (O(1) lookup)
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::String(expected))) => {
+                        items.contains(&AttributeValue::String(*expected))
+                    }
+                    // List contains int
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::Int(i) if *i == *expected))
+                    }
+                    // Set contains int
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::Int(expected))) => {
+                        items.contains(&AttributeValue::Int(*expected))
+                    }
                     _ => false,
                 }
             }
@@ -2516,6 +2626,80 @@ impl ReaperDSLEvaluator {
                     user.get_attribute(user_key),
                 ) {
                     (Some(AttributeValue::Int(r)), Some(AttributeValue::Int(u))) => r > u,
+                    _ => false,
+                }
+            }
+
+            // Wildcard iteration: user.attr[_] == resource.attr
+            // Existential quantification: true if ANY element in user's array equals resource's scalar
+            Condition::UserWildcardEqualsResourceAttr {
+                user_attr,
+                resource_attr,
+            } => {
+                let user_key = self.get_interned(user_attr, interner);
+                let resource_key = self.get_interned(resource_attr, interner);
+
+                let user_collection = user.get_attribute(user_key);
+                let resource_val = resource.get_attribute(resource_key);
+
+                match (user_collection, resource_val) {
+                    // List contains string
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::String(s) if *s == *expected))
+                    }
+                    // Set contains string (O(1) lookup)
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::String(expected))) => {
+                        items.contains(&AttributeValue::String(*expected))
+                    }
+                    // List contains int
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::Int(i) if *i == *expected))
+                    }
+                    // Set contains int
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::Int(expected))) => {
+                        items.contains(&AttributeValue::Int(*expected))
+                    }
+                    _ => false,
+                }
+            }
+
+            // Wildcard iteration: resource.attr[_] == user.attr
+            // Existential quantification: true if ANY element in resource's array equals user's scalar
+            Condition::ResourceWildcardEqualsUserAttr {
+                resource_attr,
+                user_attr,
+            } => {
+                let user_key = self.get_interned(user_attr, interner);
+                let resource_key = self.get_interned(resource_attr, interner);
+
+                let resource_collection = resource.get_attribute(resource_key);
+                let user_val = user.get_attribute(user_key);
+
+                match (resource_collection, user_val) {
+                    // List contains string
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::String(s) if *s == *expected))
+                    }
+                    // Set contains string (O(1) lookup)
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::String(expected))) => {
+                        items.contains(&AttributeValue::String(*expected))
+                    }
+                    // List contains int
+                    (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => {
+                        items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::Int(i) if *i == *expected))
+                    }
+                    // Set contains int
+                    (Some(AttributeValue::Set(items)), Some(AttributeValue::Int(expected))) => {
+                        items.contains(&AttributeValue::Int(*expected))
+                    }
                     _ => false,
                 }
             }

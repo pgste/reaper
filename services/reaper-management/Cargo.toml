@@ -52,13 +52,25 @@ glob = "0.3"
 jsonwebtoken = "9.3"
 rand = { workspace = true }
 hex = "0.4"
+hmac = "0.12"
+md-5 = "0.10"
+dashmap = "6.1"
+base64 = "0.22"
+argon2 = "0.5"
+
+# Rate limiting
+governor = "0.8"
+tower_governor = "0.6"
+
+# URL encoding
+urlencoding = "2.1"
 
 # HTTP/SSE
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower = { workspace = true }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 async-stream = "0.3"
 async-trait = "0.1"
 
@@ -68,6 +80,9 @@ jsonpath-rust = "0.7"
 # Metrics
 prometheus = { version = "0.13", features = ["process"] }
 lazy_static = "1.4"
+
+# Billing - async-stripe can be added when Stripe integration is needed
+# async-stripe = { version = "0.41", default-features = false, features = ["runtime-tokio-hyper-rustls"] }
 
 # Optional storage backends
 aws-sdk-s3 = { version = "1.0", optional = true }

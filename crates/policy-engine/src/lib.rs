@@ -83,5 +83,14 @@ pub use decision_cache::{CachedEvaluator, DecisionCache, DecisionCacheStats};
 // Re-export batch evaluation for parallel request processing
 pub use batch::{BatchEvaluator, BatchResult, BatchStats};
 
+// Decision logging (OPA-style structured decision logs)
+pub mod decision_buffer;
+pub mod decision_log;
+
+pub use decision_buffer::{
+    create_shared_buffer, DecisionBuffer, DecisionBufferStats, DecisionFilter, SharedDecisionBuffer,
+};
+pub use decision_log::{DecisionLogConfig, DecisionLogEntry};
+
 // Re-export cache configuration for environment-based cache setup
 pub use cache_config::{CacheConfig, CacheConfigBuilder};

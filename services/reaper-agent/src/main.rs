@@ -1,6 +1,7 @@
 mod bootstrap;
 mod cache;
 mod management;
+mod tls;
 
 use axum::{
     body::Bytes,
@@ -21,8 +22,9 @@ use opentelemetry_sdk::{
 };
 use opentelemetry_semantic_conventions as semconv;
 use policy_engine::{
-    cache_config::CacheConfig, decision_cache::DecisionCache, EnhancedPolicy, PolicyAction,
-    PolicyBundle, PolicyEngine, PolicyRequest, PolicyRule,
+    cache_config::CacheConfig, create_shared_buffer, decision_cache::DecisionCache, DecisionFilter,
+    DecisionLogConfig, DecisionLogEntry, EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine,
+    PolicyRequest, PolicyRule, SharedDecisionBuffer,
 };
 use prometheus::{
     register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Encoder, Gauge,
@@ -38,7 +40,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
@@ -139,6 +141,25 @@ lazy_static! {
         "Current number of concurrent policy evaluations"
     )
     .unwrap();
+
+    /// Decision log metrics
+    static ref DECISION_LOG_ENTRIES: Gauge = register_gauge!(
+        "reaper_decision_log_entries_total",
+        "Total decision log entries recorded"
+    )
+    .unwrap();
+
+    static ref DECISION_LOG_BUFFER_SIZE: Gauge = register_gauge!(
+        "reaper_decision_log_buffer_size",
+        "Current decision log buffer size"
+    )
+    .unwrap();
+
+    static ref DECISION_LOG_FLUSHES: Gauge = register_gauge!(
+        "reaper_decision_log_flushes_total",
+        "Total decision log file flushes"
+    )
+    .unwrap();
 }
 
 #[derive(Clone)]
@@ -150,6 +171,8 @@ struct AgentState {
     cache_config: CacheConfig,                  // Cache configuration for logging
     agent_config: ReaperAgentConfig,            // Full agent configuration
     policy_cache: Option<Arc<PolicyCache>>,     // Optional disk cache for policies
+    decision_buffer: Option<SharedDecisionBuffer>, // Decision logging buffer
+    agent_id: String,                           // Agent identifier for decision logs
 }
 
 // Add Debug manually since PolicyEngine has its own Debug implementation now
@@ -169,18 +192,78 @@ impl std::fmt::Debug for AgentState {
                 "policy_cache",
                 &self.policy_cache.as_ref().map(|_| "PolicyCache"),
             )
+            .field(
+                "decision_buffer",
+                &self.decision_buffer.as_ref().map(|_| "DecisionBuffer"),
+            )
+            .field("agent_id", &self.agent_id)
             .finish()
     }
 }
 
-#[derive(Debug, Default)]
-struct AgentStats {
-    requests_processed: AtomicU64,
-    total_evaluation_time_ns: AtomicU64,
-    policy_cache_hits: AtomicU64,
-    policy_cache_misses: AtomicU64,
-    decision_cache_hits: AtomicU64,
-    decision_cache_misses: AtomicU64,
+/// Agent statistics for metrics collection
+///
+/// Thread-safe counters and histogram for accurate metrics reporting.
+pub struct AgentStats {
+    pub requests_processed: AtomicU64,
+    pub total_evaluation_time_ns: AtomicU64,
+    pub policy_cache_hits: AtomicU64,
+    pub policy_cache_misses: AtomicU64,
+    pub decision_cache_hits: AtomicU64,
+    pub decision_cache_misses: AtomicU64,
+    /// Count of allow decisions
+    pub decisions_allow: AtomicU64,
+    /// Count of deny decisions
+    pub decisions_deny: AtomicU64,
+    /// Whether enhanced metrics (histogram, CPU, memory) are enabled
+    /// Controlled by REAPER_ENHANCED_METRICS env var (default: false)
+    enhanced_metrics_enabled: bool,
+    /// HDR histogram for accurate latency percentiles (in nanoseconds)
+    /// Range: 1ns to 1 second, 3 significant figures
+    /// Only used when enhanced_metrics_enabled is true
+    latency_histogram: parking_lot::Mutex<hdrhistogram::Histogram<u64>>,
+    /// System info for CPU monitoring
+    /// Only used when enhanced_metrics_enabled is true
+    system_info: parking_lot::Mutex<sysinfo::System>,
+}
+
+impl AgentStats {
+    /// Create new AgentStats with enhanced metrics control
+    pub fn new(enhanced_metrics_enabled: bool) -> Self {
+        Self {
+            requests_processed: AtomicU64::new(0),
+            total_evaluation_time_ns: AtomicU64::new(0),
+            policy_cache_hits: AtomicU64::new(0),
+            policy_cache_misses: AtomicU64::new(0),
+            decision_cache_hits: AtomicU64::new(0),
+            decision_cache_misses: AtomicU64::new(0),
+            decisions_allow: AtomicU64::new(0),
+            decisions_deny: AtomicU64::new(0),
+            enhanced_metrics_enabled,
+            // Histogram: 1ns to 1s range, 3 significant figures
+            latency_histogram: parking_lot::Mutex::new(
+                hdrhistogram::Histogram::new_with_bounds(1, 1_000_000_000, 3)
+                    .expect("Failed to create histogram"),
+            ),
+            system_info: parking_lot::Mutex::new(sysinfo::System::new()),
+        }
+    }
+}
+
+impl Default for AgentStats {
+    fn default() -> Self {
+        Self::new(false) // Enhanced metrics off by default
+    }
+}
+
+impl std::fmt::Debug for AgentStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentStats")
+            .field("requests_processed", &self.requests_processed)
+            .field("decisions_allow", &self.decisions_allow)
+            .field("decisions_deny", &self.decisions_deny)
+            .finish()
+    }
 }
 
 /// Policy evaluation request from external services
@@ -228,11 +311,31 @@ struct DeployBundleResponse {
     pub bundle_hash: String, // Hex-encoded SHA-256
 }
 
+// Additional AgentStats methods (continuation of impl block above)
 impl AgentStats {
     fn record_evaluation(&self, evaluation_time_ns: u64) {
         self.requests_processed.fetch_add(1, Ordering::Relaxed);
         self.total_evaluation_time_ns
             .fetch_add(evaluation_time_ns, Ordering::Relaxed);
+
+        // Only record to histogram if enhanced metrics are enabled
+        if self.enhanced_metrics_enabled {
+            if let Some(mut histogram) = self.latency_histogram.try_lock() {
+                // Clamp to histogram range (1ns to 1s)
+                let clamped = evaluation_time_ns.clamp(1, 1_000_000_000);
+                let _ = histogram.record(clamped);
+            }
+        }
+    }
+
+    /// Record an allow decision
+    fn record_allow(&self) {
+        self.decisions_allow.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a deny decision
+    fn record_deny(&self) {
+        self.decisions_deny.fetch_add(1, Ordering::Relaxed);
     }
 
     fn record_cache_hit(&self) {
@@ -249,6 +352,73 @@ impl AgentStats {
 
     fn record_decision_cache_miss(&self) {
         self.decision_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get latency percentile in nanoseconds
+    /// Returns 0 if enhanced metrics disabled, histogram empty, or lock contended
+    pub fn get_latency_percentile_ns(&self, percentile: f64) -> u64 {
+        if !self.enhanced_metrics_enabled {
+            return 0;
+        }
+        if let Some(histogram) = self.latency_histogram.try_lock() {
+            if histogram.len() > 0 {
+                return histogram.value_at_percentile(percentile);
+            }
+        }
+        0
+    }
+
+    /// Get latency percentile in microseconds
+    pub fn get_latency_percentile_us(&self, percentile: f64) -> f64 {
+        self.get_latency_percentile_ns(percentile) as f64 / 1000.0
+    }
+
+    /// Get current CPU usage percentage for this process
+    /// Returns 0.0 if enhanced metrics disabled or unable to read CPU info
+    pub fn get_cpu_percent(&self) -> f64 {
+        if !self.enhanced_metrics_enabled {
+            return 0.0;
+        }
+        use sysinfo::{Pid, ProcessRefreshKind, RefreshKind};
+
+        if let Some(mut system) = self.system_info.try_lock() {
+            let pid = Pid::from_u32(std::process::id());
+
+            // Refresh only process CPU info for efficiency
+            let refresh_kind = RefreshKind::new().with_processes(
+                ProcessRefreshKind::new().with_cpu(),
+            );
+            system.refresh_specifics(refresh_kind);
+
+            if let Some(process) = system.process(pid) {
+                return process.cpu_usage() as f64;
+            }
+        }
+        0.0
+    }
+
+    /// Get current memory usage in bytes for this process
+    /// Returns 0 if enhanced metrics disabled or unable to read memory info
+    pub fn get_memory_bytes(&self) -> u64 {
+        if !self.enhanced_metrics_enabled {
+            return 0;
+        }
+        use sysinfo::{Pid, ProcessRefreshKind, RefreshKind};
+
+        if let Some(mut system) = self.system_info.try_lock() {
+            let pid = Pid::from_u32(std::process::id());
+
+            // Refresh only process memory info
+            let refresh_kind = RefreshKind::new().with_processes(
+                ProcessRefreshKind::new().with_memory(),
+            );
+            system.refresh_specifics(refresh_kind);
+
+            if let Some(process) = system.process(pid) {
+                return process.memory();
+            }
+        }
+        0
     }
 }
 
@@ -515,6 +685,17 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Create shared stats for both management sync and request handling
+    // Enhanced metrics (histogram, CPU, memory) are controlled by config
+    let stats = Arc::new(AgentStats::new(config.observability.enable_enhanced_metrics));
+    let started_at = std::time::Instant::now();
+
+    if config.observability.enable_enhanced_metrics {
+        info!("Enhanced metrics enabled (REAPER_ENHANCED_METRICS=true)");
+    } else {
+        debug!("Enhanced metrics disabled (set REAPER_ENHANCED_METRICS=true to enable)");
+    }
+
     // Initialize management client if enabled
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut management_handle = None;
@@ -534,11 +715,13 @@ async fn main() -> anyhow::Result<()> {
                 let client = Arc::new(client);
                 let policy_engine_for_sync = policy_engine.clone();
 
-                // Create sync service
+                // Create sync service with stats and start time for metrics
                 let (sync_service, mut update_rx) = management::SyncService::new(
                     client.clone(),
                     config.management.clone(),
                     Arc::new(policy_engine_for_sync),
+                    stats.clone(),
+                    started_at,
                     shutdown_rx.clone(),
                 );
 
@@ -633,14 +816,41 @@ async fn main() -> anyhow::Result<()> {
     info!("  POST /api/v1/data           - Load entity data (JSON)");
     info!("  POST /api/v1/policies/compile - Deploy compiled .reap policy");
 
+    // Initialize decision logging buffer from environment config
+    let decision_log_config = DecisionLogConfig::from_env();
+    let decision_buffer = if decision_log_config.enabled {
+        match create_shared_buffer(decision_log_config) {
+            Ok(buffer) => {
+                info!("Decision logging enabled");
+                Some(buffer)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to create decision buffer, decision logging disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Generate or use configured agent ID
+    let agent_id = std::env::var("REAPER_AGENT_ID").unwrap_or_else(|_| {
+        format!(
+            "agent-{}",
+            Uuid::new_v4().to_string().split('-').next().unwrap()
+        )
+    });
+
     let state = Arc::new(AgentState {
         policy_engine,
         data_store,
-        stats: Arc::new(AgentStats::default()),
+        stats, // Use shared stats for consistency with management sync
         decision_cache,
         cache_config,
         agent_config: config.clone(),
         policy_cache,
+        decision_buffer,
+        agent_id,
     });
 
     let app = Router::new()
@@ -681,11 +891,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/entities/batch", post(batch_upsert_handler))
         // Debug endpoints
         .route("/debug/datastore", get(debug_datastore))
+        // Decision log endpoints (OPA-style audit logging)
+        .route("/api/v1/decisions", get(get_decisions))
+        .route("/api/v1/decisions/stats", get(get_decision_stats))
+        .route("/api/v1/decisions/export", post(export_decisions))
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
         .with_state(state);
 
     let bind_addr = format!("{}:{}", config.agent.bind_address, config.agent.port);
-    let listener = TcpListener::bind(&bind_addr).await?;
+
     info!(bind_addr = %bind_addr, "Reaper Agent listening");
     info!("");
     info!("⚡ Policy Evaluation API:");
@@ -700,10 +914,32 @@ async fn main() -> anyhow::Result<()> {
     info!("  Traces: OpenTelemetry → Tempo");
     info!("  Metrics: Prometheus format");
     info!("");
-    info!("🚀 Ready for sub-microsecond policy enforcement!");
 
-    // Run server
-    let result = axum::serve(listener, app).await;
+    // Run server with TLS if configured
+    let result = if config.tls.enabled {
+        info!("🔒 TLS enabled - secure mode");
+        if config.tls.require_client_cert {
+            info!("   mTLS: Client certificates REQUIRED");
+        }
+
+        // Validate TLS settings
+        tls::validate_tls_settings(&config.tls)?;
+
+        // Create TLS config
+        let tls_config = tls::create_tls_config(&config.tls).await?;
+
+        let addr: std::net::SocketAddr = bind_addr.parse()?;
+        info!("🚀 Ready for sub-microsecond policy enforcement (HTTPS)!");
+
+        axum_server::bind_rustls(addr, tls_config)
+            .serve(app.into_make_service())
+            .await
+            .map_err(|e| anyhow::anyhow!("TLS server error: {}", e))
+    } else {
+        info!("🚀 Ready for sub-microsecond policy enforcement!");
+        let listener = TcpListener::bind(&bind_addr).await?;
+        axum::serve(listener, app).await.map_err(|e| anyhow::anyhow!("Server error: {}", e))
+    };
 
     // Signal shutdown to sync service
     let _ = shutdown_tx.send(true);
@@ -889,7 +1125,8 @@ async fn evaluate_policy(
     // Create policy request
     // The compiled evaluator looks up user entities by ID in the DataStore
     // Use the principal as-is (it's already an entity ID like "user_admin")
-    let mut context = payload.context.unwrap_or_default();
+    let original_context = payload.context.clone(); // Save for decision logging
+    let mut context = original_context.clone().unwrap_or_default();
     context.insert("principal".to_string(), payload.principal.clone());
 
     let request = PolicyRequest {
@@ -904,6 +1141,13 @@ async fn evaluate_policy(
             // Cache hit - return cached decision immediately
             state.stats.record_decision_cache_hit();
             CACHE_HITS.with_label_values(&["decision"]).inc();
+
+            // Track the cached decision
+            match cached_decision {
+                PolicyAction::Allow => state.stats.record_allow(),
+                PolicyAction::Deny => state.stats.record_deny(),
+                PolicyAction::Log => {}
+            }
 
             let total_time = start_time.elapsed();
             let decision_str = match cached_decision {
@@ -986,6 +1230,13 @@ async fn evaluate_policy(
     let total_time = start_time.elapsed();
     state.stats.record_evaluation(total_eval_time_ns);
 
+    // Track allow/deny decision counts
+    match final_decision {
+        PolicyAction::Allow => state.stats.record_allow(),
+        PolicyAction::Deny => state.stats.record_deny(),
+        PolicyAction::Log => {} // Log doesn't count as allow or deny
+    }
+
     let decision_str = match final_decision {
         PolicyAction::Allow => "allow",
         PolicyAction::Deny => "deny",
@@ -1064,6 +1315,33 @@ async fn evaluate_policy(
         );
     }
 
+    // Log to decision buffer (OPA-style audit logging)
+    if let Some(ref buffer) = state.decision_buffer {
+        let mut context_values: HashMap<String, serde_json::Value> = HashMap::new();
+        if let Some(ref ctx) = original_context {
+            for (k, v) in ctx {
+                context_values.insert(k.clone(), serde_json::Value::String(v.clone()));
+            }
+        }
+
+        let entry = DecisionLogEntry::new(
+            payload.principal.clone(),
+            payload.action.clone(),
+            payload.resource.clone(),
+            decision_str.to_string(),
+            matched_policy_id.to_string(),
+            matched_policy_name.clone(),
+        )
+        .with_trace_id(trace_id.clone())
+        .with_context(context_values)
+        .with_evaluation_time_ns(total_eval_time_ns)
+        .with_cache_hit(false)
+        .with_agent_id(state.agent_id.clone())
+        .with_matched_rule(matched_rule.clone());
+
+        buffer.log(entry);
+    }
+
     // Cache the decision for future requests (if caching enabled)
     if let Some(ref cache) = state.decision_cache {
         cache.insert(&request, final_decision.clone());
@@ -1076,7 +1354,7 @@ async fn evaluate_policy(
         "evaluation_time_microseconds": total_eval_time_ns as f64 / 1000.0,
         "total_time_microseconds": total_time.as_nanos() as f64 / 1000.0,
         "matched_rule": matched_rule,
-        "agent_id": "reaper-agent-001",
+        "agent_id": state.agent_id,
         "cache_hit": false
     })))
 }
@@ -1232,6 +1510,17 @@ async fn fast_evaluate_policy(
     }
 
     let total_time = start_time.elapsed();
+
+    // Record to agent stats
+    state.stats.record_evaluation(total_eval_time_ns);
+
+    // Track allow/deny decision counts
+    match final_decision {
+        PolicyAction::Allow => state.stats.record_allow(),
+        PolicyAction::Deny => state.stats.record_deny(),
+        PolicyAction::Log => {}
+    }
+
     let decision_str = match final_decision {
         PolicyAction::Allow => "allow",
         PolicyAction::Deny => "deny",
@@ -1397,6 +1686,15 @@ async fn batch_evaluate_policy(
         .filter(|r| r.get("decision").and_then(|d| d.as_str()) == Some("allow"))
         .count();
     let deny_count = results.len() - allow_count;
+
+    // Record batch stats to agent metrics
+    state.stats.record_evaluation(total_time.as_nanos() as u64);
+    for _ in 0..allow_count {
+        state.stats.record_allow();
+    }
+    for _ in 0..deny_count {
+        state.stats.record_deny();
+    }
 
     info!(
         policy_name = %policy.name,
@@ -2270,4 +2568,159 @@ async fn debug_datastore(State(state): State<Arc<AgentState>>) -> Result<Json<Va
         "unique_types": stats.unique_types,
         "indexed_attributes": stats.indexed_attributes
     })))
+}
+
+// ============================================================================
+// Decision Log Endpoints (OPA-style audit logging)
+// ============================================================================
+
+/// Query parameters for decision log endpoint
+#[derive(Debug, Deserialize)]
+struct DecisionQueryParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    principal: Option<String>,
+    action: Option<String>,
+    resource: Option<String>,
+    decision: Option<String>,
+    policy_id: Option<String>,
+}
+
+/// Get recent decisions from the decision buffer
+#[instrument(skip(state))]
+async fn get_decisions(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Query(params): axum::extract::Query<DecisionQueryParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let Some(buffer) = &state.decision_buffer else {
+        return Ok(Json(json!({
+            "enabled": false,
+            "message": "Decision logging is not enabled. Set REAPER_DECISION_LOG_ENABLED=true",
+            "decisions": []
+        })));
+    };
+
+    let limit = params.limit.unwrap_or(100).min(1000);
+
+    // Build filter if any query params are provided
+    let decisions = if params.principal.is_some()
+        || params.action.is_some()
+        || params.resource.is_some()
+        || params.decision.is_some()
+        || params.policy_id.is_some()
+    {
+        let mut filter = DecisionFilter::new();
+        if let Some(p) = params.principal {
+            filter = filter.with_principal(p);
+        }
+        if let Some(a) = params.action {
+            filter = filter.with_action(a);
+        }
+        if let Some(r) = params.resource {
+            filter = filter.with_resource(r);
+        }
+        if let Some(d) = params.decision {
+            filter = filter.with_decision(d);
+        }
+        if let Some(pid) = params.policy_id {
+            filter = filter.with_policy_id(pid);
+        }
+        buffer.query(filter, limit)
+    } else if let Some(offset) = params.offset {
+        buffer.get_page(offset, limit)
+    } else {
+        buffer.get_recent(limit)
+    };
+
+    // Update Prometheus metrics
+    let stats = buffer.stats();
+    DECISION_LOG_ENTRIES.set(stats.total_entries as f64);
+    DECISION_LOG_BUFFER_SIZE.set(stats.buffer_size as f64);
+    DECISION_LOG_FLUSHES.set(stats.flush_count as f64);
+
+    Ok(Json(json!({
+        "enabled": true,
+        "count": decisions.len(),
+        "decisions": decisions
+    })))
+}
+
+/// Get decision buffer statistics
+#[instrument(skip(state))]
+async fn get_decision_stats(
+    State(state): State<Arc<AgentState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let Some(buffer) = &state.decision_buffer else {
+        return Ok(Json(json!({
+            "enabled": false,
+            "message": "Decision logging is not enabled"
+        })));
+    };
+
+    let stats = buffer.stats();
+
+    // Update Prometheus metrics
+    DECISION_LOG_ENTRIES.set(stats.total_entries as f64);
+    DECISION_LOG_BUFFER_SIZE.set(stats.buffer_size as f64);
+    DECISION_LOG_FLUSHES.set(stats.flush_count as f64);
+
+    Ok(Json(json!({
+        "enabled": true,
+        "total_entries": stats.total_entries,
+        "buffer_size": stats.buffer_size,
+        "buffer_capacity": stats.buffer_capacity,
+        "dropped_entries": stats.dropped_entries,
+        "flush_count": stats.flush_count,
+        "allow_count": stats.allow_count,
+        "deny_count": stats.deny_count,
+        "config": buffer.config()
+    })))
+}
+
+/// Export request body
+#[derive(Debug, Deserialize)]
+struct ExportRequest {
+    format: Option<String>, // "ndjson" (default), "json"
+}
+
+/// Export decisions as NDJSON (for SIEM integration)
+#[instrument(skip(state))]
+async fn export_decisions(
+    State(state): State<Arc<AgentState>>,
+    Json(request): Json<ExportRequest>,
+) -> Result<Response<String>, StatusCode> {
+    let Some(buffer) = &state.decision_buffer else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+
+    let format = request.format.unwrap_or_else(|| "ndjson".to_string());
+
+    match format.as_str() {
+        "ndjson" => {
+            let ndjson = buffer.export_ndjson();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/x-ndjson")
+                .header(
+                    "Content-Disposition",
+                    "attachment; filename=\"decisions.ndjson\"",
+                )
+                .body(ndjson)
+                .unwrap())
+        }
+        "json" => {
+            let decisions = buffer.get_recent(10000);
+            let json = serde_json::to_string_pretty(&decisions).unwrap_or_default();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .header(
+                    "Content-Disposition",
+                    "attachment; filename=\"decisions.json\"",
+                )
+                .body(json)
+                .unwrap())
+        }
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
 }

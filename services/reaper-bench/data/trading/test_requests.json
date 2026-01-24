@@ -1,0 +1,702 @@
+[
+  {
+    "principal": "trader_209",
+    "action": "trade",
+    "resource": "book_312",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_848",
+    "action": "trade",
+    "resource": "book_175",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_850",
+    "action": "view",
+    "resource": "book_437",
+    "resource_desk_id": "desk_8",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_250",
+    "action": "view",
+    "resource": "book_430",
+    "resource_desk_id": "desk_8",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_179",
+    "action": "view",
+    "resource": "book_465",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_372",
+    "action": "trade",
+    "resource": "book_296",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_337",
+    "action": "trade",
+    "resource": "book_463",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_209",
+    "action": "trade",
+    "resource": "book_347",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_859",
+    "action": "view",
+    "resource": "book_100",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_763",
+    "action": "view",
+    "resource": "book_170",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_158",
+    "action": "trade",
+    "resource": "book_303",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_739",
+    "action": "view",
+    "resource": "book_25",
+    "resource_desk_id": "desk_0",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_122",
+    "action": "view",
+    "resource": "book_142",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_838",
+    "action": "trade",
+    "resource": "book_134",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_355",
+    "action": "view",
+    "resource": "book_86",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_63",
+    "action": "trade",
+    "resource": "book_136",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_725",
+    "action": "trade",
+    "resource": "book_148",
+    "resource_desk_id": "desk_2",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_698",
+    "action": "trade",
+    "resource": "book_140",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_987",
+    "action": "view",
+    "resource": "book_491",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_444",
+    "action": "view",
+    "resource": "book_278",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_16",
+    "action": "trade",
+    "resource": "book_70",
+    "resource_desk_id": "desk_1",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_856",
+    "action": "view",
+    "resource": "book_92",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_563",
+    "action": "trade",
+    "resource": "book_476",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_549",
+    "action": "view",
+    "resource": "book_31",
+    "resource_desk_id": "desk_0",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_394",
+    "action": "trade",
+    "resource": "book_51",
+    "resource_desk_id": "desk_1",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_646",
+    "action": "trade",
+    "resource": "book_445",
+    "resource_desk_id": "desk_8",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_516",
+    "action": "trade",
+    "resource": "book_262",
+    "resource_desk_id": "desk_5",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_459",
+    "action": "view",
+    "resource": "book_341",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_619",
+    "action": "view",
+    "resource": "book_256",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_957",
+    "action": "trade",
+    "resource": "book_357",
+    "resource_desk_id": "desk_7",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_820",
+    "action": "view",
+    "resource": "book_130",
+    "resource_desk_id": "desk_2",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_739",
+    "action": "trade",
+    "resource": "book_267",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_981",
+    "action": "view",
+    "resource": "book_202",
+    "resource_desk_id": "desk_4",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_194",
+    "action": "view",
+    "resource": "book_183",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_207",
+    "action": "trade",
+    "resource": "book_346",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_785",
+    "action": "trade",
+    "resource": "book_299",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_71",
+    "action": "trade",
+    "resource": "book_63",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_428",
+    "action": "view",
+    "resource": "book_231",
+    "resource_desk_id": "desk_4",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_881",
+    "action": "view",
+    "resource": "book_337",
+    "resource_desk_id": "desk_6",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_286",
+    "action": "view",
+    "resource": "book_96",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_692",
+    "action": "view",
+    "resource": "book_412",
+    "resource_desk_id": "desk_8",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_994",
+    "action": "trade",
+    "resource": "book_124",
+    "resource_desk_id": "desk_2",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_939",
+    "action": "view",
+    "resource": "book_433",
+    "resource_desk_id": "desk_8",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_221",
+    "action": "trade",
+    "resource": "book_198",
+    "resource_desk_id": "desk_3",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_105",
+    "action": "trade",
+    "resource": "book_345",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_467",
+    "action": "view",
+    "resource": "book_130",
+    "resource_desk_id": "desk_2",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_557",
+    "action": "view",
+    "resource": "book_80",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_129",
+    "action": "view",
+    "resource": "book_301",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_245",
+    "action": "trade",
+    "resource": "book_10",
+    "resource_desk_id": "desk_0",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_91",
+    "action": "trade",
+    "resource": "book_350",
+    "resource_desk_id": "desk_7",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_463",
+    "action": "view",
+    "resource": "book_11",
+    "resource_desk_id": "desk_0",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_166",
+    "action": "view",
+    "resource": "book_136",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_202",
+    "action": "trade",
+    "resource": "book_332",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_135",
+    "action": "trade",
+    "resource": "book_269",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_629",
+    "action": "trade",
+    "resource": "book_255",
+    "resource_desk_id": "desk_5",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_52",
+    "action": "trade",
+    "resource": "book_262",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_441",
+    "action": "view",
+    "resource": "book_309",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_753",
+    "action": "view",
+    "resource": "book_194",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_267",
+    "action": "view",
+    "resource": "book_111",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_524",
+    "action": "trade",
+    "resource": "book_396",
+    "resource_desk_id": "desk_7",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_815",
+    "action": "view",
+    "resource": "book_294",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_822",
+    "action": "trade",
+    "resource": "book_408",
+    "resource_desk_id": "desk_8",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_138",
+    "action": "trade",
+    "resource": "book_392",
+    "resource_desk_id": "desk_7",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_281",
+    "action": "trade",
+    "resource": "book_170",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_490",
+    "action": "trade",
+    "resource": "book_88",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_796",
+    "action": "view",
+    "resource": "book_353",
+    "resource_desk_id": "desk_7",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_120",
+    "action": "trade",
+    "resource": "book_122",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_688",
+    "action": "trade",
+    "resource": "book_34",
+    "resource_desk_id": "desk_0",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_593",
+    "action": "trade",
+    "resource": "book_156",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_650",
+    "action": "trade",
+    "resource": "book_283",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_178",
+    "action": "view",
+    "resource": "book_299",
+    "resource_desk_id": "desk_5",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_156",
+    "action": "view",
+    "resource": "book_470",
+    "resource_desk_id": "desk_9",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_553",
+    "action": "view",
+    "resource": "book_179",
+    "resource_desk_id": "desk_3",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_631",
+    "action": "trade",
+    "resource": "book_133",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_833",
+    "action": "trade",
+    "resource": "book_483",
+    "resource_desk_id": "desk_9",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_10",
+    "action": "trade",
+    "resource": "book_30",
+    "resource_desk_id": "desk_0",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_624",
+    "action": "view",
+    "resource": "book_267",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_891",
+    "action": "trade",
+    "resource": "book_490",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_225",
+    "action": "trade",
+    "resource": "book_31",
+    "resource_desk_id": "desk_0",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_336",
+    "action": "trade",
+    "resource": "book_472",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_33",
+    "action": "trade",
+    "resource": "book_147",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_973",
+    "action": "trade",
+    "resource": "book_461",
+    "resource_desk_id": "desk_9",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_767",
+    "action": "trade",
+    "resource": "book_169",
+    "resource_desk_id": "desk_3",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_878",
+    "action": "trade",
+    "resource": "book_168",
+    "resource_desk_id": "desk_3",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_151",
+    "action": "view",
+    "resource": "book_243",
+    "resource_desk_id": "desk_4",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_212",
+    "action": "trade",
+    "resource": "book_117",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_836",
+    "action": "view",
+    "resource": "book_192",
+    "resource_desk_id": "desk_3",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_940",
+    "action": "trade",
+    "resource": "book_404",
+    "resource_desk_id": "desk_8",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_243",
+    "action": "view",
+    "resource": "book_348",
+    "resource_desk_id": "desk_6",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_749",
+    "action": "view",
+    "resource": "book_381",
+    "resource_desk_id": "desk_7",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_646",
+    "action": "view",
+    "resource": "book_108",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_224",
+    "action": "trade",
+    "resource": "book_206",
+    "resource_desk_id": "desk_4",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_94",
+    "action": "view",
+    "resource": "book_82",
+    "resource_desk_id": "desk_1",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_163",
+    "action": "view",
+    "resource": "book_3",
+    "resource_desk_id": "desk_0",
+    "expected": "allow"
+  },
+  {
+    "principal": "trader_704",
+    "action": "trade",
+    "resource": "book_270",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_220",
+    "action": "trade",
+    "resource": "book_286",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_544",
+    "action": "trade",
+    "resource": "book_404",
+    "resource_desk_id": "desk_8",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_770",
+    "action": "trade",
+    "resource": "book_262",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_25",
+    "action": "trade",
+    "resource": "book_106",
+    "resource_desk_id": "desk_2",
+    "expected": "deny"
+  },
+  {
+    "principal": "trader_817",
+    "action": "trade",
+    "resource": "book_257",
+    "resource_desk_id": "desk_5",
+    "expected": "deny"
+  }
+]

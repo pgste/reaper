@@ -56,18 +56,30 @@ pub struct HeartbeatRequest {
 /// Agent metrics sent with heartbeat
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentMetrics {
+    /// Total requests processed
+    pub requests_total: u64,
     /// Requests per second
     pub requests_per_second: f64,
     /// Average latency in microseconds
     pub avg_latency_us: f64,
+    /// P50 latency in microseconds
+    pub p50_latency_us: f64,
     /// P99 latency in microseconds
     pub p99_latency_us: f64,
-    /// Active policy count
-    pub policy_count: usize,
     /// Memory usage in bytes
-    pub memory_bytes: Option<u64>,
-    /// Cache hit rate (0.0-1.0)
-    pub cache_hit_rate: Option<f64>,
+    pub memory_bytes: u64,
+    /// CPU usage percentage (0-100)
+    pub cpu_percent: f64,
+    /// Total allow decisions
+    pub decisions_allow: u64,
+    /// Total deny decisions
+    pub decisions_deny: u64,
+    /// Agent uptime in seconds
+    pub uptime_seconds: u64,
+    /// Current bundle ID
+    pub current_bundle_id: Option<Uuid>,
+    /// Current bundle version
+    pub current_bundle_version: Option<String>,
 }
 
 /// Heartbeat response

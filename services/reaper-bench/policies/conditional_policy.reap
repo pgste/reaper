@@ -1,0 +1,116 @@
+// Conditional Expressions Policy
+// Tests if/else expressions and advanced conditional logic
+// NOTE: Some features may need implementation
+
+policy conditionals {
+    version: "1.0",
+    description: "Conditional expressions and advanced logic for Day 5 testing",
+    default: deny,
+
+    // Simple conditional using boolean logic (approximation of if/else)
+    rule age_restriction {
+        allow if {
+            user.age != null &&
+            resource.type == "age_restricted" &&
+            // Conditional: allow if age >= 18
+            user.age >= 18
+        }
+    }
+
+    // Nested conditional logic
+    rule premium_content_access {
+        allow if {
+            user.age != null &&
+            user.subscription != null &&
+            resource.type == "premium_content" &&
+            // Must be adult AND have premium subscription
+            user.age >= 18 &&
+            user.subscription == "premium"
+        }
+    }
+
+    // Ternary-style using value comparison
+    rule leaderboard_qualification {
+        allow if {
+            user.score != null &&
+            resource.type == "leaderboard" &&
+            // Qualify if score >= 1000
+            user.score >= 1000
+        }
+    }
+
+    // Chained conditional checks
+    rule subscription_upgrade {
+        allow if {
+            user.tier != null &&
+            resource.type == "subscription" &&
+            // Check tier: gold can upgrade, silver can upgrade, bronze cannot
+            ((user.tier == "gold") || (user.tier == "silver"))
+        }
+    }
+
+    // Complex boolean logic
+    rule payment_transaction {
+        allow if {
+            user.verified != null &&
+            user.status != null &&
+            resource.type == "payment" &&
+            // Must be both verified AND active
+            user.verified == true &&
+            user.status == "active"
+        }
+    }
+
+    // Short-circuit AND evaluation
+    rule logic_test_and {
+        allow if {
+            user.flag1 != null &&
+            resource.type == "logic_test" &&
+            // First condition must pass for evaluation to continue
+            user.flag1 == true
+        }
+    }
+
+    // Null-safe access with default
+    rule nullable_data_handling {
+        allow if {
+            resource.type == "nullable_data" &&
+            // Check if field exists, default to empty string
+            value := user.optional_field &&
+            value != null
+        }
+    }
+
+    // Conditional with method calls
+    rule name_validation {
+        allow if {
+            user.name != null &&
+            resource.type == "name_check" &&
+            // Name must be at least 5 characters
+            name_length := user.name.count() &&
+            name_length >= 5
+        }
+    }
+
+    // Multi-branch logic (category classification)
+    rule categorization {
+        allow if {
+            user.category != null &&
+            resource.type == "categorizer" &&
+            // Accept categories A, B, or C
+            ((user.category == "A") || (user.category == "B") || (user.category == "C"))
+        }
+    }
+
+    // Conditional within comprehension
+    rule conditional_aggregation {
+        allow if {
+            user.values != null &&
+            resource.type == "conditional_sum" &&
+            // Sum only values > 50
+            high_values := [v | v := user.values[_]; v > 50] &&
+            count := high_values.count() &&
+            count >= 3
+        }
+    }
+}

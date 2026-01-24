@@ -33,6 +33,15 @@ thiserror = { workspace = true }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
 hostname = "0.4"
+parking_lot = { workspace = true }
+hdrhistogram = "7.5"
+sysinfo = "0.32"
+
+# TLS/mTLS support
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = "0.23"
+rustls-pemfile = "2.1"
+tokio-rustls = "0.26"
 
 [dev-dependencies]
 criterion = { workspace = true }

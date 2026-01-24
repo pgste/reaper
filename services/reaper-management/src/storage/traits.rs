@@ -103,6 +103,12 @@ pub trait BundleStorage: Send + Sync {
 
     /// Get the storage backend name
     fn backend_name(&self) -> &'static str;
+
+    /// Check if the storage backend is available and healthy
+    /// Default implementation tries to list with empty prefix
+    async fn is_available(&self) -> bool {
+        self.list(Some("__health_check__")).await.is_ok()
+    }
 }
 
 impl BundleMetadata {

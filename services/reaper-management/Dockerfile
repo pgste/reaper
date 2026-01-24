@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Build
 # -----------------------------------------------------------------------------
-FROM rust:1.75-slim-bookworm AS builder
+FROM rust:1.83-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -74,6 +74,12 @@ ENV REAPER_PORT=3000
 ENV REAPER_BIND_ADDRESS=0.0.0.0
 ENV REAPER_STORAGE_TYPE=filesystem
 ENV REAPER_STORAGE_PATH=/var/lib/reaper/storage
+
+# Labels for metadata
+LABEL org.opencontainers.image.title="Reaper Management"
+LABEL org.opencontainers.image.description="Reaper centralized policy management server"
+LABEL org.opencontainers.image.source="https://github.com/reaper-policy/reaper"
+LABEL com.reaper.service="management"
 
 # Run the server
 CMD ["/app/reaper-management"]

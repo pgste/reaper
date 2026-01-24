@@ -1,12 +1,107 @@
-version: '3.9'
+# ============================================================================
+# Reaper Unified Docker Compose
+# ============================================================================
+#
+# This docker-compose provides all Reaper deployment configurations via profiles.
+#
+# Profiles:
+#   engine       - Reaper Agent only (policy enforcement)
+#   platform     - Agent + Platform (simple management)
+#   management   - Agent + Management + PostgreSQL (enterprise)
+#   observability - Prometheus + Grafana + Tempo + Loki
+#   full         - All services including observability
+#
+# Usage:
+#   docker compose --profile engine up           # Just the agent
+#   docker compose --profile platform up         # Agent + Platform
+#   docker compose --profile management up       # Enterprise stack
+#   docker compose --profile observability up    # Monitoring only
+#   docker compose --profile full --profile observability up  # Everything
+#
+# Access:
+#   - Agent API: http://localhost:8080
+#   - Platform API: http://localhost:8081
+#   - Management API: http://localhost:3000
+#   - Grafana: http://localhost:3001 (admin/admin)
+#   - Prometheus: http://localhost:9090
+# ============================================================================
 
 services:
-  # Reaper Platform - Management & Deployment
+  # ==========================================================================
+  # PostgreSQL - Management Database (management profile)
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: reaper-postgres
+    profiles: ["management", "full"]
+    environment:
+      POSTGRES_USER: reaper
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reaper_secret}
+      POSTGRES_DB: reaper_management
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - reaper-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reaper -d reaper_management"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=database"
+      - "com.reaper.profile=management"
+
+  # ==========================================================================
+  # Reaper Management Server - Centralized Policy Management (management profile)
+  # ==========================================================================
+  management:
+    build:
+      context: .
+      dockerfile: services/reaper-management/Dockerfile
+    image: reaper-management:latest
+    container_name: reaper-management
+    profiles: ["management", "full"]
+    ports:
+      - "3000:3000"
+    environment:
+      - RUST_LOG=info,reaper_management=debug
+      - REAPER_PORT=3000
+      - REAPER_BIND_ADDRESS=0.0.0.0
+      - REAPER_DATABASE_URL=postgres://reaper:${POSTGRES_PASSWORD:-reaper_secret}@postgres:5432/reaper_management
+      - REAPER_JWT_SECRET=${JWT_SECRET:-development-jwt-secret-change-in-production}
+      - REAPER_STORAGE_TYPE=filesystem
+      - REAPER_STORAGE_PATH=/var/lib/reaper/storage
+    volumes:
+      - management-storage:/var/lib/reaper/storage
+    networks:
+      - reaper-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=management"
+      - "com.reaper.profile=management"
+
+  # ==========================================================================
+  # Reaper Platform - Simple Policy Management (platform profile)
+  # ==========================================================================
   platform:
     build:
       context: .
       dockerfile: services/reaper-platform/Dockerfile
+    image: reaper-platform:latest
     container_name: reaper-platform
+    profiles: ["platform", "full"]
     ports:
       - "8081:8081"
     environment:
@@ -23,34 +118,179 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+    labels:
+      - "com.reaper.service=platform"
+      - "com.reaper.profile=platform"
 
-  # Reaper Agent - Policy Enforcement
+  # ==========================================================================
+  # Reaper Agent - Policy Enforcement (all profiles)
+  # ==========================================================================
   agent:
     build:
       context: .
       dockerfile: services/reaper-agent/Dockerfile
+    image: reaper-agent:latest
     container_name: reaper-agent
+    profiles: ["engine", "platform", "management", "full"]
     ports:
       - "8080:8080"
     environment:
       - RUST_LOG=info,reaper_agent=debug
       - REAPER_BIND_ADDR=0.0.0.0:8080
+      # Platform connection (for platform profile)
       - PLATFORM_URL=http://platform:8081
+      # Management connection (for management profile) - configure as needed
+      - REAPER_MANAGEMENT_ENABLED=${MANAGEMENT_ENABLED:-false}
+      - REAPER_MANAGEMENT_URL=http://management:3000
+      - REAPER_MANAGEMENT_ORG=${MANAGEMENT_ORG:-default}
+      - REAPER_MANAGEMENT_API_KEY=${MANAGEMENT_API_KEY:-}
+      # Decision logging
+      - REAPER_DECISION_LOG_ENABLED=${DECISION_LOG_ENABLED:-false}
+      - REAPER_DECISION_LOG_CAPACITY=${DECISION_LOG_CAPACITY:-10000}
+      - REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson
+      # OpenTelemetry (enabled when observability profile is used)
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_ENDPOINT=http://tempo:4317
+      - REAPER_AGENT_ID=${AGENT_ID:-agent-1}
     volumes:
       - agent-data:/data
-      - ./policies:/policies:ro  # Mount policies directory (if you have .rbb bundles)
+      - agent-logs:/var/log/reaper
+      - ./policies:/policies:ro
     networks:
       - reaper-net
-    depends_on:
-      platform:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 10s
       timeout: 3s
       retries: 3
-      start_period: 10s  # Agent needs more time to load policies
+      start_period: 10s
     restart: unless-stopped
+    labels:
+      - "com.reaper.service=agent"
+      - "com.reaper.profile=engine"
+
+  # ==========================================================================
+  # Prometheus - Metrics Collection (observability profile)
+  # ==========================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: reaper-prometheus
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - reaper-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=prometheus"
+      - "com.reaper.profile=observability"
+
+  # ==========================================================================
+  # Grafana - Visualization (observability profile)
+  # ==========================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: reaper-grafana
+    profiles: ["observability"]
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/security-dashboard.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - reaper-net
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=grafana"
+      - "com.reaper.profile=observability"
+
+  # ==========================================================================
+  # Tempo - Distributed Tracing (observability profile)
+  # ==========================================================================
+  tempo:
+    image: grafana/tempo:latest
+    container_name: reaper-tempo
+    profiles: ["observability"]
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/tmp/tempo
+    ports:
+      - "3200:3200"   # Tempo API
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    networks:
+      - reaper-net
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=tempo"
+      - "com.reaper.profile=observability"
+
+  # ==========================================================================
+  # Loki - Log Aggregation (observability profile)
+  # ==========================================================================
+  loki:
+    image: grafana/loki:latest
+    container_name: reaper-loki
+    profiles: ["observability"]
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - reaper-net
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=loki"
+      - "com.reaper.profile=observability"
+
+  # ==========================================================================
+  # Promtail - Log Shipping (observability profile)
+  # ==========================================================================
+  promtail:
+    image: grafana/promtail:latest
+    container_name: reaper-promtail
+    profiles: ["observability"]
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./observability/promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - reaper-net
+    depends_on:
+      - loki
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=promtail"
+      - "com.reaper.profile=observability"
 
 networks:
   reaper-net:
@@ -58,7 +298,21 @@ networks:
     name: reaper-network
 
 volumes:
+  postgres-data:
+    name: reaper-postgres-data
+  management-storage:
+    name: reaper-management-storage
   platform-data:
     name: reaper-platform-data
   agent-data:
     name: reaper-agent-data
+  agent-logs:
+    name: reaper-agent-logs
+  prometheus-data:
+    name: reaper-prometheus-data
+  grafana-data:
+    name: reaper-grafana-data
+  tempo-data:
+    name: reaper-tempo-data
+  loki-data:
+    name: reaper-loki-data

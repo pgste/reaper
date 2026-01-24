@@ -1,0 +1,53 @@
+# Trading Desk Access Control Demo
+#
+# Demonstrates Reaper's policy engine for financial trading access control:
+# - 1000 traders with various roles (trader, desk_head, risk_manager, compliance)
+# - 10 trading desks with different asset types
+# - 500 books across desks
+#
+# Usage:
+#   docker compose -f docker-compose.trading.yml up --build
+#
+#   # Open benchmark dashboard
+#   open http://localhost:3000
+
+services:
+  # Reaper Agent with trading policy and data
+  reaper-agent:
+    build:
+      context: .
+      dockerfile: services/reaper-agent/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      REAPER_AGENT_PORT: 8080
+      REAPER_AGENT_BIND_ADDRESS: "0.0.0.0"
+      REAPER_CACHE_ENABLED: "false"
+      REAPER_ENHANCED_METRICS: "true"
+      RUST_LOG: "info,reaper_agent=info,policy_engine=info"
+    volumes:
+      - ./services/reaper-bench/policies/trading:/policies:ro
+      - ./services/reaper-bench/data/trading:/data:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    command:
+      - --bootstrap-policies=/policies
+      - --bootstrap-data=/data/trading_entities.json
+
+  # Benchmark service
+  reaper-bench:
+    build:
+      context: .
+      dockerfile: services/reaper-bench/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      REAPER_AGENT_URL: "http://reaper-agent:8080"
+      RUST_LOG: "info,reaper_bench=debug"
+    depends_on:
+      reaper-agent:
+        condition: service_healthy

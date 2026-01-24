@@ -90,32 +90,43 @@ impl Database {
     pub async fn run_migrations(&self) -> Result<(), DatabaseError> {
         info!("Running database migrations...");
 
-        let migration_sql = include_str!("migrations/001_initial.sql");
+        // List of migration files in order
+        let migrations = [
+            include_str!("migrations/001_initial.sql"),
+            include_str!("migrations/002_namespaces.sql"),
+            include_str!("migrations/003_security.sql"),
+            include_str!("migrations/004_users_and_audit.sql"),
+            include_str!("migrations/005_phase2_operations.sql"),
+        ];
 
         match &self.sqlite_pool {
             Some(pool) => {
-                // Split by semicolons and execute each statement
-                for statement in migration_sql.split(';') {
-                    // Clean the statement: remove comments and trim
-                    let statement: String = statement
-                        .lines()
-                        .filter(|line| !line.trim().starts_with("--"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let statement = statement.trim();
+                for (idx, migration_sql) in migrations.iter().enumerate() {
+                    info!("Running migration {}", idx + 1);
 
-                    if statement.is_empty() {
-                        continue;
-                    }
+                    // Split by semicolons and execute each statement
+                    for statement in migration_sql.split(';') {
+                        // Clean the statement: remove comments and trim
+                        let statement: String = statement
+                            .lines()
+                            .filter(|line| !line.trim().starts_with("--"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let statement = statement.trim();
 
-                    if let Err(e) = sqlx::query(statement).execute(pool).await {
-                        let err_str = e.to_string();
-                        // Ignore "already exists" errors for idempotent migrations
-                        if !err_str.contains("already exists")
-                            && !err_str.contains("duplicate column")
-                        {
-                            warn!("Migration statement failed: {} - SQL: {}", e, statement);
-                            // Don't fail on non-critical errors for now
+                        if statement.is_empty() {
+                            continue;
+                        }
+
+                        if let Err(e) = sqlx::query(statement).execute(pool).await {
+                            let err_str = e.to_string();
+                            // Ignore "already exists" errors for idempotent migrations
+                            if !err_str.contains("already exists")
+                                && !err_str.contains("duplicate column")
+                            {
+                                warn!("Migration statement failed: {} - SQL: {}", e, statement);
+                                // Don't fail on non-critical errors for now
+                            }
                         }
                     }
                 }
@@ -148,6 +159,15 @@ impl Database {
             None => Err(DatabaseError::Connection(sqlx::Error::Configuration(
                 "No database pool available".into(),
             ))),
+        }
+    }
+
+    /// Create a mock database for testing (no actual connection)
+    #[cfg(test)]
+    pub fn new_mock() -> Self {
+        Self {
+            sqlite_pool: None,
+            db_type: "mock".to_string(),
         }
     }
 }

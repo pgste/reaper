@@ -1,0 +1,28 @@
+{
+  "entities": [
+    {"id": "user_admin_0", "type": "User", "attributes": {"id": "user_admin_0", "role": "admin", "department": "engineering"}},
+    {"id": "user_admin_1", "type": "User", "attributes": {"id": "user_admin_1", "role": "admin", "department": "engineering"}},
+    {"id": "user_admin_2", "type": "User", "attributes": {"id": "user_admin_2", "role": "admin", "department": "engineering"}},
+    {"id": "user_admin_3", "type": "User", "attributes": {"id": "user_admin_3", "role": "admin", "department": "engineering"}},
+    {"id": "user_admin_4", "type": "User", "attributes": {"id": "user_admin_4", "role": "admin", "department": "engineering"}},
+    {"id": "user_engineer_0", "type": "User", "attributes": {"id": "user_engineer_0", "role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_1", "type": "User", "attributes": {"id": "user_engineer_1", "role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_2", "type": "User", "attributes": {"id": "user_engineer_2", "role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_3", "type": "User", "attributes": {"id": "user_engineer_3", "role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_4", "type": "User", "attributes": {"id": "user_engineer_4", "role": "engineer", "department": "engineering"}},
+    {"id": "user_viewer_0", "type": "User", "attributes": {"id": "user_viewer_0", "role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_1", "type": "User", "attributes": {"id": "user_viewer_1", "role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_2", "type": "User", "attributes": {"id": "user_viewer_2", "role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_3", "type": "User", "attributes": {"id": "user_viewer_3", "role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_4", "type": "User", "attributes": {"id": "user_viewer_4", "role": "viewer", "department": "marketing"}},
+    {"id": "guest_0", "type": "User", "attributes": {"id": "guest_0", "role": "guest", "department": "external"}},
+    {"id": "guest_1", "type": "User", "attributes": {"id": "guest_1", "role": "guest", "department": "external"}},
+    {"id": "guest_2", "type": "User", "attributes": {"id": "guest_2", "role": "guest", "department": "external"}},
+    {"id": "guest_3", "type": "User", "attributes": {"id": "guest_3", "role": "guest", "department": "external"}},
+    {"id": "guest_4", "type": "User", "attributes": {"id": "guest_4", "role": "guest", "department": "external"}},
+    {"id": "admin_1", "type": "User", "attributes": {"id": "admin_1", "role": "admin", "department": "engineering"}},
+    {"id": "eng_1", "type": "User", "attributes": {"id": "eng_1", "role": "engineer", "department": "engineering"}},
+    {"id": "viewer_1", "type": "User", "attributes": {"id": "viewer_1", "role": "viewer", "department": "marketing"}},
+    {"id": "guest_1", "type": "User", "attributes": {"id": "guest_1", "role": "guest", "department": "external"}}
+  ]
+}

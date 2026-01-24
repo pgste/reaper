@@ -6,24 +6,32 @@ setup:
 
 # Development workflow with auto-reload
 dev:
-	cargo watch -x "check --workspace" -x "test --workspace --lib"
+	cargo watch -x "check --workspace $(EXCLUDE_EBPF)" -x "test --workspace $(EXCLUDE_EBPF) --lib"
+
+# Detect OS for eBPF exclusion
+UNAME := $(shell uname)
+ifeq ($(UNAME), Linux)
+	EXCLUDE_EBPF :=
+else
+	EXCLUDE_EBPF := --exclude reaper-ebpf
+endif
 
 # Run all tests (unit + integration + BDD)
 test:
-	@echo "🧪 Running Reaper unit tests..."
-	cargo test --workspace --lib
-	@echo "🥒 Running Reaper BDD scenarios..."
-	cargo test --workspace --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
-	@echo "🔗 Running integration tests..."
-	cargo test --workspace --test '*integration*' 2>/dev/null || echo "Integration tests will be added"
+	@echo "Running Reaper unit tests..."
+	cargo test --workspace $(EXCLUDE_EBPF) --lib
+	@echo "Running Reaper BDD scenarios..."
+	cargo test --workspace $(EXCLUDE_EBPF) --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
+	@echo "Running integration tests..."
+	cargo test --workspace $(EXCLUDE_EBPF) --test '*integration*' 2>/dev/null || echo "Integration tests will be added"
 
 # Run only BDD scenarios
 bdd:
-	cargo test --workspace --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
+	cargo test --workspace $(EXCLUDE_EBPF) --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
 
 # Performance benchmarks
 bench:
-	cargo bench --workspace
+	cargo bench --workspace $(EXCLUDE_EBPF)
 
 # Performance benchmarks with summary report
 bench-summary:
@@ -31,13 +39,13 @@ bench-summary:
 
 # Test coverage report
 coverage:
-	cargo tarpaulin --workspace --out Html --output-dir coverage/ --exclude-files 'target/*' 'tests/*'
+	cargo tarpaulin --workspace $(EXCLUDE_EBPF) --out Html --output-dir coverage/ --exclude-files 'target/*' 'tests/*'
 
 # Code quality checks
-check: 
+check:
 	cargo fmt --check
-	cargo clippy --workspace -- -D warnings
-	cargo test --workspace
+	cargo clippy --workspace $(EXCLUDE_EBPF) -- -D warnings
+	cargo test --workspace $(EXCLUDE_EBPF)
 
 # Build and run Reaper Agent locally
 agent:
@@ -65,8 +73,8 @@ release:
 
 # Quick build check for all Reaper components
 build:
-	cargo build --workspace
-	cargo build --workspace --release
+	cargo build --workspace $(EXCLUDE_EBPF)
+	cargo build --workspace $(EXCLUDE_EBPF) --release
 
 # Run both agent and platform in development
 dev-services:

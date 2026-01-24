@@ -4,7 +4,7 @@
 
 use super::ast::{
     AssignmentValue, ComparisonLeft, ComparisonRight, Condition, Decision, Entity, EntityAttr,
-    Expr, MethodName, Operator, Policy, Rule, Value,
+    Expr, Index, MethodName, Operator, Policy, Rule, Value,
 };
 use crate::evaluators::reaper_dsl::{
     AttrCompareOp, Condition as DslCondition, ReaperDSLEvaluator, Rule as DslRule,
@@ -966,15 +966,73 @@ fn compile_attr_comparison(
     op: Operator,
     right: EntityAttr,
 ) -> Result<DslCondition, ReaperError> {
-    match (left.entity, right.entity, op) {
-        // User == Resource (same attribute)
-        (Entity::User, Entity::Resource, Operator::Equal) => Ok(DslCondition::UserEqualsResource {
-            user_attr: left.attribute,
-            resource_attr: right.attribute,
-        }),
+    // Check for wildcard iteration: user.attr[_] == resource.attr
+    // This requires special handling for existential quantification
+    let left_has_wildcard = matches!(left.index, Some(Index::Wildcard));
+    let right_has_wildcard = matches!(right.index, Some(Index::Wildcard));
+
+    match (left.entity, right.entity, op, left_has_wildcard, right_has_wildcard) {
+        // Wildcard: user.attr[_] == resource.attr (existential quantification)
+        (Entity::User, Entity::Resource, Operator::Equal, true, false) => {
+            Ok(DslCondition::UserWildcardEqualsResourceAttr {
+                user_attr: left.attribute,
+                resource_attr: right.attribute,
+            })
+        }
+
+        // Wildcard: resource.attr[_] == user.attr (existential quantification)
+        (Entity::Resource, Entity::User, Operator::Equal, true, false) => {
+            Ok(DslCondition::ResourceWildcardEqualsUserAttr {
+                resource_attr: left.attribute,
+                user_attr: right.attribute,
+            })
+        }
+
+        // Wildcard: user.attr == resource.attr[_] (flip to resource wildcard)
+        (Entity::User, Entity::Resource, Operator::Equal, false, true) => {
+            Ok(DslCondition::ResourceWildcardEqualsUserAttr {
+                resource_attr: right.attribute,
+                user_attr: left.attribute,
+            })
+        }
+
+        // Wildcard: resource.attr == user.attr[_] (flip to user wildcard)
+        (Entity::Resource, Entity::User, Operator::Equal, false, true) => {
+            Ok(DslCondition::UserWildcardEqualsResourceAttr {
+                user_attr: right.attribute,
+                resource_attr: left.attribute,
+            })
+        }
+
+        // Wildcard != (negation of wildcard equality)
+        (Entity::User, Entity::Resource, Operator::NotEqual, true, false) => {
+            Ok(DslCondition::Not(Box::new(
+                DslCondition::UserWildcardEqualsResourceAttr {
+                    user_attr: left.attribute,
+                    resource_attr: right.attribute,
+                },
+            )))
+        }
+
+        (Entity::Resource, Entity::User, Operator::NotEqual, true, false) => {
+            Ok(DslCondition::Not(Box::new(
+                DslCondition::ResourceWildcardEqualsUserAttr {
+                    resource_attr: left.attribute,
+                    user_attr: right.attribute,
+                },
+            )))
+        }
+
+        // User == Resource (same attribute) - no wildcard
+        (Entity::User, Entity::Resource, Operator::Equal, false, false) => {
+            Ok(DslCondition::UserEqualsResource {
+                user_attr: left.attribute,
+                resource_attr: right.attribute,
+            })
+        }
 
         // User > Resource (int comparison)
-        (Entity::User, Entity::Resource, Operator::GreaterThan) => {
+        (Entity::User, Entity::Resource, Operator::GreaterThan, _, _) => {
             Ok(DslCondition::UserIntGreater {
                 user_attr: left.attribute,
                 resource_attr: right.attribute,
@@ -982,19 +1040,21 @@ fn compile_attr_comparison(
         }
 
         // User >= Resource (user > resource || user == resource)
-        (Entity::User, Entity::Resource, Operator::GreaterEqual) => Ok(DslCondition::Or(vec![
-            DslCondition::UserIntGreater {
-                user_attr: left.attribute.clone(),
-                resource_attr: right.attribute.clone(),
-            },
-            DslCondition::UserEqualsResource {
-                user_attr: left.attribute,
-                resource_attr: right.attribute,
-            },
-        ])),
+        (Entity::User, Entity::Resource, Operator::GreaterEqual, _, _) => {
+            Ok(DslCondition::Or(vec![
+                DslCondition::UserIntGreater {
+                    user_attr: left.attribute.clone(),
+                    resource_attr: right.attribute.clone(),
+                },
+                DslCondition::UserEqualsResource {
+                    user_attr: left.attribute,
+                    resource_attr: right.attribute,
+                },
+            ]))
+        }
 
         // Resource > User
-        (Entity::Resource, Entity::User, Operator::GreaterThan) => {
+        (Entity::Resource, Entity::User, Operator::GreaterThan, _, _) => {
             Ok(DslCondition::ResourceIntGreater {
                 resource_attr: left.attribute,
                 user_attr: right.attribute,
@@ -1002,19 +1062,21 @@ fn compile_attr_comparison(
         }
 
         // Resource >= User
-        (Entity::Resource, Entity::User, Operator::GreaterEqual) => Ok(DslCondition::Or(vec![
-            DslCondition::ResourceIntGreater {
-                resource_attr: left.attribute.clone(),
-                user_attr: right.attribute.clone(),
-            },
-            DslCondition::UserEqualsResource {
-                user_attr: right.attribute,
-                resource_attr: left.attribute,
-            },
-        ])),
+        (Entity::Resource, Entity::User, Operator::GreaterEqual, _, _) => {
+            Ok(DslCondition::Or(vec![
+                DslCondition::ResourceIntGreater {
+                    resource_attr: left.attribute.clone(),
+                    user_attr: right.attribute.clone(),
+                },
+                DslCondition::UserEqualsResource {
+                    user_attr: right.attribute,
+                    resource_attr: left.attribute,
+                },
+            ]))
+        }
 
         // User < Resource = Resource > User
-        (Entity::User, Entity::Resource, Operator::LessThan) => {
+        (Entity::User, Entity::Resource, Operator::LessThan, _, _) => {
             Ok(DslCondition::ResourceIntGreater {
                 resource_attr: right.attribute,
                 user_attr: left.attribute,
@@ -1022,28 +1084,30 @@ fn compile_attr_comparison(
         }
 
         // User <= Resource = Resource >= User
-        (Entity::User, Entity::Resource, Operator::LessEqual) => Ok(DslCondition::Or(vec![
-            DslCondition::ResourceIntGreater {
-                resource_attr: right.attribute.clone(),
-                user_attr: left.attribute.clone(),
-            },
-            DslCondition::UserEqualsResource {
-                user_attr: left.attribute,
-                resource_attr: right.attribute,
-            },
-        ])),
+        (Entity::User, Entity::Resource, Operator::LessEqual, _, _) => {
+            Ok(DslCondition::Or(vec![
+                DslCondition::ResourceIntGreater {
+                    resource_attr: right.attribute.clone(),
+                    user_attr: left.attribute.clone(),
+                },
+                DslCondition::UserEqualsResource {
+                    user_attr: left.attribute,
+                    resource_attr: right.attribute,
+                },
+            ]))
+        }
 
-        // User != Resource
-        (Entity::User, Entity::Resource, Operator::NotEqual) => Ok(DslCondition::Not(Box::new(
-            DslCondition::UserEqualsResource {
+        // User != Resource (no wildcard)
+        (Entity::User, Entity::Resource, Operator::NotEqual, false, false) => {
+            Ok(DslCondition::Not(Box::new(DslCondition::UserEqualsResource {
                 user_attr: left.attribute,
                 resource_attr: right.attribute,
-            },
-        ))),
+            })))
+        }
 
         // Same-entity comparisons: entity.attr1 op entity.attr2
         // Works for User, Resource, or Context entities
-        (left_ent, right_ent, op) if left_ent == right_ent => {
+        (left_ent, right_ent, op, _, _) if left_ent == right_ent => {
             let entity_type = match left_ent {
                 Entity::User => crate::evaluators::reaper_dsl::EntityType::User,
                 Entity::Resource => crate::evaluators::reaper_dsl::EntityType::Resource,

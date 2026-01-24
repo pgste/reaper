@@ -4,14 +4,15 @@
 
 **Reaper Agent** provides sub-microsecond policy enforcement for enterprise sidecars, while **Reaper Platform** manages distributed agents with zero-downtime deployments.
 
-## 🎯 Core Value Proposition
+## Core Value Proposition
 
 - **60-80% Memory Reduction** vs traditional JVM-based policy engines
 - **Sub-microsecond Decision Latency** for cost-effective sidecar deployment
 - **Zero-downtime Policy Updates** using atomic swapping
+- **OPA-style Decision Logging** for audit and compliance
 - **Enterprise-grade Reliability** with comprehensive BDD testing
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Rust 1.70+ (install via [rustup](https://rustup.rs/))
@@ -84,7 +85,106 @@ make cli
 ./target/debug/reaper-cli status
 ```
 
-## 🏗️ Architecture
+## Docker Deployment
+
+Reaper provides Docker profiles for different deployment patterns:
+
+```bash
+# Just the agent (standalone enforcement)
+docker compose --profile engine up -d
+
+# Agent + Platform (simple management)
+docker compose --profile platform up -d
+
+# Enterprise stack (Agent + Management + PostgreSQL)
+docker compose --profile management up -d
+
+# Full stack with observability (Prometheus, Grafana, Tempo, Loki)
+docker compose --profile full --profile observability up -d
+```
+
+| Profile | Services | Use Case |
+|---------|----------|----------|
+| `engine` | Agent | Simple policy enforcement |
+| `platform` | Agent, Platform | Basic management |
+| `management` | Agent, Management, PostgreSQL | Enterprise with centralized control |
+| `observability` | Prometheus, Grafana, Tempo, Loki | Monitoring stack |
+| `full` | All core services | Complete deployment |
+
+### Health Checks
+
+```bash
+curl http://localhost:8080/health   # Agent
+curl http://localhost:8081/health   # Platform
+curl http://localhost:3000/health   # Management
+```
+
+## Decision Logging
+
+Reaper provides OPA-style decision logging for audit and compliance:
+
+```bash
+# Enable decision logging
+REAPER_DECISION_LOG_ENABLED=true
+REAPER_DECISION_LOG_CAPACITY=10000
+REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson
+```
+
+### Query Decisions
+
+```bash
+# Get recent decisions
+curl http://localhost:8080/api/v1/decisions
+
+# Get decision stats
+curl http://localhost:8080/api/v1/decisions/stats
+
+# Filter by principal or decision
+curl "http://localhost:8080/api/v1/decisions?principal=alice"
+curl "http://localhost:8080/api/v1/decisions?decision=deny"
+
+# Real-time streaming (SSE)
+curl http://localhost:8080/api/v1/decisions/stream
+```
+
+Decision logs are NDJSON format, compatible with Splunk, Elasticsearch, Datadog, and other SIEM tools.
+
+## Policy Testing (CLI)
+
+Reaper CLI provides assertion-based testing for CI/CD integration:
+
+```bash
+# Single test assertion
+reaper test --policy policy.reap --data entities.json \
+    --principal alice --action read --resource /api \
+    --expect allow
+
+# Batch test suite
+reaper test-suite --file tests.yaml
+```
+
+### Test Suite Format (YAML)
+
+```yaml
+tests:
+  - name: "Admin can access dashboard"
+    policy: "policies/admin.reap"
+    data: "data/entities.json"
+    principal: "admin_alice"
+    action: "access"
+    resource: "/admin/dashboard"
+    expect: allow
+
+  - name: "Viewer cannot delete"
+    policy: "policies/rbac.reap"
+    data: "data/entities.json"
+    principal: "viewer_bob"
+    action: "delete"
+    resource: "/api/data"
+    expect: deny
+```
+
+## Architecture
 
 ### Core Components
 
@@ -116,7 +216,7 @@ make cli
 3. **Multiple deployment patterns** - Choose the pattern that fits your needs
 4. **Zero-downtime updates** - Atomic hot-swapping for all deployment modes
 
-## 📊 API Endpoints & Examples
+## API Endpoints & Examples
 
 ### Reaper Agent (Port 8080)
 
@@ -217,7 +317,7 @@ curl http://localhost:8081/api/v1/agents
 curl http://localhost:8081/api/v1/agents/{agent-id}
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Running All Tests
 ```bash
@@ -321,7 +421,7 @@ cargo run --release --example test_multilayer_10k
 cargo run --release --example memory_volume_test
 ```
 
-## 🚢 Release Process
+## Release Process
 
 ```bash
 # Patch release
@@ -334,7 +434,7 @@ make release VERSION=minor
 make release VERSION=major
 ```
 
-## 🔄 CI/CD Pipeline
+## CI/CD Pipeline
 
 The project includes a comprehensive GitHub Actions pipeline that runs on every push and pull request:
 
@@ -421,7 +521,7 @@ cargo run -p policy-engine --example test_multilayer_10k --release
 cargo test --workspace --test '*bdd*'
 ```
 
-## 🔧 Development
+## Development
 
 ### Project Structure
 
@@ -435,27 +535,28 @@ reaper/
 │   │   │   ├── evaluators/        # Policy language evaluators
 │   │   │   ├── data/              # DataStore for ABAC/ReBAC
 │   │   │   ├── reap/              # Policy format support
+│   │   │   ├── decision_log.rs    # Decision logging types
+│   │   │   ├── decision_buffer.rs # Lock-free ring buffer
 │   │   │   └── gherkin/           # Cucumber integration
 │   │   ├── tests/                 # BDD tests
 │   │   ├── examples/              # Performance tests
 │   │   └── benches/               # Benchmarks
-│   ├── message-queue/             # Async messaging (stub)
-│   └── metrics/                   # Monitoring (stub)
+│   ├── reaper-sdk/                # Client SDK (HTTP + future UDP)
+│   └── reaper-ebpf/               # eBPF integration (Linux only)
 ├── services/                       # Standalone services
 │   ├── reaper-agent/              # Policy enforcement (port 8080)
-│   │   ├── src/main.rs           # Agent service
-│   │   └── tests/                # Agent BDD tests
-│   └── reaper-platform/           # Management layer (port 8081)
-│       ├── src/main.rs           # Platform service
-│       └── tests/                # Platform BDD tests
+│   ├── reaper-platform/           # Management layer (port 8081)
+│   ├── reaper-management/         # Enterprise management (port 3000)
+│   └── reaper-sync/               # Policy sync client
 ├── tools/
 │   └── reaper-cli/                # Command-line interface
 ├── docs/                          # All documentation
 │   ├── architecture/             # Architecture docs
-│   ├── deployment/               # Deployment guides
+│   ├── concepts/                 # Bundle format, event-driven loading
+│   ├── deployment/               # Operations guide, deployment patterns
 │   ├── performance/              # Performance docs
-│   ├── testing/                  # Testing guides
-│   └── development/              # Dev guides
+│   └── testing/                  # Testing guides
+├── docker-compose.yml             # Multi-profile Docker deployment
 ├── Makefile                       # Development commands
 └── Cargo.toml                     # Workspace configuration
 ```
@@ -571,14 +672,14 @@ curl http://localhost:8081/api/v1/policies
 | `make clean` | Remove build artifacts |
 | `make release` | Create a release |
 
-## 📈 Performance Goals
+## Performance Goals
 
 - **Policy Evaluation**: < 1 microsecond p99 latency
 - **Memory Usage**: < 50MB per agent instance
 - **Throughput**: > 100K decisions/second per agent
 - **Startup Time**: < 100ms cold start
 
-## 🎖️ Enterprise Features
+## Enterprise Features
 
 - Zero-downtime policy deployments
 - Centralized agent management
@@ -588,4 +689,4 @@ curl http://localhost:8081/api/v1/policies
 
 ---
 
-Built with ❤️ using Rust for maximum performance and reliability.
+Built with Rust for maximum performance and reliability.

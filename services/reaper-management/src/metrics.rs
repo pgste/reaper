@@ -197,16 +197,114 @@ lazy_static! {
         "Estimated active JWT tokens"
     )
     .unwrap();
+
+    // === Database Pool Metrics ===
+
+    /// Database pool size (configured max connections)
+    pub static ref DB_POOL_SIZE: Gauge = register_gauge!(
+        "reaper_management_db_pool_size",
+        "Database connection pool size (max connections)"
+    )
+    .unwrap();
+
+    /// Database pool connections (current active + idle)
+    pub static ref DB_POOL_CONNECTIONS: Gauge = register_gauge!(
+        "reaper_management_db_pool_connections",
+        "Current database pool connections"
+    )
+    .unwrap();
+
+    /// Database pool idle connections
+    pub static ref DB_POOL_IDLE: Gauge = register_gauge!(
+        "reaper_management_db_pool_idle",
+        "Current idle database pool connections"
+    )
+    .unwrap();
+
+    // === Health Check Metrics ===
+
+    /// Health check status by component (1 = healthy, 0 = unhealthy)
+    pub static ref HEALTH_CHECK_STATUS: GaugeVec = register_gauge_vec!(
+        "reaper_management_health_check_status",
+        "Health check status by component (1=healthy, 0=unhealthy)",
+        &["component"]
+    )
+    .unwrap();
+
+    /// Health check latency by component
+    pub static ref HEALTH_CHECK_LATENCY: HistogramVec = register_histogram_vec!(
+        "reaper_management_health_check_latency_seconds",
+        "Health check latency in seconds",
+        &["component"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+    )
+    .unwrap();
+
+    // === Error Metrics ===
+
+    /// Total errors by type
+    pub static ref ERRORS_TOTAL: CounterVec = register_counter_vec!(
+        "reaper_management_errors_total",
+        "Total errors by type",
+        &["error_type", "endpoint"]
+    )
+    .unwrap();
+
+    // === Request Size Metrics ===
+
+    /// HTTP request body size
+    pub static ref REQUEST_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+        "reaper_management_http_request_size_bytes",
+        "HTTP request body size in bytes",
+        &["endpoint", "method"],
+        vec![100.0, 1000.0, 10000.0, 100000.0, 1000000.0, 10000000.0]
+    )
+    .unwrap();
+
+    /// HTTP response body size
+    pub static ref RESPONSE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+        "reaper_management_http_response_size_bytes",
+        "HTTP response body size in bytes",
+        &["endpoint", "method"],
+        vec![100.0, 1000.0, 10000.0, 100000.0, 1000000.0, 10000000.0]
+    )
+    .unwrap();
+
+    // === Connection Metrics ===
+
+    /// Active HTTP connections
+    pub static ref ACTIVE_CONNECTIONS: Gauge = register_gauge!(
+        "reaper_management_active_connections",
+        "Current active HTTP connections"
+    )
+    .unwrap();
 }
 
 /// Encode all metrics to Prometheus text format
-pub fn encode_metrics() -> String {
+/// Returns an error if encoding fails instead of panicking
+pub fn encode_metrics() -> Result<String, MetricsError> {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-    String::from_utf8(buffer).unwrap()
+    encoder.encode(&metric_families, &mut buffer)
+        .map_err(|e| MetricsError::Encode(e.to_string()))?;
+    String::from_utf8(buffer)
+        .map_err(|e| MetricsError::Utf8(e.to_string()))
 }
+
+/// Metrics encoding error
+#[derive(Debug, thiserror::Error)]
+pub enum MetricsError {
+    #[error("Failed to encode metrics: {0}")]
+    Encode(String),
+    #[error("Invalid UTF-8 in metrics output: {0}")]
+    Utf8(String),
+}
+
+// Convenience aliases for commonly used metrics
+pub use API_REQUESTS_TOTAL as API_REQUESTS;
+pub use API_REQUEST_DURATION as API_LATENCY;
+pub use STORAGE_OPERATIONS_TOTAL as STORAGE_OPERATIONS;
 
 /// Initialize metrics (call once at startup)
 pub fn init_metrics() {
@@ -219,6 +317,12 @@ pub fn init_metrics() {
     lazy_static::initialize(&AGENTS_TOTAL);
     lazy_static::initialize(&SOURCES_TOTAL);
     lazy_static::initialize(&SSE_SUBSCRIBERS);
+    lazy_static::initialize(&DB_POOL_SIZE);
+    lazy_static::initialize(&DB_POOL_CONNECTIONS);
+    lazy_static::initialize(&DB_POOL_IDLE);
+    lazy_static::initialize(&HEALTH_CHECK_STATUS);
+    lazy_static::initialize(&ERRORS_TOTAL);
+    lazy_static::initialize(&ACTIVE_CONNECTIONS);
 
     tracing::info!("Prometheus metrics initialized");
 }
@@ -237,7 +341,7 @@ mod tests {
             .inc();
         ORGANIZATIONS_TOTAL.set(5.0);
 
-        let output = encode_metrics();
+        let output = encode_metrics().expect("encoding should succeed");
         assert!(output.contains("reaper_management_api_requests_total"));
         assert!(output.contains("reaper_management_organizations_total"));
     }
