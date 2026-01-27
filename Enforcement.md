@@ -1,4 +1,4 @@
-# CLAUDE.md - AI Assistant Guide for Reaper
+# Enforcement.md - AI Assistant Guide for Reaper
 
 ## Project Overview
 
@@ -245,3 +245,9 @@ make release VERSION=major  # Major release
 ```
 
 Release script runs: tests, format check, clippy, then cargo-release.
+
+---
+
+## Related Documentation
+
+- **[bundles.md](bundles.md)** - Bundle architecture, compilation, atomic deployment
