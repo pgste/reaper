@@ -20,9 +20,11 @@ pub mod reap;
 pub mod regex_cache;
 
 pub use engine::{
-    EnhancedPolicy, PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage,
-    PolicyRequest, PolicyRule, PolicySource, PolicySourceMetadata, SimpleAction, SimpleRule,
+    AllPoliciesEvaluationResult, DenyInfo, EnhancedPolicy, PackageEvaluationResult, PackageInfo,
+    PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage, PolicyRequest,
+    PolicyRule, PolicySource, PolicySourceMetadata, SimpleAction, SimpleRule, StagedPackage,
 };
+pub use engine::PolicyVersion as EngineVersion;
 
 pub use evaluators::{
     CedarPolicyEvaluator, EvaluatorMetadata, PolicyEvaluator, SimplePolicyEvaluator,
@@ -32,7 +34,7 @@ pub use evaluators::{
 pub use evaluators::reaper_dsl;
 
 // Re-export reap parser and bundle format
-pub use reap::{BundleFormat, PolicyBundle, ReaperPolicy};
+pub use reap::{BundleFormat, PolicyBundle, PolicyPackage, PrecompilationHints, ReaperPolicy};
 
 // Re-export optimizer types (Phase 5A: Decision Trees)
 pub use optimizer::{DecisionTree, DecisionTreeBuilder, TreeStats};
@@ -58,8 +60,9 @@ pub use optimized_engine::{OptimizationSummary, OptimizedEngineStats, OptimizedP
 pub use compiled_evaluator::CompiledPolicyEvaluator;
 
 pub use data::{
-    AttributeValue, Attributes, DataFormat, DataLoader, DataStore, Entity, EntityId, EntityType,
-    IndexStrategy, InternedString, QueryBuilder, StreamingLoader, StreamingStats, StringInterner,
+    AttributeValue, Attributes, DataBundle, DataBundleMetadata, DataFormat, DataLoader, DataStore,
+    Entity, EntityId, EntityType, IndexStrategy, InternedString, QueryBuilder, StreamingLoader,
+    StreamingStats, StringInterner, StringTable,
 };
 
 // Re-export entity builder for convenience

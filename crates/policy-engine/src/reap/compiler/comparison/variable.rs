@@ -1,0 +1,362 @@
+//! Variable comparison compilation.
+//!
+//! This module handles compilation of comparisons involving variables,
+//! including variable method calls and variable attribute comparisons.
+
+use crate::evaluators::reaper_dsl::{
+    AttrCompareOp, Condition as DslCondition, LiteralValue, VariableMethod, VariableStringTransform,
+};
+use crate::reap::ast::{ComparisonRight, MethodName, Operator, Value, VarAttr};
+use reaper_core::ReaperError;
+
+/// Compile comparison with method call on a variable: all_skills.count() >= 2
+pub fn compile_variable_method_comparison(
+    var_name: String,
+    method: MethodName,
+    op: Operator,
+    right: ComparisonRight,
+) -> Result<DslCondition, ReaperError> {
+    let threshold = match right {
+        ComparisonRight::Value(Value::Integer(i)) => i,
+        ComparisonRight::Value(Value::Float(f)) => f as i64,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "Variable method comparisons require integer literal on right side"
+                    .to_string(),
+            })
+        }
+    };
+
+    let var_method = match method {
+        MethodName::Count => VariableMethod::Count,
+        MethodName::Sum => VariableMethod::Sum,
+        MethodName::Max => VariableMethod::Max,
+        MethodName::Min => VariableMethod::Min,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Method .{}() is not supported for variable comparisons. \
+                    Supported: .count(), .sum(), .max(), .min()",
+                    method.as_str()
+                ),
+            })
+        }
+    };
+
+    let attr_op = match op {
+        Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
+        Operator::GreaterThan => AttrCompareOp::Greater,
+        Operator::Equal => AttrCompareOp::Equal,
+        Operator::NotEqual => AttrCompareOp::NotEqual,
+        Operator::LessEqual => AttrCompareOp::LessEqual,
+        Operator::LessThan => AttrCompareOp::Less,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Operator {:?} not supported for variable method comparisons",
+                    op
+                ),
+            })
+        }
+    };
+
+    Ok(DslCondition::VariableMethodCompare {
+        variable: var_name,
+        method: var_method,
+        op: attr_op,
+        value: LiteralValue::Int(threshold),
+    })
+}
+
+/// Compile chained variable method comparison: t.trim().count() > 0
+/// This handles patterns like var.transform_method().compare_method() op value
+pub fn compile_chained_variable_method_comparison(
+    var_name: String,
+    first_method: MethodName,
+    second_method: MethodName,
+    op: Operator,
+    right: ComparisonRight,
+) -> Result<DslCondition, ReaperError> {
+    // Convert first method to transform
+    let transform_method = match first_method {
+        MethodName::Trim => VariableStringTransform::Trim,
+        MethodName::Lower => VariableStringTransform::Lower,
+        MethodName::Upper => VariableStringTransform::Upper,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Method .{}() is not supported as the first method in chained comparisons. \
+                    Supported: .trim(), .lower(), .upper()",
+                    first_method.as_str()
+                ),
+            })
+        }
+    };
+
+    // Convert second method to comparison method
+    let compare_method = match second_method {
+        MethodName::Count => VariableMethod::Count,
+        MethodName::Sum => VariableMethod::Sum,
+        MethodName::Max => VariableMethod::Max,
+        MethodName::Min => VariableMethod::Min,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Method .{}() is not supported as the second method in chained comparisons. \
+                    Supported: .count(), .sum(), .max(), .min()",
+                    second_method.as_str()
+                ),
+            })
+        }
+    };
+
+    // Get the threshold value
+    let threshold = match right {
+        ComparisonRight::Value(Value::Integer(i)) => i,
+        ComparisonRight::Value(Value::Float(f)) => f as i64,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "Chained method comparisons require integer literal on right side"
+                    .to_string(),
+            })
+        }
+    };
+
+    // Convert operator
+    let attr_op = match op {
+        Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
+        Operator::GreaterThan => AttrCompareOp::Greater,
+        Operator::Equal => AttrCompareOp::Equal,
+        Operator::NotEqual => AttrCompareOp::NotEqual,
+        Operator::LessEqual => AttrCompareOp::LessEqual,
+        Operator::LessThan => AttrCompareOp::Less,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Operator {:?} not supported for chained method comparisons",
+                    op
+                ),
+            })
+        }
+    };
+
+    Ok(DslCondition::VariableChainedMethodCompare {
+        variable: var_name,
+        transform_method,
+        compare_method,
+        op: attr_op,
+        value: LiteralValue::Int(threshold),
+    })
+}
+
+/// Compile comparison: var.attr op value (for comprehension filters)
+pub fn compile_var_attr_comparison(
+    var_attr: VarAttr,
+    op: Operator,
+    right: ComparisonRight,
+) -> Result<DslCondition, ReaperError> {
+    match right {
+        ComparisonRight::Value(value) => {
+            // Handle null comparisons
+            if matches!(value, Value::Null) {
+                return match op {
+                    Operator::Equal => Ok(DslCondition::VariableAttrEqualsNull {
+                        variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                    }),
+                    Operator::NotEqual => Ok(DslCondition::VariableAttrNotEqualsNull {
+                        variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                    }),
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "Operator {:?} not supported for null comparisons. Use == or !=.",
+                            op
+                        ),
+                    }),
+                };
+            }
+
+            // Convert value to LiteralValue
+            let literal_value = match value {
+                Value::String(s) => LiteralValue::String(s),
+                Value::Integer(i) => LiteralValue::Int(i),
+                Value::Float(f) => LiteralValue::Int(f as i64), // Convert float to int
+                Value::Boolean(b) => LiteralValue::Bool(b),
+                Value::Null => unreachable!(), // handled above
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "Variable attribute comparisons only support primitive values, not arrays/objects".to_string(),
+                    })
+                }
+            };
+
+            match op {
+                Operator::Equal | Operator::NotEqual => {
+                    // For == and !=, use VariableAttrEqualsLiteral
+                    // NotEqual will be handled by wrapping in Not
+                    let cond = DslCondition::VariableAttrEqualsLiteral {
+                        variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                        value: literal_value,
+                    };
+                    if op == Operator::NotEqual {
+                        Ok(DslCondition::Not(Box::new(cond)))
+                    } else {
+                        Ok(cond)
+                    }
+                }
+                Operator::GreaterEqual | Operator::GreaterThan | Operator::LessEqual | Operator::LessThan => {
+                    // For numeric comparisons, use VariableAttrCompare
+                    let attr_op = match op {
+                        Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
+                        Operator::GreaterThan => AttrCompareOp::Greater,
+                        Operator::LessEqual => AttrCompareOp::LessEqual,
+                        Operator::LessThan => AttrCompareOp::Less,
+                        _ => unreachable!(),
+                    };
+                    Ok(DslCondition::VariableAttrCompare {
+                        variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                        op: attr_op,
+                        value: literal_value,
+                    })
+                }
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Operator {:?} not supported for variable attribute comparisons.",
+                        op
+                    ),
+                }),
+            }
+        }
+        ComparisonRight::Variable(var_name) => {
+            // var.attr == other_var - not commonly needed, but could be supported
+            Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Variable attribute to variable comparisons not yet supported: {}.{} {:?} {}",
+                    var_attr.variable, var_attr.attribute, op, var_name
+                ),
+            })
+        }
+        ComparisonRight::VarAttr(other_var_attr) => {
+            // var.attr == other_var.attr - not commonly needed
+            Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Variable attribute to variable attribute comparisons not yet supported: {}.{} {:?} {}.{}",
+                    var_attr.variable, var_attr.attribute, op, other_var_attr.variable, other_var_attr.attribute
+                ),
+            })
+        }
+        ComparisonRight::EntityAttr(_) => {
+            Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Variable attribute to entity attribute comparisons not yet supported: {}.{}",
+                    var_attr.variable, var_attr.attribute
+                ),
+            })
+        }
+        ComparisonRight::Expr(_) => {
+            Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "Variable attribute to expression comparisons not yet supported: {}.{}",
+                    var_attr.variable, var_attr.attribute
+                ),
+            })
+        }
+    }
+}
+
+/// Compile variable attribute comparison assignment: x := var.attr op value
+/// This handles patterns like: is_active := p.active == true
+pub fn compile_var_attr_comparison_assignment(
+    result_variable: String,
+    var_attr: VarAttr,
+    op: Operator,
+    right: ComparisonRight,
+) -> Result<DslCondition, ReaperError> {
+    // Compile variable attribute comparison assignments that store the result in a variable
+    match right {
+        ComparisonRight::Value(value) => {
+            // Handle null comparisons: has_items := first_cat.items != null
+            if matches!(value, Value::Null) {
+                return match op {
+                    Operator::Equal => Ok(DslCondition::VarAttrNullCompareAssignment {
+                        result_variable,
+                        source_variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                        is_null_check: true, // == null
+                    }),
+                    Operator::NotEqual => Ok(DslCondition::VarAttrNullCompareAssignment {
+                        result_variable,
+                        source_variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                        is_null_check: false, // != null (result is true if NOT null)
+                    }),
+                    _ => Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "Operator {:?} not supported for null comparisons. Use == or !=.",
+                            op
+                        ),
+                    }),
+                };
+            }
+
+            // Convert value to LiteralValue
+            let literal_value = match value {
+                Value::String(s) => LiteralValue::String(s),
+                Value::Integer(i) => LiteralValue::Int(i),
+                Value::Float(f) => LiteralValue::Int(f as i64),
+                Value::Boolean(b) => LiteralValue::Bool(b),
+                Value::Null => unreachable!(),
+                _ => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "Variable attribute comparison assignments only support primitive values".to_string(),
+                    })
+                }
+            };
+
+            match op {
+                Operator::Equal | Operator::NotEqual => {
+                    let cond = DslCondition::VariableAttrEqualsLiteral {
+                        variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                        value: literal_value,
+                    };
+                    if op == Operator::NotEqual {
+                        Ok(DslCondition::Not(Box::new(cond)))
+                    } else {
+                        Ok(cond)
+                    }
+                }
+                Operator::GreaterEqual | Operator::GreaterThan | Operator::LessEqual | Operator::LessThan => {
+                    let attr_op = match op {
+                        Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
+                        Operator::GreaterThan => AttrCompareOp::Greater,
+                        Operator::LessEqual => AttrCompareOp::LessEqual,
+                        Operator::LessThan => AttrCompareOp::Less,
+                        _ => unreachable!(),
+                    };
+                    Ok(DslCondition::VariableAttrCompare {
+                        variable: var_attr.variable,
+                        attribute: var_attr.attribute,
+                        op: attr_op,
+                        value: literal_value,
+                    })
+                }
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Operator {:?} not supported for variable attribute comparison assignments.",
+                        op
+                    ),
+                }),
+            }
+        }
+        _ => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Variable attribute comparison assignments only support literal values on right side: {}.{} {:?} ...",
+                var_attr.variable, var_attr.attribute, op
+            ),
+        }),
+    }
+}

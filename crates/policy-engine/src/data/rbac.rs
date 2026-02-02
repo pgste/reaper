@@ -48,7 +48,7 @@ impl RBACViewBuilder {
     /// - Query time: 100-500ns (single index lookup)
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let builder = RBACViewBuilder::new(store.clone());
     /// let view = builder.build_user_permission_view()?;
     /// store.add_view(view)?;
@@ -395,7 +395,7 @@ pub trait DataStoreRBACExt {
     /// and run in 100-500ns instead of 5-10µs.
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// use policy_engine::data::{DataStore, DataStoreRBACExt};
     ///
     /// let store = DataStore::new();

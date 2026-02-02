@@ -23,6 +23,16 @@
                 <h1 class="text-3xl font-bold">Reaper Benchmark</h1>
                 <p class="text-gray-400">Policy Engine Performance Analysis</p>
             </div>
+            <div class="flex items-center gap-4">
+                <div id="initStatus" class="text-sm text-gray-400"></div>
+                <button onclick="initializeAgent()" id="initBtn"
+                    class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    Initialize Agent
+                </button>
+            </div>
         </div>
 
         <!-- Tabs -->
@@ -128,9 +138,9 @@
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
                     <div>
-                        <label class="block text-gray-400 mb-2">Policy</label>
+                        <label class="block text-gray-400 mb-2">Policy Package</label>
                         <select id="benchPolicy" class="w-full bg-gray-700 rounded px-3 py-2">
-                            <option value="benchmark_rbac">benchmark_rbac</option>
+                            <!-- Populated dynamically -->
                         </select>
                     </div>
                     <div>
@@ -166,7 +176,7 @@
 
             <!-- Results Summary -->
             <div id="summary" class="hidden mb-8">
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-6 gap-4">
                     <div class="metric-card bg-gradient-to-br from-green-800 to-green-900 rounded-lg p-6">
                         <div class="text-gray-300 text-sm">Peak Throughput</div>
                         <div id="peakRps" class="text-3xl font-bold">-</div>
@@ -181,6 +191,16 @@
                         <div class="text-gray-300 text-sm">Total Requests</div>
                         <div id="totalRequests" class="text-3xl font-bold">-</div>
                         <div class="text-gray-400 text-sm">processed</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-emerald-800 to-emerald-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Allowed</div>
+                        <div id="totalAllowed" class="text-3xl font-bold text-green-400">-</div>
+                        <div class="text-gray-400 text-sm">decisions</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-red-800 to-red-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Denied</div>
+                        <div id="totalDenied" class="text-3xl font-bold text-red-400">-</div>
+                        <div class="text-gray-400 text-sm">decisions</div>
                     </div>
                     <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-6">
                         <div class="text-gray-300 text-sm">Success Rate</div>
@@ -224,6 +244,33 @@
                 </div>
             </div>
 
+            <!-- Agent Stats & Recommendation -->
+            <div id="agentStatsSection" class="hidden bg-gray-800 rounded-lg p-6 mt-8">
+                <h2 class="text-xl font-semibold mb-4">Reaper Agent Stats</h2>
+                <div class="grid grid-cols-5 gap-4 mb-4">
+                    <div>
+                        <div class="text-gray-400 text-sm">Policies Loaded</div>
+                        <div id="benchAgentPolicies" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Total Evaluations</div>
+                        <div id="benchAgentEvaluations" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Cache Hits</div>
+                        <div id="benchAgentCacheHits" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Cache Misses</div>
+                        <div id="benchAgentCacheMisses" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Bench Memory</div>
+                        <div id="benchServiceMemory" class="text-xl font-bold">-</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Recommendation -->
             <div id="recommendation" class="hidden bg-gray-800 rounded-lg p-6 mt-8">
                 <h2 class="text-xl font-semibold mb-4">Recommendation</h2>
@@ -242,7 +289,13 @@
                     </button>
                 </div>
                 <p class="text-gray-400 mb-4">Tests a matrix of parameters to find optimal batch size and concurrency settings.</p>
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <div>
+                        <label class="block text-gray-400 mb-2">Policy Package</label>
+                        <select id="simPolicy" class="w-full bg-gray-700 rounded px-3 py-2">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
                     <div>
                         <label class="block text-gray-400 mb-2">Volumes</label>
                         <input type="text" id="simVolumes" value="100, 500, 1000"
@@ -295,25 +348,42 @@
                         <p id="recExplanation" class="text-gray-300 text-sm"></p>
                     </div>
 
-                    <!-- System Resources -->
+                    <!-- System Resources & Decisions -->
                     <div class="bg-gray-800 rounded-lg p-6">
-                        <h3 class="text-lg font-semibold mb-4">System Resources</h3>
+                        <h3 class="text-lg font-semibold mb-4">Reaper Agent</h3>
                         <div class="grid grid-cols-2 gap-4">
                             <div>
-                                <div class="text-gray-400 text-sm">CPU Cores</div>
-                                <div id="sysCpuCores" class="text-xl font-bold">-</div>
+                                <div class="text-gray-400 text-sm">Policies Loaded</div>
+                                <div id="agentPolicies" class="text-xl font-bold">-</div>
                             </div>
                             <div>
-                                <div class="text-gray-400 text-sm">CPU Usage</div>
-                                <div id="sysCpuUsage" class="text-xl font-bold">-</div>
+                                <div class="text-gray-400 text-sm">Total Evaluations</div>
+                                <div id="agentEvaluations" class="text-xl font-bold">-</div>
                             </div>
                             <div>
-                                <div class="text-gray-400 text-sm">Memory Used</div>
+                                <div class="text-gray-400 text-sm">Cache Hits</div>
+                                <div id="agentCacheHits" class="text-xl font-bold">-</div>
+                            </div>
+                            <div>
+                                <div class="text-gray-400 text-sm">Bench Memory</div>
                                 <div id="sysMemUsed" class="text-xl font-bold">-</div>
                             </div>
-                            <div>
-                                <div class="text-gray-400 text-sm">Memory Available</div>
-                                <div id="sysMemAvail" class="text-xl font-bold">-</div>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-gray-700">
+                            <h4 class="text-gray-300 font-medium mb-2">Policy Decisions</h4>
+                            <div class="grid grid-cols-3 gap-4">
+                                <div>
+                                    <div class="text-gray-400 text-sm">Total</div>
+                                    <div id="simTotalRequests" class="text-lg font-bold">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-gray-400 text-sm">Allowed</div>
+                                    <div id="simAllowed" class="text-lg font-bold text-green-400">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-gray-400 text-sm">Denied</div>
+                                    <div id="simDenied" class="text-lg font-bold text-red-400">-</div>
+                                </div>
                             </div>
                         </div>
                         <div class="mt-4 pt-4 border-t border-gray-700">
@@ -335,6 +405,7 @@
                                     <th class="pb-3">Volume</th>
                                     <th class="pb-3">Throughput</th>
                                     <th class="pb-3">P99</th>
+                                    <th class="pb-3">Allow/Deny</th>
                                     <th class="pb-3">CPU %</th>
                                 </tr>
                             </thead>
@@ -368,23 +439,82 @@
             });
         }
 
+        // Initialize agent with benchmark policies and data
+        async function initializeAgent() {
+            const btn = document.getElementById('initBtn');
+            const status = document.getElementById('initStatus');
+
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Initializing...';
+            status.textContent = '';
+            status.className = 'text-sm text-gray-400';
+
+            try {
+                const response = await fetch('/init', { method: 'POST' });
+                const result = await response.json();
+
+                if (response.ok) {
+                    status.textContent = `✓ ${result.summary.total_deployed} policies deployed, ${result.summary.total_data_files} data files loaded`;
+                    status.className = 'text-sm text-green-400';
+                    // Reload packages to reflect new state
+                    await loadPackages();
+                } else {
+                    status.textContent = `✗ Initialization failed`;
+                    status.className = 'text-sm text-red-400';
+                }
+            } catch (error) {
+                console.error('Initialization failed:', error);
+                status.textContent = `✗ ${error.message}`;
+                status.className = 'text-sm text-red-400';
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> Initialize Agent';
+        }
+
         // Load packages on page load
         async function loadPackages() {
             try {
                 const response = await fetch('/packages');
-                packages = await response.json();
-                renderPackageList();
+                const packageList = await response.json();
 
-                // Update policy select in benchmark tab
-                const select = document.getElementById('benchPolicy');
-                packages.forEach(pkg => {
-                    pkg.policies && pkg.policies.forEach && packages.forEach(p => {
-                        // Add unique policy names
-                    });
-                });
+                // Fetch full details for each package to get policies
+                packages = await Promise.all(packageList.map(async (pkg) => {
+                    const detailResponse = await fetch(`/packages/${pkg.name}`);
+                    return await detailResponse.json();
+                }));
+
+                renderPackageList();
+                populatePolicySelectors();
             } catch (error) {
                 console.error('Failed to load packages:', error);
             }
+        }
+
+        function populatePolicySelectors() {
+            const benchSelect = document.getElementById('benchPolicy');
+            const simSelect = document.getElementById('simPolicy');
+
+            // Clear and populate both selectors
+            benchSelect.innerHTML = '';
+            simSelect.innerHTML = '';
+
+            packages.forEach(pkg => {
+                if (pkg.policies && pkg.policies.length > 0) {
+                    const policyName = pkg.policies[0];
+                    const optionText = `${pkg.name.toUpperCase()} (${policyName})`;
+
+                    const benchOption = document.createElement('option');
+                    benchOption.value = policyName;
+                    benchOption.textContent = optionText;
+                    benchSelect.appendChild(benchOption);
+
+                    const simOption = document.createElement('option');
+                    simOption.value = policyName;
+                    simOption.textContent = optionText;
+                    simSelect.appendChild(simOption);
+                }
+            });
         }
 
         function renderPackageList() {
@@ -503,7 +633,7 @@
 
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
-                renderBenchmarkResults(data);
+                await renderBenchmarkResults(data);
             } catch (error) {
                 alert('Benchmark failed: ' + error.message);
             } finally {
@@ -511,11 +641,12 @@
             }
         }
 
-        function renderBenchmarkResults(data) {
+        async function renderBenchmarkResults(data) {
             document.getElementById('summary').classList.remove('hidden');
             document.getElementById('charts').classList.remove('hidden');
             document.getElementById('resultsTable').classList.remove('hidden');
             document.getElementById('recommendation').classList.remove('hidden');
+            document.getElementById('agentStatsSection').classList.remove('hidden');
 
             const summary = data.summary;
             document.getElementById('peakRps').textContent =
@@ -525,10 +656,30 @@
             document.getElementById('totalRequests').textContent =
                 summary.total_requests?.toLocaleString() || '-';
 
+            // Calculate total allowed and denied across all results
+            const totalAllowed = data.results.reduce((acc, r) => acc + (r.allowed || 0), 0);
+            const totalDenied = data.results.reduce((acc, r) => acc + (r.denied || 0), 0);
+            document.getElementById('totalAllowed').textContent = totalAllowed.toLocaleString();
+            document.getElementById('totalDenied').textContent = totalDenied.toLocaleString();
+
             const successRate = data.results.reduce((acc, r) =>
                 acc + (r.successful / r.total_requests * 100), 0) / data.results.length;
             document.getElementById('successRate').textContent = successRate.toFixed(1) + '%';
             document.getElementById('recommendationText').textContent = summary.recommendation;
+
+            // Show benchmark service memory from report
+            if (data.system_info) {
+                document.getElementById('benchServiceMemory').textContent = data.system_info.benchmark_service_memory_mb + ' MB';
+            }
+
+            // Fetch and display agent stats
+            const agentStats = await fetchAgentStats();
+            if (agentStats) {
+                document.getElementById('benchAgentPolicies').textContent = agentStats.policies_loaded ?? '-';
+                document.getElementById('benchAgentEvaluations').textContent = agentStats.total_evaluations?.toLocaleString() ?? '-';
+                document.getElementById('benchAgentCacheHits').textContent = agentStats.cache_hits?.toLocaleString() ?? '-';
+                document.getElementById('benchAgentCacheMisses').textContent = agentStats.cache_misses?.toLocaleString() ?? '-';
+            }
 
             renderLatencyChart(data.results);
             renderThroughputChart(data.results);
@@ -611,7 +762,7 @@
             showLoading('Running simulation (this may take a while)...');
 
             const config = {
-                policy_name: "benchmark_rbac",
+                policy_name: document.getElementById('simPolicy').value,
                 volumes: document.getElementById('simVolumes').value.split(',').map(v => parseInt(v.trim())),
                 batch_sizes: document.getElementById('simBatchSizes').value.split(',').map(v => parseInt(v.trim())),
                 concurrency_levels: document.getElementById('simConcurrency').value.split(',').map(v => parseInt(v.trim())),
@@ -628,7 +779,7 @@
 
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
-                renderSimulationResults(data);
+                await renderSimulationResults(data);
             } catch (error) {
                 alert('Simulation failed: ' + error.message);
             } finally {
@@ -636,7 +787,19 @@
             }
         }
 
-        function renderSimulationResults(data) {
+        async function fetchAgentStats() {
+            try {
+                const response = await fetch('/agent-stats');
+                if (response.ok) {
+                    return await response.json();
+                }
+            } catch (e) {
+                console.error('Failed to fetch agent stats:', e);
+            }
+            return null;
+        }
+
+        async function renderSimulationResults(data) {
             document.getElementById('simResults').classList.remove('hidden');
 
             // Recommendation
@@ -647,13 +810,26 @@
             document.getElementById('recConfidence').textContent = rec.confidence + '%';
             document.getElementById('recExplanation').textContent = rec.explanation;
 
-            // System Resources
+            // Fetch and display agent stats
+            const agentStats = await fetchAgentStats();
+            if (agentStats) {
+                document.getElementById('agentPolicies').textContent = agentStats.policies_loaded ?? '-';
+                document.getElementById('agentEvaluations').textContent = agentStats.total_evaluations?.toLocaleString() ?? '-';
+                document.getElementById('agentCacheHits').textContent = agentStats.cache_hits?.toLocaleString() ?? '-';
+            }
+
+            // Benchmark service resources
             const res = data.resources_end;
-            document.getElementById('sysCpuCores').textContent = res.cpu_cores;
-            document.getElementById('sysCpuUsage').textContent = res.cpu_usage_percent.toFixed(1) + '%';
             document.getElementById('sysMemUsed').textContent = res.used_memory_mb + ' MB';
-            document.getElementById('sysMemAvail').textContent = res.available_memory_mb + ' MB';
             document.getElementById('sysBottleneck').textContent = data.summary.bottleneck_detected || 'None detected';
+
+            // Calculate total allowed/denied across all parameter results
+            const totalRequests = data.parameter_results.reduce((acc, r) => acc + (r.total_requests || r.volume || 0), 0);
+            const totalAllowed = data.parameter_results.reduce((acc, r) => acc + (r.allowed || 0), 0);
+            const totalDenied = data.parameter_results.reduce((acc, r) => acc + (r.denied || 0), 0);
+            document.getElementById('simTotalRequests').textContent = totalRequests.toLocaleString();
+            document.getElementById('simAllowed').textContent = totalAllowed.toLocaleString();
+            document.getElementById('simDenied').textContent = totalDenied.toLocaleString();
 
             // Parameter Results
             document.getElementById('simResultsBody').innerHTML = data.parameter_results.map(r => `
@@ -663,6 +839,7 @@
                     <td class="py-2">${r.volume}</td>
                     <td class="py-2">${r.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
                     <td class="py-2">${r.p99_us}µs</td>
+                    <td class="py-2"><span class="text-green-400">${r.allowed || 0}</span> / <span class="text-red-400">${r.denied || 0}</span></td>
                     <td class="py-2">${r.cpu_usage_percent.toFixed(1)}%</td>
                 </tr>
             `).join('');

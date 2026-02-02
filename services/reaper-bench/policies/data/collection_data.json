@@ -1,0 +1,13 @@
+{
+  "entities": [
+    {"id": "coll_user1", "type": "User", "attributes": {"id": "coll_user1", "permissions": ["read", "write"]}},
+    {"id": "coll_user2", "type": "User", "attributes": {"id": "coll_user2", "permissions": ["admin"]}},
+    {"id": "coll_user3", "type": "User", "attributes": {"id": "coll_user3", "permissions": ["view"]}},
+    {"id": "coll_user4", "type": "User", "attributes": {"id": "coll_user4", "groups": ["engineering", "frontend"]}},
+    {"id": "coll_user5", "type": "User", "attributes": {"id": "coll_user5", "roles": ["user", "admin"]}},
+    {"id": "coll_user6", "type": "User", "attributes": {"id": "coll_user6", "roles": ["user", "editor"]}},
+    {"id": "coll_doc1", "type": "Resource", "attributes": {"id": "coll_doc1", "type": "document"}},
+    {"id": "coll_resource1", "type": "Resource", "attributes": {"id": "coll_resource1", "type": "shared_resource"}},
+    {"id": "coll_sys1", "type": "Resource", "attributes": {"id": "coll_sys1", "type": "system"}}
+  ]
+}

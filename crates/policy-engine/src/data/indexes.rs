@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// Manages attribute-based indexes for fast queries
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let index_manager = IndexManager::new(store);
 ///
 /// // Create indexes
@@ -78,7 +78,7 @@ impl IndexManager {
     /// Statistics about the created index
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let stats = index_manager.create_index("Device", "trustscore")?;
     /// println!("Indexed {} entities with {} unique values",
     ///          stats.entity_count, stats.unique_values);
@@ -144,7 +144,7 @@ impl IndexManager {
     /// Vector of entity IDs matching the predicate
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// // Find all devices with trustscore >= 75
     /// let high_trust = index_manager.query("Device", "trustscore", |v| {
     ///     matches!(v, AttributeValue::Int(score) if *score >= 75)
@@ -181,7 +181,7 @@ impl IndexManager {
     /// This is faster than using query() with a predicate for equality checks.
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let admins = index_manager.query_equals("User", "role", &admin_value)?;
     /// ```
     pub fn query_equals(

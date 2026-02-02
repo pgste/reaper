@@ -10,7 +10,7 @@
 //! - **Efficient I/O**: Buffered reading with configurable chunk size
 //!
 //! # Example
-//! ```ignore
+//! ```text
 //! let reader = JsonStreamReader::new("large_file.json")?;
 //! while let Some(entity) = reader.next()? {
 //!     // Process entity incrementally
@@ -341,7 +341,7 @@ impl StreamingStats {
 /// Ideal for loading 1M+ entities without OOM errors.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let loader = StreamingLoader::new(data_loader, 10000);
 /// let stats = loader.stream_and_load("large_file.ndjson")?;
 /// println!("Loaded {} entities in {} chunks", stats.total, stats.chunks_processed);
@@ -372,7 +372,7 @@ impl StreamingLoader {
     /// StreamingStats with total count and duration
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let stats = streaming_loader.stream_and_load("entities.ndjson")?;
     /// println!("Loaded {} entities in {:?}", stats.total, stats.duration);
     /// ```

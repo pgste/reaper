@@ -57,23 +57,116 @@ pub struct BatchRequestItem {
     pub context: Option<HashMap<String, String>>,
 }
 
-/// Batch response
+/// Batch response - matches agent's batch_evaluate_policy response format
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatchResponse {
-    pub total_requests: u32,
-    pub successful: u32,
-    pub failed: u32,
-    pub total_time_microseconds: f64,
+    pub policy_name: Option<String>,
+    pub policy_id: Option<String>,
+    pub request_count: u32,
     pub results: Vec<BatchResultItem>,
+    pub summary: BatchSummary,
+    pub agent_id: Option<String>,
+}
+
+/// Summary statistics from batch evaluation
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchSummary {
+    pub allowed: u32,
+    pub denied: u32,
+    pub total_time_microseconds: f64,
+    pub avg_time_microseconds: f64,
 }
 
 /// Individual result in a batch
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatchResultItem {
+    pub index: Option<u32>,
     pub decision: String,
     pub evaluation_time_microseconds: Option<f64>,
     #[serde(default)]
+    pub cache_hit: bool,
+    #[serde(default)]
     pub error: Option<String>,
+}
+
+// ============================================================================
+// Package-related types
+// ============================================================================
+
+/// General evaluation request (for package and all policies evaluation)
+#[derive(Debug, Clone, Serialize)]
+pub struct EvaluateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_name: Option<String>,
+    pub principal: String,
+    pub action: String,
+    pub resource: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<HashMap<String, String>>,
+}
+
+/// Package information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageInfo {
+    pub name: String,
+    pub policy_count: usize,
+    pub policy_names: Vec<String>,
+}
+
+/// Denial information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenyInfo {
+    pub policy_id: String,
+    pub policy_name: String,
+    pub package: String,
+    pub matched_rule: Option<String>,
+}
+
+/// Response from package evaluation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageEvaluationResponse {
+    pub package: String,
+    pub decision: String,
+    pub denied_by: Option<DenyInfo>,
+    pub policies_evaluated: usize,
+    pub total_evaluation_time_microseconds: f64,
+}
+
+/// Response from evaluating all policies
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllPoliciesEvaluationResponse {
+    pub decision: String,
+    pub denied_by: Option<DenyInfo>,
+    pub policies_evaluated: usize,
+    pub packages_evaluated: usize,
+    pub total_evaluation_time_microseconds: f64,
+}
+
+/// List packages response
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListPackagesResponse {
+    pub packages: Vec<PackageInfo>,
+    pub total: usize,
+}
+
+/// Package policies response
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackagePoliciesResponse {
+    pub package: String,
+    pub policies: Vec<PolicyInfo>,
+    pub total: usize,
+}
+
+/// Policy information
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyInfo {
+    pub id: String,
+    pub name: String,
+    pub version: u64,
+    pub package: String,
+    pub rules_count: usize,
 }
 
 impl AgentClient {
@@ -159,6 +252,116 @@ impl AgentClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             anyhow::bail!("Failed to load data {}: {}", status, body);
+        }
+
+        Ok(response.json().await?)
+    }
+
+    // ========================================================================
+    // Package Evaluation Methods
+    // ========================================================================
+
+    /// List all packages
+    pub async fn list_packages(&self, url: &str) -> anyhow::Result<Vec<PackageInfo>> {
+        let response = self
+            .client
+            .get(format!("{}/api/v1/packages", url))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to list packages {}: {}", status, body);
+        }
+
+        let result: ListPackagesResponse = response.json().await?;
+        Ok(result.packages)
+    }
+
+    /// Get policies in a specific package
+    pub async fn get_package_policies(&self, url: &str, package: &str) -> anyhow::Result<PackagePoliciesResponse> {
+        let response = self
+            .client
+            .get(format!("{}/api/v1/packages/{}/policies", url, package))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get package policies {}: {}", status, body);
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Evaluate request against all policies in a specific package
+    pub async fn evaluate_package(
+        &self,
+        url: &str,
+        package: &str,
+        request: &EvaluateRequest,
+    ) -> anyhow::Result<PackageEvaluationResponse> {
+        let response = self
+            .client
+            .post(format!("{}/api/v1/packages/{}/evaluate", url, package))
+            .json(request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Package evaluation failed {}: {}", status, body);
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Evaluate request against ALL policies across ALL packages
+    pub async fn evaluate_all(
+        &self,
+        url: &str,
+        request: &EvaluateRequest,
+    ) -> anyhow::Result<AllPoliciesEvaluationResponse> {
+        let response = self
+            .client
+            .post(format!("{}/api/v1/evaluate", url))
+            .json(request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("All policies evaluation failed {}: {}", status, body);
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Deploy a compiled policy to the agent
+    pub async fn deploy_policy(
+        &self,
+        url: &str,
+        policy_name: &str,
+        policy_content: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let response = self
+            .client
+            .post(format!("{}/api/v1/policies/compile", url))
+            .json(&serde_json::json!({
+                "policy_name": policy_name,
+                "policy_content": policy_content
+            }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Policy deployment failed {}: {}", status, body);
         }
 
         Ok(response.json().await?)

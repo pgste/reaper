@@ -1,0 +1,244 @@
+{
+  "entities": [
+    {
+      "id": "user_minimal",
+      "type": "User",
+      "attributes": {
+        "name": "Minimal User"
+      }
+    },
+    {
+      "id": "user_with_level",
+      "type": "User",
+      "attributes": {
+        "name": "Level User",
+        "level": 5
+      }
+    },
+    {
+      "id": "user_null_role",
+      "type": "User",
+      "attributes": {
+        "name": "Null Role User",
+        "role": null
+      }
+    },
+    {
+      "id": "user_null_permissions",
+      "type": "User",
+      "attributes": {
+        "name": "Null Perms User",
+        "permissions": null
+      }
+    },
+    {
+      "id": "user_string_age",
+      "type": "User",
+      "attributes": {
+        "name": "String Age User",
+        "age": "25"
+      }
+    },
+    {
+      "id": "user_invalid_age",
+      "type": "User",
+      "attributes": {
+        "name": "Invalid Age User",
+        "age": "twenty-five"
+      }
+    },
+    {
+      "id": "user_empty_permissions",
+      "type": "User",
+      "attributes": {
+        "name": "Empty Perms User",
+        "permissions": []
+      }
+    },
+    {
+      "id": "user_empty_roles",
+      "type": "User",
+      "attributes": {
+        "name": "Empty Roles User",
+        "roles": []
+      }
+    },
+    {
+      "id": "user_deep_nested",
+      "type": "User",
+      "attributes": {
+        "name": "Deep Nested User",
+        "config": {
+          "settings": {
+            "security": {
+              "level": "high"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "user_partial_nested",
+      "type": "User",
+      "attributes": {
+        "name": "Partial Nested User",
+        "config": {
+          "settings": {}
+        }
+      }
+    },
+    {
+      "id": "user_many_permissions",
+      "type": "User",
+      "attributes": {
+        "name": "Many Perms User",
+        "permissions": ["read", "write", "delete", "admin", "super", "perm1", "perm2", "perm3", "perm4", "perm5", "perm6", "perm7", "perm8", "perm9", "perm10", "target_perm"]
+      }
+    },
+    {
+      "id": "user_active_true",
+      "type": "User",
+      "attributes": {
+        "name": "Active True User",
+        "active": true
+      }
+    },
+    {
+      "id": "user_active_false",
+      "type": "User",
+      "attributes": {
+        "name": "Active False User",
+        "active": false
+      }
+    },
+    {
+      "id": "user_active_string",
+      "type": "User",
+      "attributes": {
+        "name": "Active String User",
+        "active": "true"
+      }
+    },
+    {
+      "id": "user_whitespace_name",
+      "type": "User",
+      "attributes": {
+        "name": "  Test Name  ",
+        "trimmed_name": "Test Name"
+      }
+    },
+    {
+      "id": "user_unicode_name",
+      "type": "User",
+      "attributes": {
+        "name": "José García 日本語",
+        "unicode_enabled": true
+      }
+    },
+    {
+      "id": "dept_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "department",
+        "required_dept": "engineering"
+      }
+    },
+    {
+      "id": "resource_no_level",
+      "type": "Resource",
+      "attributes": {
+        "type": "no_level"
+      }
+    },
+    {
+      "id": "admin_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "admin",
+        "required_role": "admin"
+      }
+    },
+    {
+      "id": "perm_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "permission_check"
+      }
+    },
+    {
+      "id": "any_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "any"
+      }
+    },
+    {
+      "id": "role_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "role_check"
+      }
+    },
+    {
+      "id": "nested_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "nested",
+        "required_level": "high"
+      }
+    },
+    {
+      "id": "perf_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "performance"
+      }
+    },
+    {
+      "id": "active_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "active_check"
+      }
+    },
+    {
+      "id": "bool_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "strict_bool"
+      }
+    },
+    {
+      "id": "name_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "name_check",
+        "expected_name": "Test Name"
+      }
+    },
+    {
+      "id": "exact_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "exact_match",
+        "expected_name": "  Test Name  "
+      }
+    },
+    {
+      "id": "unicode_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "unicode",
+        "allow_unicode": true
+      }
+    },
+    {
+      "id": "age_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "age_verification",
+        "min_age": 21
+      }
+    }
+  ]
+}

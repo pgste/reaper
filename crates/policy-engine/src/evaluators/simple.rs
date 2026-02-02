@@ -62,7 +62,7 @@ impl SimplePolicyEvaluator {
     /// Compilation adds ~1-10ms overhead but provides 10-600x faster evaluation.
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let evaluator = SimplePolicyEvaluator::with_tree_optimization(rules)?;
     /// // Evaluates in O(log r) time instead of O(r)
     /// ```

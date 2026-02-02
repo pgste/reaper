@@ -1,0 +1,62 @@
+# RBAC Semantic Equivalence Test Cases
+# Tests that Reaper RBAC policies produce correct decisions
+
+name: "RBAC Equivalence"
+description: "Verify Reaper RBAC policy produces correct decisions"
+
+# Use existing test data and policies
+reaper_policy: "crates/policy-engine/examples/policies/rbac.reap"
+opa_policy: "n/a"  # OPA comparison disabled
+data_file: "test-data/rbac-test-data.json"
+
+test_cases:
+  # Admin full access (user_0 has admin role)
+  - id: "admin_read"
+    description: "Admin can read any resource"
+    input:
+      principal: "user_0"
+      action: "read"
+      resource: "resource_100"
+    expected: allow
+
+  - id: "admin_write"
+    description: "Admin can write any resource"
+    input:
+      principal: "user_0"
+      action: "write"
+      resource: "resource_200"
+    expected: allow
+
+  - id: "admin_delete"
+    description: "Admin can delete any resource"
+    input:
+      principal: "user_0"
+      action: "delete"
+      resource: "resource_500"
+    expected: allow
+
+  # User ownership scenarios (user_50 owns resource_50, resource_51)
+  - id: "owner_read"
+    description: "User can access their own resources"
+    input:
+      principal: "user_50"
+      action: "read"
+      resource: "resource_50"
+    expected: allow
+
+  - id: "owner_other_resource"
+    description: "User can access other resources they own"
+    input:
+      principal: "user_50"
+      action: "read"
+      resource: "resource_51"
+    expected: allow
+
+  # Viewer permissions (user_700 has viewer role)
+  - id: "viewer_read"
+    description: "Viewer can read resources"
+    input:
+      principal: "user_700"
+      action: "read"
+      resource: "resource_900"
+    expected: allow

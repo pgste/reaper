@@ -1,0 +1,188 @@
+{
+  "entities": [
+    {
+      "id": "user_mixed_case",
+      "type": "User",
+      "attributes": {
+        "name": "John Doe",
+        "role": "viewer"
+      }
+    },
+    {
+      "id": "user_wrong_case",
+      "type": "User",
+      "attributes": {
+        "name": "Jane Smith",
+        "role": "viewer"
+      }
+    },
+    {
+      "id": "user_uppercase_code",
+      "type": "User",
+      "attributes": {
+        "access_code": "admin123",
+        "role": "admin"
+      }
+    },
+    {
+      "id": "user_lowercase_code",
+      "type": "User",
+      "attributes": {
+        "access_code": "user456",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_whitespace_role",
+      "type": "User",
+      "attributes": {
+        "role": "  manager  ",
+        "department": "sales"
+      }
+    },
+    {
+      "id": "user_wrong_role",
+      "type": "User",
+      "attributes": {
+        "role": "  employee  ",
+        "department": "sales"
+      }
+    },
+    {
+      "id": "user_email_contains_company",
+      "type": "User",
+      "attributes": {
+        "email": "alice@company.com",
+        "role": "employee"
+      }
+    },
+    {
+      "id": "user_external_email",
+      "type": "User",
+      "attributes": {
+        "email": "bob@external.com",
+        "role": "contractor"
+      }
+    },
+    {
+      "id": "user_admin_username",
+      "type": "User",
+      "attributes": {
+        "username": "admin_alice",
+        "role": "admin"
+      }
+    },
+    {
+      "id": "user_regular_username",
+      "type": "User",
+      "attributes": {
+        "username": "regular_bob",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_gov_email",
+      "type": "User",
+      "attributes": {
+        "email": "agent@fbi.gov",
+        "clearance": "top-secret"
+      }
+    },
+    {
+      "id": "user_commercial_email",
+      "type": "User",
+      "attributes": {
+        "email": "user@company.com",
+        "clearance": "public"
+      }
+    },
+    {
+      "id": "user_full_name",
+      "type": "User",
+      "attributes": {
+        "name": "Alice Johnson Smith",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_single_name",
+      "type": "User",
+      "attributes": {
+        "name": "Madonna",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_complex_email",
+      "type": "User",
+      "attributes": {
+        "email": "  Alice.Smith@Company.COM  ",
+        "role": "user"
+      }
+    },
+    {
+      "id": "case_insensitive",
+      "type": "Document",
+      "attributes": {
+        "type": "case_insensitive",
+        "title": "Test Document"
+      }
+    },
+    {
+      "id": "code_entry",
+      "type": "System",
+      "attributes": {
+        "type": "code_entry",
+        "name": "Access Control"
+      }
+    },
+    {
+      "id": "trimmed_check",
+      "type": "Resource",
+      "attributes": {
+        "type": "trimmed_check",
+        "name": "Whitespace Test"
+      }
+    },
+    {
+      "id": "internal_docs",
+      "type": "Document",
+      "attributes": {
+        "type": "internal_docs",
+        "classification": "internal"
+      }
+    },
+    {
+      "id": "system_settings",
+      "type": "System",
+      "attributes": {
+        "type": "system_settings",
+        "level": "admin"
+      }
+    },
+    {
+      "id": "classified_docs",
+      "type": "Document",
+      "attributes": {
+        "type": "classified_docs",
+        "classification": "classified"
+      }
+    },
+    {
+      "id": "profile",
+      "type": "Profile",
+      "attributes": {
+        "type": "profile",
+        "visibility": "public"
+      }
+    },
+    {
+      "id": "email_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "email_check",
+        "strict": true
+      }
+    }
+  ]
+}

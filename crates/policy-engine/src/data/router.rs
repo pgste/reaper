@@ -167,7 +167,7 @@ impl QueryRouter {
     /// 4. Use full scan as last resort
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let result = router.execute(QueryPattern::PermissionCheck {
     ///     user: "alice".to_string(),
     ///     resource: "foo123".to_string(),

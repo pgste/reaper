@@ -1,0 +1,14 @@
+{
+  "entities": [
+    {"id": "math_user1", "type": "User", "attributes": {"id": "math_user1", "credit_score": 750}},
+    {"id": "math_user2", "type": "User", "attributes": {"id": "math_user2", "credit_score": 650}},
+    {"id": "math_user3", "type": "User", "attributes": {"id": "math_user3", "order_total": 150, "budget_limit": 200}},
+    {"id": "math_user4", "type": "User", "attributes": {"id": "math_user4", "order_total": 250, "budget_limit": 200}},
+    {"id": "math_user5", "type": "User", "attributes": {"id": "math_user5", "average_rating": 4.5}},
+    {"id": "math_user6", "type": "User", "attributes": {"id": "math_user6", "total_points": 1500}},
+    {"id": "math_loan1", "type": "Resource", "attributes": {"id": "math_loan1", "type": "premium_loan"}},
+    {"id": "math_cart1", "type": "Resource", "attributes": {"id": "math_cart1", "type": "shopping_cart"}},
+    {"id": "math_listing1", "type": "Resource", "attributes": {"id": "math_listing1", "type": "featured_listing"}},
+    {"id": "math_reward1", "type": "Resource", "attributes": {"id": "math_reward1", "type": "loyalty_reward"}}
+  ]
+}

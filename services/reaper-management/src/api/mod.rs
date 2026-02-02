@@ -27,6 +27,8 @@ use std::sync::Arc;
 
 /// Build the API router with all routes
 pub fn build_api_router() -> Router<Arc<AppState>> {
+    // Note: orgs::routes() already includes policies::routes() and teams::routes()
+    // via merge(), so we don't add them separately here to avoid route conflicts
     Router::new()
         .merge(health::routes())
         .merge(orgs::routes())
@@ -39,8 +41,6 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
         .merge(bundles::routes())
         .merge(webhooks::routes())
         .merge(webhook_subscriptions::routes())
-        .merge(policies::routes())
-        .merge(teams::routes())
         .merge(namespaces::routes())
         .merge(deployments::routes())
         .merge(landscape::routes())

@@ -339,7 +339,7 @@ impl MaterializedView {
     /// This enables O(1) lookups by attribute value instead of O(n) scans.
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// view.create_index(interner.intern("user"))?;
     /// // Now lookups by user are O(1) instead of O(n)
     /// ```
@@ -378,7 +378,7 @@ impl MaterializedView {
     /// - Without index: O(n) full scan
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let users = view.get_by_attribute(
     ///     user_key,
     ///     AttributeValue::String(interner.intern("alice"))
@@ -429,7 +429,7 @@ impl MaterializedView {
     /// - Worst case: O(n) if no indexes exist
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// // Check: alice has write access to doc123?
     /// let results = view.get_by_attributes(vec![
     ///     (user_key, &AttributeValue::String(interner.intern("alice"))),
@@ -488,7 +488,7 @@ impl MaterializedView {
     /// - With composite index: get_by_composite() = 2-5µs cold
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// // Create composite index for permission checks
     /// let user_key = interner.intern("user");
     /// let resource_key = interner.intern("resource");
@@ -544,7 +544,7 @@ impl MaterializedView {
     /// - Typical: 2-5µs cold, <1µs warm
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// // Direct O(1) lookup for permission check
     /// let results = view.get_by_composite(
     ///     "user_resource_action",

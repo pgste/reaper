@@ -116,6 +116,17 @@ pub struct BundleDownload {
     pub checksum: String,
 }
 
+/// Data bundle download result
+#[derive(Debug)]
+pub struct DataBundleDownload {
+    /// Data bundle binary data (.rdb format)
+    pub data: Vec<u8>,
+    /// Source ID
+    pub source_id: Uuid,
+    /// SHA-256 checksum
+    pub checksum: String,
+}
+
 /// Bundle content from management server (JSON format)
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManagementBundle {
@@ -162,6 +173,9 @@ pub enum ManagementError {
     #[error("Bundle not found")]
     BundleNotFound,
 
+    #[error("Data source not found: {0}")]
+    DataSourceNotFound(Uuid),
+
     #[error("Bundle checksum mismatch: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
 
@@ -173,6 +187,9 @@ pub enum ManagementError {
 
     #[error("Not registered")]
     NotRegistered,
+
+    #[error("Data load error: {0}")]
+    DataLoadError(String),
 }
 
 /// Result type for management operations

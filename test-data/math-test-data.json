@@ -1,0 +1,196 @@
+{
+  "entities": [
+    {
+      "id": "user_high_credit",
+      "type": "User",
+      "attributes": {
+        "credit_score": 750,
+        "role": "borrower"
+      }
+    },
+    {
+      "id": "user_low_credit",
+      "type": "User",
+      "attributes": {
+        "credit_score": 650,
+        "role": "borrower"
+      }
+    },
+    {
+      "id": "user_budget_ok",
+      "type": "User",
+      "attributes": {
+        "order_total": 450,
+        "budget_limit": 500,
+        "role": "shopper"
+      }
+    },
+    {
+      "id": "user_budget_exceeded",
+      "type": "User",
+      "attributes": {
+        "order_total": 550,
+        "budget_limit": 500,
+        "role": "shopper"
+      }
+    },
+    {
+      "id": "seller_good_rating",
+      "type": "User",
+      "attributes": {
+        "average_rating": 4.5,
+        "role": "seller"
+      }
+    },
+    {
+      "id": "seller_poor_rating",
+      "type": "User",
+      "attributes": {
+        "average_rating": 3.0,
+        "role": "seller"
+      }
+    },
+    {
+      "id": "seller_fair_price",
+      "type": "User",
+      "attributes": {
+        "list_price": 5000,
+        "role": "seller"
+      }
+    },
+    {
+      "id": "seller_high_price",
+      "type": "User",
+      "attributes": {
+        "list_price": 15000,
+        "role": "seller"
+      }
+    },
+    {
+      "id": "user_tier_upgrade",
+      "type": "User",
+      "attributes": {
+        "score": 92.5,
+        "role": "member"
+      }
+    },
+    {
+      "id": "sensor_normal_temp",
+      "type": "User",
+      "attributes": {
+        "temperature": 25,
+        "role": "sensor"
+      }
+    },
+    {
+      "id": "sensor_extreme_temp",
+      "type": "User",
+      "attributes": {
+        "temperature": 75,
+        "role": "sensor"
+      }
+    },
+    {
+      "id": "user_enough_points",
+      "type": "User",
+      "attributes": {
+        "total_points": 1500,
+        "role": "customer"
+      }
+    },
+    {
+      "id": "user_few_points",
+      "type": "User",
+      "attributes": {
+        "total_points": 500,
+        "role": "customer"
+      }
+    },
+    {
+      "id": "user_valid_discount",
+      "type": "User",
+      "attributes": {
+        "discount_percentage": 25,
+        "role": "customer"
+      }
+    },
+    {
+      "id": "user_excessive_discount",
+      "type": "User",
+      "attributes": {
+        "discount_percentage": 75,
+        "role": "customer"
+      }
+    },
+    {
+      "id": "premium_loan",
+      "type": "Resource",
+      "attributes": {
+        "type": "premium_loan"
+      }
+    },
+    {
+      "id": "shopping_cart",
+      "type": "Resource",
+      "attributes": {
+        "type": "shopping_cart"
+      }
+    },
+    {
+      "id": "featured_listing",
+      "type": "Resource",
+      "attributes": {
+        "type": "featured_listing"
+      }
+    },
+    {
+      "id": "marketplace",
+      "type": "Resource",
+      "attributes": {
+        "type": "marketplace"
+      }
+    },
+    {
+      "id": "premium_tier",
+      "type": "Resource",
+      "attributes": {
+        "type": "premium_tier"
+      }
+    },
+    {
+      "id": "temperature_monitor",
+      "type": "Resource",
+      "attributes": {
+        "type": "temperature_monitor"
+      }
+    },
+    {
+      "id": "loyalty_reward",
+      "type": "Resource",
+      "attributes": {
+        "type": "loyalty_reward"
+      }
+    },
+    {
+      "id": "sale_item",
+      "type": "Resource",
+      "attributes": {
+        "type": "sale_item"
+      }
+    },
+    {
+      "id": "resource_0",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    },
+    {
+      "id": "resource_1",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    }
+  ]
+}

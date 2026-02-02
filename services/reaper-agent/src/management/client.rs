@@ -375,6 +375,71 @@ impl ManagementClient {
             Err(_) => (None, None),
         }
     }
+
+    /// Download a data bundle by source ID
+    ///
+    /// Used to sync data from a data source (e.g., after receiving a DataRefresh SSE event).
+    pub async fn download_data_bundle(&self, source_id: Uuid) -> ManagementResult<DataBundleDownload> {
+        let state = self.state.read().await;
+        let token = state
+            .token
+            .as_ref()
+            .ok_or(ManagementError::NotRegistered)?
+            .clone();
+        drop(state);
+
+        let url = format!(
+            "{}/orgs/{}/sources/{}/data",
+            self.base_url, self.org, source_id
+        );
+
+        info!(source_id = %source_id, "Downloading data bundle");
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Accept", "application/octet-stream")
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ManagementError::DataSourceNotFound(source_id));
+        }
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ManagementError::AuthFailed("Token expired".to_string()));
+        }
+
+        if !status.is_success() {
+            let message = response.text().await.unwrap_or_default();
+            return Err(ManagementError::ServerError {
+                status: status.as_u16(),
+                message,
+            });
+        }
+
+        let data = response.bytes().await?.to_vec();
+
+        // Calculate checksum
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let checksum = format!("{:x}", hasher.finalize());
+
+        info!(
+            source_id = %source_id,
+            size_bytes = data.len(),
+            checksum = %checksum,
+            "Data bundle downloaded successfully"
+        );
+
+        Ok(DataBundleDownload {
+            data,
+            source_id,
+            checksum,
+        })
+    }
 }
 
 impl std::fmt::Debug for ManagementClient {

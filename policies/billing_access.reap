@@ -1,0 +1,23 @@
+// Billing Access Policy - Package: billing
+policy billing_access {
+    version: "1.0.0",
+    package: "billing",
+    description: "Billing access control policy",
+    default: deny,
+
+    rule finance_team {
+        allow if user.department == "finance"
+    }
+
+    rule billing_manager {
+        allow if user.role == "billing_manager"
+    }
+
+    rule read_own_invoices {
+        allow if {
+            action == "read" &&
+            resource.type == "invoice" &&
+            user.id == resource.customer_id
+        }
+    }
+}

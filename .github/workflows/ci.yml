@@ -511,7 +511,108 @@ jobs:
             });
 
   # ============================================================
-  # Stage 7: BDD Tests (Behavior-Driven Development)
+  # Stage 7: Integration & Comparison Tests
+  # ============================================================
+  integration-tests:
+    name: Integration & Comparison Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-ci"
+          cache-on-failure: true
+
+      - name: Generate test data
+        run: |
+          mkdir -p test-data
+          cargo run -p policy-engine --example generate_rbac_data --release 2>&1 || true
+          cargo run -p policy-engine --example generate_abac_data --release 2>&1 || true
+
+      - name: Run Integration Tests (YAML Suite Runner)
+        run: |
+          mkdir -p integration-reports
+          cargo test -p policy-engine --test integration_runner 2>&1 | tee integration-reports/integration-tests.txt
+          echo "INTEGRATION_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run Comparison Tests (Reaper-only mode)
+        run: |
+          cargo test -p policy-engine --test comparison_runner 2>&1 | tee integration-reports/comparison-tests.txt
+          echo "COMPARISON_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Generate Integration Test Summary
+        if: always()
+        run: |
+          echo "# Integration & Comparison Test Results" > integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+          echo "## YAML Test Suite Results" >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          grep -E "test.*ok|test.*FAILED|passed|failed|Total:|Passed:|Results:" integration-reports/integration-tests.txt >> integration-reports/integration-summary.md || echo "See full output" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+
+          echo "## Semantic Comparison Results (Reaper-only)" >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          grep -E "test.*ok|test.*FAILED|passed|failed|Results:|Reaper avg" integration-reports/comparison-tests.txt >> integration-reports/integration-summary.md || echo "See full output" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+
+          # Extract test suite results
+          echo "## Test Suites Executed" >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+          echo "| Suite | Status |" >> integration-reports/integration-summary.md
+          echo "|-------|--------|" >> integration-reports/integration-summary.md
+
+          if grep -q "test_rbac_core_suite.*ok" integration-reports/integration-tests.txt; then
+            echo "| RBAC Core | ✅ Passed |" >> integration-reports/integration-summary.md
+          else
+            echo "| RBAC Core | ❌ Failed |" >> integration-reports/integration-summary.md
+          fi
+
+          if grep -q "test_string_operations_suite.*ok" integration-reports/integration-tests.txt; then
+            echo "| String Operations | ✅ Passed |" >> integration-reports/integration-summary.md
+          else
+            echo "| String Operations | ❌ Failed |" >> integration-reports/integration-summary.md
+          fi
+
+          if grep -q "test_rbac_equivalence_reaper_only.*ok" integration-reports/comparison-tests.txt; then
+            echo "| RBAC Equivalence | ✅ Passed |" >> integration-reports/integration-summary.md
+          else
+            echo "| RBAC Equivalence | ❌ Failed |" >> integration-reports/integration-summary.md
+          fi
+
+          if grep -q "test_string_equivalence_reaper_only.*ok" integration-reports/comparison-tests.txt; then
+            echo "| String Equivalence | ✅ Passed |" >> integration-reports/integration-summary.md
+          else
+            echo "| String Equivalence | ❌ Failed |" >> integration-reports/integration-summary.md
+          fi
+
+      - name: Upload Integration Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: integration-reports/
+
+      - name: Fail if tests failed
+        if: always()
+        run: |
+          if [ "${INTEGRATION_EXIT_CODE:-1}" != "0" ] || [ "${COMPARISON_EXIT_CODE:-1}" != "0" ]; then
+            echo "Integration or comparison tests failed"
+            exit 1
+          fi
+
+  # ============================================================
+  # Stage 9: BDD Tests (Behavior-Driven Development)
   # ============================================================
   bdd-tests:
     name: BDD Tests (Cucumber)
@@ -602,12 +703,12 @@ jobs:
           path: bdd-reports/cucumber-report.json
 
   # ============================================================
-  # Stage 8: Generate Combined Test Report
+  # Stage 10: Generate Combined Test Report
   # ============================================================
   generate-report:
     name: Generate Combined Test Report
     runs-on: ubuntu-latest
-    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, bdd-tests]
+    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, integration-tests, bdd-tests]
     if: always()
     steps:
       - name: Download all artifacts
@@ -664,6 +765,15 @@ jobs:
             cat scale-test-results/scale-test-summary.md >> COMBINED_REPORT.md
           else
             echo "⏭️  Scale tests only run on pull requests" >> COMBINED_REPORT.md
+          fi
+          echo "" >> COMBINED_REPORT.md
+
+          # Integration & Comparison Tests
+          echo "## 🔗 Integration & Comparison Tests" >> COMBINED_REPORT.md
+          if [ -f "integration-test-results/integration-summary.md" ]; then
+            cat integration-test-results/integration-summary.md >> COMBINED_REPORT.md
+          else
+            echo "⚠️ Integration test results not available" >> COMBINED_REPORT.md
           fi
           echo "" >> COMBINED_REPORT.md
 

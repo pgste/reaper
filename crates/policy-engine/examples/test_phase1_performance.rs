@@ -5,7 +5,8 @@
 
 use policy_engine::data::{AttributeValue, DataStore};
 use policy_engine::reaper_dsl::{
-    Condition, EntityType, IndexExpr, LiteralValue, ReaperDSLEvaluator, Rule,
+    AttributeComparison, CompareTarget, Condition, EntityType, IndexExpr, LiteralValue,
+    NumericOp, ReaperDSLEvaluator, Rule,
 };
 use policy_engine::{EntityBuilder, PolicyAction, PolicyEvaluator, PolicyRequest};
 use rustc_hash::FxHashSet;
@@ -55,10 +56,12 @@ fn test_baseline_performance() {
     // Create simple policy
     let rules = vec![Rule {
         name: "admin_access".to_string(),
-        condition: Condition::UserEquals {
+        condition: Condition::AttributeCompare(AttributeComparison {
+            entity_type: EntityType::User,
             attribute: "role".to_string(),
-            value: "admin".to_string(),
-        },
+            op: NumericOp::Equal,
+            target: CompareTarget::LiteralString("admin".to_string()),
+        }),
         decision: PolicyAction::Allow,
     }];
 

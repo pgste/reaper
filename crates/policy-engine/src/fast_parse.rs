@@ -9,7 +9,7 @@
 //! - Lazy parsing for large payloads
 //!
 //! # Usage
-//! ```rust,ignore
+//! ```text
 //! use policy_engine::fast_parse::{parse_policy_request, FastPolicyRequest};
 //!
 //! let bytes = br#"{"principal":"user_123","resource":"doc_456","action":"read"}"#;
@@ -37,7 +37,7 @@ use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 /// * `Err(ReaperError)` - Parse error
 ///
 /// # Example
-/// ```rust,ignore
+/// ```text
 /// let json = br#"{"principal":"user_1","resource":"doc_1","action":"read","context":{}}"#;
 /// let request = parse_policy_request(json)?;
 /// assert_eq!(request.action, "read");

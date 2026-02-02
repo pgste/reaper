@@ -1,0 +1,69 @@
+# RBAC Core Test Suite
+# Tests role-based access control patterns
+
+name: "RBAC Core"
+description: "Core RBAC policy tests covering admin, manager, and user roles"
+
+policies:
+  - path: "crates/policy-engine/examples/policies/rbac.reap"
+
+data:
+  - path: "test-data/rbac-test-data.json"
+
+test_cases:
+  # Admin scenarios
+  - name: "Admin has full access to all resources"
+    principal: "user_0"
+    action: "read"
+    resource: "resource_100"
+    expected: allow
+    tags: [admin, positive]
+
+  - name: "Admin can write to any resource"
+    principal: "user_0"
+    action: "write"
+    resource: "resource_200"
+    expected: allow
+    tags: [admin, positive]
+
+  - name: "Admin can delete any resource"
+    principal: "user_0"
+    action: "delete"
+    resource: "resource_500"
+    expected: allow
+    tags: [admin, positive]
+
+  # Manager scenarios
+  - name: "Manager cannot access non-report resources"
+    principal: "user_1"
+    action: "read"
+    resource: "resource_50"
+    expected: deny
+    tags: [manager, negative]
+
+  # User ownership scenarios
+  - name: "User can access their own resources"
+    principal: "user_50"
+    action: "read"
+    resource: "resource_50"
+    expected: allow
+    tags: [ownership, positive]
+
+  - name: "User can access other resources they own"
+    principal: "user_50"
+    action: "read"
+    resource: "resource_51"
+    expected: allow
+    tags: [ownership, positive]
+
+  - name: "User with viewer role can read resources"
+    principal: "user_700"
+    action: "read"
+    resource: "resource_900"
+    expected: allow
+    tags: [viewer, positive]
+
+performance:
+  p50_threshold_us: 10
+  p99_threshold_us: 100
+  max_threshold_us: 500

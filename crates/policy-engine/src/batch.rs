@@ -10,7 +10,7 @@
 //! - Zero-copy request handling where possible
 //!
 //! # Usage
-//! ```rust,ignore
+//! ```text
 //! use policy_engine::batch::{BatchEvaluator, BatchResult};
 //!
 //! let evaluator = policy.build_ast_evaluator(store);

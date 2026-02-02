@@ -24,7 +24,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! let builder = DecisionTreeBuilder::new();
 //! let tree = builder.build_from_rules(&policy_rules)?;
 //!

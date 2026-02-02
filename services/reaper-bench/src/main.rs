@@ -201,16 +201,27 @@ async fn main() -> anyhow::Result<()> {
         .route("/results/{id}", get(results_view))
         // Health check
         .route("/health", get(health_check))
+        // Agent stats endpoint
+        .route("/agent-stats", get(get_agent_stats))
+        // Initialize agent with benchmark policies
+        .route("/init", post(initialize_agent))
         // JSON API endpoints
         .route("/run-benchmark", post(run_benchmark))
         .route("/run-benchmark/{volume}", post(run_single_volume))
         .route("/run-latency", post(run_latency_mode))
         .route("/run-throughput", post(run_throughput_mode))
         .route("/run-simulation", post(run_simulation_mode))
-        // Policy package endpoints
+        // Policy package endpoints (local packages)
         .route("/packages", get(list_packages))
         .route("/packages/{name}", get(get_package))
         .route("/packages/{name}/run", post(run_package))
+        // Agent package evaluation endpoints (live agent)
+        .route("/agent-packages", get(list_agent_packages))
+        .route("/agent-packages/{name}/evaluate", post(evaluate_agent_package))
+        .route("/agent-packages/{name}/benchmark", post(benchmark_agent_package))
+        .route("/agent-evaluate-all", post(evaluate_all_agent_policies))
+        .route("/agent-benchmark-all", post(benchmark_all_policies))
+        .route("/compare-modes", post(compare_execution_modes))
         .with_state(state);
 
     // Start server
@@ -219,15 +230,25 @@ async fn main() -> anyhow::Result<()> {
     info!("Benchmark service listening on http://{}", addr);
     info!("");
     info!("Endpoints:");
-    info!("  GET  /                    - Interactive dashboard");
-    info!("  GET  /health              - Health check");
-    info!("  POST /run-benchmark       - Run full benchmark suite");
-    info!("  POST /run-latency         - Run latency mode only");
-    info!("  POST /run-throughput      - Run throughput mode only");
-    info!("  POST /run-simulation      - Run full simulation with auto-tuning");
-    info!("  GET  /packages            - List available policy packages");
-    info!("  GET  /packages/:name      - Get package details");
-    info!("  POST /packages/:name/run  - Run package tests");
+    info!("  GET  /                              - Interactive dashboard");
+    info!("  GET  /health                        - Health check");
+    info!("  POST /run-benchmark                 - Run full benchmark suite");
+    info!("  POST /run-latency                   - Run latency mode only");
+    info!("  POST /run-throughput                - Run throughput mode only");
+    info!("  POST /run-simulation                - Run full simulation with auto-tuning");
+    info!("");
+    info!("Local Package Endpoints:");
+    info!("  GET  /packages                      - List local policy packages");
+    info!("  GET  /packages/:name                - Get package details");
+    info!("  POST /packages/:name/run            - Run package tests");
+    info!("");
+    info!("Agent Package Endpoints (NEW):");
+    info!("  GET  /agent-packages                - List packages from agent");
+    info!("  POST /agent-packages/:name/evaluate - Evaluate request against package");
+    info!("  POST /agent-packages/:name/benchmark- Benchmark package evaluation");
+    info!("  POST /agent-evaluate-all            - Evaluate against ALL policies");
+    info!("  POST /agent-benchmark-all           - Benchmark all policies evaluation");
+    info!("  POST /compare-modes                 - Compare individual vs package modes");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -239,6 +260,146 @@ async fn health_check() -> Json<serde_json::Value> {
         "status": "healthy",
         "service": "reaper-bench"
     }))
+}
+
+/// Get agent stats from health endpoint
+async fn get_agent_stats(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Query agent health endpoint which includes stats
+    match state.client.health(&state.agent_url).await {
+        Ok(health) => {
+            // Extract stats from health response
+            let policies_loaded = health.get("policies_loaded").and_then(|v| v.as_u64());
+            let total_evaluations = health.get("total_evaluations").and_then(|v| v.as_u64());
+            let decisions_allow = health.get("decisions_allow").and_then(|v| v.as_u64());
+            let decisions_deny = health.get("decisions_deny").and_then(|v| v.as_u64());
+            let cache_hits = health.get("cache_hits").and_then(|v| v.as_u64());
+            let cache_misses = health.get("cache_misses").and_then(|v| v.as_u64());
+
+            Ok(Json(serde_json::json!({
+                "status": "connected",
+                "agent_url": state.agent_url,
+                "health": health.get("status").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                "policies_loaded": policies_loaded,
+                "total_evaluations": total_evaluations,
+                "decisions_allow": decisions_allow,
+                "decisions_deny": decisions_deny,
+                "cache_hits": cache_hits,
+                "cache_misses": cache_misses
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to reach agent: {}", e),
+        )),
+    }
+}
+
+/// Initialize agent with all benchmark policies and data
+///
+/// POST /init
+/// Deploys all benchmark policies from /app/policies/*.reap to the agent
+/// and loads all data files from /app/policies/data/*.json
+async fn initialize_agent(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    info!("Initializing agent with benchmark policies...");
+
+    let policies_dir = std::path::Path::new("/app/policies");
+    let mut deployed_policies = Vec::new();
+    let mut failed_policies = Vec::new();
+    let mut loaded_data_files = Vec::new();
+
+    // First, load all data files
+    let data_dir = policies_dir.join("data");
+    if data_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&data_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "json").unwrap_or(false) {
+                    let filename = path.file_name().unwrap().to_string_lossy().to_string();
+                    info!("Loading data file: {}", filename);
+                    match std::fs::read_to_string(&path) {
+                        Ok(data_json) => {
+                            match state.client.load_data(&state.agent_url, &data_json).await {
+                                Ok(_) => {
+                                    info!("  ✓ Loaded {}", filename);
+                                    loaded_data_files.push(filename);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("  ✗ Failed to load {}: {}", filename, e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("  ✗ Failed to read {}: {}", filename, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Then deploy all .reap policies
+    if let Ok(entries) = std::fs::read_dir(policies_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "reap").unwrap_or(false) {
+                let filename = path.file_name().unwrap().to_string_lossy().to_string();
+
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        // Extract actual policy name from content (e.g., "policy rbac_simple {")
+                        let policy_name = extract_policy_name(&content)
+                            .unwrap_or_else(|| filename.trim_end_matches(".reap").to_string());
+                        info!("Deploying policy: {} (from {})", policy_name, filename);
+
+                        match state.client.deploy_policy(&state.agent_url, &policy_name, &content).await {
+                            Ok(_) => {
+                                info!("  ✓ Deployed {}", policy_name);
+                                deployed_policies.push(policy_name);
+                            }
+                            Err(e) => {
+                                tracing::warn!("  ✗ Failed to deploy {}: {}", policy_name, e);
+                                failed_policies.push(serde_json::json!({
+                                    "policy": policy_name,
+                                    "error": e.to_string()
+                                }));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let policy_name = filename.trim_end_matches(".reap");
+                        tracing::warn!("  ✗ Failed to read {}: {}", filename, e);
+                        failed_policies.push(serde_json::json!({
+                            "policy": policy_name,
+                            "error": format!("Failed to read file: {}", e)
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    info!(
+        "Initialization complete: {} policies deployed, {} failed, {} data files loaded",
+        deployed_policies.len(),
+        failed_policies.len(),
+        loaded_data_files.len()
+    );
+
+    Ok(Json(serde_json::json!({
+        "status": "initialized",
+        "deployed_policies": deployed_policies,
+        "failed_policies": failed_policies,
+        "loaded_data_files": loaded_data_files,
+        "summary": {
+            "total_deployed": deployed_policies.len(),
+            "total_failed": failed_policies.len(),
+            "total_data_files": loaded_data_files.len()
+        }
+    })))
 }
 
 /// Interactive HTML dashboard
@@ -266,6 +427,18 @@ async fn run_benchmark(
 ) -> Result<Json<BenchmarkReport>, (StatusCode, String)> {
     info!("Starting benchmark: {:?}", request);
 
+    // Load appropriate data file for the policy
+    if let Some(data_file) = get_data_file_for_policy(&request.policy_name) {
+        let data_path = format!("/app/policies/{}", data_file);
+        info!("Loading data for benchmark from: {}", data_path);
+        if let Ok(data_json) = std::fs::read_to_string(&data_path) {
+            match state.client.load_data(&state.agent_url, &data_json).await {
+                Ok(_) => info!("Data loaded successfully"),
+                Err(e) => tracing::warn!("Failed to load data: {}", e),
+            }
+        }
+    }
+
     let config = BenchmarkConfig {
         agent_url: state.agent_url.clone(),
         policy_name: request.policy_name,
@@ -274,6 +447,7 @@ async fn run_benchmark(
         concurrency: request.concurrency,
         batch_size: request.batch_size,
         warmup_requests: request.warmup_requests,
+        execution_mode: benchmark::BenchmarkExecutionMode::Individual,
     };
 
     let report = benchmark::run_full_benchmark(&state.client, config)
@@ -299,6 +473,7 @@ async fn run_single_volume(
         concurrency: 10,
         batch_size: 100,
         warmup_requests: 100,
+        execution_mode: benchmark::BenchmarkExecutionMode::Individual,
     };
 
     let report = benchmark::run_full_benchmark(&state.client, config)
@@ -357,6 +532,18 @@ async fn run_simulation_mode(
     Json(config): Json<SimulationConfig>,
 ) -> Result<Json<SimulationResult>, (StatusCode, String)> {
     info!("Starting full simulation with config: {:?}", config);
+
+    // Load appropriate data file for the policy
+    if let Some(data_file) = get_data_file_for_policy(&config.policy_name) {
+        let data_path = format!("/app/policies/{}", data_file);
+        info!("Loading data for simulation from: {}", data_path);
+        if let Ok(data_json) = std::fs::read_to_string(&data_path) {
+            match state.client.load_data(&state.agent_url, &data_json).await {
+                Ok(_) => info!("Data loaded successfully"),
+                Err(e) => tracing::warn!("Failed to load data: {}", e),
+            }
+        }
+    }
 
     let result = simulation::run_simulation(&state.client, &state.agent_url, config)
         .await
@@ -629,4 +816,221 @@ fn build_context(
     context
 }
 
+/// Extract policy name from .reap content (e.g., "policy rbac_simple {" -> "rbac_simple")
+fn extract_policy_name(content: &str) -> Option<String> {
+    // Look for "policy <name> {" pattern
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("policy ") {
+            // Extract name between "policy " and " {"
+            let after_policy = trimmed.trim_start_matches("policy ");
+            if let Some(name_end) = after_policy.find(|c: char| c == ' ' || c == '{') {
+                let name = after_policy[..name_end].trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get the data file path for a given policy name
+fn get_data_file_for_policy(policy_name: &str) -> Option<&'static str> {
+    match policy_name {
+        "rbac_simple" => Some("data/rbac_data.json"),
+        "abac_clearance" => Some("data/abac_data.json"),
+        "rebac_relationships" => Some("data/rebac_data.json"),
+        "multilayer_enterprise" => Some("data/multilayer_data.json"),
+        "benchmark_rbac" => Some("data/benchmark_data.json"),
+        "string_operations" => Some("data/string_data.json"),
+        "math_validation" => Some("data/math_data.json"),
+        "regex_validation" => Some("data/regex_data.json"),
+        "collection_operations" => Some("data/collection_data.json"),
+        "conditionals" => Some("data/conditional_data.json"),
+        "time_based_access" => Some("data/time_data.json"),
+        _ => None,
+    }
+}
+
 use serde::Serialize;
+
+// =============================================================================
+// Agent Package Evaluation Endpoints
+// =============================================================================
+
+/// List packages from the agent (live)
+async fn list_agent_packages(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    match state.client.list_packages(&state.agent_url).await {
+        Ok(packages) => Ok(Json(serde_json::json!({
+            "source": "agent",
+            "agent_url": state.agent_url,
+            "packages": packages,
+            "total": packages.len()
+        }))),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("Failed to list packages from agent: {}", e))),
+    }
+}
+
+/// Request for evaluating a package
+#[derive(Debug, Deserialize)]
+struct AgentPackageEvaluateRequest {
+    principal: String,
+    action: String,
+    resource: String,
+    #[serde(default)]
+    context: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Evaluate a request against a package on the agent
+async fn evaluate_agent_package(
+    State(state): State<AppState>,
+    Path(package): Path<String>,
+    Json(request): Json<AgentPackageEvaluateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eval_req = client::EvaluateRequest {
+        policy_id: None,
+        policy_name: None,
+        principal: request.principal,
+        action: request.action,
+        resource: request.resource,
+        context: request.context,
+    };
+
+    match state.client.evaluate_package(&state.agent_url, &package, &eval_req).await {
+        Ok(response) => Ok(Json(serde_json::json!({
+            "package": response.package,
+            "decision": response.decision,
+            "denied_by": response.denied_by,
+            "policies_evaluated": response.policies_evaluated,
+            "evaluation_time_microseconds": response.total_evaluation_time_microseconds
+        }))),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("Package evaluation failed: {}", e))),
+    }
+}
+
+/// Evaluate a request against ALL policies on the agent
+async fn evaluate_all_agent_policies(
+    State(state): State<AppState>,
+    Json(request): Json<AgentPackageEvaluateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eval_req = client::EvaluateRequest {
+        policy_id: None,
+        policy_name: None,
+        principal: request.principal,
+        action: request.action,
+        resource: request.resource,
+        context: request.context,
+    };
+
+    match state.client.evaluate_all(&state.agent_url, &eval_req).await {
+        Ok(response) => Ok(Json(serde_json::json!({
+            "decision": response.decision,
+            "denied_by": response.denied_by,
+            "policies_evaluated": response.policies_evaluated,
+            "packages_evaluated": response.packages_evaluated,
+            "evaluation_time_microseconds": response.total_evaluation_time_microseconds
+        }))),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("All policies evaluation failed: {}", e))),
+    }
+}
+
+/// Request for benchmarking package evaluation
+#[derive(Debug, Deserialize)]
+struct PackageBenchmarkRequest {
+    #[serde(default = "default_benchmark_volume")]
+    volume: u32,
+    #[serde(default = "default_warmup")]
+    warmup: u32,
+}
+
+/// Benchmark package evaluation on the agent
+async fn benchmark_agent_package(
+    State(state): State<AppState>,
+    Path(package): Path<String>,
+    Json(request): Json<PackageBenchmarkRequest>,
+) -> Result<Json<BenchmarkResult>, (StatusCode, String)> {
+    info!("Running package benchmark for '{}': {} requests", package, request.volume);
+
+    match benchmark::run_package_benchmark(
+        &state.client,
+        &state.agent_url,
+        &package,
+        request.volume,
+        request.warmup,
+    )
+    .await
+    {
+        Ok(result) => {
+            info!(
+                "Package '{}' benchmark complete: p99={}µs, throughput={:.0} rps",
+                package, result.latency.p99_us, result.throughput_rps
+            );
+            Ok(Json(result))
+        }
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Package benchmark failed: {}", e))),
+    }
+}
+
+/// Benchmark all policies evaluation on the agent
+async fn benchmark_all_policies(
+    State(state): State<AppState>,
+    Json(request): Json<PackageBenchmarkRequest>,
+) -> Result<Json<BenchmarkResult>, (StatusCode, String)> {
+    info!("Running all-policies benchmark: {} requests", request.volume);
+
+    match benchmark::run_all_policies_benchmark(
+        &state.client,
+        &state.agent_url,
+        request.volume,
+        request.warmup,
+    )
+    .await
+    {
+        Ok(result) => {
+            info!(
+                "All-policies benchmark complete: p99={}µs, throughput={:.0} rps",
+                result.latency.p99_us, result.throughput_rps
+            );
+            Ok(Json(result))
+        }
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("All-policies benchmark failed: {}", e))),
+    }
+}
+
+/// Request for comparing execution modes
+#[derive(Debug, Deserialize)]
+struct CompareModeRequest {
+    package: String,
+    #[serde(default = "default_benchmark_volume")]
+    volume: u32,
+}
+
+/// Compare individual vs package evaluation modes
+async fn compare_execution_modes(
+    State(state): State<AppState>,
+    Json(request): Json<CompareModeRequest>,
+) -> Result<Json<benchmark::ModeComparisonResult>, (StatusCode, String)> {
+    info!("Comparing execution modes for package '{}': {} requests", request.package, request.volume);
+
+    match benchmark::compare_execution_modes(
+        &state.client,
+        &state.agent_url,
+        &request.package,
+        request.volume,
+    )
+    .await
+    {
+        Ok(result) => {
+            info!(
+                "Mode comparison complete: latency reduction={:.1}%, throughput increase={:.1}%",
+                result.improvement.latency_reduction_percent,
+                result.improvement.throughput_increase_percent
+            );
+            Ok(Json(result))
+        }
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Mode comparison failed: {}", e))),
+    }
+}

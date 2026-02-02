@@ -32,4 +32,10 @@ pub enum ReaperError {
 
     #[error("Materialized view error: {0}")]
     ViewError(String),
+
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    #[error("Binary serialization error: {0}")]
+    BinarySerializationError(String),
 }

@@ -9,7 +9,7 @@
 //! - No Arc/Mutex overhead on the hot path
 //!
 //! # Usage
-//! ```rust,ignore
+//! ```text
 //! use policy_engine::regex_cache::{get_or_compile, prewarm_patterns};
 //!
 //! // Pre-warm cache with known patterns (e.g., from bundle hints)
@@ -48,7 +48,7 @@ thread_local! {
 /// * `None` - Pattern failed to compile
 ///
 /// # Example
-/// ```rust,ignore
+/// ```text
 /// if let Some(re) = get_or_compile("^user_\\d+$") {
 ///     assert!(re.is_match("user_123"));
 /// }
@@ -105,7 +105,7 @@ pub fn matches(pattern: &str, text: &str) -> bool {
 /// * Number of patterns successfully compiled
 ///
 /// # Example
-/// ```rust,ignore
+/// ```text
 /// // Pre-warm with patterns from policy bundle hints
 /// let hints = policy_bundle.precompilation_hints();
 /// let count = prewarm_patterns(&hints.regex_patterns);

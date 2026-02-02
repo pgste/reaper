@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Reaper Agent - High-performance policy enforcement"
 
+[lib]
+name = "reaper_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reaper-agent"
+path = "src/main.rs"
+
 [dependencies]
 reaper-core = { path = "../../crates/reaper-core" }
 policy-engine = { path = "../../crates/policy-engine" }
@@ -31,6 +39,9 @@ tracing-opentelemetry = "0.22"
 tempfile = "3.8"
 thiserror = { workspace = true }
 reqwest = { workspace = true }
+reqwest-eventsource = "0.6"
+eventsource-stream = "0.2"
+futures = { workspace = true }
 sha2 = { workspace = true }
 hostname = "0.4"
 parking_lot = { workspace = true }

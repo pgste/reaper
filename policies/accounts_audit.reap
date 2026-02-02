@@ -1,0 +1,18 @@
+// Account Audit Policy - Package: accounts
+policy account_audit {
+    version: "1.0.0",
+    package: "accounts",
+    description: "Account audit logging policy",
+    default: deny,
+
+    rule allow_auditors {
+        allow if user.role == "auditor"
+    }
+
+    rule compliance_team {
+        allow if {
+            user.department == "compliance" &&
+            action == "read"
+        }
+    }
+}

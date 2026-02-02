@@ -58,7 +58,7 @@ impl CedarPolicyEvaluator {
     /// * `policy_text` - Cedar policy syntax string
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let policy = r#"
     ///     permit(principal, action == Action::"read", resource);
     /// "#;

@@ -278,6 +278,10 @@ pub struct PrecompilationHints {
     pub total_rules: usize,
     /// Entity IDs referenced in policies (for pre-loading from DataStore)
     pub referenced_entities: Vec<String>,
+    /// Map of package name -> policy indices in the policies array
+    /// Enables package-based deployment and evaluation
+    #[serde(default)]
+    pub package_groups: std::collections::HashMap<String, Vec<usize>>,
 }
 
 impl PrecompilationHints {
@@ -290,7 +294,7 @@ impl PrecompilationHints {
     /// Number of patterns successfully compiled
     ///
     /// # Example
-    /// ```rust,ignore
+    /// ```text
     /// let package = PolicyPackage::from_bytes(&bytes)?;
     /// let count = package.hints.prewarm_regex_cache();
     /// println!("Pre-compiled {} regex patterns", count);
@@ -319,6 +323,14 @@ pub struct PolicyEntry {
     pub policy: Policy,
     /// Priority for evaluation order (lower = higher priority)
     pub priority: u32,
+    /// Package name for grouping related policies
+    /// Defaults to "default" if not specified in policy metadata
+    #[serde(default = "default_package")]
+    pub package: String,
+}
+
+fn default_package() -> String {
+    "default".to_string()
 }
 
 /// Enhanced bundle format supporting multiple policies with optimization hints
@@ -398,21 +410,41 @@ impl PolicyPackage {
             policy_count: policies.len(),
         };
 
+        // Build policy entries with package names extracted from metadata
+        let policy_entries: Vec<PolicyEntry> = policies
+            .into_iter()
+            .enumerate()
+            .map(|(idx, policy)| {
+                let package = policy
+                    .metadata
+                    .get("package")
+                    .cloned()
+                    .unwrap_or_else(|| "default".to_string());
+                PolicyEntry {
+                    policy,
+                    priority: (idx * 100) as u32,
+                    package,
+                }
+            })
+            .collect();
+
+        // Build package groups index
+        let mut package_groups: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (idx, entry) in policy_entries.iter().enumerate() {
+            package_groups
+                .entry(entry.package.clone())
+                .or_default()
+                .push(idx);
+        }
+
         let hints = PrecompilationHints {
             strings_to_intern: strings.into_iter().collect(),
             regex_patterns: regex_patterns.into_iter().collect(),
             total_rules,
             referenced_entities: Vec::new(),
+            package_groups,
         };
-
-        let policy_entries: Vec<PolicyEntry> = policies
-            .into_iter()
-            .enumerate()
-            .map(|(idx, policy)| PolicyEntry {
-                policy,
-                priority: (idx * 100) as u32,
-            })
-            .collect();
 
         Self {
             metadata,
@@ -464,6 +496,13 @@ impl PolicyPackage {
     ///
     /// Uses the optimization hints to pre-intern strings and compile regexes
     /// before compiling and deploying each policy.
+    ///
+    /// **Deprecated**: Use `deploy_to_engine_atomic()` instead for atomic
+    /// all-or-nothing deployment with rollback on failure.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use deploy_to_engine_atomic() for atomic package deployment"
+    )]
     pub fn deploy_to_engine(
         &self,
         engine: &crate::engine::PolicyEngine,
@@ -486,6 +525,38 @@ impl PolicyPackage {
         }
 
         Ok(versions)
+    }
+
+    /// Deploy all policies in this package atomically using two-phase commit
+    ///
+    /// This method provides atomic, all-or-nothing deployment:
+    /// - Phase 1 (Stage): All policies are validated and compiled
+    /// - Phase 2 (Commit): All policies are activated atomically
+    ///
+    /// If any policy fails validation during staging, no policies are deployed.
+    /// Concurrent policy evaluations will either see all old policies or all
+    /// new policies - never a mix.
+    ///
+    /// # Arguments
+    /// * `engine` - The PolicyEngine to deploy to
+    /// * `store` - DataStore containing entity data for evaluators
+    ///
+    /// # Returns
+    /// - Ok(Vec<PolicyVersion>) on success with version info for each policy
+    /// - Err on failure (no policies deployed)
+    ///
+    /// # Example
+    /// ```text
+    /// let package = PolicyPackage::from_bytes(&bundle_bytes)?;
+    /// let versions = package.deploy_to_engine_atomic(&engine, store)?;
+    /// println!("Deployed {} policies atomically", versions.len());
+    /// ```
+    pub fn deploy_to_engine_atomic(
+        &self,
+        engine: &crate::engine::PolicyEngine,
+        store: Arc<DataStore>,
+    ) -> Result<Vec<crate::engine::PolicyVersion>, ReaperError> {
+        engine.deploy_package_atomic(self, store)
     }
 }
 

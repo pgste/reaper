@@ -1,0 +1,248 @@
+{
+  "entities": [
+    {
+      "id": "user_adult",
+      "type": "User",
+      "attributes": {
+        "age": 25,
+        "role": "member"
+      }
+    },
+    {
+      "id": "user_minor",
+      "type": "User",
+      "attributes": {
+        "age": 16,
+        "role": "youth"
+      }
+    },
+    {
+      "id": "user_premium_adult",
+      "type": "User",
+      "attributes": {
+        "age": 30,
+        "subscription": "premium",
+        "role": "premium_member"
+      }
+    },
+    {
+      "id": "user_premium_minor",
+      "type": "User",
+      "attributes": {
+        "age": 17,
+        "subscription": "premium",
+        "role": "premium_youth"
+      }
+    },
+    {
+      "id": "user_high_score",
+      "type": "User",
+      "attributes": {
+        "score": 1250,
+        "role": "competitor"
+      }
+    },
+    {
+      "id": "user_low_score",
+      "type": "User",
+      "attributes": {
+        "score": 800,
+        "role": "participant"
+      }
+    },
+    {
+      "id": "user_tier_gold",
+      "type": "User",
+      "attributes": {
+        "tier": "gold",
+        "role": "premium_member"
+      }
+    },
+    {
+      "id": "user_tier_bronze",
+      "type": "User",
+      "attributes": {
+        "tier": "bronze",
+        "role": "basic_member"
+      }
+    },
+    {
+      "id": "user_verified_active",
+      "type": "User",
+      "attributes": {
+        "verified": true,
+        "status": "active",
+        "role": "trusted_user"
+      }
+    },
+    {
+      "id": "user_unverified_active",
+      "type": "User",
+      "attributes": {
+        "verified": false,
+        "status": "active",
+        "role": "unverified_user"
+      }
+    },
+    {
+      "id": "user_early_exit",
+      "type": "User",
+      "attributes": {
+        "flag1": true,
+        "flag2": true,
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_or_condition",
+      "type": "User",
+      "attributes": {
+        "flag1": false,
+        "flag2": false,
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_missing_field",
+      "type": "User",
+      "attributes": {
+        "name": "John",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_null_value",
+      "type": "User",
+      "attributes": {
+        "optional_field": null,
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_long_name",
+      "type": "User",
+      "attributes": {
+        "name": "Alexander",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_short_name",
+      "type": "User",
+      "attributes": {
+        "name": "Bob",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_category_a",
+      "type": "User",
+      "attributes": {
+        "category": "A",
+        "role": "categorized"
+      }
+    },
+    {
+      "id": "user_category_unknown",
+      "type": "User",
+      "attributes": {
+        "category": "Z",
+        "role": "uncategorized"
+      }
+    },
+    {
+      "id": "user_threshold_data",
+      "type": "User",
+      "attributes": {
+        "values": [60, 75, 80, 90],
+        "role": "analyst"
+      }
+    },
+    {
+      "id": "user_below_threshold",
+      "type": "User",
+      "attributes": {
+        "values": [30, 40, 45],
+        "role": "user"
+      }
+    },
+    {
+      "id": "age_restricted",
+      "type": "Content",
+      "attributes": {
+        "type": "age_restricted",
+        "min_age": 18
+      }
+    },
+    {
+      "id": "premium_content",
+      "type": "Content",
+      "attributes": {
+        "type": "premium_content",
+        "requires_subscription": true
+      }
+    },
+    {
+      "id": "leaderboard",
+      "type": "Feature",
+      "attributes": {
+        "type": "leaderboard",
+        "min_score": 1000
+      }
+    },
+    {
+      "id": "subscription",
+      "type": "Service",
+      "attributes": {
+        "type": "subscription",
+        "upgradeable": true
+      }
+    },
+    {
+      "id": "payment",
+      "type": "Transaction",
+      "attributes": {
+        "type": "payment",
+        "requires_verification": true
+      }
+    },
+    {
+      "id": "logic_test",
+      "type": "Test",
+      "attributes": {
+        "type": "logic_test"
+      }
+    },
+    {
+      "id": "nullable_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "nullable_data"
+      }
+    },
+    {
+      "id": "name_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "name_check",
+        "min_length": 5
+      }
+    },
+    {
+      "id": "categorizer",
+      "type": "Service",
+      "attributes": {
+        "type": "categorizer",
+        "valid_categories": ["A", "B", "C"]
+      }
+    },
+    {
+      "id": "conditional_sum",
+      "type": "Computation",
+      "attributes": {
+        "type": "conditional_sum",
+        "threshold": 50
+      }
+    }
+  ]
+}

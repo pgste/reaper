@@ -10,7 +10,7 @@
 //! - Cache-friendly linear memory layout
 //!
 //! # Usage Pattern
-//! ```rust,ignore
+//! ```text
 //! use policy_engine::arena::{with_arena, ArenaVec, ArenaString};
 //!
 //! // All allocations within the closure use the thread-local arena
@@ -55,7 +55,7 @@ thread_local! {
 /// * `R` - Return type
 ///
 /// # Example
-/// ```rust,ignore
+/// ```text
 /// let count = with_arena(|arena| {
 ///     let s1 = arena.alloc_str("hello");
 ///     let s2 = arena.alloc_str("world");
@@ -89,7 +89,7 @@ where
 /// Use this for top-level evaluation calls.
 ///
 /// # Example
-/// ```rust,ignore
+/// ```text
 /// let decision = with_arena_reset(|arena| {
 ///     evaluate_policy(arena, policy, request)
 /// });

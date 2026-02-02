@@ -1,0 +1,15 @@
+{
+  "entities": [
+    {"id": "str_user1", "type": "User", "attributes": {"id": "str_user1", "name": "John Doe"}},
+    {"id": "str_user2", "type": "User", "attributes": {"id": "str_user2", "access_code": "admin123"}},
+    {"id": "str_user3", "type": "User", "attributes": {"id": "str_user3", "email": "alice@company.com"}},
+    {"id": "str_user4", "type": "User", "attributes": {"id": "str_user4", "email": "bob@external.org"}},
+    {"id": "str_user5", "type": "User", "attributes": {"id": "str_user5", "username": "admin_jones"}},
+    {"id": "str_user6", "type": "User", "attributes": {"id": "str_user6", "email": "agent@fbi.gov"}},
+    {"id": "str_doc1", "type": "Resource", "attributes": {"id": "str_doc1", "type": "case_insensitive"}},
+    {"id": "str_gate1", "type": "Resource", "attributes": {"id": "str_gate1", "type": "code_entry"}},
+    {"id": "str_docs", "type": "Resource", "attributes": {"id": "str_docs", "type": "internal_docs"}},
+    {"id": "str_settings", "type": "Resource", "attributes": {"id": "str_settings", "type": "system_settings"}},
+    {"id": "str_classified", "type": "Resource", "attributes": {"id": "str_classified", "type": "classified_docs"}}
+  ]
+}

@@ -170,6 +170,39 @@ services:
       - "com.reaper.profile=engine"
 
   # ==========================================================================
+  # Reaper Benchmark Service - Performance Testing (engine, platform profiles)
+  # ==========================================================================
+  bench:
+    build:
+      context: .
+      dockerfile: services/reaper-bench/Dockerfile
+    image: reaper-bench:latest
+    container_name: reaper-bench
+    profiles: ["engine", "platform", "full"]
+    ports:
+      - "3002:3000"
+    environment:
+      - RUST_LOG=info,reaper_bench=debug
+      - REAPER_AGENT_URL=http://agent:8080
+    volumes:
+      - ./services/reaper-bench/policies:/app/policies:ro
+    networks:
+      - reaper-net
+    depends_on:
+      agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=bench"
+      - "com.reaper.profile=engine"
+
+  # ==========================================================================
   # Prometheus - Metrics Collection (observability profile)
   # ==========================================================================
   prometheus:

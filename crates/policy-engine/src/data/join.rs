@@ -13,7 +13,7 @@ use std::time::Instant;
 /// Configuration for joining entities from multiple sources
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let config = JoinConfig {
 ///     primary: EntitySource {
 ///         file_path: "users.json".to_string(),

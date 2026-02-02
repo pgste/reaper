@@ -1,0 +1,77 @@
+# String Operations Test Suite
+# Tests string manipulation DSL features
+
+name: "String Operations"
+description: "DSL string function coverage: contains, startswith, endswith, lower, upper, trim, split"
+
+policies:
+  - path: "crates/policy-engine/examples/policies/string_policy.reap"
+
+data:
+  - path: "test-data/string-test-data.json"
+
+test_cases:
+  # Contains operations
+  - name: "Email domain check - company domain allows"
+    principal: "user_email_contains_company"
+    action: "view"
+    resource: "internal_docs"
+    expected: allow
+    tags: [contains, positive]
+
+  - name: "Email domain check - external domain denied"
+    principal: "user_external_email"
+    action: "view"
+    resource: "internal_docs"
+    expected: deny
+    tags: [contains, negative]
+
+  # Case operations
+  - name: "Mixed case role matches with lowercase"
+    principal: "user_mixed_case"
+    action: "read"
+    resource: "case_insensitive"
+    expected: allow
+    tags: [lowercase, positive]
+
+  - name: "Wrong case role fails"
+    principal: "user_wrong_case"
+    action: "read"
+    resource: "case_insensitive"
+    expected: deny
+    tags: [lowercase, negative]
+
+  # Prefix operations
+  - name: "Admin username prefix allows config"
+    principal: "user_admin_username"
+    action: "configure"
+    resource: "system_settings"
+    expected: allow
+    tags: [startswith, positive]
+
+  - name: "Regular username denied config"
+    principal: "user_regular_username"
+    action: "configure"
+    resource: "system_settings"
+    expected: deny
+    tags: [startswith, negative]
+
+  # Suffix operations
+  - name: "Gov email suffix allows classified"
+    principal: "user_gov_email"
+    action: "access"
+    resource: "classified_docs"
+    expected: allow
+    tags: [endswith, positive]
+
+  - name: "Commercial email denied classified"
+    principal: "user_commercial_email"
+    action: "access"
+    resource: "classified_docs"
+    expected: deny
+    tags: [endswith, negative]
+
+performance:
+  p50_threshold_us: 5
+  p99_threshold_us: 50
+  max_threshold_us: 100

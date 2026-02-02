@@ -10,7 +10,9 @@
 //! - **Multi-Index**: Fast lookups by ID, type, and attributes
 //! - **Hot-Swappable**: Update data without stopping evaluations
 //! - **Memory Efficient**: 60-80% less memory than equivalent Go structures
+//! - **Binary Bundles**: Fast loading via .rdb format with pre-interned strings
 
+pub mod bundle;
 pub mod entity;
 pub mod indexes;
 pub mod interning;
@@ -22,6 +24,10 @@ pub mod store;
 pub mod streaming;
 pub mod views;
 
+pub use bundle::{
+    DataBundle, DataBundleMetadata, SerializedAttributeValue, SerializedEntity, StringTable,
+    DATA_BUNDLE_MAGIC, DATA_BUNDLE_VERSION,
+};
 pub use entity::{AttributeValue, Attributes, Entity, EntityId, EntityType};
 pub use indexes::{IndexManager, IndexStats};
 pub use interning::{InternedString, StringInterner};

@@ -252,8 +252,13 @@ impl DataStore {
     ///
     /// # Example
     /// ```
+    /// use policy_engine::DataStore;
+    ///
+    /// let store = DataStore::new();
     /// let stats = store.get_entity_type_stats();
-    /// // {"User": 1000, "Device": 500, "Resource": 2000}
+    /// // Returns empty map for new store: {}
+    /// // After loading data: {"User": 1000, "Device": 500, "Resource": 2000}
+    /// assert!(stats.is_empty());
     /// ```
     pub fn get_entity_type_stats(&self) -> HashMap<String, usize> {
         self.type_index
@@ -309,7 +314,7 @@ impl DataStore {
     /// Add a materialized view
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// use policy_engine::data::{DataStore, MaterializedView, ViewQuery, ViewStrategy};
     ///
     /// let store = DataStore::new();
@@ -366,7 +371,7 @@ impl DataStore {
     /// recomputed first (Phase 6A-2 will add automatic recomputation).
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let results = store.query_view("user_permission", |entity| {
     ///     // Filter by user and resource
     ///     entity.get_attribute_str("user") == Some("alice") &&
@@ -406,7 +411,7 @@ impl DataStore {
     /// - Tier 4 (5-10µs): Full scan with filtering
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// use policy_engine::data::{DataStore, QueryPattern};
     ///
     /// let store = DataStore::new();

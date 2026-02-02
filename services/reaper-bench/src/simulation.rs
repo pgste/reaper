@@ -98,6 +98,9 @@ pub struct ParameterTestResult {
     pub success_rate: f64,
     pub cpu_usage_percent: f32,
     pub memory_usage_mb: u64,
+    pub allowed: u32,
+    pub denied: u32,
+    pub total_requests: u32,
 }
 
 /// System resource snapshot
@@ -183,8 +186,14 @@ pub fn get_resource_snapshot() -> ResourceSnapshot {
 
     let cpu_usage = sys.global_cpu_usage();
     let total_memory = sys.total_memory() / (1024 * 1024); // Convert to MB
-    let used_memory = sys.used_memory() / (1024 * 1024);
     let available_memory = sys.available_memory() / (1024 * 1024);
+
+    // Get current process memory usage (not total system memory)
+    let current_pid = sysinfo::get_current_pid().ok();
+    let used_memory = current_pid
+        .and_then(|pid| sys.process(pid))
+        .map(|p| p.memory() / (1024 * 1024))
+        .unwrap_or(0);
 
     ResourceSnapshot {
         cpu_cores: num_cpus::get(),
@@ -284,6 +293,9 @@ pub async fn run_simulation(
                             success_rate,
                             cpu_usage_percent: post_test.cpu_usage_percent,
                             memory_usage_mb: post_test.used_memory_mb,
+                            allowed: result.allowed,
+                            denied: result.denied,
+                            total_requests: result.total_requests,
                         };
 
                         info!(

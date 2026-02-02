@@ -22,7 +22,7 @@ use std::str::FromStr;
 /// This enables Cedar policies to query entity attributes loaded in the DataStore.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let store = DataStore::new();
 /// // ... load entities into store ...
 ///

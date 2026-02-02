@@ -124,6 +124,21 @@ impl ReaperPolicy {
         self.ast.metadata.get("version").map(|s| s.as_str())
     }
 
+    /// Get the policy package name (defaults to "default" if not specified)
+    pub fn package(&self) -> &str {
+        self.ast.metadata.get("package").map(|s| s.as_str()).unwrap_or("default")
+    }
+
+    /// Get the policy description (if any)
+    pub fn description(&self) -> Option<&str> {
+        self.ast.metadata.get("description").map(|s| s.as_str())
+    }
+
+    /// Get all policy metadata as a HashMap
+    pub fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        &self.ast.metadata
+    }
+
     /// Compile to a binary bundle for fast loading
     pub fn compile_to_bundle(&self) -> Result<Vec<u8>, ReaperError> {
         bundle::compile_to_bundle(&self.ast)

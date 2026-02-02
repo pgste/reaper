@@ -1,20 +1,23 @@
 //! Background sync service for management plane
 //!
 //! Handles:
+//! - SSE push notifications (primary - instant)
 //! - Periodic heartbeats
-//! - Polling for bundle updates
+//! - Polling for bundle updates (fallback)
 //! - Automatic bundle deployment
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-use policy_engine::PolicyEngine;
+use policy_engine::{DataStore, PolicyEngine};
 use reaper_core::config::ManagementSettings;
 
 use super::client::ManagementClient;
+use super::sse::{ManagementEvent, SseClient, SseConfig};
 use super::types::{AgentMetrics, ManagementError};
 use crate::AgentStats;
 
@@ -31,6 +34,8 @@ pub struct SyncService {
     client: Arc<ManagementClient>,
     config: ManagementSettings,
     policy_engine: Arc<PolicyEngine>,
+    /// Shared DataStore for entity data updates via SSE
+    data_store: Arc<DataStore>,
     /// Agent statistics for metrics collection
     stats: Arc<AgentStats>,
     /// Agent start time for uptime calculation
@@ -39,6 +44,8 @@ pub struct SyncService {
     update_tx: watch::Sender<Option<BundleUpdate>>,
     /// Channel to receive shutdown signal
     shutdown_rx: watch::Receiver<bool>,
+    /// Whether SSE is currently connected
+    sse_connected: bool,
 }
 
 impl SyncService {
@@ -47,6 +54,7 @@ impl SyncService {
         client: Arc<ManagementClient>,
         config: ManagementSettings,
         policy_engine: Arc<PolicyEngine>,
+        data_store: Arc<DataStore>,
         stats: Arc<AgentStats>,
         started_at: Instant,
         shutdown_rx: watch::Receiver<bool>,
@@ -57,17 +65,19 @@ impl SyncService {
             client,
             config,
             policy_engine,
+            data_store,
             stats,
             started_at,
             update_tx,
             shutdown_rx,
+            sse_connected: false,
         };
 
         (service, update_rx)
     }
 
     /// Run the sync service
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         info!("Starting management sync service");
 
         // Register with management server
@@ -83,9 +93,54 @@ impl SyncService {
             }
         }
 
-        // Start background tasks
+        // Determine poll interval based on SSE configuration
         let heartbeat_interval = Duration::from_secs(self.config.heartbeat_interval_secs);
-        let poll_interval = Duration::from_secs(self.config.poll_interval_secs);
+        let poll_interval = if self.config.sse_enabled {
+            Duration::from_secs(self.config.poll_interval_with_sse_secs)
+        } else {
+            Duration::from_secs(self.config.poll_interval_secs)
+        };
+
+        info!(
+            sse_enabled = self.config.sse_enabled,
+            poll_interval_secs = poll_interval.as_secs(),
+            "Sync service configured"
+        );
+
+        // Set up SSE event channel
+        let (sse_tx, mut sse_rx) = mpsc::channel::<ManagementEvent>(100);
+
+        // Spawn SSE client if enabled
+        let sse_shutdown_rx = self.shutdown_rx.clone();
+        let sse_task = if self.config.sse_enabled {
+            let state = self.client.state().await;
+            if let (Some(agent_id), Some(token)) = (state.agent_id, state.token) {
+                let sse_config = SseConfig {
+                    base_url: self
+                        .config
+                        .url
+                        .clone()
+                        .unwrap_or_default()
+                        .trim_end_matches('/')
+                        .to_string(),
+                    org: self.config.org.clone().unwrap_or_default(),
+                    agent_id,
+                    token,
+                    reconnect_initial_secs: self.config.sse_reconnect_initial_secs,
+                    reconnect_max_secs: self.config.sse_reconnect_max_secs,
+                };
+
+                let sse_client = SseClient::new(sse_config, sse_tx);
+                Some(tokio::spawn(async move {
+                    sse_client.run(sse_shutdown_rx).await;
+                }))
+            } else {
+                warn!("SSE enabled but agent not registered, skipping SSE");
+                None
+            }
+        } else {
+            None
+        };
 
         let mut heartbeat_ticker = tokio::time::interval(heartbeat_interval);
         let mut poll_ticker = tokio::time::interval(poll_interval);
@@ -98,6 +153,11 @@ impl SyncService {
 
         loop {
             tokio::select! {
+                // SSE events (primary - instant)
+                Some(event) = sse_rx.recv() => {
+                    self.handle_sse_event(event).await;
+                }
+                // Heartbeat (unchanged)
                 _ = heartbeat_ticker.tick() => {
                     if let Err(e) = self.send_heartbeat().await {
                         warn!(error = %e, "Heartbeat failed");
@@ -109,7 +169,9 @@ impl SyncService {
                         }
                     }
                 }
+                // Poll fallback (longer interval when SSE active)
                 _ = poll_ticker.tick() => {
+                    debug!(sse_connected = self.sse_connected, "Polling for bundle updates");
                     if let Err(e) = self.sync_bundle().await {
                         warn!(error = %e, "Bundle sync failed");
                     }
@@ -122,6 +184,133 @@ impl SyncService {
                 }
             }
         }
+
+        // Wait for SSE task to finish
+        if let Some(task) = sse_task {
+            let _ = task.await;
+        }
+    }
+
+    /// Handle an SSE event
+    async fn handle_sse_event(&mut self, event: ManagementEvent) {
+        match event {
+            ManagementEvent::Connected => {
+                self.sse_connected = true;
+                info!("SSE connected - real-time updates active");
+            }
+            ManagementEvent::Disconnected { error } => {
+                self.sse_connected = false;
+                if let Some(err) = error {
+                    warn!(error = %err, "SSE disconnected");
+                } else {
+                    info!("SSE disconnected");
+                }
+            }
+            ManagementEvent::BundlePromoted { bundle_id, version, .. } => {
+                info!(
+                    bundle_id = %bundle_id,
+                    version = %version,
+                    "Received BundlePromoted event via SSE"
+                );
+                // Trigger immediate bundle sync
+                if let Err(e) = self.sync_bundle_by_id(bundle_id).await {
+                    warn!(error = %e, bundle_id = %bundle_id, "Failed to sync bundle from SSE event");
+                }
+            }
+            ManagementEvent::DataRefresh { source_id, source_type, .. } => {
+                info!(
+                    source_id = %source_id,
+                    source_type = %source_type,
+                    "Received DataRefresh event via SSE"
+                );
+                // Data refresh handling will be implemented in Phase 4
+                if let Err(e) = self.sync_data_source(source_id, &source_type).await {
+                    warn!(error = %e, source_id = %source_id, "Failed to sync data source from SSE event");
+                }
+            }
+            ManagementEvent::PolicyUpdated { policy_id, version, .. } => {
+                info!(
+                    policy_id = %policy_id,
+                    version = version,
+                    "Received PolicyUpdated event via SSE"
+                );
+                // Trigger bundle sync to get latest policies
+                if let Err(e) = self.sync_bundle().await {
+                    warn!(error = %e, "Failed to sync bundle after PolicyUpdated event");
+                }
+            }
+            ManagementEvent::Ping { timestamp } => {
+                debug!(timestamp = %timestamp, "SSE ping received");
+            }
+        }
+    }
+
+    /// Sync a specific bundle by ID
+    async fn sync_bundle_by_id(&self, bundle_id: Uuid) -> Result<(), ManagementError> {
+        info!(bundle_id = %bundle_id, "Downloading bundle by ID");
+
+        // Download the bundle
+        let download = self.client.download_bundle(bundle_id).await?;
+
+        // Update tracking
+        self.client
+            .set_current_bundle(download.bundle_id, download.checksum.clone())
+            .await;
+
+        // Notify about the update
+        let bundle_update = BundleUpdate {
+            bundle_id: download.bundle_id,
+            checksum: download.checksum,
+            data: Arc::new(download.data),
+        };
+
+        // Send update notification (ignoring errors if no receivers)
+        let _ = self.update_tx.send(Some(bundle_update));
+
+        info!(bundle_id = %bundle_id, "Bundle sync from SSE complete");
+        Ok(())
+    }
+
+    /// Sync data from a data source
+    ///
+    /// Downloads the data bundle and atomically replaces the DataStore contents.
+    async fn sync_data_source(&self, source_id: Uuid, source_type: &str) -> Result<(), ManagementError> {
+        info!(
+            source_id = %source_id,
+            source_type = %source_type,
+            "Downloading data bundle from source"
+        );
+
+        // Download the data bundle
+        let download = self.client.download_data_bundle(source_id).await?;
+
+        info!(
+            source_id = %source_id,
+            size_bytes = download.data.len(),
+            checksum = %download.checksum,
+            "Data bundle downloaded, loading into DataStore"
+        );
+
+        // Parse the data bundle
+        let bundle = policy_engine::DataBundle::from_bytes(&download.data)
+            .map_err(|e| ManagementError::DataLoadError(format!("Failed to parse data bundle: {}", e)))?;
+
+        let entity_count = bundle.metadata.entity_count;
+        let bundle_version = bundle.metadata.version.clone();
+
+        // Atomically replace the DataStore contents with the bundle data
+        bundle.replace_store(&self.data_store)
+            .map_err(|e| ManagementError::DataLoadError(format!("Failed to load data bundle: {}", e)))?;
+
+        info!(
+            source_id = %source_id,
+            entity_count = entity_count,
+            bundle_version = %bundle_version,
+            "Data source sync complete - {} entities loaded",
+            entity_count
+        );
+
+        Ok(())
     }
 
     /// Register with the management server with retries

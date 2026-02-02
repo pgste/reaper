@@ -9,7 +9,7 @@
 //! - `REAPER_CACHE_TTL_SECS` - Time-to-live in seconds (default: 300, 0 = no TTL)
 //!
 //! # Usage
-//! ```rust,ignore
+//! ```text
 //! use policy_engine::cache_config::CacheConfig;
 //!
 //! // Load from environment (with defaults)

@@ -9,7 +9,7 @@
 //! - Memory: ~100 bytes per cached decision
 //!
 //! # Usage
-//! ```rust,ignore
+//! ```text
 //! use policy_engine::decision_cache::DecisionCache;
 //!
 //! let cache = DecisionCache::new(10000); // 10K entries
