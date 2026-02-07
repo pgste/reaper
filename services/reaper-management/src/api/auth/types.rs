@@ -3,11 +3,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{
-    jwks::JwksConfig,
-    mtls::ClientCertificate,
-    ApiKey,
-};
+use crate::auth::{jwks::JwksConfig, mtls::ClientCertificate, ApiKey};
 
 // ==================== API Key Types ====================
 

@@ -1,17 +1,19 @@
-//! HTTP client for communicating with Reaper Agent
+//! HTTP/UDS client for communicating with Reaper Agent
 //!
-//! Supports mTLS authentication and HTTP/2 for optimal performance.
+//! Uses the Reaper SDK for transport (TCP or Unix Domain Socket).
+//! Supports mTLS authentication via reqwest and UDS for same-host/pod deployments.
 
-use reqwest::{Certificate, Client, Identity};
+use reaper_sdk::ReaperClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::time::Duration;
+use std::path::Path;
 use tracing::info;
 
-/// Agent client wrapper
+/// Agent client wrapper using the Reaper SDK's transport layer.
+///
+/// Supports both TCP (HTTP/HTTPS) and Unix Domain Socket connections.
 pub struct AgentClient {
-    client: Client,
+    client: ReaperClient,
 }
 
 /// Policy evaluation request
@@ -29,6 +31,7 @@ pub struct PolicyRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyResponse {
     pub decision: String,
+    pub decision_id: Option<String>,
     pub policy_id: Option<String>,
     pub policy_name: Option<String>,
     pub policy_version: Option<u64>,
@@ -50,6 +53,8 @@ pub struct BatchRequest {
 /// Individual request in a batch
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchRequestItem {
+    /// Request identifier for correlation (required by agent)
+    pub id: String,
     pub principal: String,
     pub action: String,
     pub resource: String,
@@ -170,91 +175,62 @@ pub struct PolicyInfo {
 }
 
 impl AgentClient {
-    /// Create a new agent client
-    pub fn new(client: Client) -> Self {
+    /// Create a new agent client wrapping a ReaperClient.
+    pub fn new(client: ReaperClient) -> Self {
         Self { client }
     }
 
-    /// Get the underlying reqwest client
-    pub fn inner(&self) -> &Client {
+    /// Get a reference to the underlying ReaperClient.
+    pub fn sdk_client(&self) -> &ReaperClient {
         &self.client
     }
 
     /// Evaluate a single policy request (fast-messages endpoint)
-    pub async fn evaluate(&self, url: &str, request: &PolicyRequest) -> anyhow::Result<PolicyResponse> {
-        let response = self
-            .client
-            .post(format!("{}/api/v1/fast-messages", url))
-            .json(request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Agent returned error {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+    pub async fn evaluate(
+        &self,
+        _url: &str,
+        request: &PolicyRequest,
+    ) -> anyhow::Result<PolicyResponse> {
+        self.client
+            .post_json("/api/v1/fast-messages", request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Agent evaluate error: {}", e))
     }
 
     /// Evaluate a batch of requests (batch-messages endpoint)
     pub async fn evaluate_batch(
         &self,
-        url: &str,
+        _url: &str,
         request: &BatchRequest,
     ) -> anyhow::Result<BatchResponse> {
-        let response = self
-            .client
-            .post(format!("{}/api/v1/batch-messages", url))
-            .json(request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Agent returned error {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+        self.client
+            .post_json("/api/v1/batch-messages", request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Agent batch evaluate error: {}", e))
     }
 
     /// Check agent health
-    pub async fn health(&self, url: &str) -> anyhow::Result<serde_json::Value> {
-        let response = self
-            .client
-            .get(format!("{}/health", url))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Agent health check failed: {}", response.status());
-        }
-
-        Ok(response.json().await?)
+    pub async fn health(&self, _url: &str) -> anyhow::Result<serde_json::Value> {
+        self.client
+            .get_json("/health")
+            .await
+            .map_err(|e| anyhow::anyhow!("Agent health check failed: {}", e))
     }
 
     /// Load entity data into the agent's DataStore
-    pub async fn load_data(&self, url: &str, data_json: &str) -> anyhow::Result<serde_json::Value> {
+    pub async fn load_data(
+        &self,
+        _url: &str,
+        data_json: &str,
+    ) -> anyhow::Result<serde_json::Value> {
         let payload = serde_json::json!({
             "data": data_json
         });
 
-        let response = self
-            .client
-            .post(format!("{}/api/v1/data", url))
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to load data {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+        self.client
+            .post_json("/api/v1/data", &payload)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to load data: {}", e))
     }
 
     // ========================================================================
@@ -262,156 +238,98 @@ impl AgentClient {
     // ========================================================================
 
     /// List all packages
-    pub async fn list_packages(&self, url: &str) -> anyhow::Result<Vec<PackageInfo>> {
-        let response = self
+    pub async fn list_packages(&self, _url: &str) -> anyhow::Result<Vec<PackageInfo>> {
+        let result: ListPackagesResponse = self
             .client
-            .get(format!("{}/api/v1/packages", url))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to list packages {}: {}", status, body);
-        }
-
-        let result: ListPackagesResponse = response.json().await?;
+            .get_json("/api/v1/packages")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list packages: {}", e))?;
         Ok(result.packages)
     }
 
     /// Get policies in a specific package
-    pub async fn get_package_policies(&self, url: &str, package: &str) -> anyhow::Result<PackagePoliciesResponse> {
-        let response = self
-            .client
-            .get(format!("{}/api/v1/packages/{}/policies", url, package))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get package policies {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+    pub async fn get_package_policies(
+        &self,
+        _url: &str,
+        package: &str,
+    ) -> anyhow::Result<PackagePoliciesResponse> {
+        self.client
+            .get_json(&format!("/api/v1/packages/{}/policies", package))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get package policies: {}", e))
     }
 
     /// Evaluate request against all policies in a specific package
     pub async fn evaluate_package(
         &self,
-        url: &str,
+        _url: &str,
         package: &str,
         request: &EvaluateRequest,
     ) -> anyhow::Result<PackageEvaluationResponse> {
-        let response = self
-            .client
-            .post(format!("{}/api/v1/packages/{}/evaluate", url, package))
-            .json(request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Package evaluation failed {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+        self.client
+            .post_json(&format!("/api/v1/packages/{}/evaluate", package), request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Package evaluation failed: {}", e))
     }
 
     /// Evaluate request against ALL policies across ALL packages
     pub async fn evaluate_all(
         &self,
-        url: &str,
+        _url: &str,
         request: &EvaluateRequest,
     ) -> anyhow::Result<AllPoliciesEvaluationResponse> {
-        let response = self
-            .client
-            .post(format!("{}/api/v1/evaluate", url))
-            .json(request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("All policies evaluation failed {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+        self.client
+            .post_json("/api/v1/evaluate", request)
+            .await
+            .map_err(|e| anyhow::anyhow!("All policies evaluation failed: {}", e))
     }
 
     /// Deploy a compiled policy to the agent
     pub async fn deploy_policy(
         &self,
-        url: &str,
+        _url: &str,
         policy_name: &str,
         policy_content: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        let response = self
-            .client
-            .post(format!("{}/api/v1/policies/compile", url))
-            .json(&serde_json::json!({
-                "policy_name": policy_name,
-                "policy_content": policy_content
-            }))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Policy deployment failed {}: {}", status, body);
-        }
-
-        Ok(response.json().await?)
+        self.client
+            .post_json(
+                "/api/v1/policies/compile",
+                &serde_json::json!({
+                    "policy_name": policy_name,
+                    "policy_content": policy_content
+                }),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Policy deployment failed: {}", e))
     }
 }
 
-/// Create an agent client with optional mTLS configuration
+/// Create an agent client with optional mTLS and/or UDS transport.
+///
+/// If `uds_path` is provided, connects via Unix Domain Socket (ignores TLS settings).
+/// Otherwise, connects via HTTP/HTTPS with optional mTLS.
 pub fn create_agent_client(
-    ca_path: Option<&str>,
-    cert_path: Option<&str>,
-    key_path: Option<&str>,
+    agent_url: &str,
+    uds_path: Option<&str>,
+    _ca_path: Option<&str>,
+    _cert_path: Option<&str>,
+    _key_path: Option<&str>,
 ) -> anyhow::Result<AgentClient> {
-    let mut builder = Client::builder()
-        .use_rustls_tls()
-        .http2_prior_knowledge() // Force HTTP/2
-        .pool_max_idle_per_host(100)
-        .pool_idle_timeout(Duration::from_secs(30))
-        .tcp_keepalive(Duration::from_secs(60))
-        .timeout(Duration::from_secs(30));
+    let client = if let Some(socket_path) = uds_path {
+        info!("Creating UDS client: {}", socket_path);
+        if !Path::new(socket_path).exists() {
+            info!(
+                "Note: socket file does not exist yet (agent may not be running): {}",
+                socket_path
+            );
+        }
+        ReaperClient::unix(socket_path)
+            .map_err(|e| anyhow::anyhow!("Failed to create UDS client: {}", e))?
+    } else {
+        info!("Creating HTTP client: {}", agent_url);
+        ReaperClient::http(agent_url)
+            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?
+    };
 
-    // Add CA certificate if provided
-    if let Some(ca) = ca_path {
-        info!("Loading CA certificate from: {}", ca);
-        let ca_bytes = fs::read(ca)?;
-        let ca_cert = Certificate::from_pem(&ca_bytes)?;
-        builder = builder.add_root_certificate(ca_cert);
-    }
-
-    // Add client certificate and key for mTLS if both provided
-    if let (Some(cert), Some(key)) = (cert_path, key_path) {
-        info!("Loading client certificate from: {}", cert);
-        info!("Loading client key from: {}", key);
-
-        let cert_bytes = fs::read(cert)?;
-        let key_bytes = fs::read(key)?;
-
-        // Combine cert and key into identity
-        let mut pem = cert_bytes.clone();
-        pem.extend_from_slice(b"\n");
-        pem.extend_from_slice(&key_bytes);
-
-        let identity = Identity::from_pem(&pem)?;
-        builder = builder.identity(identity);
-    }
-
-    // Allow invalid certificates in development
-    if std::env::var("REAPER_TLS_INSECURE").is_ok() {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-
-    let client = builder.build()?;
     Ok(AgentClient::new(client))
 }

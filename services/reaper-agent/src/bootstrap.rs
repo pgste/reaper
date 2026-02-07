@@ -130,23 +130,24 @@ async fn load_reap_policy(
 
     // Try compiled evaluator first for sub-microsecond performance
     // Fall back to AST evaluator for policies with advanced features (variables, comprehensions, etc.)
-    let evaluator: Arc<dyn policy_engine::PolicyEvaluator> = match reaper_policy.clone().build(data_store.clone()) {
-        Ok(compiled) => {
-            debug!(
-                "Using compiled evaluator for policy: {} (sub-microsecond performance)",
-                policy_name
-            );
-            Arc::new(compiled)
-        }
-        Err(compile_err) => {
-            // Compilation failed - use AST evaluator which supports all features
-            info!(
-                "Using AST evaluator for policy: {} (full feature support). Compile hint: {}",
-                policy_name, compile_err
-            );
-            Arc::new(reaper_policy.build_ast_evaluator(data_store))
-        }
-    };
+    let evaluator: Arc<dyn policy_engine::PolicyEvaluator> =
+        match reaper_policy.clone().build(data_store.clone()) {
+            Ok(compiled) => {
+                debug!(
+                    "Using compiled evaluator for policy: {} (sub-microsecond performance)",
+                    policy_name
+                );
+                Arc::new(compiled)
+            }
+            Err(compile_err) => {
+                // Compilation failed - use AST evaluator which supports all features
+                info!(
+                    "Using AST evaluator for policy: {} (full feature support). Compile hint: {}",
+                    policy_name, compile_err
+                );
+                Arc::new(reaper_policy.build_ast_evaluator(data_store))
+            }
+        };
 
     // Create EnhancedPolicy with the evaluator
     let mut enhanced_policy = EnhancedPolicy {

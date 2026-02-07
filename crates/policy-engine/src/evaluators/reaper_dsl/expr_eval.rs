@@ -145,7 +145,11 @@ pub fn eval_string_substring(
             let end_idx = end.unwrap_or(resolved.len()).min(resolved.len());
             let start_idx = start.min(end_idx);
             // Handle UTF-8 properly by using chars
-            let substring: String = resolved.chars().skip(start_idx).take(end_idx - start_idx).collect();
+            let substring: String = resolved
+                .chars()
+                .skip(start_idx)
+                .take(end_idx - start_idx)
+                .collect();
             let interned = interner.intern(&substring);
             return Some(AttributeValue::String(interned));
         }
@@ -168,13 +172,9 @@ pub fn eval_collection_count(
         Some(AttributeValue::List(items)) => Some(AttributeValue::Int(items.len() as i64)),
         Some(AttributeValue::Set(items)) => Some(AttributeValue::Int(items.len() as i64)),
         Some(AttributeValue::Object(map)) => Some(AttributeValue::Int(map.len() as i64)),
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                Some(AttributeValue::Int(resolved.len() as i64))
-            } else {
-                None
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .resolve(*s)
+            .map(|resolved| AttributeValue::Int(resolved.len() as i64)),
         Some(AttributeValue::Null) => Some(AttributeValue::Int(0)),
         _ => None,
     }
@@ -433,11 +433,8 @@ pub fn eval_map_keys(
     let entity = get_entity_for_type(entity_type, user, resource)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Object(map)) => {
-            let keys: Vec<AttributeValue> = map
-                .keys()
-                .copied()
-                .map(AttributeValue::String)
-                .collect();
+            let keys: Vec<AttributeValue> =
+                map.keys().copied().map(AttributeValue::String).collect();
             Some(AttributeValue::List(keys))
         }
         _ => None,
@@ -589,15 +586,21 @@ pub(super) fn compare_attribute_values(
         (AttributeValue::Float(x), AttributeValue::Float(y)) => {
             x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
         }
-        (AttributeValue::Int(x), AttributeValue::Float(y)) => {
-            (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
-        }
-        (AttributeValue::Float(x), AttributeValue::Int(y)) => {
-            x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal)
-        }
+        (AttributeValue::Int(x), AttributeValue::Float(y)) => (*x as f64)
+            .partial_cmp(y)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (AttributeValue::Float(x), AttributeValue::Int(y)) => x
+            .partial_cmp(&(*y as f64))
+            .unwrap_or(std::cmp::Ordering::Equal),
         (AttributeValue::String(x), AttributeValue::String(y)) => {
-            let x_str = interner.resolve(*x).map(|s| s.to_string()).unwrap_or_default();
-            let y_str = interner.resolve(*y).map(|s| s.to_string()).unwrap_or_default();
+            let x_str = interner
+                .resolve(*x)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let y_str = interner
+                .resolve(*y)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             x_str.cmp(&y_str)
         }
         (AttributeValue::Bool(x), AttributeValue::Bool(y)) => x.cmp(y),
@@ -632,52 +635,67 @@ pub fn evaluate_compiled_expr_type(
     expr_type: &CompiledExprType,
     user: &Entity,
     resource: &Entity,
-    _context: &HashMap<String, String>,
     variables: &HashMap<String, AttributeValue>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
     match expr_type {
-        CompiledExprType::StringLower { entity_type, attribute } => {
-            eval_string_lower(entity_type, *attribute, user, resource, interner)
-        }
+        CompiledExprType::StringLower {
+            entity_type,
+            attribute,
+        } => eval_string_lower(entity_type, *attribute, user, resource, interner),
 
-        CompiledExprType::StringUpper { entity_type, attribute } => {
-            eval_string_upper(entity_type, *attribute, user, resource, interner)
-        }
+        CompiledExprType::StringUpper {
+            entity_type,
+            attribute,
+        } => eval_string_upper(entity_type, *attribute, user, resource, interner),
 
-        CompiledExprType::StringTrim { entity_type, attribute } => {
-            eval_string_trim(entity_type, *attribute, user, resource, interner)
-        }
+        CompiledExprType::StringTrim {
+            entity_type,
+            attribute,
+        } => eval_string_trim(entity_type, *attribute, user, resource, interner),
 
-        CompiledExprType::StringSplit { entity_type, attribute, delimiter } => {
-            eval_string_split(entity_type, *attribute, delimiter, user, resource, interner)
-        }
+        CompiledExprType::StringSplit {
+            entity_type,
+            attribute,
+            delimiter,
+        } => eval_string_split(entity_type, *attribute, delimiter, user, resource, interner),
 
-        CompiledExprType::CollectionCount { entity_type, attribute } => {
-            eval_collection_count(entity_type, *attribute, user, resource, interner)
-        }
+        CompiledExprType::CollectionCount {
+            entity_type,
+            attribute,
+        } => eval_collection_count(entity_type, *attribute, user, resource, interner),
 
-        CompiledExprType::CollectionSum { entity_type, attribute } => {
-            eval_collection_sum(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionSum {
+            entity_type,
+            attribute,
+        } => eval_collection_sum(entity_type, *attribute, user, resource),
 
-        CompiledExprType::CollectionMax { entity_type, attribute } => {
-            eval_collection_max(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionMax {
+            entity_type,
+            attribute,
+        } => eval_collection_max(entity_type, *attribute, user, resource),
 
-        CompiledExprType::CollectionMin { entity_type, attribute } => {
-            eval_collection_min(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionMin {
+            entity_type,
+            attribute,
+        } => eval_collection_min(entity_type, *attribute, user, resource),
 
-        CompiledExprType::CollectionFirst { entity_type, attribute } => {
-            eval_collection_first(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionFirst {
+            entity_type,
+            attribute,
+        } => eval_collection_first(entity_type, *attribute, user, resource),
 
-        CompiledExprType::CollectionLast { entity_type, attribute } => {
-            eval_collection_last(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionLast {
+            entity_type,
+            attribute,
+        } => eval_collection_last(entity_type, *attribute, user, resource),
 
-        CompiledExprType::CollectionSlice { entity_type, attribute, start, end } => {
+        CompiledExprType::CollectionSlice {
+            entity_type,
+            attribute,
+            start,
+            end,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => {
@@ -694,17 +712,20 @@ pub fn evaluate_compiled_expr_type(
             }
         }
 
-        CompiledExprType::CollectionReverse { entity_type, attribute } => {
-            eval_collection_reverse(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionReverse {
+            entity_type,
+            attribute,
+        } => eval_collection_reverse(entity_type, *attribute, user, resource),
 
-        CompiledExprType::CollectionSort { entity_type, attribute } => {
-            eval_collection_sort(entity_type, *attribute, user, resource, interner)
-        }
+        CompiledExprType::CollectionSort {
+            entity_type,
+            attribute,
+        } => eval_collection_sort(entity_type, *attribute, user, resource, interner),
 
-        CompiledExprType::CollectionUnique { entity_type, attribute } => {
-            eval_collection_unique(entity_type, *attribute, user, resource)
-        }
+        CompiledExprType::CollectionUnique {
+            entity_type,
+            attribute,
+        } => eval_collection_unique(entity_type, *attribute, user, resource),
 
         CompiledExprType::CollectionDifference {
             entity_type,
@@ -872,7 +893,11 @@ pub fn evaluate_compiled_expr_type(
             Some(AttributeValue::List(intersection))
         }
 
-        CompiledExprType::SetIntersection { entity_type, attribute, values } => {
+        CompiledExprType::SetIntersection {
+            entity_type,
+            attribute,
+            values,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             let items_vec: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => items.clone(),
@@ -893,13 +918,20 @@ pub fn evaluate_compiled_expr_type(
             Some(AttributeValue::List(intersection))
         }
 
-        CompiledExprType::SetUnion { entity_type, attribute, values } => {
+        CompiledExprType::SetUnion {
+            entity_type,
+            attribute,
+            values,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => {
                     let mut union: Vec<AttributeValue> = items.clone();
                     for v in values {
-                        if !items.iter().any(|item| matches!(item, AttributeValue::String(s) if *s == *v)) {
+                        if !items
+                            .iter()
+                            .any(|item| matches!(item, AttributeValue::String(s) if *s == *v))
+                        {
                             union.push(AttributeValue::String(*v));
                         }
                     }
@@ -909,11 +941,15 @@ pub fn evaluate_compiled_expr_type(
             }
         }
 
-        CompiledExprType::SetKeys { entity_type, attribute } => {
+        CompiledExprType::SetKeys {
+            entity_type,
+            attribute,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             match entity.get_attribute(*attribute) {
                 Some(AttributeValue::Object(map)) => {
-                    let keys: Vec<AttributeValue> = map.keys().map(|k| AttributeValue::String(*k)).collect();
+                    let keys: Vec<AttributeValue> =
+                        map.keys().map(|k| AttributeValue::String(*k)).collect();
                     Some(AttributeValue::List(keys))
                 }
                 _ => None,
@@ -933,7 +969,11 @@ pub fn evaluate_compiled_expr_type(
             Some(AttributeValue::Int(value))
         }
 
-        CompiledExprType::StringContains { entity_type, attribute, substring } => {
+        CompiledExprType::StringContains {
+            entity_type,
+            attribute,
+            substring,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
@@ -943,7 +983,11 @@ pub fn evaluate_compiled_expr_type(
             None
         }
 
-        CompiledExprType::StringStartsWithExpr { entity_type, attribute, prefix } => {
+        CompiledExprType::StringStartsWithExpr {
+            entity_type,
+            attribute,
+            prefix,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
@@ -953,7 +997,11 @@ pub fn evaluate_compiled_expr_type(
             None
         }
 
-        CompiledExprType::StringEndsWithExpr { entity_type, attribute, suffix } => {
+        CompiledExprType::StringEndsWithExpr {
+            entity_type,
+            attribute,
+            suffix,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
@@ -963,7 +1011,11 @@ pub fn evaluate_compiled_expr_type(
             None
         }
 
-        CompiledExprType::RegexMatches { entity_type, attribute, pattern } => {
+        CompiledExprType::RegexMatches {
+            entity_type,
+            attribute,
+            pattern,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
@@ -974,7 +1026,11 @@ pub fn evaluate_compiled_expr_type(
             None
         }
 
-        CompiledExprType::RegexFind { entity_type, attribute, pattern } => {
+        CompiledExprType::RegexFind {
+            entity_type,
+            attribute,
+            pattern,
+        } => {
             let entity = get_entity_for_type(entity_type, user, resource)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
@@ -991,7 +1047,8 @@ pub fn evaluate_compiled_expr_type(
 
         CompiledExprType::ChainedMethod { base, method } => {
             // First evaluate the base expression recursively
-            let base_value = evaluate_compiled_expr_type(base, user, resource, _context, variables, interner)?;
+            let base_value =
+                evaluate_compiled_expr_type(base, user, resource, variables, interner)?;
 
             // Then apply the chained method
             evaluate_chained_method(method, base_value, interner)
@@ -1011,52 +1068,51 @@ pub fn evaluate_compiled_expr_type(
 
             match index {
                 CompiledExprIndexType::Wildcard => Some(var_value.clone()),
-                CompiledExprIndexType::Number(n) => {
-                    match var_value {
-                        AttributeValue::List(items) => {
-                            let idx = *n as usize;
-                            items.get(idx).cloned()
-                        }
-                        _ => None,
+                CompiledExprIndexType::Number(n) => match var_value {
+                    AttributeValue::List(items) => {
+                        let idx = *n as usize;
+                        items.get(idx).cloned()
                     }
-                }
-                CompiledExprIndexType::String(key) => {
-                    match var_value {
-                        AttributeValue::Object(map) => map.get(key).cloned(),
-                        _ => None,
-                    }
-                }
+                    _ => None,
+                },
+                CompiledExprIndexType::String(key) => match var_value {
+                    AttributeValue::Object(map) => map.get(key).cloned(),
+                    _ => None,
+                },
             }
         }
 
-        CompiledExprType::VariableAttrAccess { variable, attribute } => {
+        CompiledExprType::VariableAttrAccess {
+            variable,
+            attribute,
+        } => {
             let var_name = interner.resolve(*variable)?;
             let var_value = variables.get(&*var_name)?;
             let attr_name = interner.resolve(*attribute)?;
 
             match var_value {
-                AttributeValue::Object(map) => {
-                    map.get(attribute).cloned().or_else(|| {
-                        let attr_interned = interner.intern(&attr_name);
-                        map.get(&attr_interned).cloned()
-                    })
-                }
+                AttributeValue::Object(map) => map.get(attribute).cloned().or_else(|| {
+                    let attr_interned = interner.intern(&attr_name);
+                    map.get(&attr_interned).cloned()
+                }),
                 _ => None,
             }
         }
 
-        CompiledExprType::VariableAttrIndexed { variable, attribute, index } => {
+        CompiledExprType::VariableAttrIndexed {
+            variable,
+            attribute,
+            index,
+        } => {
             let var_name = interner.resolve(*variable)?;
             let var_value = variables.get(&*var_name)?;
             let attr_name = interner.resolve(*attribute)?;
 
             let attr_value = match var_value {
-                AttributeValue::Object(map) => {
-                    map.get(attribute).cloned().or_else(|| {
-                        let attr_interned = interner.intern(&attr_name);
-                        map.get(&attr_interned).cloned()
-                    })?
-                }
+                AttributeValue::Object(map) => map.get(attribute).cloned().or_else(|| {
+                    let attr_interned = interner.intern(&attr_name);
+                    map.get(&attr_interned).cloned()
+                })?,
                 _ => return None,
             };
 

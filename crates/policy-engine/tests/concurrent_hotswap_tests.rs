@@ -97,7 +97,10 @@ async fn test_concurrent_hot_swap_many_threads() {
         total_swaps,
         total_errors
     );
-    assert_eq!(total_errors, 0, "Expected no errors during concurrent swaps");
+    assert_eq!(
+        total_errors, 0,
+        "Expected no errors during concurrent swaps"
+    );
 
     // Final policy should exist
     let final_policy = engine.get_policy(&policy_id);

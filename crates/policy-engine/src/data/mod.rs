@@ -35,6 +35,6 @@ pub use join::{EntitySource, JoinConfig, JoinEngine, JoinKey, JoinResult, Second
 pub use loader::{DataFormat, DataLoader, LoadStats};
 pub use rbac::{DataStoreRBACExt, RBACViewBuilder};
 pub use router::{PerformanceTier, QueryPattern, QueryResult, QueryRouter, RouterStats};
-pub use store::{DataStore, IndexStrategy, QueryBuilder};
+pub use store::{DataStore, DataStoreConfig, IndexStrategy, QueryBuilder};
 pub use streaming::{JsonStreamReader, StreamingLoader, StreamingStats};
 pub use views::{MaterializedView, ViewManager, ViewQuery, ViewStats, ViewStrategy};

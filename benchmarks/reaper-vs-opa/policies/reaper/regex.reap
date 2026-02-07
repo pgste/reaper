@@ -9,7 +9,7 @@ policy regex_validation {
     // Email Validation Rule - matches valid email format
     rule valid_email_access {
         allow if {
-            resource == "email_service" &&
+            resource.type == "email_validation" &&
             regex::matches(user.email, "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$")
         }
     }
@@ -17,7 +17,7 @@ policy regex_validation {
     // Phone Validation Rule - matches US phone format (555) 123-4567
     rule valid_phone_access {
         allow if {
-            resource == "phone_service" &&
+            resource.type == "phone_validation" &&
             regex::matches(user.phone, "^\\(\\d{3}\\) \\d{3}-\\d{4}$")
         }
     }
@@ -25,7 +25,7 @@ policy regex_validation {
     // UUID Validation Rule - matches UUID format
     rule valid_uuid_access {
         allow if {
-            resource == "uuid_service" &&
+            resource.type == "uuid_validation" &&
             regex::matches(user.uuid, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
         }
     }
@@ -33,7 +33,7 @@ policy regex_validation {
     // Credit Card Validation Rule - matches credit card format XXXX-XXXX-XXXX-XXXX
     rule valid_credit_card_access {
         allow if {
-            resource == "payment_service" &&
+            resource.type == "payment_validation" &&
             regex::matches(user.credit_card, "^\\d{4}-\\d{4}-\\d{4}-\\d{4}$")
         }
     }
@@ -41,7 +41,7 @@ policy regex_validation {
     // URL Validation Rule - matches URL format
     rule valid_url_access {
         allow if {
-            resource == "web_service" &&
+            resource.type == "url_validation" &&
             regex::matches(user.url, "^https?://[a-zA-Z0-9.-]+")
         }
     }

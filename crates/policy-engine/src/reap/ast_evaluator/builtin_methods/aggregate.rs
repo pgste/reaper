@@ -24,7 +24,7 @@ pub fn method_count(value: &EvalValue) -> Result<EvalValue, ReaperError> {
         EvalValue::Set(set) => Ok(EvalValue::Integer(set.len() as i64)),
         EvalValue::Object(obj) => Ok(EvalValue::Integer(obj.len() as i64)),
         EvalValue::String(s) => Ok(EvalValue::Integer(s.len() as i64)), // Character count
-        EvalValue::Null => Ok(EvalValue::Integer(0)), // Null counts as 0 items
+        EvalValue::Null => Ok(EvalValue::Integer(0)),                   // Null counts as 0 items
         _ => Ok(EvalValue::Null), // Unsupported types return null (for type checking patterns)
     }
 }
@@ -308,7 +308,11 @@ mod tests {
     #[test]
     fn test_count() {
         assert_eq!(
-            method_count(&EvalValue::Array(vec![EvalValue::Integer(1), EvalValue::Integer(2)])).unwrap(),
+            method_count(&EvalValue::Array(vec![
+                EvalValue::Integer(1),
+                EvalValue::Integer(2)
+            ]))
+            .unwrap(),
             EvalValue::Integer(2)
         );
         assert_eq!(
@@ -319,19 +323,31 @@ mod tests {
 
     #[test]
     fn test_sum() {
-        let items = vec![EvalValue::Integer(1), EvalValue::Integer(2), EvalValue::Integer(3)];
+        let items = vec![
+            EvalValue::Integer(1),
+            EvalValue::Integer(2),
+            EvalValue::Integer(3),
+        ];
         assert_eq!(method_sum(&items).unwrap(), EvalValue::Integer(6));
     }
 
     #[test]
     fn test_max() {
-        let items = vec![EvalValue::Integer(1), EvalValue::Integer(5), EvalValue::Integer(3)];
+        let items = vec![
+            EvalValue::Integer(1),
+            EvalValue::Integer(5),
+            EvalValue::Integer(3),
+        ];
         assert_eq!(method_max(&items).unwrap(), EvalValue::Integer(5));
     }
 
     #[test]
     fn test_min() {
-        let items = vec![EvalValue::Integer(1), EvalValue::Integer(5), EvalValue::Integer(3)];
+        let items = vec![
+            EvalValue::Integer(1),
+            EvalValue::Integer(5),
+            EvalValue::Integer(3),
+        ];
         assert_eq!(method_min(&items).unwrap(), EvalValue::Integer(1));
     }
 

@@ -110,10 +110,7 @@ pub fn compile_value_comparison(
             }
         }
         return Err(ReaperError::InvalidPolicy {
-            reason: format!(
-                "Operator {:?} requires numeric value, got {:?}",
-                op, value
-            ),
+            reason: format!("Operator {:?} requires numeric value, got {:?}", op, value),
         });
     }
 
@@ -166,7 +163,10 @@ pub fn compile_attr_comparison(
             Operator::NotEqual => AttrCompareOp::NotEqual,
             _ => {
                 return Err(ReaperError::InvalidPolicy {
-                    reason: format!("Operator {:?} not supported for same-entity comparisons", op),
+                    reason: format!(
+                        "Operator {:?} not supported for same-entity comparisons",
+                        op
+                    ),
                 })
             }
         };
@@ -201,15 +201,13 @@ pub fn compile_attr_comparison(
             }),
         ))),
 
-        Operator::GreaterThan => {
-            Ok(DslCondition::CrossEntityCompare(CrossEntityComparison {
-                left_entity: left_type,
-                left_attr: left.attribute,
-                op: NumericOp::Greater,
-                right_entity: right_type,
-                right_attr: right.attribute,
-            }))
-        }
+        Operator::GreaterThan => Ok(DslCondition::CrossEntityCompare(CrossEntityComparison {
+            left_entity: left_type,
+            left_attr: left.attribute,
+            op: NumericOp::Greater,
+            right_entity: right_type,
+            right_attr: right.attribute,
+        })),
 
         Operator::GreaterEqual => {
             // left >= right is (left > right) OR (left == right)
@@ -251,15 +249,13 @@ pub fn compile_attr_comparison(
             ]))
         }
 
-        Operator::LessThan => {
-            Ok(DslCondition::CrossEntityCompare(CrossEntityComparison {
-                left_entity: left_type,
-                left_attr: left.attribute,
-                op: NumericOp::Less,
-                right_entity: right_type,
-                right_attr: right.attribute,
-            }))
-        }
+        Operator::LessThan => Ok(DslCondition::CrossEntityCompare(CrossEntityComparison {
+            left_entity: left_type,
+            left_attr: left.attribute,
+            op: NumericOp::Less,
+            right_entity: right_type,
+            right_attr: right.attribute,
+        })),
 
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(
@@ -308,10 +304,7 @@ fn compile_wildcard_comparison(
             comparison,
         )))),
         _ => Err(ReaperError::InvalidPolicy {
-            reason: format!(
-                "Wildcard comparisons only support == and !=, got {:?}",
-                op
-            ),
+            reason: format!("Wildcard comparisons only support == and !=, got {:?}", op),
         }),
     }
 }

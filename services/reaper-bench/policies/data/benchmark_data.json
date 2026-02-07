@@ -20,9 +20,8 @@
     {"id": "guest_2", "type": "User", "attributes": {"id": "guest_2", "role": "guest", "department": "external"}},
     {"id": "guest_3", "type": "User", "attributes": {"id": "guest_3", "role": "guest", "department": "external"}},
     {"id": "guest_4", "type": "User", "attributes": {"id": "guest_4", "role": "guest", "department": "external"}},
-    {"id": "admin_1", "type": "User", "attributes": {"id": "admin_1", "role": "admin", "department": "engineering"}},
+    {"id": "bench_admin_1", "type": "User", "attributes": {"id": "bench_admin_1", "role": "admin", "department": "engineering"}},
     {"id": "eng_1", "type": "User", "attributes": {"id": "eng_1", "role": "engineer", "department": "engineering"}},
-    {"id": "viewer_1", "type": "User", "attributes": {"id": "viewer_1", "role": "viewer", "department": "marketing"}},
-    {"id": "guest_1", "type": "User", "attributes": {"id": "guest_1", "role": "guest", "department": "external"}}
+    {"id": "viewer_1", "type": "User", "attributes": {"id": "viewer_1", "role": "viewer", "department": "marketing"}}
   ]
 }

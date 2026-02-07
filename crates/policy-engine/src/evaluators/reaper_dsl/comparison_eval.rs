@@ -15,8 +15,8 @@ use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
 
 use super::entity_helpers::{get_nested_attr, get_numeric_attr};
 use super::types::{
-    AttrCompareOp, CompiledAttributeComparison, CompiledCompareTarget, CompiledCrossEntityComparison,
-    CompiledWildcardComparison, EntityType, NumericOp,
+    AttrCompareOp, CompiledAttributeComparison, CompiledCompareTarget,
+    CompiledCrossEntityComparison, CompiledWildcardComparison, EntityType, NumericOp,
 };
 
 // ============================================================================
@@ -34,7 +34,13 @@ pub fn eval_attribute_comparison(
     match &comp.target {
         CompiledCompareTarget::LiteralNum(threshold) => {
             // For numeric comparisons, try nested attribute access
-            let actual = match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
+            let actual = match get_nested_attr(
+                &comp.entity_type,
+                comp.attribute,
+                user,
+                resource,
+                interner,
+            ) {
                 Some(AttributeValue::Int(n)) => n as f64,
                 Some(AttributeValue::Float(f)) => f,
                 _ => return false,
@@ -63,33 +69,37 @@ pub fn eval_attribute_comparison(
         }
         CompiledCompareTarget::LiteralBool(expected) => {
             match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
-                Some(AttributeValue::Bool(actual)) => {
-                    match comp.op {
-                        NumericOp::Equal => actual == *expected,
-                        NumericOp::NotEqual => actual != *expected,
-                        _ => false,
-                    }
-                }
+                Some(AttributeValue::Bool(actual)) => match comp.op {
+                    NumericOp::Equal => actual == *expected,
+                    NumericOp::NotEqual => actual != *expected,
+                    _ => false,
+                },
                 _ => false,
             }
         }
         CompiledCompareTarget::LiteralNull => {
             // Handle null comparisons: attr == null or attr != null
-            let attr_val = get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner);
+            let attr_val =
+                get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner);
             let is_null = match &attr_val {
-                None => true,                        // Missing attribute is null
-                Some(AttributeValue::Null) => true,  // Explicit null
-                _ => false,                          // Has a value, not null
+                None => true,                       // Missing attribute is null
+                Some(AttributeValue::Null) => true, // Explicit null
+                _ => false,                         // Has a value, not null
             };
             match comp.op {
-                NumericOp::Equal => is_null,      // attr == null -> true if null
-                NumericOp::NotEqual => !is_null,  // attr != null -> true if not null
-                _ => false,                        // Other ops don't make sense for null
+                NumericOp::Equal => is_null,     // attr == null -> true if null
+                NumericOp::NotEqual => !is_null, // attr != null -> true if not null
+                _ => false,                      // Other ops don't make sense for null
             }
         }
-        CompiledCompareTarget::EntityAttr { entity_type: other_entity_type, attribute: other_attr } => {
-            let left_val = get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner);
-            let right_val = get_nested_attr(other_entity_type, *other_attr, user, resource, interner);
+        CompiledCompareTarget::EntityAttr {
+            entity_type: other_entity_type,
+            attribute: other_attr,
+        } => {
+            let left_val =
+                get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner);
+            let right_val =
+                get_nested_attr(other_entity_type, *other_attr, user, resource, interner);
             compare_attr_values(left_val.as_ref(), right_val.as_ref(), &comp.op.into())
         }
         CompiledCompareTarget::Variable(_var) => {
@@ -109,7 +119,13 @@ pub fn eval_cross_entity_comparison(
     interner: &StringInterner,
 ) -> bool {
     let left_val = get_nested_attr(&comp.left_entity, comp.left_attr, user, resource, interner);
-    let right_val = get_nested_attr(&comp.right_entity, comp.right_attr, user, resource, interner);
+    let right_val = get_nested_attr(
+        &comp.right_entity,
+        comp.right_attr,
+        user,
+        resource,
+        interner,
+    );
     compare_attr_values(left_val.as_ref(), right_val.as_ref(), &comp.op.into())
 }
 
@@ -121,8 +137,20 @@ pub fn eval_wildcard_comparison(
     resource: &Entity,
     interner: &StringInterner,
 ) -> bool {
-    let collection = get_nested_attr(&comp.collection_entity, comp.collection_attr, user, resource, interner);
-    let scalar_val = get_nested_attr(&comp.scalar_entity, comp.scalar_attr, user, resource, interner);
+    let collection = get_nested_attr(
+        &comp.collection_entity,
+        comp.collection_attr,
+        user,
+        resource,
+        interner,
+    );
+    let scalar_val = get_nested_attr(
+        &comp.scalar_entity,
+        comp.scalar_attr,
+        user,
+        resource,
+        interner,
+    );
 
     match (collection, scalar_val) {
         (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => items
@@ -252,7 +280,13 @@ pub fn eval_user_equals_resource(
     interner: &StringInterner,
 ) -> bool {
     let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
-    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, user, resource, interner);
+    let resource_val = get_nested_attr(
+        &EntityType::Resource,
+        resource_attr,
+        user,
+        resource,
+        interner,
+    );
     match (user_val, resource_val) {
         (Some(AttributeValue::String(u)), Some(AttributeValue::String(r))) => u == r,
         (Some(AttributeValue::Int(u)), Some(AttributeValue::Int(r))) => u == r,
@@ -272,7 +306,13 @@ pub fn eval_user_int_greater(
     interner: &StringInterner,
 ) -> bool {
     let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
-    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, user, resource, interner);
+    let resource_val = get_nested_attr(
+        &EntityType::Resource,
+        resource_attr,
+        user,
+        resource,
+        interner,
+    );
     match (user_val, resource_val) {
         (Some(AttributeValue::Int(u)), Some(AttributeValue::Int(r))) => u > r,
         _ => false,
@@ -289,7 +329,13 @@ pub fn eval_resource_int_greater(
     resource: &Entity,
     interner: &StringInterner,
 ) -> bool {
-    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, user, resource, interner);
+    let resource_val = get_nested_attr(
+        &EntityType::Resource,
+        resource_attr,
+        user,
+        resource,
+        interner,
+    );
     let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
     match (resource_val, user_val) {
         (Some(AttributeValue::Int(r)), Some(AttributeValue::Int(u))) => r > u,
@@ -309,7 +355,13 @@ pub fn eval_user_wildcard_equals_resource(
     resource: &Entity,
     interner: &StringInterner,
 ) -> bool {
-    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, user, resource, interner);
+    let resource_val = get_nested_attr(
+        &EntityType::Resource,
+        resource_attr,
+        user,
+        resource,
+        interner,
+    );
     let user_collection = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
 
     match (user_collection, resource_val) {
@@ -342,7 +394,13 @@ pub fn eval_resource_wildcard_equals_user(
     interner: &StringInterner,
 ) -> bool {
     let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
-    let resource_collection = get_nested_attr(&EntityType::Resource, resource_attr, user, resource, interner);
+    let resource_collection = get_nested_attr(
+        &EntityType::Resource,
+        resource_attr,
+        user,
+        resource,
+        interner,
+    );
 
     match (resource_collection, user_val) {
         (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => items
@@ -388,9 +446,11 @@ pub fn compare_attr_values(
 ) -> bool {
     match (left, right, op) {
         // String comparisons
-        (Some(AttributeValue::String(l)), Some(AttributeValue::String(r)), AttrCompareOp::Equal) => {
-            l == r
-        }
+        (
+            Some(AttributeValue::String(l)),
+            Some(AttributeValue::String(r)),
+            AttrCompareOp::Equal,
+        ) => l == r,
         (
             Some(AttributeValue::String(l)),
             Some(AttributeValue::String(r)),
@@ -668,7 +728,9 @@ mod tests {
         let dept_key = interner.intern("department");
 
         // Both have department = engineering
-        assert!(eval_user_equals_resource(dept_key, dept_key, &user, &resource, &interner));
+        assert!(eval_user_equals_resource(
+            dept_key, dept_key, &user, &resource, &interner
+        ));
 
         // role != owner
         let role_key = interner.intern("role");
@@ -746,7 +808,11 @@ mod tests {
         // user.role is "admin"
         // So readers[_] == role should be true
         assert!(eval_resource_wildcard_equals_user(
-            readers_key, role_key, &user, &resource, &interner
+            readers_key,
+            role_key,
+            &user,
+            &resource,
+            &interner
         ));
     }
 

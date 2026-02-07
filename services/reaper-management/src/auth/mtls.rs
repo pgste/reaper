@@ -406,8 +406,9 @@ impl<'a> ClientCertificateRepository<'a> {
                 .map_err(|e| crate::db::DatabaseError::Config(format!("Invalid UUID: {}", e)))?,
             agent_id: agent_id
                 .map(|s| {
-                    s.parse()
-                        .map_err(|e| crate::db::DatabaseError::Config(format!("Invalid UUID: {}", e)))
+                    s.parse().map_err(|e| {
+                        crate::db::DatabaseError::Config(format!("Invalid UUID: {}", e))
+                    })
                 })
                 .transpose()?,
             fingerprint: row.get("fingerprint"),

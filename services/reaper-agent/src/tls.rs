@@ -65,7 +65,10 @@ pub async fn create_tls_config(settings: &TlsSettings) -> Result<RustlsConfig, T
         .as_ref()
         .ok_or(TlsError::CertNotSpecified)?;
 
-    let key_path = settings.key_file.as_ref().ok_or(TlsError::KeyNotSpecified)?;
+    let key_path = settings
+        .key_file
+        .as_ref()
+        .ok_or(TlsError::KeyNotSpecified)?;
 
     info!(
         "Loading TLS certificates: cert={:?}, key={:?}",
@@ -73,12 +76,9 @@ pub async fn create_tls_config(settings: &TlsSettings) -> Result<RustlsConfig, T
     );
 
     // Load certificates
-    let cert_file =
-        File::open(cert_path).map_err(|e| TlsError::CertReadError(e.to_string()))?;
+    let cert_file = File::open(cert_path).map_err(|e| TlsError::CertReadError(e.to_string()))?;
     let mut cert_reader = BufReader::new(cert_file);
-    let certs_vec: Vec<_> = certs(&mut cert_reader)
-        .filter_map(|r| r.ok())
-        .collect();
+    let certs_vec: Vec<_> = certs(&mut cert_reader).filter_map(|r| r.ok()).collect();
 
     if certs_vec.is_empty() {
         return Err(TlsError::NoCertsFound);
@@ -105,12 +105,12 @@ pub async fn create_tls_config(settings: &TlsSettings) -> Result<RustlsConfig, T
         // Load CA certificates for client verification
         let ca_file = File::open(ca_path).map_err(|e| TlsError::CaReadError(e.to_string()))?;
         let mut ca_reader = BufReader::new(ca_file);
-        let ca_certs: Vec<_> = certs(&mut ca_reader)
-            .filter_map(|r| r.ok())
-            .collect();
+        let ca_certs: Vec<_> = certs(&mut ca_reader).filter_map(|r| r.ok()).collect();
 
         if ca_certs.is_empty() {
-            return Err(TlsError::CaReadError("No CA certificates found".to_string()));
+            return Err(TlsError::CaReadError(
+                "No CA certificates found".to_string(),
+            ));
         }
 
         info!("Loaded {} CA certificate(s)", ca_certs.len());

@@ -50,7 +50,7 @@ pub fn parse(value: &EvalValue) -> Result<EvalValue, ReaperError> {
 pub fn stringify(value: &EvalValue) -> Result<EvalValue, ReaperError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let json_value = eval_value_to_sonic(&value)?;
+        let json_value = eval_value_to_sonic(value)?;
         match sonic_rs::to_string(&json_value) {
             Ok(json_str) => Ok(EvalValue::String(json_str)),
             Err(e) => Err(ReaperError::InvalidPolicy {
@@ -112,10 +112,8 @@ fn sonic_value_to_eval_value(json: &sonic_rs::Value) -> Result<EvalValue, Reaper
     } else if let Some(s) = json.as_str() {
         Ok(EvalValue::String(s.to_string()))
     } else if let Some(arr) = json.as_array() {
-        let eval_arr: Result<Vec<EvalValue>, ReaperError> = arr
-            .iter()
-            .map(|v| sonic_value_to_eval_value(v))
-            .collect();
+        let eval_arr: Result<Vec<EvalValue>, ReaperError> =
+            arr.iter().map(sonic_value_to_eval_value).collect();
         Ok(EvalValue::Array(eval_arr?))
     } else if let Some(obj) = json.as_object() {
         let mut eval_obj = HashMap::new();
@@ -150,17 +148,13 @@ fn eval_value_to_sonic(eval: &EvalValue) -> Result<sonic_rs::Value, ReaperError>
         }
         EvalValue::String(s) => Ok(json!(s)),
         EvalValue::Array(arr) => {
-            let json_arr: Result<Vec<sonic_rs::Value>, ReaperError> = arr
-                .iter()
-                .map(|v| eval_value_to_sonic(v))
-                .collect();
+            let json_arr: Result<Vec<sonic_rs::Value>, ReaperError> =
+                arr.iter().map(eval_value_to_sonic).collect();
             Ok(json!(json_arr?))
         }
         EvalValue::Set(set) => {
-            let json_arr: Result<Vec<sonic_rs::Value>, ReaperError> = set
-                .iter()
-                .map(|v| eval_value_to_sonic(v))
-                .collect();
+            let json_arr: Result<Vec<sonic_rs::Value>, ReaperError> =
+                set.iter().map(eval_value_to_sonic).collect();
             Ok(json!(json_arr?))
         }
         EvalValue::Object(obj) => {
@@ -196,10 +190,8 @@ fn serde_value_to_eval_value(json: &serde_json::Value) -> Result<EvalValue, Reap
         }
         serde_json::Value::String(s) => Ok(EvalValue::String(s.clone())),
         serde_json::Value::Array(arr) => {
-            let eval_arr: Result<Vec<EvalValue>, ReaperError> = arr
-                .iter()
-                .map(|v| serde_value_to_eval_value(v))
-                .collect();
+            let eval_arr: Result<Vec<EvalValue>, ReaperError> =
+                arr.iter().map(|v| serde_value_to_eval_value(v)).collect();
             Ok(EvalValue::Array(eval_arr?))
         }
         serde_json::Value::Object(obj) => {
@@ -232,17 +224,13 @@ fn eval_value_to_serde(eval: &EvalValue) -> Result<serde_json::Value, ReaperErro
         }
         EvalValue::String(s) => Ok(json!(s)),
         EvalValue::Array(arr) => {
-            let json_arr: Result<Vec<serde_json::Value>, ReaperError> = arr
-                .iter()
-                .map(|v| eval_value_to_serde(v))
-                .collect();
+            let json_arr: Result<Vec<serde_json::Value>, ReaperError> =
+                arr.iter().map(|v| eval_value_to_serde(v)).collect();
             Ok(json!(json_arr?))
         }
         EvalValue::Set(set) => {
-            let json_arr: Result<Vec<serde_json::Value>, ReaperError> = set
-                .iter()
-                .map(|v| eval_value_to_serde(v))
-                .collect();
+            let json_arr: Result<Vec<serde_json::Value>, ReaperError> =
+                set.iter().map(|v| eval_value_to_serde(v)).collect();
             Ok(json!(json_arr?))
         }
         EvalValue::Object(obj) => {

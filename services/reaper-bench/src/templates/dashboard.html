@@ -46,6 +46,9 @@
             <button onclick="showTab('simulation')" id="tab-simulation" class="pb-3 px-4 tab-inactive">
                 Auto-Tuning Simulation
             </button>
+            <button onclick="showTab('comparison')" id="tab-comparison" class="pb-3 px-4 tab-inactive">
+                Reaper vs eOPA
+            </button>
         </div>
 
         <!-- Policy Packages Tab -->
@@ -416,6 +419,259 @@
             </div>
         </div>
 
+        <!-- Comparison Tab (Reaper vs eOPA) -->
+        <div id="content-comparison" class="hidden">
+            <!-- Configuration -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold">Reaper vs Enterprise OPA</h2>
+                    <div class="flex gap-3">
+                        <div id="eopaStatus" class="flex items-center gap-2 text-sm text-gray-400">
+                            <span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-gray-500"></span>
+                            eOPA: checking...
+                        </div>
+                        <button onclick="initAll()" id="initAllBtn"
+                            class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg">
+                            Initialize Both Engines
+                        </button>
+                        <button onclick="runComparison()" id="runCompBtn"
+                            class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-semibold">
+                            Run Comparison
+                        </button>
+                        <button onclick="runComparisonAll()" id="runCompAllBtn"
+                            class="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-semibold">
+                            Run All 12 Policies
+                        </button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div>
+                        <label class="block text-gray-400 mb-2">Policy</label>
+                        <select id="compPolicy" class="w-full bg-gray-700 rounded px-3 py-2">
+                            <option value="rbac_simple">RBAC Simple</option>
+                            <option value="abac_clearance">ABAC Clearance</option>
+                            <option value="rebac_relationships">ReBAC Relationships</option>
+                            <option value="multilayer_enterprise">Multilayer Enterprise</option>
+                            <option value="math_validation">Math Validation</option>
+                            <option value="regex_validation">Regex Validation</option>
+                            <option value="string_operations">String Operations</option>
+                            <option value="collection_operations">Collection Operations</option>
+                            <option value="time_based_access">Time Based Access</option>
+                            <option value="comprehension_test">Comprehension</option>
+                            <option value="json_processing">JSON Processing</option>
+                            <option value="mega_policy">Mega Policy</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Volumes</label>
+                        <input type="text" id="compVolumes" value="100, 1000, 10000"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Concurrency</label>
+                        <input type="number" id="compConcurrency" value="1" min="1" max="256"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Warmup Requests</label>
+                        <input type="number" id="compWarmup" value="100"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hero Metrics -->
+            <div id="compSummary" class="hidden mb-8">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS P99</div>
+                        <div id="compReaperUdsP99" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-cyan-800 to-cyan-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">TCP P99</div>
+                        <div id="compReaperTcpP99" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">eOPA P99</div>
+                        <div id="compEopaP99" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-green-800 to-green-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS vs eOPA</div>
+                        <div id="compSpeedup" class="text-3xl font-bold text-green-400">-</div>
+                        <div class="text-gray-400 text-sm">times faster</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS RPS</div>
+                        <div id="compReaperUdsRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-cyan-800 to-cyan-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">TCP RPS</div>
+                        <div id="compReaperTcpRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">eOPA RPS</div>
+                        <div id="compEopaRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-purple-800 to-purple-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS vs TCP</div>
+                        <div id="compUdsTcpRatio" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">ratio</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts -->
+            <div id="compCharts" class="hidden grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Latency Comparison (P50 / P99)</h3>
+                    <canvas id="compLatencyChart"></canvas>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Throughput Comparison</h3>
+                    <canvas id="compThroughputChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Comparison Table -->
+            <div id="compTable" class="hidden bg-gray-800 rounded-lg p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4">Detailed Comparison</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="pb-3">Volume</th>
+                                <th class="pb-3 text-blue-400">UDS P50</th>
+                                <th class="pb-3 text-cyan-400">TCP P50</th>
+                                <th class="pb-3 text-orange-400">eOPA P50</th>
+                                <th class="pb-3 text-blue-400">UDS P99</th>
+                                <th class="pb-3 text-cyan-400">TCP P99</th>
+                                <th class="pb-3 text-orange-400">eOPA P99</th>
+                                <th class="pb-3 text-blue-400">UDS RPS</th>
+                                <th class="pb-3 text-cyan-400">TCP RPS</th>
+                                <th class="pb-3 text-orange-400">eOPA RPS</th>
+                                <th class="pb-3">Speedup</th>
+                            </tr>
+                        </thead>
+                        <tbody id="compResultsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Fairness Verification Table -->
+            <div id="compFairnessTable" class="hidden bg-gray-800 rounded-lg p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4">Fairness Verification (Allow/Deny Counts)</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="pb-3">Volume</th>
+                                <th class="pb-3 text-blue-400">UDS Allow</th>
+                                <th class="pb-3 text-blue-400">UDS Deny</th>
+                                <th class="pb-3 text-cyan-400">TCP Allow</th>
+                                <th class="pb-3 text-cyan-400">TCP Deny</th>
+                                <th class="pb-3 text-orange-400">eOPA Allow</th>
+                                <th class="pb-3 text-orange-400">eOPA Deny</th>
+                                <th class="pb-3">Match</th>
+                            </tr>
+                        </thead>
+                        <tbody id="compFairnessBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Multi-Policy Results Section (Run All) -->
+            <div id="multiPolicyResults" class="hidden">
+                <!-- Summary Cards -->
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+                    <div class="metric-card bg-gradient-to-br from-purple-800 to-purple-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">Policies Tested</div>
+                        <div id="multiPoliciesCount" class="text-3xl font-bold">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-green-800 to-green-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">Avg Speedup</div>
+                        <div id="multiAvgSpeedup" class="text-3xl font-bold text-green-400">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS Peak RPS</div>
+                        <div id="multiUdsPeakRps" class="text-3xl font-bold">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-cyan-800 to-cyan-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">TCP Peak RPS</div>
+                        <div id="multiTcpPeakRps" class="text-3xl font-bold">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">eOPA Peak RPS</div>
+                        <div id="multiEopaPeakRps" class="text-3xl font-bold">-</div>
+                    </div>
+                </div>
+
+                <!-- Multi-Policy Charts -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">P99 Latency by Policy</h3>
+                        <canvas id="multiLatencyChart"></canvas>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Throughput by Policy</h3>
+                        <canvas id="multiThroughputChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Multi-Policy Fairness Table -->
+                <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                    <h2 class="text-xl font-semibold mb-4">Per-Policy Fairness Verification</h2>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="pb-3">Policy</th>
+                                    <th class="pb-3 text-blue-400">UDS Allow</th>
+                                    <th class="pb-3 text-blue-400">UDS Deny</th>
+                                    <th class="pb-3 text-cyan-400">TCP Allow</th>
+                                    <th class="pb-3 text-cyan-400">TCP Deny</th>
+                                    <th class="pb-3 text-orange-400">eOPA Allow</th>
+                                    <th class="pb-3 text-orange-400">eOPA Deny</th>
+                                    <th class="pb-3">Match</th>
+                                    <th class="pb-3">Speedup</th>
+                                </tr>
+                            </thead>
+                            <tbody id="multiFairnessBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Multi-Policy Performance Table -->
+                <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                    <h2 class="text-xl font-semibold mb-4">Per-Policy Performance</h2>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="pb-3">Policy</th>
+                                    <th class="pb-3 text-blue-400">UDS P99</th>
+                                    <th class="pb-3 text-cyan-400">TCP P99</th>
+                                    <th class="pb-3 text-orange-400">eOPA P99</th>
+                                    <th class="pb-3 text-blue-400">UDS RPS</th>
+                                    <th class="pb-3 text-cyan-400">TCP RPS</th>
+                                    <th class="pb-3 text-orange-400">eOPA RPS</th>
+                                    <th class="pb-3">Speedup</th>
+                                </tr>
+                            </thead>
+                            <tbody id="multiResultsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Loading State -->
         <div id="loading" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div class="bg-gray-800 rounded-lg p-8 text-center">
@@ -430,13 +686,16 @@
         let currentPackage = null;
         let packages = [];
 
+        let compLatencyChart, compThroughputChart, multiLatencyChart, multiThroughputChart;
+
         // Tab management
         function showTab(tab) {
-            ['packages', 'benchmark', 'simulation'].forEach(t => {
+            ['packages', 'benchmark', 'simulation', 'comparison'].forEach(t => {
                 document.getElementById(`content-${t}`).classList.toggle('hidden', t !== tab);
                 document.getElementById(`tab-${t}`).classList.toggle('tab-active', t === tab);
                 document.getElementById(`tab-${t}`).classList.toggle('tab-inactive', t !== tab);
             });
+            if (tab === 'comparison') checkEopaHealth();
         }
 
         // Initialize agent with benchmark policies and data
@@ -852,6 +1111,480 @@
 
         function hideLoading() {
             document.getElementById('loading').classList.add('hidden');
+        }
+
+        // =================================================================
+        // Reaper vs eOPA Comparison Functions
+        // =================================================================
+
+        async function checkEopaHealth() {
+            const dot = document.getElementById('eopaStatusDot');
+            const label = document.getElementById('eopaStatus');
+            try {
+                const resp = await fetch('/eopa-health');
+                if (resp.ok) {
+                    dot.className = 'w-3 h-3 rounded-full bg-green-500';
+                    label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-green-500"></span> eOPA: healthy';
+                } else if (resp.status === 503) {
+                    dot.className = 'w-3 h-3 rounded-full bg-yellow-500';
+                    label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-yellow-500"></span> eOPA: not configured';
+                } else {
+                    dot.className = 'w-3 h-3 rounded-full bg-red-500';
+                    label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-red-500"></span> eOPA: unreachable';
+                }
+            } catch (e) {
+                dot.className = 'w-3 h-3 rounded-full bg-red-500';
+                label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-red-500"></span> eOPA: error';
+            }
+        }
+
+        async function initAll() {
+            const btn = document.getElementById('initAllBtn');
+            btn.disabled = true;
+            btn.textContent = 'Initializing...';
+            showLoading('Initializing both Reaper and eOPA...');
+
+            try {
+                const resp = await fetch('/init-all', { method: 'POST' });
+                const result = await resp.json();
+
+                const agentOk = result.agent?.summary?.total_deployed ?? 0;
+                const eopaOk = result.eopa?.summary?.total_policies ?? 0;
+                alert(`Initialized: Reaper ${agentOk} policies, eOPA ${eopaOk} policies`);
+                checkEopaHealth();
+            } catch (e) {
+                alert('Initialization failed: ' + e.message);
+            } finally {
+                hideLoading();
+                btn.disabled = false;
+                btn.textContent = 'Initialize Both Engines';
+            }
+        }
+
+        async function runComparison() {
+            const concurrency = parseInt(document.getElementById('compConcurrency').value) || 1;
+            const modeLabel = concurrency > 1 ? `concurrent (c=${concurrency})` : 'sequential';
+            showLoading(`Running Reaper vs eOPA comparison (${modeLabel})...`);
+
+            const config = {
+                policy_name: document.getElementById('compPolicy').value,
+                volumes: document.getElementById('compVolumes').value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
+                warmup_requests: parseInt(document.getElementById('compWarmup').value) || 100,
+                concurrency: concurrency
+            };
+
+            try {
+                const resp = await fetch('/run-comparison', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(errText);
+                }
+
+                const data = await resp.json();
+                renderComparisonResults(data);
+            } catch (e) {
+                alert('Comparison failed: ' + e.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderComparisonResults(data) {
+            // Hide multi-policy results when showing single-policy
+            document.getElementById('multiPolicyResults').classList.add('hidden');
+
+            document.getElementById('compSummary').classList.remove('hidden');
+            document.getElementById('compCharts').classList.remove('hidden');
+            document.getElementById('compTable').classList.remove('hidden');
+            document.getElementById('compFairnessTable').classList.remove('hidden');
+
+            const s = data.summary;
+            const comps = data.comparisons;
+
+            // Use the last volume's data for hero metrics (largest sample)
+            const last = comps[comps.length - 1];
+
+            document.getElementById('compReaperUdsP99').textContent = last.reaper_uds.latency.p99_us.toLocaleString();
+            document.getElementById('compReaperTcpP99').textContent = last.reaper_tcp.latency.p99_us.toLocaleString();
+            document.getElementById('compEopaP99').textContent = last.eopa.latency.p99_us.toLocaleString();
+            document.getElementById('compSpeedup').textContent = s.avg_p99_ratio.toFixed(1) + 'x';
+            document.getElementById('compReaperUdsRps').textContent = s.reaper_uds_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('compReaperTcpRps').textContent = s.reaper_tcp_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('compEopaRps').textContent = s.eopa_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+
+            // UDS vs TCP ratio
+            const udsVsTcp = s.reaper_tcp_peak_rps > 0 ? (s.reaper_uds_peak_rps / s.reaper_tcp_peak_rps).toFixed(2) + 'x' : '-';
+            document.getElementById('compUdsTcpRatio').textContent = udsVsTcp;
+
+            renderCompLatencyChart(comps);
+            renderCompThroughputChart(comps);
+            renderCompTable(comps);
+            renderCompFairnessTable(comps);
+        }
+
+        function renderCompLatencyChart(comps) {
+            const ctx = document.getElementById('compLatencyChart').getContext('2d');
+            if (compLatencyChart) compLatencyChart.destroy();
+
+            const labels = comps.map(c => c.volume.toLocaleString());
+
+            compLatencyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'UDS P50', data: comps.map(c => c.reaper_uds.latency.median_us), backgroundColor: 'rgba(59, 130, 246, 0.7)' },
+                        { label: 'UDS P99', data: comps.map(c => c.reaper_uds.latency.p99_us), backgroundColor: 'rgba(139, 92, 246, 0.7)' },
+                        { label: 'TCP P50', data: comps.map(c => c.reaper_tcp.latency.median_us), backgroundColor: 'rgba(6, 182, 212, 0.7)' },
+                        { label: 'TCP P99', data: comps.map(c => c.reaper_tcp.latency.p99_us), backgroundColor: 'rgba(99, 102, 241, 0.7)' },
+                        { label: 'eOPA P50', data: comps.map(c => c.eopa.latency.median_us), backgroundColor: 'rgba(249, 115, 22, 0.7)' },
+                        { label: 'eOPA P99', data: comps.map(c => c.eopa.latency.p99_us), backgroundColor: 'rgba(239, 68, 68, 0.7)' }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Latency (us)', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { title: { display: true, text: 'Request Volume', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderCompThroughputChart(comps) {
+            const ctx = document.getElementById('compThroughputChart').getContext('2d');
+            if (compThroughputChart) compThroughputChart.destroy();
+
+            const labels = comps.map(c => c.volume.toLocaleString());
+
+            compThroughputChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Reaper UDS',
+                            data: comps.map(c => c.reaper_uds.throughput_rps),
+                            borderColor: 'rgba(34, 197, 94, 1)',
+                            backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Reaper TCP',
+                            data: comps.map(c => c.reaper_tcp.throughput_rps),
+                            borderColor: 'rgba(6, 182, 212, 1)',
+                            backgroundColor: 'rgba(6, 182, 212, 0.15)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'eOPA',
+                            data: comps.map(c => c.eopa.throughput_rps),
+                            borderColor: 'rgba(249, 115, 22, 1)',
+                            backgroundColor: 'rgba(249, 115, 22, 0.15)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Requests/sec', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { title: { display: true, text: 'Request Volume', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderCompTable(comps) {
+            document.getElementById('compResultsBody').innerHTML = comps.map(c => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-3">${c.volume.toLocaleString()}
+                        <span class="text-xs text-gray-500 ml-1">${c.mode !== 'latency' ? c.mode : ''}</span></td>
+                    <td class="py-3 text-blue-400">${c.reaper_uds.latency.median_us}us</td>
+                    <td class="py-3 text-cyan-400">${c.reaper_tcp.latency.median_us}us</td>
+                    <td class="py-3 text-orange-400">${c.eopa.latency.median_us}us</td>
+                    <td class="py-3 text-blue-400">${c.reaper_uds.latency.p99_us}us</td>
+                    <td class="py-3 text-cyan-400">${c.reaper_tcp.latency.p99_us}us</td>
+                    <td class="py-3 text-orange-400">${c.eopa.latency.p99_us}us</td>
+                    <td class="py-3 text-blue-400">${c.reaper_uds.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-3 text-cyan-400">${c.reaper_tcp.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-3 text-orange-400">${c.eopa.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-3 text-green-400 font-bold">${c.speedup.p99_ratio.toFixed(1)}x</td>
+                </tr>
+            `).join('');
+        }
+
+        function renderCompFairnessTable(comps) {
+            let totalUdsAllow = 0, totalUdsDeny = 0;
+            let totalTcpAllow = 0, totalTcpDeny = 0;
+            let totalEopaAllow = 0, totalEopaDeny = 0;
+            let allMatch = true;
+
+            const rows = comps.map(c => {
+                const ua = c.reaper_uds.allowed, ud = c.reaper_uds.denied;
+                const ta = c.reaper_tcp.allowed, td = c.reaper_tcp.denied;
+                const ea = c.eopa.allowed, ed = c.eopa.denied;
+                totalUdsAllow += ua; totalUdsDeny += ud;
+                totalTcpAllow += ta; totalTcpDeny += td;
+                totalEopaAllow += ea; totalEopaDeny += ed;
+
+                const match = ua === ta && ta === ea && ud === td && td === ed;
+                if (!match) allMatch = false;
+
+                const matchBadge = match
+                    ? '<span class="text-green-400 font-bold">MATCH</span>'
+                    : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+
+                return `<tr class="border-b border-gray-700">
+                    <td class="py-2">${c.volume.toLocaleString()}</td>
+                    <td class="py-2 text-blue-400">${ua}</td>
+                    <td class="py-2 text-blue-400">${ud}</td>
+                    <td class="py-2 text-cyan-400">${ta}</td>
+                    <td class="py-2 text-cyan-400">${td}</td>
+                    <td class="py-2 text-orange-400">${ea}</td>
+                    <td class="py-2 text-orange-400">${ed}</td>
+                    <td class="py-2">${matchBadge}</td>
+                </tr>`;
+            }).join('');
+
+            const overallBadge = allMatch
+                ? '<span class="text-green-400 font-bold">ALL MATCH</span>'
+                : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+
+            const totalsRow = `<tr class="border-t-2 border-gray-500 font-bold">
+                <td class="py-2">TOTAL</td>
+                <td class="py-2 text-blue-400">${totalUdsAllow}</td>
+                <td class="py-2 text-blue-400">${totalUdsDeny}</td>
+                <td class="py-2 text-cyan-400">${totalTcpAllow}</td>
+                <td class="py-2 text-cyan-400">${totalTcpDeny}</td>
+                <td class="py-2 text-orange-400">${totalEopaAllow}</td>
+                <td class="py-2 text-orange-400">${totalEopaDeny}</td>
+                <td class="py-2">${overallBadge}</td>
+            </tr>`;
+
+            document.getElementById('compFairnessBody').innerHTML = rows + totalsRow;
+        }
+
+        // =================================================================
+        // Multi-Policy (Run All) Functions
+        // =================================================================
+
+        async function runComparisonAll() {
+            const concurrency = parseInt(document.getElementById('compConcurrency').value) || 1;
+            const modeLabel = concurrency > 1 ? `concurrent (c=${concurrency})` : 'sequential';
+            showLoading(`Running all 12 policy comparisons (${modeLabel})...`);
+
+            const config = {
+                volumes: document.getElementById('compVolumes').value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
+                warmup_requests: parseInt(document.getElementById('compWarmup').value) || 100,
+                concurrency: concurrency
+            };
+
+            try {
+                const resp = await fetch('/run-comparison-all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(errText);
+                }
+
+                const data = await resp.json();
+                renderMultiPolicyResults(data);
+            } catch (e) {
+                alert('All-policy comparison failed: ' + e.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderMultiPolicyResults(data) {
+            // Hide single-policy results, show multi-policy
+            document.getElementById('compSummary').classList.add('hidden');
+            document.getElementById('compCharts').classList.add('hidden');
+            document.getElementById('compTable').classList.add('hidden');
+            document.getElementById('compFairnessTable').classList.add('hidden');
+            document.getElementById('multiPolicyResults').classList.remove('hidden');
+
+            const s = data.overall_summary;
+
+            document.getElementById('multiPoliciesCount').textContent = s.total_policies;
+            document.getElementById('multiAvgSpeedup').textContent = s.avg_speedup.toFixed(1) + 'x';
+            document.getElementById('multiUdsPeakRps').textContent = s.reaper_uds_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('multiTcpPeakRps').textContent = s.reaper_tcp_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('multiEopaPeakRps').textContent = s.eopa_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+
+            renderMultiLatencyChart(s.per_policy);
+            renderMultiThroughputChart(s.per_policy);
+            renderMultiFairnessTable(s.per_policy);
+            renderMultiResultsTable(s.per_policy);
+        }
+
+        function renderMultiLatencyChart(perPolicy) {
+            const ctx = document.getElementById('multiLatencyChart').getContext('2d');
+            if (multiLatencyChart) multiLatencyChart.destroy();
+
+            const labels = perPolicy.map(p => p.policy_name.replace(/_/g, ' '));
+            const udsData = perPolicy.map(p => p.reaper_uds_avg_p99_us);
+            const tcpData = perPolicy.map(p => p.reaper_tcp_avg_p99_us);
+            const eopaData = perPolicy.map(p => p.eopa_avg_p99_us);
+
+            // Compute averages for dashed lines
+            const avgUds = udsData.reduce((a, b) => a + b, 0) / udsData.length;
+            const avgTcp = tcpData.reduce((a, b) => a + b, 0) / tcpData.length;
+            const avgEopa = eopaData.reduce((a, b) => a + b, 0) / eopaData.length;
+
+            multiLatencyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Reaper UDS P99', data: udsData, backgroundColor: 'rgba(59, 130, 246, 0.7)', order: 2 },
+                        { label: 'Reaper TCP P99', data: tcpData, backgroundColor: 'rgba(6, 182, 212, 0.7)', order: 2 },
+                        { label: 'eOPA P99', data: eopaData, backgroundColor: 'rgba(249, 115, 22, 0.7)', order: 2 },
+                        {
+                            label: 'UDS Avg', type: 'line',
+                            data: Array(labels.length).fill(avgUds),
+                            borderColor: 'rgba(59, 130, 246, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'TCP Avg', type: 'line',
+                            data: Array(labels.length).fill(avgTcp),
+                            borderColor: 'rgba(6, 182, 212, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'eOPA Avg', type: 'line',
+                            data: Array(labels.length).fill(avgEopa),
+                            borderColor: 'rgba(249, 115, 22, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'P99 Latency (us)', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af', maxRotation: 45 } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderMultiThroughputChart(perPolicy) {
+            const ctx = document.getElementById('multiThroughputChart').getContext('2d');
+            if (multiThroughputChart) multiThroughputChart.destroy();
+
+            const labels = perPolicy.map(p => p.policy_name.replace(/_/g, ' '));
+            const udsData = perPolicy.map(p => p.reaper_uds_avg_rps);
+            const tcpData = perPolicy.map(p => p.reaper_tcp_avg_rps);
+            const eopaData = perPolicy.map(p => p.eopa_avg_rps);
+
+            const avgUds = udsData.reduce((a, b) => a + b, 0) / udsData.length;
+            const avgTcp = tcpData.reduce((a, b) => a + b, 0) / tcpData.length;
+            const avgEopa = eopaData.reduce((a, b) => a + b, 0) / eopaData.length;
+
+            multiThroughputChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Reaper UDS', data: udsData, backgroundColor: 'rgba(59, 130, 246, 0.7)', order: 2 },
+                        { label: 'Reaper TCP', data: tcpData, backgroundColor: 'rgba(6, 182, 212, 0.7)', order: 2 },
+                        { label: 'eOPA', data: eopaData, backgroundColor: 'rgba(249, 115, 22, 0.7)', order: 2 },
+                        {
+                            label: 'UDS Avg', type: 'line',
+                            data: Array(labels.length).fill(avgUds),
+                            borderColor: 'rgba(59, 130, 246, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'TCP Avg', type: 'line',
+                            data: Array(labels.length).fill(avgTcp),
+                            borderColor: 'rgba(6, 182, 212, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'eOPA Avg', type: 'line',
+                            data: Array(labels.length).fill(avgEopa),
+                            borderColor: 'rgba(249, 115, 22, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Requests/sec', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af', maxRotation: 45 } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderMultiFairnessTable(perPolicy) {
+            let allMatch = true;
+            const rows = perPolicy.map(p => {
+                if (!p.decisions_match) allMatch = false;
+                const matchBadge = p.decisions_match
+                    ? '<span class="text-green-400 font-bold">MATCH</span>'
+                    : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+                return `<tr class="border-b border-gray-700">
+                    <td class="py-2">${p.policy_name}</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_allowed}</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_denied}</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_allowed}</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_denied}</td>
+                    <td class="py-2 text-orange-400">${p.eopa_allowed}</td>
+                    <td class="py-2 text-orange-400">${p.eopa_denied}</td>
+                    <td class="py-2">${matchBadge}</td>
+                    <td class="py-2 text-green-400 font-bold">${p.avg_speedup.toFixed(1)}x</td>
+                </tr>`;
+            }).join('');
+
+            const overallBadge = allMatch
+                ? '<span class="text-green-400 font-bold">ALL MATCH</span>'
+                : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+
+            const totalsRow = `<tr class="border-t-2 border-gray-500 font-bold">
+                <td class="py-2">OVERALL</td>
+                <td class="py-2" colspan="6"></td>
+                <td class="py-2">${overallBadge}</td>
+                <td class="py-2"></td>
+            </tr>`;
+
+            document.getElementById('multiFairnessBody').innerHTML = rows + totalsRow;
+        }
+
+        function renderMultiResultsTable(perPolicy) {
+            document.getElementById('multiResultsBody').innerHTML = perPolicy.map(p => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-2">${p.policy_name}</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_avg_p99_us.toFixed(0)}us</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_avg_p99_us.toFixed(0)}us</td>
+                    <td class="py-2 text-orange-400">${p.eopa_avg_p99_us.toFixed(0)}us</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_avg_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_avg_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2 text-orange-400">${p.eopa_avg_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2 text-green-400 font-bold">${p.avg_speedup.toFixed(1)}x</td>
+                </tr>
+            `).join('');
         }
 
         // Initialize

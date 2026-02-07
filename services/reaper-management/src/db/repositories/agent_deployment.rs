@@ -22,7 +22,10 @@ impl<'a> AgentDeploymentRepository<'a> {
 
     /// Create a new agent deployment record
     pub async fn create(&self, deployment: &AgentDeployment) -> Result<(), DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query(
             r#"
@@ -48,7 +51,10 @@ impl<'a> AgentDeploymentRepository<'a> {
 
     /// Get deployment by ID
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<AgentDeployment>, DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
@@ -65,8 +71,14 @@ impl<'a> AgentDeploymentRepository<'a> {
     }
 
     /// Get deployments for a rollout
-    pub async fn get_by_rollout(&self, rollout_id: Uuid) -> Result<Vec<AgentDeployment>, DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+    pub async fn get_by_rollout(
+        &self,
+        rollout_id: Uuid,
+    ) -> Result<Vec<AgentDeployment>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
@@ -80,12 +92,20 @@ impl<'a> AgentDeploymentRepository<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.into_iter().map(|r| self.row_to_deployment(r)).collect()
+        rows.into_iter()
+            .map(|r| self.row_to_deployment(r))
+            .collect()
     }
 
     /// Get latest deployment for an agent
-    pub async fn get_latest_for_agent(&self, agent_id: Uuid) -> Result<Option<AgentDeployment>, DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+    pub async fn get_latest_for_agent(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<Option<AgentDeployment>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
@@ -109,7 +129,10 @@ impl<'a> AgentDeploymentRepository<'a> {
         status: AgentDeploymentStatus,
         error_message: Option<&str>,
     ) -> Result<(), DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let deployed_at = if status == AgentDeploymentStatus::Deployed {
             Some(Utc::now().to_rfc3339())
@@ -136,7 +159,10 @@ impl<'a> AgentDeploymentRepository<'a> {
 
     /// Mark deployment as acknowledged
     pub async fn acknowledge(&self, id: Uuid) -> Result<(), DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query("UPDATE agent_deployments SET acknowledged_at = ? WHERE id = ?")
             .bind(Utc::now().to_rfc3339())
@@ -149,7 +175,10 @@ impl<'a> AgentDeploymentRepository<'a> {
 
     /// Get deployment summary for a rollout
     pub async fn get_summary(&self, rollout_id: Uuid) -> Result<DeploymentSummary, DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
             r#"
@@ -178,8 +207,14 @@ impl<'a> AgentDeploymentRepository<'a> {
     }
 
     /// Get failed deployments for a rollout
-    pub async fn get_failed(&self, rollout_id: Uuid) -> Result<Vec<AgentDeployment>, DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+    pub async fn get_failed(
+        &self,
+        rollout_id: Uuid,
+    ) -> Result<Vec<AgentDeployment>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
@@ -193,22 +228,45 @@ impl<'a> AgentDeploymentRepository<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.into_iter().map(|r| self.row_to_deployment(r)).collect()
+        rows.into_iter()
+            .map(|r| self.row_to_deployment(r))
+            .collect()
     }
 
     fn row_to_deployment(
         &self,
-        row: (String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String),
+        row: (
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+        ),
     ) -> Result<AgentDeployment, DatabaseError> {
         Ok(AgentDeployment {
             id: Uuid::parse_str(&row.0).map_err(|e| DatabaseError::Config(e.to_string()))?,
             agent_id: Uuid::parse_str(&row.1).map_err(|e| DatabaseError::Config(e.to_string()))?,
             bundle_id: Uuid::parse_str(&row.2).map_err(|e| DatabaseError::Config(e.to_string()))?,
             rollout_id: row.3.as_ref().and_then(|s| Uuid::parse_str(s).ok()),
-            status: row.4.parse().map_err(|e: String| DatabaseError::Config(e))?,
+            status: row
+                .4
+                .parse()
+                .map_err(|e: String| DatabaseError::Config(e))?,
             error_message: row.5,
-            deployed_at: row.6.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))),
-            acknowledged_at: row.7.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))),
+            deployed_at: row.6.as_ref().and_then(|s| {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            }),
+            acknowledged_at: row.7.as_ref().and_then(|s| {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            }),
             created_at: DateTime::parse_from_rfc3339(&row.8)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| DatabaseError::Config(e.to_string()))?,
@@ -232,9 +290,22 @@ impl<'a> RollbackConfigRepository<'a> {
         org_id: Uuid,
         namespace_id: Option<Uuid>,
     ) -> Result<Option<RollbackConfig>, DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
-        let row: Option<(String, String, Option<String>, i32, f64, i32, i32, String, String)> = if let Some(ns_id) = namespace_id {
+        let row: Option<(
+            String,
+            String,
+            Option<String>,
+            i32,
+            f64,
+            i32,
+            i32,
+            String,
+            String,
+        )> = if let Some(ns_id) = namespace_id {
             sqlx::query_as(
                 r#"
                 SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
@@ -262,7 +333,10 @@ impl<'a> RollbackConfigRepository<'a> {
 
     /// Create or update rollback config
     pub async fn upsert(&self, config: &RollbackConfig) -> Result<(), DatabaseError> {
-        let pool = self.db.sqlite_pool().ok_or(DatabaseError::Config("No database pool".to_string()))?;
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query(
             r#"
@@ -294,7 +368,17 @@ impl<'a> RollbackConfigRepository<'a> {
 
     fn row_to_config(
         &self,
-        row: (String, String, Option<String>, i32, f64, i32, i32, String, String),
+        row: (
+            String,
+            String,
+            Option<String>,
+            i32,
+            f64,
+            i32,
+            i32,
+            String,
+            String,
+        ),
     ) -> Result<RollbackConfig, DatabaseError> {
         Ok(RollbackConfig {
             id: Uuid::parse_str(&row.0).map_err(|e| DatabaseError::Config(e.to_string()))?,

@@ -206,7 +206,10 @@ pub fn compile_var_attr_comparison(
                         Ok(cond)
                     }
                 }
-                Operator::GreaterEqual | Operator::GreaterThan | Operator::LessEqual | Operator::LessThan => {
+                Operator::GreaterEqual
+                | Operator::GreaterThan
+                | Operator::LessEqual
+                | Operator::LessThan => {
                     // For numeric comparisons, use VariableAttrCompare
                     let attr_op = match op {
                         Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
@@ -248,22 +251,18 @@ pub fn compile_var_attr_comparison(
                 ),
             })
         }
-        ComparisonRight::EntityAttr(_) => {
-            Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "Variable attribute to entity attribute comparisons not yet supported: {}.{}",
-                    var_attr.variable, var_attr.attribute
-                ),
-            })
-        }
-        ComparisonRight::Expr(_) => {
-            Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "Variable attribute to expression comparisons not yet supported: {}.{}",
-                    var_attr.variable, var_attr.attribute
-                ),
-            })
-        }
+        ComparisonRight::EntityAttr(_) => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Variable attribute to entity attribute comparisons not yet supported: {}.{}",
+                var_attr.variable, var_attr.attribute
+            ),
+        }),
+        ComparisonRight::Expr(_) => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "Variable attribute to expression comparisons not yet supported: {}.{}",
+                var_attr.variable, var_attr.attribute
+            ),
+        }),
     }
 }
 

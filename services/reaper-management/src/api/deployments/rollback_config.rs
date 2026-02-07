@@ -11,7 +11,9 @@ use crate::{
     api::error::ApiError,
     api::orgs::resolve_org,
     auth::middleware::RequireAuth,
-    db::repositories::{AgentDeploymentRepository, OrganizationRepository, RollbackConfigRepository},
+    db::repositories::{
+        AgentDeploymentRepository, OrganizationRepository, RollbackConfigRepository,
+    },
     deployment::DeploymentService,
     domain::agent_deployment::{RollbackConfig, UpdateRollbackConfig},
     domain::namespace::resolve_namespace,
@@ -219,15 +221,12 @@ pub async fn check_rollback_trigger(
 
     // Get the rollout
     let service = DeploymentService::new(state.db.clone());
-    let rollout = service
-        .get_rollout(rollout_id)
-        .await
-        .map_err(|e| match e {
-            crate::deployment::DeploymentError::RolloutNotFound(_) => {
-                ApiError::NotFound("Rollout not found".to_string())
-            }
-            e => ApiError::Internal(e.to_string()),
-        })?;
+    let rollout = service.get_rollout(rollout_id).await.map_err(|e| match e {
+        crate::deployment::DeploymentError::RolloutNotFound(_) => {
+            ApiError::NotFound("Rollout not found".to_string())
+        }
+        e => ApiError::Internal(e.to_string()),
+    })?;
 
     // Get rollback config (namespace-specific or org-level fallback)
     let rollback_repo = RollbackConfigRepository::new(&state.db);

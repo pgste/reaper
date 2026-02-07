@@ -1,11 +1,11 @@
 //! Debug test for first() collection method
 
-use std::sync::Arc;
-use std::collections::HashMap;
 use policy_engine::{
-    DataLoader, DataStore, ReaperPolicy, PolicyRequest, PolicyEvaluator, PolicyAction,
-    reap::ReapParser,
+    reap::ReapParser, DataLoader, DataStore, PolicyAction, PolicyEvaluator, PolicyRequest,
+    ReaperPolicy,
 };
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[test]
 fn test_parse_first_method_ast() {
@@ -33,8 +33,10 @@ fn test_type_checking_bdd_scenario() {
     let loader = DataLoader::new(store.clone());
 
     // Load the same data as the BDD test
-    let data = std::fs::read_to_string("/Volumes/PGS-E/Code/reaper/test-data/type-checking-test-data.json")
-        .expect("read data file");
+    let data = std::fs::read_to_string(
+        "/Volumes/PGS-E/Code/reaper/test-data/type-checking-test-data.json",
+    )
+    .expect("read data file");
     loader.load_json(&data).expect("load data");
 
     let store_arc = Arc::new(store);
@@ -187,8 +189,12 @@ policy test_two_level {
     match result {
         Ok(decision) => {
             eprintln!("Decision: {:?}", decision);
-            assert!(matches!(decision, PolicyAction::Allow), "Expected Allow but got {:?}", decision);
-        },
+            assert!(
+                matches!(decision, PolicyAction::Allow),
+                "Expected Allow but got {:?}",
+                decision
+            );
+        }
         Err(e) => panic!("Error: {:?}", e),
     }
 }
@@ -292,7 +298,11 @@ policy test_nested {
 
             let result = compiled.evaluate(&request);
             eprintln!("Compiled nested object result: {:?}", result);
-            assert!(matches!(result, Ok(PolicyAction::Allow)), "Expected Allow but got {:?}", result);
+            assert!(
+                matches!(result, Ok(PolicyAction::Allow)),
+                "Expected Allow but got {:?}",
+                result
+            );
         }
         Err(e) => {
             eprintln!("Compilation failed: {:?}", e);
@@ -361,13 +371,21 @@ policy test_null_safety {
 
             let result = compiled.evaluate(&request);
             eprintln!("Compiled null_safety result: {:?}", result);
-            assert!(matches!(result, Ok(PolicyAction::Allow)), "Expected Allow but got {:?}", result);
+            assert!(
+                matches!(result, Ok(PolicyAction::Allow)),
+                "Expected Allow but got {:?}",
+                result
+            );
         }
         Err(e) => {
             eprintln!("Compilation failed: {:?}", e);
             // This is ok if compilation fails - the BDD test would use AST
             // But the AST result should still be Allow
-            assert!(matches!(ast_result, Ok(PolicyAction::Allow)), "AST Expected Allow but got {:?}", ast_result);
+            assert!(
+                matches!(ast_result, Ok(PolicyAction::Allow)),
+                "AST Expected Allow but got {:?}",
+                ast_result
+            );
         }
     }
 }
@@ -426,7 +444,11 @@ policy test_not_empty {
             };
             let result = compiled.evaluate(&request);
             eprintln!("Compiled string != '' result: {:?}", result);
-            assert!(matches!(result, Ok(PolicyAction::Allow)), "Expected Allow but got {:?}", result);
+            assert!(
+                matches!(result, Ok(PolicyAction::Allow)),
+                "Expected Allow but got {:?}",
+                result
+            );
         }
         Err(e) => {
             eprintln!("Compilation failed: {:?}", e);
@@ -489,7 +511,11 @@ policy test_assignment {
             };
             let result = compiled.evaluate(&request);
             eprintln!("Compiled assignment result: {:?}", result);
-            assert!(matches!(result, Ok(PolicyAction::Allow)), "Expected Allow but got {:?}", result);
+            assert!(
+                matches!(result, Ok(PolicyAction::Allow)),
+                "Expected Allow but got {:?}",
+                result
+            );
         }
         Err(e) => {
             eprintln!("Compilation failed: {:?}", e);
@@ -505,8 +531,10 @@ fn test_bdd_object_validation() {
     let loader = DataLoader::new(store.clone());
 
     // Load the same data as the BDD test
-    let data = std::fs::read_to_string("/Volumes/PGS-E/Code/reaper/test-data/type-checking-test-data.json")
-        .expect("read data file");
+    let data = std::fs::read_to_string(
+        "/Volumes/PGS-E/Code/reaper/test-data/type-checking-test-data.json",
+    )
+    .expect("read data file");
     loader.load_json(&data).expect("load data");
 
     let store_arc = Arc::new(store);
@@ -616,7 +644,11 @@ policy test_first {
 
     let decision = compiled.evaluate(&request).expect("evaluation failed");
     eprintln!("Decision: {:?}", decision);
-    assert!(matches!(decision, PolicyAction::Allow), "Expected Allow but got {:?}", decision);
+    assert!(
+        matches!(decision, PolicyAction::Allow),
+        "Expected Allow but got {:?}",
+        decision
+    );
 }
 
 #[test]
@@ -684,7 +716,13 @@ policy test_first {
         context,
     };
 
-    let decision = ast_evaluator.evaluate(&request).expect("ast evaluation failed");
+    let decision = ast_evaluator
+        .evaluate(&request)
+        .expect("ast evaluation failed");
     eprintln!("AST Decision: {:?}", decision);
-    assert!(matches!(decision, PolicyAction::Allow), "Expected Allow but got {:?}", decision);
+    assert!(
+        matches!(decision, PolicyAction::Allow),
+        "Expected Allow but got {:?}",
+        decision
+    );
 }

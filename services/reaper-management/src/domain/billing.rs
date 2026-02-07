@@ -211,10 +211,10 @@ impl PlanLimits {
     pub fn enterprise() -> Self {
         Self {
             tier: PlanTier::Enterprise,
-            max_agents: -1,     // Unlimited
-            max_policies: -1,   // Unlimited
-            max_users: -1,      // Unlimited
-            max_storage_bytes: -1, // Unlimited
+            max_agents: -1,                // Unlimited
+            max_policies: -1,              // Unlimited
+            max_users: -1,                 // Unlimited
+            max_storage_bytes: -1,         // Unlimited
             max_evaluations_per_month: -1, // Unlimited
             sso_enabled: true,
             audit_logs_enabled: true,

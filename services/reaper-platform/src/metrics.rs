@@ -1,7 +1,9 @@
 //! Prometheus metrics for the platform.
 
 use lazy_static::lazy_static;
-use prometheus::{register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Gauge, HistogramVec};
+use prometheus::{
+    register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Gauge, HistogramVec,
+};
 
 lazy_static! {
     /// Total API requests by endpoint and status

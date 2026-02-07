@@ -175,9 +175,8 @@ impl WebhookDeliveryService {
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
-                let delay = Duration::from_millis(
-                    self.config.retry_delay_ms * 2u64.pow(attempt - 1),
-                );
+                let delay =
+                    Duration::from_millis(self.config.retry_delay_ms * 2u64.pow(attempt - 1));
                 tokio::time::sleep(delay).await;
                 debug!(
                     subscription_id = %subscription.id,

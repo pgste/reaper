@@ -95,7 +95,10 @@ fn test_all_comparisons_reaper_only() {
     let test_cases_dir = comparison_path.join("test_cases");
 
     if !test_cases_dir.exists() {
-        eprintln!("Skipping: test_cases directory not found at {:?}", test_cases_dir);
+        eprintln!(
+            "Skipping: test_cases directory not found at {:?}",
+            test_cases_dir
+        );
         return;
     }
 
@@ -108,7 +111,11 @@ fn test_all_comparisons_reaper_only() {
         let entry = entry.expect("Failed to read directory entry");
         let path = entry.path();
 
-        if path.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
+        if path
+            .extension()
+            .map(|e| e == "yaml" || e == "yml")
+            .unwrap_or(false)
+        {
             println!("\n--- Loading: {:?} ---", path.file_name().unwrap());
 
             match load_comparison_suite(&path) {
@@ -141,7 +148,10 @@ fn test_all_comparisons_reaper_only() {
     }
 
     println!("\n=== TOTAL COMPARISON RESULTS ===");
-    println!("Suites run: {} | Passed: {} | Failed: {}", suite_count, total_passed, total_failed);
+    println!(
+        "Suites run: {} | Passed: {} | Failed: {}",
+        suite_count, total_passed, total_failed
+    );
 
     // Note: Not asserting zero failures here as policies may not exist yet
     // Individual tests will fail if their policies exist but produce wrong results

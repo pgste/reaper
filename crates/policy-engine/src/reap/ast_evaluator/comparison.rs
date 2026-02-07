@@ -44,8 +44,8 @@ impl ReapAstEvaluator {
 
         // Perform comparison based on operator
         match op {
-            Operator::Equal => Ok(self.values_equal(&left_value, &right_value)),
-            Operator::NotEqual => Ok(!self.values_equal(&left_value, &right_value)),
+            Operator::Equal => Ok(Self::values_equal(&left_value, &right_value)),
+            Operator::NotEqual => Ok(!Self::values_equal(&left_value, &right_value)),
             Operator::GreaterThan => self.compare_numeric(&left_value, &right_value, |a, b| a > b),
             Operator::LessThan => self.compare_numeric(&left_value, &right_value, |a, b| a < b),
             Operator::GreaterEqual => {
@@ -66,7 +66,7 @@ impl ReapAstEvaluator {
     ) -> Result<bool, ReaperError> {
         match collection {
             EvalValue::Array(arr) | EvalValue::Set(arr) => {
-                Ok(arr.iter().any(|item| self.values_equal(item, value)))
+                Ok(arr.iter().any(|item| Self::values_equal(item, value)))
             }
             EvalValue::Object(map) => {
                 // For objects, check if key exists
@@ -86,7 +86,7 @@ impl ReapAstEvaluator {
     /// Supports existential quantification: when comparing an array to a scalar,
     /// returns true if ANY element in the array equals the scalar.
     /// This enables wildcard iteration syntax like `user.desk_ids[_] == resource.desk_id`
-    pub(super) fn values_equal(&self, a: &EvalValue, b: &EvalValue) -> bool {
+    pub(super) fn values_equal(a: &EvalValue, b: &EvalValue) -> bool {
         match (a, b) {
             (EvalValue::String(a), EvalValue::String(b)) => a == b,
             (EvalValue::Integer(a), EvalValue::Integer(b)) => a == b,
@@ -96,12 +96,12 @@ impl ReapAstEvaluator {
             // Existential quantification: array[_] == scalar
             // Returns true if ANY element in the array equals the scalar
             (EvalValue::Array(arr), scalar) | (EvalValue::Set(arr), scalar) => {
-                arr.iter().any(|item| self.values_equal(item, scalar))
+                arr.iter().any(|item| Self::values_equal(item, scalar))
             }
             // Existential quantification: scalar == array[_]
             // Returns true if ANY element in the array equals the scalar
             (scalar, EvalValue::Array(arr)) | (scalar, EvalValue::Set(arr)) => {
-                arr.iter().any(|item| self.values_equal(scalar, item))
+                arr.iter().any(|item| Self::values_equal(scalar, item))
             }
             _ => false,
         }

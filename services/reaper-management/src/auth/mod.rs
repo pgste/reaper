@@ -18,7 +18,7 @@ pub mod scopes;
 pub mod users;
 
 pub use api_key::{ApiKey, ApiKeyGenerator, ApiKeyRepository};
-pub use jwks::{JwksConfig, JwksClaims, JwksConfigRepository, JwksError, JwksValidator};
+pub use jwks::{JwksClaims, JwksConfig, JwksConfigRepository, JwksError, JwksValidator};
 pub use jwt::{Claims, JwtManager};
 pub use middleware::{AuthenticatedUser, RequireAuth};
 pub use mtls::{ClientCertificate, ClientCertificateRepository, MtlsError, RegisterCertificate};

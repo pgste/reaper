@@ -342,7 +342,10 @@ pub fn eval_is_string(
         Some(e) => e,
         None => return false,
     };
-    matches!(entity.get_attribute(attribute), Some(AttributeValue::String(_)))
+    matches!(
+        entity.get_attribute(attribute),
+        Some(AttributeValue::String(_))
+    )
 }
 
 /// Check if an entity attribute is a number (int or float)
@@ -375,7 +378,10 @@ pub fn eval_is_bool(
         Some(e) => e,
         None => return false,
     };
-    matches!(entity.get_attribute(attribute), Some(AttributeValue::Bool(_)))
+    matches!(
+        entity.get_attribute(attribute),
+        Some(AttributeValue::Bool(_))
+    )
 }
 
 /// Evaluate set intersection count > threshold with InternedString values
@@ -604,8 +610,14 @@ mod tests {
             AttributeValue::Int(3),
         ];
 
-        assert!(compiled_value_in_list(&CompiledLiteralValue::Int(2), &items));
-        assert!(!compiled_value_in_list(&CompiledLiteralValue::Int(4), &items));
+        assert!(compiled_value_in_list(
+            &CompiledLiteralValue::Int(2),
+            &items
+        ));
+        assert!(!compiled_value_in_list(
+            &CompiledLiteralValue::Int(4),
+            &items
+        ));
     }
 
     #[test]
@@ -621,8 +633,14 @@ mod tests {
             &CompiledLiteralValue::String(admin),
             &items
         ));
-        assert!(compiled_value_in_set(&CompiledLiteralValue::Int(42), &items));
-        assert!(!compiled_value_in_set(&CompiledLiteralValue::Int(99), &items));
+        assert!(compiled_value_in_set(
+            &CompiledLiteralValue::Int(42),
+            &items
+        ));
+        assert!(!compiled_value_in_set(
+            &CompiledLiteralValue::Int(99),
+            &items
+        ));
     }
 
     #[test]
@@ -633,7 +651,8 @@ mod tests {
         let scores_key = interner.intern("scores");
 
         // Get first element
-        let result = get_indexed_value_compiled(&user, scores_key, &IndexExpr::Number(0), &interner);
+        let result =
+            get_indexed_value_compiled(&user, scores_key, &IndexExpr::Number(0), &interner);
         assert_eq!(result, Some(AttributeValue::Int(85)));
 
         // Get last element with negative index

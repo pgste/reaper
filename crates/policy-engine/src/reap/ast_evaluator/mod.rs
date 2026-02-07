@@ -11,7 +11,6 @@
 //! Module structure:
 //! - `types`: Core evaluation types (EvalContext, EvalValue)
 
-mod types;
 pub mod builtin_functions;
 pub mod builtin_methods;
 mod comparison;
@@ -21,6 +20,7 @@ mod expr_eval;
 mod function_dispatch;
 mod method_dispatch;
 mod regex_methods;
+mod types;
 
 use types::{EvalContext, EvalValue};
 

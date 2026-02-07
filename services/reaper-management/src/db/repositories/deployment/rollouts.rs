@@ -75,7 +75,10 @@ impl<'a> RolloutOps<'a> {
     }
 
     /// Get active rollouts for a bundle
-    pub async fn get_active_for_bundle(&self, bundle_id: Uuid) -> Result<Vec<Rollout>, DatabaseError> {
+    pub async fn get_active_for_bundle(
+        &self,
+        bundle_id: Uuid,
+    ) -> Result<Vec<Rollout>, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()

@@ -99,8 +99,8 @@ pub(super) async fn get_connection(
     .fetch_optional(pool)
     .await?;
 
-    let (provider, username, scopes_json, created_at) = row
-        .ok_or_else(|| ApiError::NotFound("OAuth connection not found".to_string()))?;
+    let (provider, username, scopes_json, created_at) =
+        row.ok_or_else(|| ApiError::NotFound("OAuth connection not found".to_string()))?;
 
     let scopes: Vec<String> = serde_json::from_str(&scopes_json).unwrap_or_default();
 

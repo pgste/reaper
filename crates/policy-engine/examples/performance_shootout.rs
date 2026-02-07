@@ -9,7 +9,10 @@
 //!
 //! Run with: cargo run --example performance_shootout --release
 
-use policy_engine::reaper_dsl::{Condition, ReaperDSLEvaluator, Rule};
+use policy_engine::reaper_dsl::{
+    AttributeComparison, CompareTarget, Condition, CrossEntityComparison, EntityType, NumericOp,
+    ReaperDSLEvaluator, Rule,
+};
 use policy_engine::{
     DataLoader, DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator,
     PolicyLanguage, PolicyRequest, PolicyRule,
@@ -205,10 +208,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let reaper_rules = vec![Rule {
         name: "admin_access".to_string(),
-        condition: Condition::UserEquals {
+        condition: Condition::AttributeCompare(AttributeComparison {
+            entity_type: EntityType::User,
             attribute: "role".to_string(),
-            value: "admin".to_string(),
-        },
+            op: NumericOp::Equal,
+            target: CompareTarget::LiteralString("admin".to_string()),
+        }),
         decision: PolicyAction::Allow,
     }];
 
@@ -248,32 +253,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let complex_rules = vec![
         Rule {
             name: "admin_access".to_string(),
-            condition: Condition::UserEquals {
+            condition: Condition::AttributeCompare(AttributeComparison {
+                entity_type: EntityType::User,
                 attribute: "role".to_string(),
-                value: "admin".to_string(),
-            },
+                op: NumericOp::Equal,
+                target: CompareTarget::LiteralString("admin".to_string()),
+            }),
             decision: PolicyAction::Allow,
         },
         Rule {
             name: "department_access".to_string(),
             condition: Condition::And(vec![
-                Condition::UserEqualsResource {
-                    user_attr: "department".to_string(),
-                    resource_attr: "department".to_string(),
-                },
-                Condition::ResourceEquals {
+                Condition::CrossEntityCompare(CrossEntityComparison {
+                    left_entity: EntityType::User,
+                    left_attr: "department".to_string(),
+                    op: NumericOp::Equal,
+                    right_entity: EntityType::Resource,
+                    right_attr: "department".to_string(),
+                }),
+                Condition::AttributeCompare(AttributeComparison {
+                    entity_type: EntityType::Resource,
                     attribute: "classification".to_string(),
-                    value: "public".to_string(),
-                },
+                    op: NumericOp::Equal,
+                    target: CompareTarget::LiteralString("public".to_string()),
+                }),
             ]),
             decision: PolicyAction::Allow,
         },
         Rule {
             name: "clearance_check".to_string(),
-            condition: Condition::ResourceIntGreater {
-                resource_attr: "clearance_required".to_string(),
-                user_attr: "clearance".to_string(),
-            },
+            condition: Condition::CrossEntityCompare(CrossEntityComparison {
+                left_entity: EntityType::Resource,
+                left_attr: "clearance_required".to_string(),
+                op: NumericOp::Greater,
+                right_entity: EntityType::User,
+                right_attr: "clearance".to_string(),
+            }),
             decision: PolicyAction::Deny,
         },
     ];

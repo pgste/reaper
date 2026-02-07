@@ -15,7 +15,12 @@ use std::sync::Arc;
 fn project_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // crates/policy-engine -> reaper/
-    manifest_dir.parent().unwrap().parent().unwrap().to_path_buf()
+    manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// Get the path to a benchmark policy file
@@ -185,7 +190,8 @@ fn test_string_email_contains() {
     eprintln!("DEBUG: AST evaluator result = {:?}", ast_result);
 
     // Build compiled evaluator
-    let compiled_evaluator = policy.build(Arc::clone(&store))
+    let compiled_evaluator = policy
+        .build(Arc::clone(&store))
         .unwrap_or_else(|e| panic!("Failed to build evaluator: {}", e));
 
     let compiled_result = compiled_evaluator.evaluate(&request);
@@ -203,11 +209,21 @@ policy test {
 }
 "#;
     let simple_policy: ReaperPolicy = simple_policy_text.parse().expect("parse simple policy");
-    let simple_ast_evaluator = simple_policy.clone().build_ast_evaluator(Arc::clone(&store));
-    let simple_compiled_evaluator = simple_policy.build(Arc::clone(&store)).expect("build simple evaluator");
+    let simple_ast_evaluator = simple_policy
+        .clone()
+        .build_ast_evaluator(Arc::clone(&store));
+    let simple_compiled_evaluator = simple_policy
+        .build(Arc::clone(&store))
+        .expect("build simple evaluator");
 
-    eprintln!("DEBUG: Simple AST evaluator = {:?}", simple_ast_evaluator.evaluate(&request));
-    eprintln!("DEBUG: Simple compiled evaluator = {:?}", simple_compiled_evaluator.evaluate(&request));
+    eprintln!(
+        "DEBUG: Simple AST evaluator = {:?}",
+        simple_ast_evaluator.evaluate(&request)
+    );
+    eprintln!(
+        "DEBUG: Simple compiled evaluator = {:?}",
+        simple_compiled_evaluator.evaluate(&request)
+    );
 
     // Run the original tests
     run_policy_test(

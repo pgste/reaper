@@ -99,7 +99,6 @@ impl ReapAstEvaluator {
             }
 
             // ===== Time/Date Functions (using builtin_functions::time) =====
-
             (Some("time"), "now_ns") => {
                 if !args.is_empty() {
                     return Err(ReaperError::InvalidPolicy {
@@ -141,8 +140,9 @@ impl ReapAstEvaluator {
             (Some("time"), "format_rfc3339") => {
                 if args.len() != 1 {
                     return Err(ReaperError::InvalidPolicy {
-                        reason: "time::format_rfc3339() requires exactly one argument (nanoseconds)"
-                            .to_string(),
+                        reason:
+                            "time::format_rfc3339() requires exactly one argument (nanoseconds)"
+                                .to_string(),
                     });
                 }
                 let value = self.evaluate_expr(&args[0], context)?;
@@ -198,8 +198,9 @@ impl ReapAstEvaluator {
             (Some("time"), "is_between") => {
                 if args.len() != 3 {
                     return Err(ReaperError::InvalidPolicy {
-                        reason: "time::is_between() requires exactly three arguments (t, start, end)"
-                            .to_string(),
+                        reason:
+                            "time::is_between() requires exactly three arguments (t, start, end)"
+                                .to_string(),
                     });
                 }
                 let t = self.evaluate_expr(&args[0], context)?;
@@ -296,13 +297,16 @@ impl ReapAstEvaluator {
                     EvalValue::String(s) => s,
                     _ => {
                         return Err(ReaperError::InvalidPolicy {
-                            reason: "regex::replace() third argument must be a string (replacement)"
-                                .to_string(),
+                            reason:
+                                "regex::replace() third argument must be a string (replacement)"
+                                    .to_string(),
                         })
                     }
                 };
                 let re = self.get_cached_regex(&pattern)?;
-                Ok(EvalValue::String(re.replace_all(&text, replacement.as_str()).to_string()))
+                Ok(EvalValue::String(
+                    re.replace_all(&text, replacement.as_str()).to_string(),
+                ))
             }
 
             (Some("regex"), "split") => {

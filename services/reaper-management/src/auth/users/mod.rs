@@ -187,9 +187,10 @@ impl<'a> UserRepository<'a> {
             email: row.1,
             email_verified: row.2 != 0,
             password_hash: row.3,
-            status: row.4.parse().map_err(|e: String| {
-                UserError::Database(sqlx::Error::Decode(e.into()))
-            })?,
+            status: row
+                .4
+                .parse()
+                .map_err(|e: String| UserError::Database(sqlx::Error::Decode(e.into())))?,
             created_at: DateTime::parse_from_rfc3339(&row.5)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| UserError::Database(sqlx::Error::Decode(e.into())))?,
@@ -238,7 +239,11 @@ impl<'a> UserOrgRepository<'a> {
     }
 
     /// Get user's role in an org
-    pub async fn get_role(&self, user_id: Uuid, org_id: Uuid) -> Result<Option<OrgRole>, UserError> {
+    pub async fn get_role(
+        &self,
+        user_id: Uuid,
+        org_id: Uuid,
+    ) -> Result<Option<OrgRole>, UserError> {
         let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let row: Option<(String,)> =
@@ -249,9 +254,11 @@ impl<'a> UserOrgRepository<'a> {
                 .await?;
 
         match row {
-            Some((role,)) => Ok(Some(role.parse().map_err(|e: String| {
-                UserError::Database(sqlx::Error::Decode(e.into()))
-            })?)),
+            Some((role,)) => {
+                Ok(Some(role.parse().map_err(|e: String| {
+                    UserError::Database(sqlx::Error::Decode(e.into()))
+                })?))
+            }
             None => Ok(None),
         }
     }
@@ -267,9 +274,7 @@ impl<'a> UserOrgRepository<'a> {
         .fetch_all(pool)
         .await?;
 
-        rows.into_iter()
-            .map(|r| Self::row_to_user_org(r))
-            .collect()
+        rows.into_iter().map(|r| Self::row_to_user_org(r)).collect()
     }
 
     /// Get all members of an org
@@ -283,9 +288,7 @@ impl<'a> UserOrgRepository<'a> {
         .fetch_all(pool)
         .await?;
 
-        rows.into_iter()
-            .map(|r| Self::row_to_user_org(r))
-            .collect()
+        rows.into_iter().map(|r| Self::row_to_user_org(r)).collect()
     }
 
     /// Update user's role in an org
@@ -297,13 +300,12 @@ impl<'a> UserOrgRepository<'a> {
     ) -> Result<(), UserError> {
         let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
 
-        let result =
-            sqlx::query("UPDATE user_orgs SET role = ? WHERE user_id = ? AND org_id = ?")
-                .bind(new_role.to_string())
-                .bind(user_id.to_string())
-                .bind(org_id.to_string())
-                .execute(pool)
-                .await?;
+        let result = sqlx::query("UPDATE user_orgs SET role = ? WHERE user_id = ? AND org_id = ?")
+            .bind(new_role.to_string())
+            .bind(user_id.to_string())
+            .bind(org_id.to_string())
+            .execute(pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Err(UserError::NotFound);
@@ -335,9 +337,10 @@ impl<'a> UserOrgRepository<'a> {
                 .map_err(|e| UserError::Database(sqlx::Error::Decode(e.into())))?,
             org_id: Uuid::parse_str(&row.2)
                 .map_err(|e| UserError::Database(sqlx::Error::Decode(e.into())))?,
-            role: row.3.parse().map_err(|e: String| {
-                UserError::Database(sqlx::Error::Decode(e.into()))
-            })?,
+            role: row
+                .3
+                .parse()
+                .map_err(|e: String| UserError::Database(sqlx::Error::Decode(e.into())))?,
             invited_by: row.4.and_then(|s| Uuid::parse_str(&s).ok()),
             joined_at: DateTime::parse_from_rfc3339(&row.5)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -385,16 +388,23 @@ impl<'a> SessionRepository<'a> {
 
         let token_hash = hash_token(token);
 
-        let row: Option<(String, String, String, Option<String>, Option<String>, String, String)> =
-            sqlx::query_as(
-                r#"
+        let row: Option<(
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        )> = sqlx::query_as(
+            r#"
                 SELECT id, user_id, token_hash, ip_address, user_agent, expires_at, created_at
                 FROM sessions WHERE token_hash = ?
                 "#,
-            )
-            .bind(&token_hash)
-            .fetch_optional(pool)
-            .await?;
+        )
+        .bind(&token_hash)
+        .fetch_optional(pool)
+        .await?;
 
         match row {
             Some(r) => {
@@ -508,7 +518,10 @@ impl<'a> PasswordResetRepository<'a> {
     }
 
     /// Find token by hash
-    pub async fn find_by_token(&self, token: &str) -> Result<Option<PasswordResetToken>, UserError> {
+    pub async fn find_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<PasswordResetToken>, UserError> {
         let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let token_hash = hash_token(token);

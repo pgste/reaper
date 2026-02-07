@@ -35,13 +35,24 @@ pub fn eval_string_operation(
 ) -> bool {
     let entity = match get_entity_for_type(&op.entity_type, user, resource) {
         Some(e) => e,
-        None => return false,
+        None => {
+            tracing::debug!(
+                entity_type = ?op.entity_type,
+                "StringOp: entity not found"
+            );
+            return false;
+        }
     };
+
+    let attr_name = interner
+        .resolve(op.attribute)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "?".to_string());
 
     match entity.get_attribute(op.attribute) {
         Some(AttributeValue::String(s)) => {
             if let Some(resolved) = interner.resolve(*s) {
-                match op.op {
+                let result = match op.op {
                     StringOp::Contains => {
                         memmem::find(resolved.as_bytes(), op.value.as_bytes()).is_some()
                     }
@@ -49,12 +60,35 @@ pub fn eval_string_operation(
                     StringOp::EndsWith => resolved.ends_with(&op.value),
                     StringOp::LowerEquals => resolved.to_lowercase() == op.value,
                     StringOp::UpperEquals => resolved.to_uppercase() == op.value,
-                }
+                };
+                tracing::debug!(
+                    entity_type = ?op.entity_type,
+                    attribute = %attr_name,
+                    attr_value = %resolved,
+                    op = ?op.op,
+                    op_value = %op.value,
+                    result = result,
+                    "StringOp evaluation"
+                );
+                result
             } else {
+                tracing::debug!(
+                    entity_type = ?op.entity_type,
+                    attribute = %attr_name,
+                    "StringOp: could not resolve interned string"
+                );
                 false
             }
         }
-        _ => false,
+        other => {
+            tracing::debug!(
+                entity_type = ?op.entity_type,
+                attribute = %attr_name,
+                attr_value = ?other,
+                "StringOp: attribute not a string or missing"
+            );
+            false
+        }
     }
 }
 
@@ -66,19 +100,17 @@ pub fn eval_variable_string_operation(
     interner: &StringInterner,
 ) -> bool {
     if let Some(var_name) = interner.resolve(op.variable) {
-        if let Some(var_val) = variables.get(&*var_name) {
-            if let AttributeValue::String(s) = var_val {
-                if let Some(resolved) = interner.resolve(*s) {
-                    return match op.op {
-                        StringOp::Contains => {
-                            memmem::find(resolved.as_bytes(), op.value.as_bytes()).is_some()
-                        }
-                        StringOp::StartsWith => resolved.starts_with(&op.value),
-                        StringOp::EndsWith => resolved.ends_with(&op.value),
-                        StringOp::LowerEquals => resolved.to_lowercase() == op.value,
-                        StringOp::UpperEquals => resolved.to_uppercase() == op.value,
-                    };
-                }
+        if let Some(AttributeValue::String(s)) = variables.get(&*var_name) {
+            if let Some(resolved) = interner.resolve(*s) {
+                return match op.op {
+                    StringOp::Contains => {
+                        memmem::find(resolved.as_bytes(), op.value.as_bytes()).is_some()
+                    }
+                    StringOp::StartsWith => resolved.starts_with(&op.value),
+                    StringOp::EndsWith => resolved.ends_with(&op.value),
+                    StringOp::LowerEquals => resolved.to_lowercase() == op.value,
+                    StringOp::UpperEquals => resolved.to_uppercase() == op.value,
+                };
             }
         }
     }
@@ -231,11 +263,9 @@ pub fn eval_variable_string_contains(
     interner: &StringInterner,
 ) -> bool {
     if let Some(var_name) = interner.resolve(variable) {
-        if let Some(var_val) = variables.get(&*var_name) {
-            if let AttributeValue::String(s) = var_val {
-                if let Some(resolved) = interner.resolve(*s) {
-                    return memmem::find(resolved.as_bytes(), substring.as_bytes()).is_some();
-                }
+        if let Some(AttributeValue::String(s)) = variables.get(&*var_name) {
+            if let Some(resolved) = interner.resolve(*s) {
+                return memmem::find(resolved.as_bytes(), substring.as_bytes()).is_some();
             }
         }
     }
@@ -251,11 +281,9 @@ pub fn eval_variable_string_starts_with(
     interner: &StringInterner,
 ) -> bool {
     if let Some(var_name) = interner.resolve(variable) {
-        if let Some(var_val) = variables.get(&*var_name) {
-            if let AttributeValue::String(s) = var_val {
-                if let Some(resolved) = interner.resolve(*s) {
-                    return resolved.starts_with(prefix);
-                }
+        if let Some(AttributeValue::String(s)) = variables.get(&*var_name) {
+            if let Some(resolved) = interner.resolve(*s) {
+                return resolved.starts_with(prefix);
             }
         }
     }
@@ -271,11 +299,9 @@ pub fn eval_variable_string_ends_with(
     interner: &StringInterner,
 ) -> bool {
     if let Some(var_name) = interner.resolve(variable) {
-        if let Some(var_val) = variables.get(&*var_name) {
-            if let AttributeValue::String(s) = var_val {
-                if let Some(resolved) = interner.resolve(*s) {
-                    return resolved.ends_with(suffix);
-                }
+        if let Some(AttributeValue::String(s)) = variables.get(&*var_name) {
+            if let Some(resolved) = interner.resolve(*s) {
+                return resolved.ends_with(suffix);
             }
         }
     }
@@ -511,17 +537,11 @@ mod tests {
         variables.insert("test_var".to_string(), AttributeValue::String(var_val));
 
         assert!(eval_variable_string_contains(
-            var_name,
-            "world",
-            &variables,
-            &interner
+            var_name, "world", &variables, &interner
         ));
 
         assert!(!eval_variable_string_contains(
-            var_name,
-            "foo",
-            &variables,
-            &interner
+            var_name, "foo", &variables, &interner
         ));
     }
 
@@ -535,17 +555,11 @@ mod tests {
         variables.insert("test_var".to_string(), AttributeValue::String(var_val));
 
         assert!(eval_variable_string_starts_with(
-            var_name,
-            "hello",
-            &variables,
-            &interner
+            var_name, "hello", &variables, &interner
         ));
 
         assert!(!eval_variable_string_starts_with(
-            var_name,
-            "world",
-            &variables,
-            &interner
+            var_name, "world", &variables, &interner
         ));
     }
 
@@ -559,17 +573,11 @@ mod tests {
         variables.insert("test_var".to_string(), AttributeValue::String(var_val));
 
         assert!(eval_variable_string_ends_with(
-            var_name,
-            "world",
-            &variables,
-            &interner
+            var_name, "world", &variables, &interner
         ));
 
         assert!(!eval_variable_string_ends_with(
-            var_name,
-            "hello",
-            &variables,
-            &interner
+            var_name, "hello", &variables, &interner
         ));
     }
 

@@ -13,11 +13,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError,
-    api::orgs::resolve_org,
-    auth::middleware::RequireAuth,
-    db::repositories::OrganizationRepository,
-    landscape::service::LandscapeService,
+    api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
+    db::repositories::OrganizationRepository, landscape::service::LandscapeService,
     state::AppState,
 };
 
@@ -34,7 +31,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Organization metrics
         .route("/orgs/{org}/metrics", get(get_org_metrics))
         // Agent metrics
-        .route("/orgs/{org}/agents/{agent_id}/metrics", get(get_agent_metrics))
+        .route(
+            "/orgs/{org}/agents/{agent_id}/metrics",
+            get(get_agent_metrics),
+        )
         // Dashboard (combined view)
         .route("/orgs/{org}/dashboard", get(get_dashboard))
 }
@@ -432,9 +432,7 @@ async fn get_dashboard(
 
 // ==================== Helpers ====================
 
-fn convert_landscape(
-    landscape: crate::landscape::service::LandscapeView,
-) -> LandscapeResponse {
+fn convert_landscape(landscape: crate::landscape::service::LandscapeView) -> LandscapeResponse {
     LandscapeResponse {
         org_id: landscape.org_id,
         namespace_id: landscape.namespace_id,

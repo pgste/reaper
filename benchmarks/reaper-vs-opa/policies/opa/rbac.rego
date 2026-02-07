@@ -2,35 +2,31 @@ package reaper.rbac
 
 import rego.v1
 
-# Default deny
+# RBAC Policy — mirrors rbac_simple.reap exactly
+# Rules:
+#   1. admin_full_access: user.role == "admin"
+#   2. manager_reports: user.role == "manager" && resource.type == "report"
+#   3. user_own_resources: user.id == resource.owner_id
+
 default allow := false
 
-# Admin has full access
+# Entity lookups — .attributes shorthand
+user := data.entities[input.principal.id].attributes
+
+resource := data.entities[input.resource].attributes
+
+# Admins can do anything
 allow if {
-    input.principal.role == "admin"
+    user.role == "admin"
 }
 
-# Manager can read and write
+# Managers can read reports
 allow if {
-    input.principal.role == "manager"
-    input.action in ["read", "write"]
+    user.role == "manager"
+    resource.type == "report"
 }
 
-# Engineer can read and write in engineering resources
+# Users can access their own resources
 allow if {
-    input.principal.role == "engineer"
-    input.action in ["read", "write"]
-    startswith(input.resource, "/api/engineering/")
-}
-
-# Viewer can only read
-allow if {
-    input.principal.role == "viewer"
-    input.action == "read"
-}
-
-# User can read public resources
-allow if {
-    input.action == "read"
-    startswith(input.resource, "/api/public/")
+    user.id == resource.owner_id
 }

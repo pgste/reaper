@@ -122,7 +122,9 @@ pub async fn deploy_policy(
 
 /// List all deployed policies.
 #[instrument(skip(state))]
-pub async fn list_policies(State(state): State<Arc<AgentState>>) -> Result<Json<Value>, StatusCode> {
+pub async fn list_policies(
+    State(state): State<Arc<AgentState>>,
+) -> Result<Json<Value>, StatusCode> {
     let policies = state.policy_engine.list_policies();
 
     let policy_list: Vec<Value> = policies

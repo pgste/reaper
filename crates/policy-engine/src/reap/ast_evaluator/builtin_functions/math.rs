@@ -123,9 +123,7 @@ pub fn min(a: &EvalValue, b: &EvalValue) -> Result<EvalValue, ReaperError> {
         (EvalValue::Integer(x), EvalValue::Integer(y)) => Ok(EvalValue::Integer(*x.min(y))),
         (EvalValue::Float(x), EvalValue::Float(y)) => Ok(EvalValue::Float(x.min(*y))),
         (EvalValue::Integer(x), EvalValue::Float(y))
-        | (EvalValue::Float(y), EvalValue::Integer(x)) => {
-            Ok(EvalValue::Float((*x as f64).min(*y)))
-        }
+        | (EvalValue::Float(y), EvalValue::Integer(x)) => Ok(EvalValue::Float((*x as f64).min(*y))),
         _ => Err(ReaperError::InvalidPolicy {
             reason: "math::min() requires two numeric arguments".to_string(),
         }),
@@ -139,9 +137,7 @@ pub fn max(a: &EvalValue, b: &EvalValue) -> Result<EvalValue, ReaperError> {
         (EvalValue::Integer(x), EvalValue::Integer(y)) => Ok(EvalValue::Integer(*x.max(y))),
         (EvalValue::Float(x), EvalValue::Float(y)) => Ok(EvalValue::Float(x.max(*y))),
         (EvalValue::Integer(x), EvalValue::Float(y))
-        | (EvalValue::Float(y), EvalValue::Integer(x)) => {
-            Ok(EvalValue::Float((*x as f64).max(*y)))
-        }
+        | (EvalValue::Float(y), EvalValue::Integer(x)) => Ok(EvalValue::Float((*x as f64).max(*y))),
         _ => Err(ReaperError::InvalidPolicy {
             reason: "math::max() requires two numeric arguments".to_string(),
         }),

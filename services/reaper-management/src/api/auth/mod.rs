@@ -31,7 +31,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/orgs/{org}/api-keys/{key_id}",
             get(api_keys::get_api_key).delete(api_keys::delete_api_key),
         )
-        .route("/orgs/{org}/api-keys/{key_id}/revoke", post(api_keys::revoke_api_key))
+        .route(
+            "/orgs/{org}/api-keys/{key_id}/revoke",
+            post(api_keys::revoke_api_key),
+        )
         // JWKS configuration management
         .route(
             "/orgs/{org}/auth/jwks",

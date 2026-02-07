@@ -114,9 +114,8 @@ impl S3Syncer {
     ) -> Result<aws_config::SdkConfig, S3SyncError> {
         use aws_config::BehaviorVersion;
 
-        let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(
-            aws_config::Region::new(config.region.clone()),
-        );
+        let mut loader = aws_config::defaults(BehaviorVersion::latest())
+            .region(aws_config::Region::new(config.region.clone()));
 
         // Use explicit credentials if provided
         if let (Some(access_key), Some(secret_key)) =

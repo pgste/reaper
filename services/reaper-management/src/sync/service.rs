@@ -348,6 +348,9 @@ mod tests {
         assert_eq!(config.max_concurrent, 5);
         assert!(config.git_base_path.to_string_lossy().contains("git"));
         assert!(config.s3_cache_path.to_string_lossy().contains("s3"));
-        assert!(config.bundle_storage_path.to_string_lossy().contains("bundles"));
+        assert!(config
+            .bundle_storage_path
+            .to_string_lossy()
+            .contains("bundles"));
     }
 }

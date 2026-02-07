@@ -32,7 +32,10 @@ pub mod sync;
 pub mod validation;
 pub mod webhook;
 
-pub use audit::{ActorType, AuditEntry, AuditError, AuditQuery, AuditRepository, ClientInfo, ResourceType};
+pub use audit::{
+    ActorType, AuditEntry, AuditError, AuditQuery, AuditRepository, ClientInfo, ResourceType,
+};
+pub use billing::{BillingConfig, BillingError, BillingService};
 pub use bundle::{BundleError, BundleService};
 pub use config::Config;
 pub use db::{Database, DatabaseError};
@@ -42,7 +45,6 @@ pub use state::AppState;
 pub use sync::SyncService;
 pub use validation::{PolicyValidationResult, ValidationError, ValidationService};
 pub use webhook::WebhookDeliveryService;
-pub use billing::{BillingConfig, BillingError, BillingService};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

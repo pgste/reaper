@@ -3,8 +3,8 @@
 use crate::PolicyAction;
 use serde::{Deserialize, Serialize};
 
-use super::condition::Condition;
 use super::compiled_condition::CompiledCondition;
+use super::condition::Condition;
 
 /// A single policy rule
 #[derive(Debug, Clone, Serialize, Deserialize)]

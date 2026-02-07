@@ -152,9 +152,13 @@ services:
       - OTEL_ENABLED=${OTEL_ENABLED:-false}
       - OTEL_ENDPOINT=http://tempo:4317
       - REAPER_AGENT_ID=${AGENT_ID:-agent-1}
+      # Unix Domain Socket (enabled for low-latency same-host IPC)
+      - REAPER_UDS_ENABLED=${UDS_ENABLED:-true}
+      - REAPER_UDS_PATH=/var/run/reaper/agent.sock
     volumes:
       - agent-data:/data
       - agent-logs:/var/log/reaper
+      - reaper-sockets:/var/run/reaper
       - ./policies:/policies:ro
     networks:
       - reaper-net
@@ -167,6 +171,29 @@ services:
     restart: unless-stopped
     labels:
       - "com.reaper.service=agent"
+      - "com.reaper.profile=engine"
+
+  # ==========================================================================
+  # Enterprise OPA - Comparison Benchmark Target (engine, platform profiles)
+  # ==========================================================================
+  eopa:
+    image: ghcr.io/styrainc/enterprise-opa:latest
+    container_name: reaper-eopa
+    profiles: ["engine", "platform", "full"]
+    ports:
+      - "8181:8181"
+    command: ["run", "--server", "--addr=0.0.0.0:8181"]
+    networks:
+      - reaper-net
+    healthcheck:
+      test: ["CMD", "/ko-app/enterprise-opa-private", "version"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    labels:
+      - "com.reaper.service=eopa"
       - "com.reaper.profile=engine"
 
   # ==========================================================================
@@ -184,12 +211,18 @@ services:
     environment:
       - RUST_LOG=info,reaper_bench=debug
       - REAPER_AGENT_URL=http://agent:8080
+      - REAPER_AGENT_UDS_PATH=/var/run/reaper/agent.sock
+      - EOPA_URL=http://eopa:8181
     volumes:
       - ./services/reaper-bench/policies:/app/policies:ro
+      - ./benchmarks/reaper-vs-opa/policies/opa:/app/opa-policies:ro
+      - reaper-sockets:/var/run/reaper
     networks:
       - reaper-net
     depends_on:
       agent:
+        condition: service_healthy
+      eopa:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
@@ -331,6 +364,8 @@ networks:
     name: reaper-network
 
 volumes:
+  reaper-sockets:
+    name: reaper-sockets
   postgres-data:
     name: reaper-postgres-data
   management-storage:

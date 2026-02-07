@@ -127,9 +127,9 @@ async fn process_bundle_webhook(
     }
 
     // Get the BundleUrl config
-    let config = source.bundle_url_config().ok_or_else(|| {
-        ApiError::Internal("Failed to parse BundleUrl config".to_string())
-    })?;
+    let config = source
+        .bundle_url_config()
+        .ok_or_else(|| ApiError::Internal("Failed to parse BundleUrl config".to_string()))?;
 
     // Validate webhook signature if configured
     if config.webhook_secret.is_some() {
@@ -145,7 +145,9 @@ async fn process_bundle_webhook(
             .map_err(|e| ApiError::Unauthorized(format!("Signature validation failed: {}", e)))?;
 
         if !valid {
-            return Err(ApiError::Unauthorized("Invalid webhook signature".to_string()));
+            return Err(ApiError::Unauthorized(
+                "Invalid webhook signature".to_string(),
+            ));
         }
     }
 
@@ -182,7 +184,10 @@ async fn process_bundle_webhook(
         bundle_id,
         org_id: source.org_id,
         namespace_id: None, // Bundle URL sources are org-wide by default
-        version: bundle.version.clone().unwrap_or_else(|| "latest".to_string()),
+        version: bundle
+            .version
+            .clone()
+            .unwrap_or_else(|| "latest".to_string()),
         download_url: bundle_path.to_string_lossy().to_string(),
     });
 
@@ -287,9 +292,6 @@ mod tests {
 
         let event: S3EventNotification = serde_json::from_str(json).unwrap();
         assert_eq!(event.records.len(), 1);
-        assert_eq!(
-            event.records[0].event_source,
-            Some("aws:s3".to_string())
-        );
+        assert_eq!(event.records[0].event_source, Some("aws:s3".to_string()));
     }
 }

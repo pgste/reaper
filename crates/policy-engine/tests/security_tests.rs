@@ -43,7 +43,10 @@ policy long_string_test {{
 
     // Should build without crashing
     let evaluator = policy.build(Arc::clone(&store));
-    assert!(evaluator.is_ok(), "Should build evaluator with long strings");
+    assert!(
+        evaluator.is_ok(),
+        "Should build evaluator with long strings"
+    );
 }
 
 /// Test that deeply nested conditions don't cause stack overflow
@@ -201,7 +204,11 @@ policy injection_test {
             // Should deny (default), not allow from "injected" rule
             let result = eval.evaluate(&request);
             if let Ok(decision) = result {
-                assert_eq!(decision, PolicyAction::Deny, "Injection attempt should not create allow rule");
+                assert_eq!(
+                    decision,
+                    PolicyAction::Deny,
+                    "Injection attempt should not create allow rule"
+                );
             }
         }
     }
@@ -255,7 +262,11 @@ policy attr_injection_test {
         // Should deny - the injected attribute name shouldn't match "role"
         let result = evaluator.evaluate(&request);
         if let Ok(decision) = result {
-            assert_eq!(decision, PolicyAction::Deny, "Attribute name injection should not grant access");
+            assert_eq!(
+                decision,
+                PolicyAction::Deny,
+                "Attribute name injection should not grant access"
+            );
         }
     }
 }
@@ -746,7 +757,11 @@ policy missing_entity_test {
     let result = evaluator.evaluate(&request);
     match result {
         Ok(decision) => {
-            assert_eq!(decision, PolicyAction::Deny, "Missing principal should not be allowed");
+            assert_eq!(
+                decision,
+                PolicyAction::Deny,
+                "Missing principal should not be allowed"
+            );
         }
         Err(_) => {
             // Returning an error is also acceptable behavior
@@ -762,11 +777,11 @@ fn test_error_malformed_json() {
 
     // Various malformed JSON inputs
     let malformed_inputs = vec![
-        r#"{"entities": [{"id": "user1" "type": "User"}]}"#,  // Missing comma
-        r#"{"entities": [{"id": "user1", "type": }]}"#,       // Missing value
+        r#"{"entities": [{"id": "user1" "type": "User"}]}"#, // Missing comma
+        r#"{"entities": [{"id": "user1", "type": }]}"#,      // Missing value
         r#"{"entities": [{"id": "user1", "type": "User",}]}"#, // Trailing comma
-        r#"not json at all"#,                                  // Not JSON
-        r#"{"entities": null}"#,                               // Null entities
+        r#"not json at all"#,                                // Not JSON
+        r#"{"entities": null}"#,                             // Null entities
     ];
 
     for input in malformed_inputs {

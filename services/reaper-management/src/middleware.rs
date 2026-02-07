@@ -18,18 +18,12 @@ use crate::metrics;
 
 /// Security headers middleware
 /// Adds standard security headers to all responses
-pub async fn security_headers(
-    request: Request,
-    next: Next,
-) -> Response<Body> {
+pub async fn security_headers(request: Request, next: Next) -> Response<Body> {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
     // Prevent clickjacking
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("DENY"),
-    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
 
     // Prevent MIME type sniffing
     headers.insert(
@@ -68,10 +62,7 @@ pub async fn security_headers(
 }
 
 /// HSTS middleware (only enable in production with HTTPS)
-pub async fn hsts_headers(
-    request: Request,
-    next: Next,
-) -> Response<Body> {
+pub async fn hsts_headers(request: Request, next: Next) -> Response<Body> {
     // Check for HTTPS before consuming the request
     let is_https = request
         .headers()
@@ -94,10 +85,7 @@ pub async fn hsts_headers(
 
 /// Request correlation ID middleware
 /// Adds a unique request ID to each request for tracing
-pub async fn correlation_id(
-    mut request: Request,
-    next: Next,
-) -> Response<Body> {
+pub async fn correlation_id(mut request: Request, next: Next) -> Response<Body> {
     // Check if client provided a request ID
     let request_id = request
         .headers()
@@ -107,7 +95,9 @@ pub async fn correlation_id(
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     // Store in request extensions for use by handlers
-    request.extensions_mut().insert(RequestId(request_id.clone()));
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
 
     // Add to tracing span
     Span::current().record("request_id", &request_id);
@@ -161,10 +151,7 @@ impl Default for TimeoutConfig {
 
 /// Request metrics middleware
 /// Records request duration and counts
-pub async fn request_metrics(
-    request: Request,
-    next: Next,
-) -> Response<Body> {
+pub async fn request_metrics(request: Request, next: Next) -> Response<Body> {
     let start = Instant::now();
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
@@ -220,10 +207,7 @@ fn normalize_path_for_metrics(path: &str) -> String {
 }
 
 /// Request body size limit middleware
-pub async fn body_size_limit(
-    request: Request,
-    next: Next,
-) -> Result<Response<Body>, StatusCode> {
+pub async fn body_size_limit(request: Request, next: Next) -> Result<Response<Body>, StatusCode> {
     // Check Content-Length header
     if let Some(content_length) = request
         .headers()
@@ -247,10 +231,7 @@ pub async fn body_size_limit(
 }
 
 /// Log all requests (access log style)
-pub async fn access_log(
-    request: Request,
-    next: Next,
-) -> Response<Body> {
+pub async fn access_log(request: Request, next: Next) -> Response<Body> {
     let start = Instant::now();
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -309,10 +290,7 @@ mod tests {
             normalize_path_for_metrics("/orgs/550e8400-e29b-41d4-a716-446655440000/agents"),
             "/orgs/{id}/agents"
         );
-        assert_eq!(
-            normalize_path_for_metrics("/health"),
-            "/health"
-        );
+        assert_eq!(normalize_path_for_metrics("/health"), "/health");
         assert_eq!(
             normalize_path_for_metrics("/orgs/test-org/bundles/123"),
             "/orgs/test-org/bundles/{id}"

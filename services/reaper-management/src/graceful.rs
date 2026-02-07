@@ -138,10 +138,7 @@ pub async fn wait_for_shutdown_signal() {
 }
 
 /// Perform graceful shutdown with the given configuration
-pub async fn graceful_shutdown(
-    shutdown_signal: &ShutdownSignal,
-    config: &ShutdownConfig,
-) -> bool {
+pub async fn graceful_shutdown(shutdown_signal: &ShutdownSignal, config: &ShutdownConfig) -> bool {
     info!("Initiating graceful shutdown...");
     shutdown_signal.shutdown();
 

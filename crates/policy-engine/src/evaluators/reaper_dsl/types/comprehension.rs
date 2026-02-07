@@ -34,10 +34,16 @@ pub enum UncompiledIterationSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UncompiledOutput {
     Variable(String),
-    VarAttr { variable: String, attribute: String },
+    VarAttr {
+        variable: String,
+        attribute: String,
+    },
     Literal(LiteralValue),
     /// Method call on variable: t.trim(), item.upper()
-    VarMethodCall { variable: String, method: OutputMethod },
+    VarMethodCall {
+        variable: String,
+        method: OutputMethod,
+    },
 }
 
 // ============ Compiled Comprehension Types ============

@@ -96,15 +96,15 @@ pub fn add_ns(timestamp: &EvalValue, duration: &EvalValue) -> Result<EvalValue, 
             })
         }
     };
-    let dur = match duration {
-        EvalValue::Integer(n) => *n,
-        _ => {
-            return Err(ReaperError::InvalidPolicy {
-                reason: "time::add_ns() second argument must be an integer (duration in nanoseconds)"
-                    .to_string(),
-            })
-        }
-    };
+    let dur =
+        match duration {
+            EvalValue::Integer(n) => *n,
+            _ => return Err(ReaperError::InvalidPolicy {
+                reason:
+                    "time::add_ns() second argument must be an integer (duration in nanoseconds)"
+                        .to_string(),
+            }),
+        };
 
     Ok(EvalValue::Integer(ts.saturating_add(dur)))
 }
@@ -123,12 +123,11 @@ pub fn subtract_ns(timestamp: &EvalValue, duration: &EvalValue) -> Result<EvalVa
     };
     let dur = match duration {
         EvalValue::Integer(n) => *n,
-        _ => {
-            return Err(ReaperError::InvalidPolicy {
-                reason: "time::subtract_ns() second argument must be an integer (duration in nanoseconds)"
+        _ => return Err(ReaperError::InvalidPolicy {
+            reason:
+                "time::subtract_ns() second argument must be an integer (duration in nanoseconds)"
                     .to_string(),
-            })
-        }
+        }),
     };
 
     Ok(EvalValue::Integer(ts.saturating_sub(dur)))

@@ -2,14 +2,14 @@ package reaper.mega
 
 import rego.v1
 
-# Mega Policy with 50+ Rules (Matching Reaper supported features)
+# Mega Policy with 50+ Rules — mirrors mega.reap from benchmarks
 # Uses only features supported by both Reaper and OPA for fair comparison
 
 # Default deny
 default allow := false
 
-# Entity lookup from pre-loaded data
-user := data.entities[input.principal]
+# Entity lookup — .attributes shorthand
+user := data.entities[input.principal.id].attributes
 
 # ===== MATH OPERATIONS (Rules 1-15) =====
 

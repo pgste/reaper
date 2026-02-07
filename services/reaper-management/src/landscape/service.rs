@@ -186,9 +186,10 @@ impl LandscapeService {
 
             // Track bundle distribution
             if let Some(bundle_id) = current_bundle_id {
-                let entry = bundle_counts
-                    .entry(bundle_id)
-                    .or_insert(("Unknown".to_string(), None, 0));
+                let entry =
+                    bundle_counts
+                        .entry(bundle_id)
+                        .or_insert(("Unknown".to_string(), None, 0));
                 entry.2 += 1;
             }
 
@@ -219,7 +220,11 @@ impl LandscapeService {
         let promoted_bundle = bundle_repo.get_promoted(org_id).await?;
 
         // Build bundle distribution
-        let total_with_bundle = bundle_counts.values().map(|(_, _, c)| c).sum::<usize>().max(1);
+        let total_with_bundle = bundle_counts
+            .values()
+            .map(|(_, _, c)| c)
+            .sum::<usize>()
+            .max(1);
         let bundle_distribution: Vec<BundleDistribution> = bundle_counts
             .into_iter()
             .map(|(bundle_id, (name, version, count))| {
@@ -344,7 +349,9 @@ impl LandscapeService {
         namespace_id: Uuid,
     ) -> Result<Vec<Uuid>, LandscapeError> {
         // Get all subscriptions for this namespace
-        let subscriptions = ns_repo.list_subscriptions_for_namespace(namespace_id).await?;
+        let subscriptions = ns_repo
+            .list_subscriptions_for_namespace(namespace_id)
+            .await?;
         Ok(subscriptions.into_iter().map(|s| s.agent_id).collect())
     }
 }

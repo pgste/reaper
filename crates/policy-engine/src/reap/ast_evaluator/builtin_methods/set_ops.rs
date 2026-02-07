@@ -55,14 +55,8 @@ mod tests {
 
     #[test]
     fn test_union() {
-        let arr1 = EvalValue::Array(vec![
-            EvalValue::Integer(1),
-            EvalValue::Integer(2),
-        ]);
-        let arr2 = EvalValue::Array(vec![
-            EvalValue::Integer(2),
-            EvalValue::Integer(3),
-        ]);
+        let arr1 = EvalValue::Array(vec![EvalValue::Integer(1), EvalValue::Integer(2)]);
+        let arr2 = EvalValue::Array(vec![EvalValue::Integer(2), EvalValue::Integer(3)]);
 
         let result = method_union(&arr1, &arr2).unwrap();
         if let EvalValue::Set(items) = result {
@@ -100,10 +94,7 @@ mod tests {
             EvalValue::Integer(2),
             EvalValue::Integer(3),
         ]);
-        let arr2 = EvalValue::Array(vec![
-            EvalValue::Integer(2),
-            EvalValue::Integer(3),
-        ]);
+        let arr2 = EvalValue::Array(vec![EvalValue::Integer(2), EvalValue::Integer(3)]);
 
         let result = method_difference(&arr1, &arr2).unwrap();
         if let EvalValue::Set(items) = result {

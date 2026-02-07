@@ -161,7 +161,9 @@ pub(super) fn parse_comp_base_expr(pair: pest::iterators::Pair<Rule>) -> Result<
 }
 
 /// Parse dot access: u.name or u.roles[0]
-pub(super) fn parse_comp_dot_access(pair: pest::iterators::Pair<Rule>) -> Result<Expr, ReaperError> {
+pub(super) fn parse_comp_dot_access(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Expr, ReaperError> {
     let mut variable: Option<String> = None;
     let mut attribute: Option<String> = None;
     let mut index: Option<Index> = None;

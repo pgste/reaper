@@ -21,7 +21,7 @@ chrono = { version = "0.4", features = ["serde"] }
 cedar-policy = "4.2"
 pest = "2.7"
 pest_derive = "2.7"
-bincode = "1.3"
+postcard = { workspace = true }
 regex = "1.10"
 sha2 = { workspace = true }
 hex = "0.4"  # Hex encoding for checksums
@@ -71,6 +71,14 @@ harness = false
 
 [[bench]]
 name = "optimization_phases_bench"
+harness = false
+
+[[bench]]
+name = "complex_policy_bench"
+harness = false
+
+[[bench]]
+name = "data_scaling_bench"
 harness = false
 
 [[test]]

@@ -11,15 +11,22 @@
 //! - etc.
 
 use super::types::{
-    // Uncompiled types
-    Condition, LiteralValue,
-    UncompiledComprehensionType, UncompiledIterationSource, UncompiledOutput,
     // Compiled types
-    CompiledComprehension, CompiledCondition,
-    CompiledIterationSource, CompiledIterator,
-    CompiledLiteralValue, CompiledOutput, ComprehensionType,
+    CompiledComprehension,
+    CompiledCondition,
+    CompiledIterationSource,
+    CompiledIterator,
+    CompiledLiteralValue,
+    CompiledOutput,
     // Compiled consolidated types
     CompiledRegexMatch,
+    ComprehensionType,
+    // Uncompiled types
+    Condition,
+    LiteralValue,
+    UncompiledComprehensionType,
+    UncompiledIterationSource,
+    UncompiledOutput,
 };
 use crate::data::StringInterner;
 
@@ -31,10 +38,7 @@ pub use super::collect::{collect_membership_values, collect_regex_patterns};
 
 /// Compile a condition with pre-interned strings for zero-lookup evaluation.
 /// This is called once at construction time, not during evaluation.
-pub fn compile_condition(
-    condition: &Condition,
-    interner: &StringInterner,
-) -> CompiledCondition {
+pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> CompiledCondition {
     match condition {
         Condition::Always => CompiledCondition::Always,
         Condition::ActionEquals { value } => CompiledCondition::ActionEquals {
@@ -48,18 +52,12 @@ pub fn compile_condition(
         Condition::AttributeCompare(comp) => {
             CompiledCondition::AttributeCompare(comp.to_compiled(interner))
         }
-        Condition::StringOp(op) => {
-            CompiledCondition::StringOp(op.to_compiled(interner))
-        }
+        Condition::StringOp(op) => CompiledCondition::StringOp(op.to_compiled(interner)),
         Condition::VariableStringOp(op) => {
             CompiledCondition::VariableStringOp(op.to_compiled(interner))
         }
-        Condition::CountOp(cond) => {
-            CompiledCondition::CountOp(cond.to_compiled(interner))
-        }
-        Condition::TimeOp(cond) => {
-            CompiledCondition::TimeOp(cond.to_compiled(interner))
-        }
+        Condition::CountOp(cond) => CompiledCondition::CountOp(cond.to_compiled(interner)),
+        Condition::TimeOp(cond) => CompiledCondition::TimeOp(cond.to_compiled(interner)),
         Condition::CrossEntityCompare(comp) => {
             CompiledCondition::CrossEntityCompare(comp.to_compiled(interner))
         }
@@ -209,12 +207,13 @@ pub fn compile_condition(
         },
 
         // ============ Expression Assignment ============
-        Condition::ExpressionAssignment { variable, expr_type } => {
-            CompiledCondition::ExpressionAssignment {
-                variable: interner.intern(variable),
-                expr_type: compile_expr_type(expr_type, interner),
-            }
-        }
+        Condition::ExpressionAssignment {
+            variable,
+            expr_type,
+        } => CompiledCondition::ExpressionAssignment {
+            variable: interner.intern(variable),
+            expr_type: compile_expr_type(expr_type, interner),
+        },
         Condition::ExprCompareAssignment {
             variable,
             expr_type,
@@ -234,7 +233,11 @@ pub fn compile_condition(
                 value: compile_literal(value, interner),
             }
         }
-        Condition::VariableCompare { variable, op, value } => CompiledCondition::VariableCompare {
+        Condition::VariableCompare {
+            variable,
+            op,
+            value,
+        } => CompiledCondition::VariableCompare {
             variable: interner.intern(variable),
             op: *op,
             value: compile_literal(value, interner),
@@ -354,18 +357,20 @@ pub fn compile_condition(
             op: *op,
             value: compile_literal(value, interner),
         },
-        Condition::VariableAttrEqualsNull { variable, attribute } => {
-            CompiledCondition::VariableAttrEqualsNull {
-                variable: interner.intern(variable),
-                attribute: interner.intern(attribute),
-            }
-        }
-        Condition::VariableAttrNotEqualsNull { variable, attribute } => {
-            CompiledCondition::VariableAttrNotEqualsNull {
-                variable: interner.intern(variable),
-                attribute: interner.intern(attribute),
-            }
-        }
+        Condition::VariableAttrEqualsNull {
+            variable,
+            attribute,
+        } => CompiledCondition::VariableAttrEqualsNull {
+            variable: interner.intern(variable),
+            attribute: interner.intern(attribute),
+        },
+        Condition::VariableAttrNotEqualsNull {
+            variable,
+            attribute,
+        } => CompiledCondition::VariableAttrNotEqualsNull {
+            variable: interner.intern(variable),
+            attribute: interner.intern(attribute),
+        },
         Condition::VarAttrNullCompareAssignment {
             result_variable,
             source_variable,
@@ -480,17 +485,18 @@ fn compile_comprehension(
     };
 
     // For object comprehensions, compile key_value; for others, compile output
-    let (compiled_output, compiled_key_value) = if matches!(comp_type, UncompiledComprehensionType::Object) {
-        // Object comprehension: output is value, key_output is key
-        let key = key_output.as_ref().map(compile_output_helper);
-        let value = output.as_ref().map(compile_output_helper);
-        match (key, value) {
-            (Some(k), Some(v)) => (None, Some((k, v))),
-            _ => (output.as_ref().map(compile_output_helper), None),
-        }
-    } else {
-        (output.as_ref().map(compile_output_helper), None)
-    };
+    let (compiled_output, compiled_key_value) =
+        if matches!(comp_type, UncompiledComprehensionType::Object) {
+            // Object comprehension: output is value, key_output is key
+            let key = key_output.as_ref().map(compile_output_helper);
+            let value = output.as_ref().map(compile_output_helper);
+            match (key, value) {
+                (Some(k), Some(v)) => (None, Some((k, v))),
+                _ => (output.as_ref().map(compile_output_helper), None),
+            }
+        } else {
+            (output.as_ref().map(compile_output_helper), None)
+        };
 
     CompiledComprehension {
         comp_type: compiled_type,
@@ -517,10 +523,9 @@ pub fn compile_literal(value: &LiteralValue, interner: &StringInterner) -> Compi
 mod tests {
     use super::*;
     use crate::evaluators::reaper_dsl::types::{
-        AttributeComparison, CompareTarget, CompiledCompareTarget, CountCondition,
-        CountOp, CrossEntityComparison, EntityType, NumericOp, StringOp,
-        StringOperationCondition, TimeCondition, VariableStringOperationCondition,
-        WildcardComparison,
+        AttributeComparison, CompareTarget, CompiledCompareTarget, CountCondition, CountOp,
+        CrossEntityComparison, EntityType, NumericOp, StringOp, StringOperationCondition,
+        TimeCondition, VariableStringOperationCondition, WildcardComparison,
     };
 
     #[test]
@@ -700,7 +705,10 @@ mod tests {
 
         if let CompiledCondition::And(conditions) = compiled {
             assert_eq!(conditions.len(), 2);
-            assert!(matches!(conditions[0], CompiledCondition::AttributeCompare(_)));
+            assert!(matches!(
+                conditions[0],
+                CompiledCondition::AttributeCompare(_)
+            ));
             assert!(matches!(conditions[1], CompiledCondition::StringOp(_)));
         } else {
             panic!("Expected And, got {:?}", compiled);

@@ -50,7 +50,10 @@ impl Namespace {
 
     /// Get the leaf name (last segment of slug)
     pub fn leaf_name(&self) -> &str {
-        self.slug.rsplit_once('/').map(|(_, leaf)| leaf).unwrap_or(&self.slug)
+        self.slug
+            .rsplit_once('/')
+            .map(|(_, leaf)| leaf)
+            .unwrap_or(&self.slug)
     }
 
     /// Check if this namespace is an ancestor of another
@@ -162,10 +165,7 @@ pub async fn resolve_namespace(
 
     // Try parsing as UUID first, then as slug
     let ns = if let Ok(id) = Uuid::parse_str(namespace) {
-        ns_repo
-            .get_by_id(id)
-            .await
-            .map_err(|e| e.to_string())?
+        ns_repo.get_by_id(id).await.map_err(|e| e.to_string())?
     } else {
         ns_repo
             .get_by_slug(org_id, namespace)
@@ -217,7 +217,8 @@ pub fn build_namespace_tree(namespaces: Vec<Namespace>) -> Vec<NamespaceTree> {
 }
 
 fn sort_tree_children(node: &mut NamespaceTree) {
-    node.children.sort_by(|a, b| a.namespace.slug.cmp(&b.namespace.slug));
+    node.children
+        .sort_by(|a, b| a.namespace.slug.cmp(&b.namespace.slug));
     for child in &mut node.children {
         sort_tree_children(child);
     }

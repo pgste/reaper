@@ -127,12 +127,7 @@ impl ValidationService {
                 ))
             })?;
 
-        self.validate_content(
-            policy_id,
-            &policy.name,
-            policy.language,
-            &version.content,
-        )
+        self.validate_content(policy_id, &policy.name, policy.language, &version.content)
     }
 
     /// Validate policy content directly (for preview before saving)

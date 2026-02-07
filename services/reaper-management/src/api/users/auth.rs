@@ -333,7 +333,9 @@ pub async fn change_password(
 
     // Verify current password
     if !user.verify_password(&request.current_password) {
-        return Err(ApiError::Unauthorized("Invalid current password".to_string()));
+        return Err(ApiError::Unauthorized(
+            "Invalid current password".to_string(),
+        ));
     }
 
     // Validate new password
@@ -470,7 +472,9 @@ pub async fn reset_password(
 
     // Invalidate all sessions
     let session_repo = SessionRepository::new(&state.db);
-    session_repo.delete_all_for_user(reset_token.user_id).await?;
+    session_repo
+        .delete_all_for_user(reset_token.user_id)
+        .await?;
 
     // Audit log
     let user_org_repo = UserOrgRepository::new(&state.db);

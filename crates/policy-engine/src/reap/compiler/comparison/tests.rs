@@ -3,7 +3,9 @@
 #[cfg(test)]
 mod tests {
     use crate::evaluators::reaper_dsl::Condition as DslCondition;
-    use crate::reap::ast::{ComparisonLeft, ComparisonRight, Entity, EntityAttr, Expr, Operator, Value};
+    use crate::reap::ast::{
+        ComparisonLeft, ComparisonRight, Entity, EntityAttr, Expr, Operator, Value,
+    };
     use crate::reap::compiler::comparison::compile_comparison;
 
     #[test]

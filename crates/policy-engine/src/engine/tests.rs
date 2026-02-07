@@ -562,9 +562,7 @@ async fn test_atomic_package_rollback() {
 
     assert!(!engine.is_staging_in_progress());
     // Policy should not be visible
-    assert!(engine
-        .get_policy_by_name("rollback-test-policy")
-        .is_none());
+    assert!(engine.get_policy_by_name("rollback-test-policy").is_none());
 }
 
 #[tokio::test]
@@ -625,17 +623,9 @@ async fn test_concurrent_staging_prevented() {
         rules: vec![],
     };
 
-    let package1 = PolicyPackage::new(
-        "package-1".to_string(),
-        "1.0.0".to_string(),
-        vec![policy1],
-    );
+    let package1 = PolicyPackage::new("package-1".to_string(), "1.0.0".to_string(), vec![policy1]);
 
-    let package2 = PolicyPackage::new(
-        "package-2".to_string(),
-        "1.0.0".to_string(),
-        vec![policy2],
-    );
+    let package2 = PolicyPackage::new("package-2".to_string(), "1.0.0".to_string(), vec![policy2]);
 
     // Stage first package
     let _staged1 = engine.stage_package(&package1, store.clone()).unwrap();

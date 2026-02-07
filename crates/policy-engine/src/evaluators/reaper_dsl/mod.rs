@@ -31,12 +31,44 @@ mod variable_eval;
 // Re-export types for external use
 pub use types::*;
 
-
 use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::data::{AttributeValue, DataStore, Entity, InternedString};
 use crate::{PolicyAction, PolicyRequest};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
+
+/// Zero-copy evaluation context — avoids HashMap clone per evaluation.
+/// "action" and "resource" are served from borrowed fields;
+/// all other keys fall through to the original request context.
+pub(crate) struct EvalContext<'a> {
+    action: &'a str,
+    resource: &'a str,
+    context: &'a std::collections::HashMap<String, String>,
+}
+
+impl<'a> EvalContext<'a> {
+    #[inline]
+    fn new(
+        action: &'a str,
+        resource: &'a str,
+        context: &'a std::collections::HashMap<String, String>,
+    ) -> Self {
+        Self {
+            action,
+            resource,
+            context,
+        }
+    }
+
+    #[inline]
+    fn get(&self, key: &str) -> Option<&str> {
+        match key {
+            "action" => Some(self.action),
+            "resource" => Some(self.resource),
+            _ => self.context.get(key).map(|s| s.as_str()),
+        }
+    }
+}
 
 /// Reaper DSL Policy Evaluator
 ///
@@ -129,7 +161,7 @@ impl ReaperDSLEvaluator {
         condition: &CompiledCondition,
         user: &Entity,
         resource: &Entity,
-        _context: &std::collections::HashMap<String, String>,
+        _context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
     ) -> bool {
         let interner = self.store.interner();
@@ -137,29 +169,15 @@ impl ReaperDSLEvaluator {
         match condition {
             CompiledCondition::Always => true,
 
-            CompiledCondition::ActionEquals { value } => {
-                _context
-                    .get("action")
-                    .map(|a| {
-                        interner
-                            .resolve(*value)
-                            .map(|v| a.as_str() == &*v)
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false)
-            }
+            CompiledCondition::ActionEquals { value } => _context
+                .get("action")
+                .map(|a| interner.resolve(*value).map(|v| a == &*v).unwrap_or(false))
+                .unwrap_or(false),
 
-            CompiledCondition::ResourceIdEquals { value } => {
-                _context
-                    .get("resource")
-                    .map(|r| {
-                        interner
-                            .resolve(*value)
-                            .map(|v| r.as_str() == &*v)
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false)
-            }
+            CompiledCondition::ResourceIdEquals { value } => _context
+                .get("resource")
+                .map(|r| interner.resolve(*value).map(|v| r == &*v).unwrap_or(false))
+                .unwrap_or(false),
 
             // ============ V2 Consolidated Types ============
             CompiledCondition::AttributeCompare(comp) => {
@@ -183,9 +201,7 @@ impl ReaperDSLEvaluator {
                 collection_eval::eval_count_operation(cond, user, resource)
             }
 
-            CompiledCondition::TimeOp(cond) => {
-                time_eval::eval_time_operation(cond, user, resource)
-            }
+            CompiledCondition::TimeOp(cond) => time_eval::eval_time_operation(cond, user, resource),
 
             CompiledCondition::CrossEntityCompare(comp) => {
                 comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
@@ -229,7 +245,13 @@ impl ReaperDSLEvaluator {
                     };
                     collection_eval::get_indexed_value_compiled(entity, *attribute, idx, interner)
                 } else {
-                    entity_helpers::get_nested_attr(entity_type, *attribute, user, resource, interner)
+                    entity_helpers::get_nested_attr(
+                        entity_type,
+                        *attribute,
+                        user,
+                        resource,
+                        interner,
+                    )
                 };
 
                 if let Some(val) = value {
@@ -249,17 +271,15 @@ impl ReaperDSLEvaluator {
                 entity_type,
                 attribute,
                 index,
-            } => {
-                collection_eval::eval_membership_test(
-                    value,
-                    entity_type,
-                    *attribute,
-                    index.as_ref(),
-                    user,
-                    resource,
-                    interner,
-                )
-            }
+            } => collection_eval::eval_membership_test(
+                value,
+                entity_type,
+                *attribute,
+                index.as_ref(),
+                user,
+                resource,
+                interner,
+            ),
 
             CompiledCondition::IndexedEquals {
                 entity_type,
@@ -300,8 +320,16 @@ impl ReaperDSLEvaluator {
             }
 
             CompiledCondition::And(conditions) => {
-                for c in conditions.iter() {
-                    if !self.evaluate_compiled_condition(c, user, resource, _context, variables) {
+                for (i, c) in conditions.iter().enumerate() {
+                    let result =
+                        self.evaluate_compiled_condition(c, user, resource, _context, variables);
+                    if !result {
+                        tracing::debug!(
+                            condition_index = i,
+                            condition_type = ?std::mem::discriminant(c),
+                            condition_debug = ?c,
+                            "AND sub-condition failed"
+                        );
                         return false;
                     }
                 }
@@ -317,7 +345,6 @@ impl ReaperDSLEvaluator {
             }
 
             // Old flat variants removed - now handled by V2 types above
-
             CompiledCondition::IsString {
                 entity_type,
                 attribute,
@@ -339,14 +366,25 @@ impl ReaperDSLEvaluator {
                 values,
                 threshold,
             } => collection_eval::eval_set_intersection_count_greater(
-                entity_type, *attribute, values, *threshold, user, resource,
+                entity_type,
+                *attribute,
+                values,
+                *threshold,
+                user,
+                resource,
             ),
 
             CompiledCondition::MapKeyExists {
                 entity_type,
                 attribute,
                 key,
-            } => collection_eval::eval_map_key_exists_interned(entity_type, *attribute, key, user, resource),
+            } => collection_eval::eval_map_key_exists_interned(
+                entity_type,
+                *attribute,
+                key,
+                user,
+                resource,
+            ),
 
             CompiledCondition::ComprehensionCountGreaterEqual {
                 entity_type,
@@ -356,8 +394,15 @@ impl ReaperDSLEvaluator {
                 filter_op,
                 threshold,
             } => comprehension_eval::eval_comprehension_count_gte(
-                entity_type, *attribute, filter_attr, filter_value, filter_op, *threshold,
-                user, resource, interner,
+                entity_type,
+                *attribute,
+                filter_attr,
+                filter_value,
+                filter_op,
+                *threshold,
+                user,
+                resource,
+                interner,
             ),
 
             CompiledCondition::ComprehensionCountEqual {
@@ -368,14 +413,24 @@ impl ReaperDSLEvaluator {
                 filter_op,
                 threshold,
             } => comprehension_eval::eval_comprehension_count_eq(
-                entity_type, *attribute, filter_attr, filter_value, filter_op, *threshold,
-                user, resource, interner,
+                entity_type,
+                *attribute,
+                filter_attr,
+                filter_value,
+                filter_op,
+                *threshold,
+                user,
+                resource,
+                interner,
             ),
 
             // ============ Expression Assignment ============
-            CompiledCondition::ExpressionAssignment { variable, expr_type } => {
-                if let Some(value) =
-                    self.evaluate_expr_type(expr_type, user, resource, _context, variables, interner)
+            CompiledCondition::ExpressionAssignment {
+                variable,
+                expr_type,
+            } => {
+                if let Some(value) = self
+                    .evaluate_expr_type(expr_type, user, resource, _context, variables, interner)
                 {
                     let var_name = interner
                         .resolve(*variable)
@@ -396,24 +451,64 @@ impl ReaperDSLEvaluator {
                 op,
                 value,
             } => {
-                if let Some(expr_value) =
-                    self.evaluate_expr_type(expr_type, user, resource, _context, variables, interner)
+                if let Some(expr_value) = self
+                    .evaluate_expr_type(expr_type, user, resource, _context, variables, interner)
                 {
                     // Compare the expression result with the literal value
                     let result = match (&expr_value, value, op) {
                         // Integer comparisons
-                        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::Equal) => *i == *expected,
-                        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::NotEqual) => *i != *expected,
-                        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::Greater) => *i > *expected,
-                        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::GreaterEqual) => *i >= *expected,
-                        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::Less) => *i < *expected,
-                        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::LessEqual) => *i <= *expected,
+                        (
+                            AttributeValue::Int(i),
+                            CompiledLiteralValue::Int(expected),
+                            AttrCompareOp::Equal,
+                        ) => *i == *expected,
+                        (
+                            AttributeValue::Int(i),
+                            CompiledLiteralValue::Int(expected),
+                            AttrCompareOp::NotEqual,
+                        ) => *i != *expected,
+                        (
+                            AttributeValue::Int(i),
+                            CompiledLiteralValue::Int(expected),
+                            AttrCompareOp::Greater,
+                        ) => *i > *expected,
+                        (
+                            AttributeValue::Int(i),
+                            CompiledLiteralValue::Int(expected),
+                            AttrCompareOp::GreaterEqual,
+                        ) => *i >= *expected,
+                        (
+                            AttributeValue::Int(i),
+                            CompiledLiteralValue::Int(expected),
+                            AttrCompareOp::Less,
+                        ) => *i < *expected,
+                        (
+                            AttributeValue::Int(i),
+                            CompiledLiteralValue::Int(expected),
+                            AttrCompareOp::LessEqual,
+                        ) => *i <= *expected,
                         // String comparisons
-                        (AttributeValue::String(s), CompiledLiteralValue::String(expected), AttrCompareOp::Equal) => *s == *expected,
-                        (AttributeValue::String(s), CompiledLiteralValue::String(expected), AttrCompareOp::NotEqual) => *s != *expected,
+                        (
+                            AttributeValue::String(s),
+                            CompiledLiteralValue::String(expected),
+                            AttrCompareOp::Equal,
+                        ) => *s == *expected,
+                        (
+                            AttributeValue::String(s),
+                            CompiledLiteralValue::String(expected),
+                            AttrCompareOp::NotEqual,
+                        ) => *s != *expected,
                         // Boolean comparisons
-                        (AttributeValue::Bool(b), CompiledLiteralValue::Bool(expected), AttrCompareOp::Equal) => *b == *expected,
-                        (AttributeValue::Bool(b), CompiledLiteralValue::Bool(expected), AttrCompareOp::NotEqual) => *b != *expected,
+                        (
+                            AttributeValue::Bool(b),
+                            CompiledLiteralValue::Bool(expected),
+                            AttrCompareOp::Equal,
+                        ) => *b == *expected,
+                        (
+                            AttributeValue::Bool(b),
+                            CompiledLiteralValue::Bool(expected),
+                            AttrCompareOp::NotEqual,
+                        ) => *b != *expected,
                         _ => false,
                     };
 
@@ -434,9 +529,11 @@ impl ReaperDSLEvaluator {
                 variable_eval::eval_variable_equals_literal(*variable, value, variables, interner)
             }
 
-            CompiledCondition::VariableCompare { variable, op, value } => {
-                variable_eval::eval_variable_compare(*variable, op, value, variables, interner)
-            }
+            CompiledCondition::VariableCompare {
+                variable,
+                op,
+                value,
+            } => variable_eval::eval_variable_compare(*variable, op, value, variables, interner),
 
             CompiledCondition::VariableIsNull { variable } => {
                 variable_eval::eval_variable_is_null(*variable, variables, interner)
@@ -497,7 +594,9 @@ impl ReaperDSLEvaluator {
                                 AttrCompareOp::LessEqual => attr_val <= lit_val,
                                 AttrCompareOp::Less => attr_val < lit_val,
                                 AttrCompareOp::Equal => (attr_val - lit_val).abs() < f64::EPSILON,
-                                AttrCompareOp::NotEqual => (attr_val - lit_val).abs() >= f64::EPSILON,
+                                AttrCompareOp::NotEqual => {
+                                    (attr_val - lit_val).abs() >= f64::EPSILON
+                                }
                             }
                         } else {
                             false
@@ -532,8 +631,13 @@ impl ReaperDSLEvaluator {
                 is_null_check,
             } => {
                 // Check if the attribute is null (handles nested attributes like "config.name")
-                let attr_is_null =
-                    entity_helpers::is_nested_attr_null(entity_type, *attribute, user, resource, interner);
+                let attr_is_null = entity_helpers::is_nested_attr_null(
+                    entity_type,
+                    *attribute,
+                    user,
+                    resource,
+                    interner,
+                );
 
                 // Result depends on whether we're checking == null or != null
                 let result = if *is_null_check {
@@ -586,20 +690,18 @@ impl ReaperDSLEvaluator {
                 variable,
                 method,
                 values,
-            } => {
-                variable_eval::eval_variable_method_with_literal_array(
-                    *variable, method, values, variables, interner,
-                )
-            }
+            } => variable_eval::eval_variable_method_with_literal_array(
+                *variable, method, values, variables, interner,
+            ),
 
             CompiledCondition::VariableMethodCompare {
                 variable,
                 method,
                 op,
                 value,
-            } => {
-                variable_eval::eval_variable_method_compare(*variable, method, op, value, variables, interner)
-            }
+            } => variable_eval::eval_variable_method_compare(
+                *variable, method, op, value, variables, interner,
+            ),
 
             // Chained variable method comparison: t.trim().count() > 0
             CompiledCondition::VariableChainedMethodCompare {
@@ -608,37 +710,47 @@ impl ReaperDSLEvaluator {
                 compare_method,
                 op,
                 value,
-            } => {
-                variable_eval::eval_variable_chained_method_compare(
-                    *variable, transform_method, compare_method, op, value, variables, interner,
-                )
-            }
+            } => variable_eval::eval_variable_chained_method_compare(
+                *variable,
+                transform_method,
+                compare_method,
+                op,
+                value,
+                variables,
+                interner,
+            ),
 
             // ============ Variable Attribute Comparisons (for comprehension filters) ============
             CompiledCondition::VariableAttrEqualsLiteral {
                 variable,
                 attribute,
                 value,
-            } => {
-                variable_eval::eval_variable_attr_equals_literal(*variable, *attribute, value, variables, interner)
-            }
+            } => variable_eval::eval_variable_attr_equals_literal(
+                *variable, *attribute, value, variables, interner,
+            ),
 
             CompiledCondition::VariableAttrCompare {
                 variable,
                 attribute,
                 op,
                 value,
-            } => {
-                variable_eval::eval_variable_attr_compare(*variable, *attribute, op, value, variables, interner)
-            }
+            } => variable_eval::eval_variable_attr_compare(
+                *variable, *attribute, op, value, variables, interner,
+            ),
 
-            CompiledCondition::VariableAttrEqualsNull { variable, attribute } => {
-                variable_eval::eval_variable_attr_equals_null(*variable, *attribute, variables, interner)
-            }
+            CompiledCondition::VariableAttrEqualsNull {
+                variable,
+                attribute,
+            } => variable_eval::eval_variable_attr_equals_null(
+                *variable, *attribute, variables, interner,
+            ),
 
-            CompiledCondition::VariableAttrNotEqualsNull { variable, attribute } => {
-                variable_eval::eval_variable_attr_not_equals_null(*variable, *attribute, variables, interner)
-            }
+            CompiledCondition::VariableAttrNotEqualsNull {
+                variable,
+                attribute,
+            } => variable_eval::eval_variable_attr_not_equals_null(
+                *variable, *attribute, variables, interner,
+            ),
 
             // Variable attribute null comparison assignment: x := var.attr != null
             CompiledCondition::VarAttrNullCompareAssignment {
@@ -649,9 +761,19 @@ impl ReaperDSLEvaluator {
             } => {
                 // Evaluate the null check
                 let is_null = if *is_null_check {
-                    variable_eval::eval_variable_attr_equals_null(*source_variable, *attribute, variables, interner)
+                    variable_eval::eval_variable_attr_equals_null(
+                        *source_variable,
+                        *attribute,
+                        variables,
+                        interner,
+                    )
                 } else {
-                    variable_eval::eval_variable_attr_not_equals_null(*source_variable, *attribute, variables, interner)
+                    variable_eval::eval_variable_attr_not_equals_null(
+                        *source_variable,
+                        *attribute,
+                        variables,
+                        interner,
+                    )
                 };
                 // Assign the result to the result variable
                 if let Some(var_name) = interner.resolve(*result_variable) {
@@ -665,9 +787,9 @@ impl ReaperDSLEvaluator {
                 variable,
                 attribute,
                 substring,
-            } => {
-                variable_eval::eval_variable_attr_contains(*variable, *attribute, *substring, variables, interner)
-            }
+            } => variable_eval::eval_variable_attr_contains(
+                *variable, *attribute, *substring, variables, interner,
+            ),
 
             // Context entity comparisons are now handled by AttributeCompare V2 type
 
@@ -676,9 +798,14 @@ impl ReaperDSLEvaluator {
                 variable,
                 comprehension,
             } => {
-                if let Some(result) =
-                    self.evaluate_comprehension(comprehension, user, resource, _context, variables, interner)
-                {
+                if let Some(result) = self.evaluate_comprehension(
+                    comprehension,
+                    user,
+                    resource,
+                    _context,
+                    variables,
+                    interner,
+                ) {
                     let var_name = interner
                         .resolve(*variable)
                         .map(|s| s.to_string())
@@ -700,7 +827,7 @@ impl ReaperDSLEvaluator {
     fn eval_context_attribute_comparison(
         &self,
         comp: &CompiledAttributeComparison,
-        context: &std::collections::HashMap<String, String>,
+        context: &EvalContext<'_>,
         interner: &crate::data::StringInterner,
     ) -> bool {
         // Get the attribute name from the interner
@@ -710,7 +837,7 @@ impl ReaperDSLEvaluator {
         };
 
         // Get the context value
-        let ctx_val = match context.get(&*attr_name) {
+        let ctx_val = match context.get(&attr_name) {
             Some(v) => v,
             None => return false,
         };
@@ -743,9 +870,10 @@ impl ReaperDSLEvaluator {
                 }
             }
             CompiledCompareTarget::LiteralBool(expected) => {
+                let expected_str = if *expected { "true" } else { "false" };
                 match comp.op {
-                    NumericOp::Equal => ctx_val == &expected.to_string(),
-                    NumericOp::NotEqual => ctx_val != &expected.to_string(),
+                    NumericOp::Equal => ctx_val == expected_str,
+                    NumericOp::NotEqual => ctx_val != expected_str,
                     _ => false,
                 }
             }
@@ -761,11 +889,11 @@ impl ReaperDSLEvaluator {
         expr_type: &CompiledExprType,
         user: &Entity,
         resource: &Entity,
-        context: &std::collections::HashMap<String, String>,
+        _context: &EvalContext<'_>,
         variables: &std::collections::HashMap<String, AttributeValue>,
         interner: &crate::data::StringInterner,
     ) -> Option<AttributeValue> {
-        expr_eval::evaluate_compiled_expr_type(expr_type, user, resource, context, variables, interner)
+        expr_eval::evaluate_compiled_expr_type(expr_type, user, resource, variables, interner)
     }
 
     /// Evaluate a comprehension and return the resulting collection
@@ -774,7 +902,7 @@ impl ReaperDSLEvaluator {
         comp: &CompiledComprehension,
         user: &Entity,
         resource: &Entity,
-        context: &std::collections::HashMap<String, String>,
+        context: &EvalContext<'_>,
         variables: &std::collections::HashMap<String, AttributeValue>,
         interner: &crate::data::StringInterner,
     ) -> Option<AttributeValue> {
@@ -823,8 +951,12 @@ impl ReaperDSLEvaluator {
             // Object comprehensions: collect key-value pairs from key_value
             if let Some((key_output, value_output)) = &comp.key_value {
                 let mut object_result: Vec<(InternedString, AttributeValue)> = Vec::new();
+                // Clone once, reuse across iterations (saves N-1 clones)
+                let mut local_vars = variables.clone();
+                let snapshot_keys: Vec<String> = local_vars.keys().cloned().collect();
                 for item in source_items {
-                    let mut local_vars = variables.clone();
+                    // Reset to snapshot: remove keys added by previous iteration
+                    local_vars.retain(|k, _| snapshot_keys.contains(k));
                     local_vars.insert(iter_var_name.clone(), item.clone());
 
                     // Evaluate filters
@@ -841,7 +973,11 @@ impl ReaperDSLEvaluator {
                         // Get key and value
                         let value_opt = Some(value_output.clone());
                         if let (Some(key), Some(value)) = (
-                            self.get_comprehension_output_as_string(key_output, &local_vars, interner),
+                            self.get_comprehension_output_as_string(
+                                key_output,
+                                &local_vars,
+                                interner,
+                            ),
                             self.get_comprehension_output(&value_opt, &local_vars, interner),
                         ) {
                             object_result.push((key, value));
@@ -859,10 +995,19 @@ impl ReaperDSLEvaluator {
         }
 
         // Filter and collect items with nested iteration support (for Array/Set)
+        // Clone once, reuse across iterations (saves N-1 full HashMap clones)
         let mut result = Vec::new();
+        let mut local_vars = variables.clone();
+        let snapshot_keys: Vec<String> = local_vars.keys().cloned().collect();
         for item in source_items {
-            // Create a local variable scope with the iterator variable bound
-            let mut local_vars = variables.clone();
+            // Reset to snapshot: remove keys added by previous iteration's filters
+            local_vars.retain(|k, _| snapshot_keys.contains(k));
+            // Restore original values for snapshot keys that may have been modified
+            for key in &snapshot_keys {
+                if let Some(original) = variables.get(key) {
+                    local_vars.insert(key.clone(), original.clone());
+                }
+            }
             local_vars.insert(iter_var_name.clone(), item.clone());
 
             // Recursively evaluate filters with nested iteration support
@@ -894,7 +1039,7 @@ impl ReaperDSLEvaluator {
         filters: &[CompiledCondition],
         user: &Entity,
         resource: &Entity,
-        context: &std::collections::HashMap<String, String>,
+        context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         _interner: &crate::data::StringInterner,
     ) -> bool {
@@ -918,12 +1063,13 @@ impl ReaperDSLEvaluator {
 
     /// Recursively evaluate comprehension filters, handling nested iteration.
     /// When a filter is an assignment with VariableIndexed + Wildcard, iterate over elements.
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_comprehension_filters_recursive(
         &self,
         filters: &[CompiledCondition],
         user: &Entity,
         resource: &Entity,
-        context: &std::collections::HashMap<String, String>,
+        context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         output: &Option<CompiledOutput>,
         interner: &crate::data::StringInterner,
@@ -941,44 +1087,55 @@ impl ReaperDSLEvaluator {
         let remaining = &filters[1..];
 
         // Check if this filter is a nested iteration assignment (val := row[_])
-        if let CompiledCondition::ExpressionAssignment { variable, expr_type } = filter {
-            if let CompiledExprType::VariableIndexed {
-                variable: src_var,
-                index: CompiledExprIndexType::Wildcard,
-            } = expr_type
-            {
-                // This is a nested iteration: val := row[_]
-                if let Some(src_name) = interner.resolve(*src_var) {
-                    if let Some(src_val) = variables.get(&*src_name).cloned() {
-                        // Get elements from the source collection
-                        let elements: Vec<AttributeValue> = match src_val {
-                            AttributeValue::List(items) => items,
-                            AttributeValue::Set(items) => items.into_iter().collect(),
-                            _ => return, // Not a collection, skip
-                        };
+        if let CompiledCondition::ExpressionAssignment {
+            variable,
+            expr_type:
+                CompiledExprType::VariableIndexed {
+                    variable: src_var,
+                    index: CompiledExprIndexType::Wildcard,
+                },
+        } = filter
+        {
+            // This is a nested iteration: val := row[_]
+            if let Some(src_name) = interner.resolve(*src_var) {
+                if let Some(src_val) = variables.get(&*src_name).cloned() {
+                    // Get elements from the source collection
+                    let elements: Vec<AttributeValue> = match src_val {
+                        AttributeValue::List(items) => items,
+                        AttributeValue::Set(items) => items.into_iter().collect(),
+                        _ => return, // Not a collection, skip
+                    };
 
-                        let var_name = interner
-                            .resolve(*variable)
-                            .map(|s| s.to_string())
-                            .unwrap_or_default();
+                    let var_name = interner
+                        .resolve(*variable)
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
 
-                        // Iterate over each element (nested iteration)
-                        for element in elements {
-                            let mut inner_vars = variables.clone();
-                            inner_vars.insert(var_name.clone(), element);
-                            self.evaluate_comprehension_filters_recursive(
-                                remaining,
-                                user,
-                                resource,
-                                context,
-                                &mut inner_vars,
-                                output,
-                                interner,
-                                result,
-                            );
+                    // Iterate over each element (nested iteration)
+                    // Clone once and reuse across iterations
+                    let mut inner_vars = variables.clone();
+                    let inner_snapshot_keys: Vec<String> = inner_vars.keys().cloned().collect();
+                    for element in elements {
+                        // Reset to snapshot
+                        inner_vars.retain(|k, _| inner_snapshot_keys.contains(k));
+                        for key in &inner_snapshot_keys {
+                            if let Some(original) = variables.get(key) {
+                                inner_vars.insert(key.clone(), original.clone());
+                            }
                         }
-                        return;
+                        inner_vars.insert(var_name.clone(), element);
+                        self.evaluate_comprehension_filters_recursive(
+                            remaining,
+                            user,
+                            resource,
+                            context,
+                            &mut inner_vars,
+                            output,
+                            interner,
+                            result,
+                        );
                     }
+                    return;
                 }
             }
         }
@@ -996,14 +1153,7 @@ impl ReaperDSLEvaluator {
             // Update variables if this was an assignment filter
             self.apply_filter_variable_update(filter, variables, user, resource, context, interner);
             self.evaluate_comprehension_filters_recursive(
-                remaining,
-                user,
-                resource,
-                context,
-                variables,
-                output,
-                interner,
-                result,
+                remaining, user, resource, context, variables, output, interner, result,
             );
         }
     }
@@ -1025,20 +1175,18 @@ impl ReaperDSLEvaluator {
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         user: &Entity,
         resource: &Entity,
-        context: &std::collections::HashMap<String, String>,
+        context: &EvalContext<'_>,
         interner: &crate::data::StringInterner,
     ) {
         match filter {
-            CompiledCondition::ExpressionAssignment { variable, expr_type } => {
+            CompiledCondition::ExpressionAssignment {
+                variable,
+                expr_type,
+            } => {
                 if let Some(var_name) = interner.resolve(*variable) {
-                    if let Some(val) = self.evaluate_expr_type(
-                        expr_type,
-                        user,
-                        resource,
-                        context,
-                        variables,
-                        interner,
-                    ) {
+                    if let Some(val) = self
+                        .evaluate_expr_type(expr_type, user, resource, context, variables, interner)
+                    {
                         variables.insert(var_name.to_string(), val);
                     }
                 }
@@ -1055,7 +1203,7 @@ impl ReaperDSLEvaluator {
         condition: &CompiledCondition,
         user: &Entity,
         resource: &Entity,
-        context: &std::collections::HashMap<String, String>,
+        context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         _interner: &crate::data::StringInterner,
     ) -> bool {
@@ -1080,17 +1228,19 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         let resource_id = interner.intern(&request.resource);
 
         // Fast DataStore lookups (~20-50ns each)
-        let user = self
-            .store
-            .get(user_id)
-            .ok_or_else(|| reaper_core::ReaperError::EvaluationError {
-                reason: format!("User entity not found: {:?}", user_id),
-            })?;
+        let user =
+            self.store
+                .get(user_id)
+                .ok_or_else(|| reaper_core::ReaperError::EvaluationError {
+                    reason: format!("User entity not found: {:?}", user_id),
+                })?;
 
         // Log user entity info at trace level
         #[cfg(debug_assertions)]
         {
-            let user_attr_names: Vec<String> = user.attributes.keys()
+            let user_attr_names: Vec<String> = user
+                .attributes
+                .keys()
                 .filter_map(|k| interner.resolve(*k).map(|s| s.to_string()))
                 .collect();
             tracing::trace!(
@@ -1116,7 +1266,9 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         // Log resource entity info at trace level
         #[cfg(debug_assertions)]
         {
-            let resource_attr_names: Vec<String> = resource.attributes.keys()
+            let resource_attr_names: Vec<String> = resource
+                .attributes
+                .keys()
                 .filter_map(|k| interner.resolve(*k).map(|s| s.to_string()))
                 .collect();
             tracing::trace!(
@@ -1127,14 +1279,12 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             );
         }
 
-        // Create evaluation context with action and resource included
-        let mut eval_context = request.context.clone();
-        eval_context.insert("action".to_string(), request.action.clone());
-        eval_context.insert("resource".to_string(), request.resource.clone());
+        // Zero-copy evaluation context — avoids HashMap clone + 2 String allocations per call
+        let eval_context = EvalContext::new(&request.action, &request.resource, &request.context);
 
         // Variable context for local bindings (scoped to policy evaluation)
-        // Performance: HashMap with pre-allocated capacity for common case
-        let mut variables = std::collections::HashMap::with_capacity(4);
+        // Performance: no allocation until first variable use (most policies have zero variables)
+        let mut variables = std::collections::HashMap::new();
 
         // Security-first evaluation: Deny rules ALWAYS take precedence over Allow rules
         // Rules are pre-partitioned at construction time for optimal performance

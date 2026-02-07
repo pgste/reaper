@@ -210,11 +210,8 @@ mod tests {
 
     #[test]
     fn test_deployment_lifecycle() {
-        let mut deployment = AgentDeployment::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Some(Uuid::new_v4()),
-        );
+        let mut deployment =
+            AgentDeployment::new(Uuid::new_v4(), Uuid::new_v4(), Some(Uuid::new_v4()));
 
         assert_eq!(deployment.status, AgentDeploymentStatus::Pending);
         assert!(!deployment.is_terminal());
@@ -231,16 +228,15 @@ mod tests {
 
     #[test]
     fn test_deployment_failure() {
-        let mut deployment = AgentDeployment::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            None,
-        );
+        let mut deployment = AgentDeployment::new(Uuid::new_v4(), Uuid::new_v4(), None);
 
         deployment.mark_failed("Connection timeout".to_string());
         assert_eq!(deployment.status, AgentDeploymentStatus::Failed);
         assert!(deployment.is_terminal());
-        assert_eq!(deployment.error_message.as_deref(), Some("Connection timeout"));
+        assert_eq!(
+            deployment.error_message.as_deref(),
+            Some("Connection timeout")
+        );
     }
 
     #[test]

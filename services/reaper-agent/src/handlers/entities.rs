@@ -111,7 +111,7 @@ pub async fn upsert_entity_handler(
     Json(req): Json<UpsertEntityRequest>,
 ) -> Result<Json<EntityResponse>, (StatusCode, String)> {
     let _ = state; // Suppress unused warning
-    // TODO: Implement with eBPF entity maps when integrated
+                   // TODO: Implement with eBPF entity maps when integrated
     info!(
         "Entity upsert request (stub): type={}, id={}",
         req.entity_type, req.entity_id
@@ -147,7 +147,7 @@ pub async fn get_entity_handler(
     Path((entity_type, entity_id)): Path<(String, String)>,
 ) -> Result<Json<EntityResponse>, (StatusCode, String)> {
     let _ = state; // Suppress unused warning
-    // TODO: Implement with eBPF entity maps when integrated
+                   // TODO: Implement with eBPF entity maps when integrated
     info!(
         "Entity get request (stub): type={}, id={}",
         entity_type, entity_id
@@ -176,7 +176,7 @@ pub async fn delete_entity_handler(
     Path((entity_type, entity_id)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let _ = state; // Suppress unused warning
-    // TODO: Implement with eBPF entity maps when integrated
+                   // TODO: Implement with eBPF entity maps when integrated
     info!(
         "Entity delete request (stub): type={}, id={}",
         entity_type, entity_id
@@ -193,7 +193,7 @@ pub async fn list_entities_handler(
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListEntitiesResponse>, (StatusCode, String)> {
     let _ = state; // Suppress unused warning
-    // TODO: Implement with eBPF entity maps when integrated
+                   // TODO: Implement with eBPF entity maps when integrated
     info!(
         "Entity list request (stub): type={}, limit={}",
         entity_type, params.limit
@@ -215,7 +215,7 @@ pub async fn batch_upsert_handler(
     Json(req): Json<BatchUpsertRequest>,
 ) -> Result<Json<BatchUpsertResponse>, (StatusCode, String)> {
     let _ = state; // Suppress unused warning
-    // TODO: Implement with eBPF entity maps when integrated
+                   // TODO: Implement with eBPF entity maps when integrated
     info!(
         "Batch upsert request (stub): {} entities",
         req.entities.len()
@@ -233,7 +233,9 @@ pub async fn batch_upsert_handler(
 
 /// Debug endpoint to check DataStore stats.
 #[instrument(skip(state))]
-pub async fn debug_datastore(State(state): State<Arc<AgentState>>) -> Result<Json<Value>, StatusCode> {
+pub async fn debug_datastore(
+    State(state): State<Arc<AgentState>>,
+) -> Result<Json<Value>, StatusCode> {
     let stats = state.data_store.stats();
     Ok(Json(json!({
         "total_entities": stats.total_entities,

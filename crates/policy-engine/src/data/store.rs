@@ -29,6 +29,25 @@ pub enum IndexStrategy {
     },
 }
 
+/// Controls which secondary indexes are built during entity insertion.
+/// Disabling unused indexes reduces memory ~40-45% for enforcement-only workloads.
+#[derive(Debug, Clone)]
+pub struct DataStoreConfig {
+    /// Build (AttrKey, AttrValue) → EntityId index. Default: true.
+    pub index_attributes: bool,
+    /// Build (Type, AttrKey, AttrValue) → EntityId index. Default: true.
+    pub index_composite: bool,
+}
+
+impl Default for DataStoreConfig {
+    fn default() -> Self {
+        Self {
+            index_attributes: true,
+            index_composite: true,
+        }
+    }
+}
+
 /// High-performance, multi-indexed data store
 ///
 /// # Memory Layout
@@ -44,6 +63,9 @@ pub enum IndexStrategy {
 /// - Update: ~1-2 µs (atomic)
 #[derive(Clone, Debug)]
 pub struct DataStore {
+    /// Configuration controlling which secondary indexes are built
+    config: DataStoreConfig,
+
     /// String interner shared across all data
     interner: Arc<StringInterner>,
 
@@ -68,6 +90,20 @@ impl DataStore {
     /// Create a new data store
     pub fn new() -> Self {
         Self {
+            config: DataStoreConfig::default(),
+            interner: Arc::new(StringInterner::new()),
+            entities: Arc::new(DashMap::new()),
+            type_index: Arc::new(DashMap::new()),
+            attribute_index: Arc::new(DashMap::new()),
+            composite_index: Arc::new(DashMap::new()),
+            view_manager: Arc::new(ViewManager::new()),
+        }
+    }
+
+    /// Create a new data store with custom configuration
+    pub fn with_config(config: DataStoreConfig) -> Self {
+        Self {
+            config,
             interner: Arc::new(StringInterner::new()),
             entities: Arc::new(DashMap::new()),
             type_index: Arc::new(DashMap::new()),
@@ -83,6 +119,7 @@ impl DataStore {
         interner.prewarm(common_strings);
 
         Self {
+            config: DataStoreConfig::default(),
             interner: Arc::new(interner),
             entities: Arc::new(DashMap::new()),
             type_index: Arc::new(DashMap::new()),
@@ -115,20 +152,71 @@ impl DataStore {
             .or_default()
             .insert(entity_id);
 
-        // Update attribute indexes for string attributes
-        for (attr_key, attr_value) in &entity_arc.attributes {
-            if let AttributeValue::String(value_id) = attr_value {
-                // Update attribute index
-                self.attribute_index
-                    .entry((*attr_key, *value_id))
-                    .or_default()
-                    .insert(entity_id);
+        // Update secondary indexes for string attributes (only if configured)
+        if self.config.index_attributes {
+            for (attr_key, attr_value) in &entity_arc.attributes {
+                if let AttributeValue::String(value_id) = attr_value {
+                    self.attribute_index
+                        .entry((*attr_key, *value_id))
+                        .or_default()
+                        .insert(entity_id);
+                }
+            }
+        }
 
-                // Update composite index
-                self.composite_index
-                    .entry((entity_type, *attr_key, *value_id))
+        if self.config.index_composite {
+            for (attr_key, attr_value) in &entity_arc.attributes {
+                if let AttributeValue::String(value_id) = attr_value {
+                    self.composite_index
+                        .entry((entity_type, *attr_key, *value_id))
+                        .or_default()
+                        .insert(entity_id);
+                }
+            }
+        }
+    }
+
+    /// Batch insert entities with reduced per-entity overhead.
+    /// Separates primary insertion from index building for better locality.
+    pub fn insert_batch(&self, entities: Vec<Entity>) {
+        // Phase 1: Primary store insertion + type index
+        let arcs: Vec<Arc<Entity>> = entities
+            .into_iter()
+            .map(|entity| {
+                let arc = Arc::new(entity);
+                self.entities.insert(arc.id, arc.clone());
+                self.type_index
+                    .entry(arc.entity_type)
                     .or_default()
-                    .insert(entity_id);
+                    .insert(arc.id);
+                arc
+            })
+            .collect();
+
+        // Phase 2: Secondary indexes (only if configured)
+        if self.config.index_attributes {
+            for entity in &arcs {
+                for (attr_key, attr_value) in &entity.attributes {
+                    if let AttributeValue::String(value_id) = attr_value {
+                        self.attribute_index
+                            .entry((*attr_key, *value_id))
+                            .or_default()
+                            .insert(entity.id);
+                    }
+                }
+            }
+        }
+
+        if self.config.index_composite {
+            for entity in &arcs {
+                for (attr_key, attr_value) in &entity.attributes {
+                    if let AttributeValue::String(value_id) = attr_value {
+                        self.composite_index
+                            .entry((entity.entity_type, *attr_key, *value_id))
+                            .or_default()
+                            .insert(entity.id);
+                    }
+                }
             }
         }
     }
@@ -210,18 +298,26 @@ impl DataStore {
             type_set.remove(&id);
         }
 
-        // Remove from attribute indexes
-        for (attr_key, attr_value) in &entity.attributes {
-            if let AttributeValue::String(value_id) = attr_value {
-                // Remove from attribute index
-                if let Some(mut attr_set) = self.attribute_index.get_mut(&(*attr_key, *value_id)) {
-                    attr_set.remove(&id);
+        // Remove from secondary indexes (only if configured)
+        if self.config.index_attributes {
+            for (attr_key, attr_value) in &entity.attributes {
+                if let AttributeValue::String(value_id) = attr_value {
+                    if let Some(mut attr_set) =
+                        self.attribute_index.get_mut(&(*attr_key, *value_id))
+                    {
+                        attr_set.remove(&id);
+                    }
                 }
+            }
+        }
 
-                // Remove from composite index
-                let composite_key = (entity.entity_type, *attr_key, *value_id);
-                if let Some(mut comp_set) = self.composite_index.get_mut(&composite_key) {
-                    comp_set.remove(&id);
+        if self.config.index_composite {
+            for (attr_key, attr_value) in &entity.attributes {
+                if let AttributeValue::String(value_id) = attr_value {
+                    let composite_key = (entity.entity_type, *attr_key, *value_id);
+                    if let Some(mut comp_set) = self.composite_index.get_mut(&composite_key) {
+                        comp_set.remove(&id);
+                    }
                 }
             }
         }
@@ -241,8 +337,12 @@ impl DataStore {
     pub fn clear(&self) {
         self.entities.clear();
         self.type_index.clear();
-        self.attribute_index.clear();
-        self.composite_index.clear();
+        if self.config.index_attributes {
+            self.attribute_index.clear();
+        }
+        if self.config.index_composite {
+            self.composite_index.clear();
+        }
     }
 
     /// Get entity counts by type
@@ -280,8 +380,16 @@ impl DataStore {
         DataStoreStats {
             total_entities: self.entities.len(),
             unique_types: self.type_index.len(),
-            indexed_attributes: self.attribute_index.len(),
-            composite_indexes: self.composite_index.len(),
+            indexed_attributes: if self.config.index_attributes {
+                self.attribute_index.len()
+            } else {
+                0
+            },
+            composite_indexes: if self.config.index_composite {
+                self.composite_index.len()
+            } else {
+                0
+            },
             interner_stats: self.interner.stats(),
             estimated_memory_bytes: self.estimate_memory(),
         }
@@ -295,9 +403,18 @@ impl DataStore {
             .map(|entry| entry.value().memory_size())
             .sum();
 
-        let index_overhead = (self.type_index.len() * 64)
-            + (self.attribute_index.len() * 64)
-            + (self.composite_index.len() * 64);
+        let attr_index_overhead = if self.config.index_attributes {
+            self.attribute_index.len() * 64
+        } else {
+            0
+        };
+        let composite_index_overhead = if self.config.index_composite {
+            self.composite_index.len() * 64
+        } else {
+            0
+        };
+        let index_overhead =
+            (self.type_index.len() * 64) + attr_index_overhead + composite_index_overhead;
 
         entity_memory + index_overhead + self.interner.stats().estimated_memory_bytes
     }

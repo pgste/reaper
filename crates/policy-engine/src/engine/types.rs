@@ -217,6 +217,8 @@ pub struct PolicyRequest {
 pub struct PolicyDecision {
     pub decision: PolicyAction,
     pub policy_id: PolicyId,
+    /// Policy name — populated by engine to avoid caller re-lookup
+    pub policy_name: String,
     pub policy_version: u64,
     pub evaluation_time_ns: u64,
     pub matched_rule: Option<usize>,

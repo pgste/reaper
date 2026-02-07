@@ -5,6 +5,4 @@
 
 pub mod service;
 
-pub use service::{
-    AgentEntry, BundleDistribution, LandscapeSummary, LandscapeView, OrgMetrics,
-};
+pub use service::{AgentEntry, BundleDistribution, LandscapeSummary, LandscapeView, OrgMetrics};

@@ -286,10 +286,10 @@ pub fn encode_metrics() -> Result<String, MetricsError> {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer)
+    encoder
+        .encode(&metric_families, &mut buffer)
         .map_err(|e| MetricsError::Encode(e.to_string()))?;
-    String::from_utf8(buffer)
-        .map_err(|e| MetricsError::Utf8(e.to_string()))
+    String::from_utf8(buffer).map_err(|e| MetricsError::Utf8(e.to_string()))
 }
 
 /// Metrics encoding error

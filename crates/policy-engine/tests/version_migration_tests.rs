@@ -7,10 +7,13 @@
 //! - Multiple policy coexistence
 
 use policy_engine::reap::ReaperPolicy;
-use policy_engine::{DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest, PolicyRule};
+use policy_engine::{
+    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest,
+    PolicyRule,
+};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 // ============================================================================
 // SECTION 1: Version Tracking Tests
@@ -68,7 +71,10 @@ fn test_version_increment_on_update() {
     engine.deploy_policy(policy).unwrap();
 
     let retrieved = engine.get_policy(&policy_id).unwrap();
-    assert_eq!(retrieved.version, 2, "Version should increment after update");
+    assert_eq!(
+        retrieved.version, 2,
+        "Version should increment after update"
+    );
 }
 
 /// Test multiple version updates

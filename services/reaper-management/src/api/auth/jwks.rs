@@ -11,11 +11,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
-    auth::{
-        jwks::JwksConfigRepository,
-        middleware::RequireAuth,
-        scopes::Scope,
-    },
+    auth::{jwks::JwksConfigRepository, middleware::RequireAuth, scopes::Scope},
     db::repositories::OrganizationRepository,
     state::AppState,
 };
@@ -30,9 +26,7 @@ pub async fn list_jwks_configs(
 ) -> ApiResult<Json<ListJwksConfigsResponse>> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -62,9 +56,7 @@ pub async fn create_jwks_config(
 ) -> ApiResult<(StatusCode, Json<JwksConfigSummary>)> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -79,9 +71,7 @@ pub async fn create_jwks_config(
 
     // Validate URL format
     if !request.jwks_url.starts_with("https://") {
-        return Err(ApiError::BadRequest(
-            "JWKS URL must use HTTPS".to_string(),
-        ));
+        return Err(ApiError::BadRequest("JWKS URL must use HTTPS".to_string()));
     }
 
     let jwks_repo = JwksConfigRepository::new(&state.db);
@@ -106,9 +96,7 @@ pub async fn get_jwks_config(
 ) -> ApiResult<Json<JwksConfigSummary>> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -129,7 +117,9 @@ pub async fn get_jwks_config(
 
     // Verify config belongs to this org
     if config.org_id != organization.id {
-        return Err(ApiError::NotFound("JWKS configuration not found".to_string()));
+        return Err(ApiError::NotFound(
+            "JWKS configuration not found".to_string(),
+        ));
     }
 
     Ok(Json(config.into()))
@@ -143,9 +133,7 @@ pub async fn delete_jwks_config(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -167,7 +155,9 @@ pub async fn delete_jwks_config(
         .ok_or_else(|| ApiError::NotFound("JWKS configuration not found".to_string()))?;
 
     if config.org_id != organization.id {
-        return Err(ApiError::NotFound("JWKS configuration not found".to_string()));
+        return Err(ApiError::NotFound(
+            "JWKS configuration not found".to_string(),
+        ));
     }
 
     // Invalidate cache if we have a validator
@@ -188,9 +178,7 @@ pub async fn activate_jwks_config(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -212,7 +200,9 @@ pub async fn activate_jwks_config(
         .ok_or_else(|| ApiError::NotFound("JWKS configuration not found".to_string()))?;
 
     if config.org_id != organization.id {
-        return Err(ApiError::NotFound("JWKS configuration not found".to_string()));
+        return Err(ApiError::NotFound(
+            "JWKS configuration not found".to_string(),
+        ));
     }
 
     jwks_repo.set_active(config_id, true).await?;
@@ -228,9 +218,7 @@ pub async fn deactivate_jwks_config(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -252,7 +240,9 @@ pub async fn deactivate_jwks_config(
         .ok_or_else(|| ApiError::NotFound("JWKS configuration not found".to_string()))?;
 
     if config.org_id != organization.id {
-        return Err(ApiError::NotFound("JWKS configuration not found".to_string()));
+        return Err(ApiError::NotFound(
+            "JWKS configuration not found".to_string(),
+        ));
     }
 
     // Invalidate cache when deactivating

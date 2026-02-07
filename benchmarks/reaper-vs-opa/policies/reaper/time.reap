@@ -11,7 +11,7 @@ policy time_based_access {
     rule valid_token_access {
         allow if {
             user.token_expires_at != null &&
-            resource == "api_endpoint" &&
+            resource.type == "api_endpoint" &&
             time::is_after(user.token_expires_at, 1765180000000000000)  // Token must expire after this threshold
         }
     }
@@ -20,8 +20,8 @@ policy time_based_access {
     rule business_hours_access {
         allow if {
             user.role == "employee" &&
-            resource == "office_system" &&
-            
+            resource.type == "office_system" &&
+
             user.work_start_time != null &&
             user.work_end_time != null &&
             user.work_start_time < 1765185000000000000 &&  // Current time > work_start_time
@@ -35,7 +35,7 @@ policy time_based_access {
         allow if {
             user.birthdate != null &&
             resource.requires_age_verification == true &&
-            
+
             user.birthdate < 1000000000  // Users born before 2001-09-09 are 23+ years old in 2025
         }
     }
@@ -44,8 +44,8 @@ policy time_based_access {
     rule active_lease_access {
         allow if {
             user.lease_end_time != null &&
-            resource == "apartment" &&
-            
+            resource.type == "apartment" &&
+
             user.lease_end_time > 1765180000000000000  // Lease must be active past this time
         }
     }
@@ -54,8 +54,8 @@ policy time_based_access {
     rule maintenance_window_deployment {
         allow if {
             user.role == "operator" &&
-            resource == "production_system" &&
-            
+            resource.type == "production_system" &&
+
             resource.maintenance_window_start != null &&
             resource.maintenance_window_end != null &&
             resource.maintenance_window_start < 1765185000000000000 &&  // Current time > window start
@@ -68,8 +68,8 @@ policy time_based_access {
         allow if {
             user.session_start_time != null &&
             user.session_extension_ns != null &&
-            resource == "web_session" &&
-            
+            resource.type == "web_session" &&
+
             user.session_start_time < 1765185000000000000  // Session started before current time
         }
     }
@@ -78,8 +78,8 @@ policy time_based_access {
     rule future_event_scheduling {
         allow if {
             user.role == "event_planner" &&
-            resource == "conference_room" &&
-            
+            resource.type == "conference_room" &&
+
             user.event_scheduled_time != null &&
             user.event_scheduled_time > 1765180000000000000  // Event scheduled in future
         }
@@ -89,8 +89,8 @@ policy time_based_access {
     rule temporary_access_grant {
         allow if {
             user.role == "contractor" &&
-            resource == "project_files" &&
-            
+            resource.type == "project_files" &&
+
             user.access_grant_start != null &&
             user.access_grant_end != null &&
             user.access_grant_start < 1765185000000000000 &&  // Current time > grant start
@@ -102,8 +102,8 @@ policy time_based_access {
     rule timestamp_validation {
         allow if {
             user.role == "system" &&
-            resource == "timestamp_data" &&
-            
+            resource.type == "timestamp_data" &&
+
             user.has_valid_timestamp == true
         }
     }
@@ -112,8 +112,8 @@ policy time_based_access {
     rule audit_logging {
         allow if {
             user.role == "audit_logger" &&
-            resource == "audit_trail" &&
-            
+            resource.type == "audit_trail" &&
+
             user.can_log_audit == true
         }
     }
@@ -123,8 +123,8 @@ policy time_based_access {
     rule rate_limit_check {
         allow if {
             user.role == "api_client" &&
-            resource == "rate_limited_endpoint" &&
-            
+            resource.type == "rate_limited_endpoint" &&
+
             user.last_request_time != null &&
             user.rate_limit_window_ns != null &&
             user.last_request_time < 1765186000000000000  // Threshold for rate limit
@@ -136,7 +136,7 @@ policy time_based_access {
     rule data_retention {
         allow if {
             user.role == "archiver" &&
-            resource == "data" &&
+            resource.type == "data" &&
 
             resource.creation_time != null &&
             resource.retention_period_ns != null &&

@@ -3,6 +3,8 @@
 use crate::error::{ReaperError, Result};
 use crate::types::{DeployBundleRequest, DeployBundleResponse, PolicyRequest, PolicyResponse};
 use reqwest::Client as HttpClient;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
@@ -27,7 +29,7 @@ impl ReaperHttpClient {
     pub fn new(endpoint: &str) -> Result<Self> {
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(5))
-            .pool_max_idle_per_host(10)
+            .pool_max_idle_per_host(128)
             .build()
             .map_err(|e| ReaperError::InvalidEndpoint(e.to_string()))?;
 
@@ -215,5 +217,74 @@ impl ReaperHttpClient {
 
         debug!("Agent is healthy");
         Ok(())
+    }
+
+    /// Send a POST request with a JSON body and deserialize the response.
+    ///
+    /// This is the generic transport method that lets consumers use their own types.
+    /// The typed methods (`evaluate`, `deploy_bundle`) are convenience wrappers around this.
+    pub async fn post_json<Req: Serialize, Resp: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Req,
+    ) -> Result<Resp> {
+        let url = format!("{}{}", self.base_url, path);
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("HTTP POST {} failed: {}", path, e);
+                ReaperError::HttpError(e)
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ReaperError::AgentError(format!(
+                "HTTP {} error: {}",
+                status, error_text
+            )));
+        }
+
+        resp.json().await.map_err(|e| {
+            error!("Failed to parse response from {}: {}", path, e);
+            ReaperError::HttpError(e)
+        })
+    }
+
+    /// Send a GET request and deserialize the response.
+    ///
+    /// This is the generic transport method that lets consumers use their own types.
+    pub async fn get_json<Resp: DeserializeOwned>(&self, path: &str) -> Result<Resp> {
+        let url = format!("{}{}", self.base_url, path);
+
+        let resp = self.client.get(&url).send().await.map_err(|e| {
+            error!("HTTP GET {} failed: {}", path, e);
+            ReaperError::HttpError(e)
+        })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ReaperError::AgentError(format!(
+                "HTTP {} error: {}",
+                status, error_text
+            )));
+        }
+
+        resp.json().await.map_err(|e| {
+            error!("Failed to parse response from {}: {}", path, e);
+            ReaperError::HttpError(e)
+        })
     }
 }

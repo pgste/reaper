@@ -186,20 +186,21 @@ impl ReapAstEvaluator {
         iterator: &ComprehensionIterator,
         context: &EvalContext,
     ) -> Result<Vec<EvalValue>, ReaperError> {
-        let collection = match &iterator.collection {
-            IterationSource::EntityAttr(entity_attr) => {
-                self.get_entity_attribute(entity_attr, context)?
-            }
-            IterationSource::VarAttr(var_attr) => self.get_var_attribute(var_attr, context)?,
-            IterationSource::IndexedVariable { variable, index } => {
-                let var_value = context.variables.get(variable).ok_or_else(|| {
-                    ReaperError::InvalidPolicy {
-                        reason: format!("Undefined variable in iteration: {}", variable),
-                    }
-                })?;
-                self.apply_index(var_value, index)?
-            }
-        };
+        let collection =
+            match &iterator.collection {
+                IterationSource::EntityAttr(entity_attr) => {
+                    self.get_entity_attribute(entity_attr, context)?
+                }
+                IterationSource::VarAttr(var_attr) => self.get_var_attribute(var_attr, context)?,
+                IterationSource::IndexedVariable { variable, index } => {
+                    let var_value = context.variables.get(variable).ok_or_else(|| {
+                        ReaperError::InvalidPolicy {
+                            reason: format!("Undefined variable in iteration: {}", variable),
+                        }
+                    })?;
+                    self.apply_index(var_value, index)?
+                }
+            };
 
         match collection {
             EvalValue::Array(arr) | EvalValue::Set(arr) => Ok(arr),

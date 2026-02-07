@@ -35,23 +35,23 @@ pub use core::{CompiledRule, EntityType, IndexExpr, LiteralValue, Rule};
 pub use operators::{AttrCompareOp, ComprehensionFilterOp, CountOp, NumericOp, StringOp};
 
 // Condition types
-pub use condition::Condition;
 pub use compiled_condition::CompiledCondition;
+pub use condition::Condition;
 
 // Expression types
+pub use compiled_expression::{CompiledChainMethod, CompiledExprIndexType, CompiledExprType};
 pub use expression::{
     ChainMethod, ExprIndexType, ExprType, OutputMethod, VariableCollectionMethod, VariableMethod,
     VariableStringTransform,
 };
-pub use compiled_expression::{CompiledChainMethod, CompiledExprIndexType, CompiledExprType};
 
 // Literal types
 pub use compiled_literal::CompiledLiteralValue;
 
 // Comprehension types
 pub use comprehension::{
-    ComprehensionType, CompiledComprehension, CompiledIterationSource, CompiledIterator,
-    CompiledOutput, UncompiledComprehensionType, UncompiledIterationSource, UncompiledOutput,
+    CompiledComprehension, CompiledIterationSource, CompiledIterator, CompiledOutput,
+    ComprehensionType, UncompiledComprehensionType, UncompiledIterationSource, UncompiledOutput,
 };
 
 // V2 consolidated types (uncompiled)

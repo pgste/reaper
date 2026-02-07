@@ -88,6 +88,13 @@ impl DataLoader {
     /// }
     /// ```
     pub fn load_json(&self, json: &str) -> Result<usize, ReaperError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let data: DataDocument =
+            sonic_rs::from_str(json).map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to parse JSON: {}", e),
+            })?;
+
+        #[cfg(target_arch = "wasm32")]
         let data: DataDocument =
             serde_json::from_str(json).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to parse JSON: {}", e),
@@ -182,17 +189,14 @@ impl DataLoader {
         Ok(builder.build())
     }
 
-    /// Load a data document
+    /// Load a data document using batch insert for better locality
     fn load_document(&self, doc: DataDocument) -> Result<usize, ReaperError> {
         let interner = self.store.interner();
-        let mut count = 0;
+        let mut entities = Vec::with_capacity(doc.entities.len());
 
         for entity_doc in doc.entities {
-            // Intern strings
             let id = interner.intern(&entity_doc.id);
             let entity_type = interner.intern(&entity_doc.entity_type);
-
-            // Build entity with attributes
             let mut builder = EntityBuilder::new(id, entity_type);
 
             for (key, value) in entity_doc.attributes {
@@ -201,16 +205,16 @@ impl DataLoader {
                 builder = builder.with_attribute(key_id, attr_value);
             }
 
-            // Set parent if specified
             if let Some(parent) = entity_doc.parent {
                 let parent_id = interner.intern(&parent);
                 builder = builder.with_parent(parent_id);
             }
 
-            self.store.insert(builder.build());
-            count += 1;
+            entities.push(builder.build());
         }
 
+        let count = entities.len();
+        self.store.insert_batch(entities);
         Ok(count)
     }
 

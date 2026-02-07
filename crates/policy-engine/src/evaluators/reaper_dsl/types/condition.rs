@@ -13,9 +13,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::comprehension::{UncompiledComprehensionType, UncompiledIterationSource, UncompiledOutput};
+use super::comprehension::{
+    UncompiledComprehensionType, UncompiledIterationSource, UncompiledOutput,
+};
 use super::core::{EntityType, IndexExpr, LiteralValue};
-use super::expression::{ExprType, VariableCollectionMethod, VariableMethod, VariableStringTransform};
+use super::expression::{
+    ExprType, VariableCollectionMethod, VariableMethod, VariableStringTransform,
+};
 use super::operators::{AttrCompareOp, ComprehensionFilterOp};
 use super::v2::{
     AttributeComparison, CountCondition, CrossEntityComparison, StringOperationCondition,
@@ -28,9 +32,13 @@ pub enum Condition {
     /// Always true
     Always,
     /// Compare action to literal value
-    ActionEquals { value: String },
+    ActionEquals {
+        value: String,
+    },
     /// Compare resource ID to literal value (for simple resource matching)
-    ResourceIdEquals { value: String },
+    ResourceIdEquals {
+        value: String,
+    },
 
     // ============ Consolidated Attribute Comparisons ============
     /// Attribute comparison (replaces User/Resource/Context Equals/Greater/Less variants)

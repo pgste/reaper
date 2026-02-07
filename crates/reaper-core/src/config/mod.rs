@@ -23,7 +23,7 @@ mod settings;
 pub use error::ConfigError;
 pub use settings::{
     AgentSettings, CacheSettings, DataSettings, ManagementSettings, ObservabilitySettings,
-    PerformanceSettings, PolicySettings, TlsSettings,
+    PerformanceSettings, PolicySettings, TlsSettings, UdsSettings,
 };
 
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,10 @@ pub struct ReaperAgentConfig {
     /// TLS/mTLS settings
     #[serde(default)]
     pub tls: TlsSettings,
+
+    /// Unix Domain Socket settings
+    #[serde(default)]
+    pub uds: UdsSettings,
 }
 
 // ============================================================================
@@ -219,6 +223,19 @@ impl ReaperAgentConfig {
             }
         }
 
+        // UDS settings
+        if let Ok(val) = std::env::var("REAPER_UDS_ENABLED") {
+            self.uds.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_UDS_PATH") {
+            self.uds.socket_path = PathBuf::from(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_UDS_PERMISSIONS") {
+            if let Ok(perms) = u32::from_str_radix(&val, 8) {
+                self.uds.socket_permissions = perms;
+            }
+        }
+
         // TLS settings
         if let Ok(val) = std::env::var("REAPER_TLS_ENABLED") {
             self.tls.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
@@ -297,11 +314,18 @@ impl ReaperAgentConfig {
             "standalone".to_string()
         };
 
+        let uds_status = if self.uds.enabled {
+            format!("UDS: {}", self.uds.socket_path.display())
+        } else {
+            "UDS: disabled".to_string()
+        };
+
         format!(
-            "Agent: {}:{}, Mode: {}, Cache: {} ({} entries, {}s TTL), Bootstrap: policies={:?}, data={:?}",
+            "Agent: {}:{}, Mode: {}, {}, Cache: {} ({} entries, {}s TTL), Bootstrap: policies={:?}, data={:?}",
             self.agent.bind_address,
             self.agent.port,
             mgmt_status,
+            uds_status,
             if self.cache.enabled {
                 "enabled"
             } else {

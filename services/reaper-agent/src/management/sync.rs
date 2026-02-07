@@ -206,7 +206,9 @@ impl SyncService {
                     info!("SSE disconnected");
                 }
             }
-            ManagementEvent::BundlePromoted { bundle_id, version, .. } => {
+            ManagementEvent::BundlePromoted {
+                bundle_id, version, ..
+            } => {
                 info!(
                     bundle_id = %bundle_id,
                     version = %version,
@@ -217,7 +219,11 @@ impl SyncService {
                     warn!(error = %e, bundle_id = %bundle_id, "Failed to sync bundle from SSE event");
                 }
             }
-            ManagementEvent::DataRefresh { source_id, source_type, .. } => {
+            ManagementEvent::DataRefresh {
+                source_id,
+                source_type,
+                ..
+            } => {
                 info!(
                     source_id = %source_id,
                     source_type = %source_type,
@@ -228,7 +234,9 @@ impl SyncService {
                     warn!(error = %e, source_id = %source_id, "Failed to sync data source from SSE event");
                 }
             }
-            ManagementEvent::PolicyUpdated { policy_id, version, .. } => {
+            ManagementEvent::PolicyUpdated {
+                policy_id, version, ..
+            } => {
                 info!(
                     policy_id = %policy_id,
                     version = version,
@@ -274,7 +282,11 @@ impl SyncService {
     /// Sync data from a data source
     ///
     /// Downloads the data bundle and atomically replaces the DataStore contents.
-    async fn sync_data_source(&self, source_id: Uuid, source_type: &str) -> Result<(), ManagementError> {
+    async fn sync_data_source(
+        &self,
+        source_id: Uuid,
+        source_type: &str,
+    ) -> Result<(), ManagementError> {
         info!(
             source_id = %source_id,
             source_type = %source_type,
@@ -292,15 +304,17 @@ impl SyncService {
         );
 
         // Parse the data bundle
-        let bundle = policy_engine::DataBundle::from_bytes(&download.data)
-            .map_err(|e| ManagementError::DataLoadError(format!("Failed to parse data bundle: {}", e)))?;
+        let bundle = policy_engine::DataBundle::from_bytes(&download.data).map_err(|e| {
+            ManagementError::DataLoadError(format!("Failed to parse data bundle: {}", e))
+        })?;
 
         let entity_count = bundle.metadata.entity_count;
         let bundle_version = bundle.metadata.version.clone();
 
         // Atomically replace the DataStore contents with the bundle data
-        bundle.replace_store(&self.data_store)
-            .map_err(|e| ManagementError::DataLoadError(format!("Failed to load data bundle: {}", e)))?;
+        bundle.replace_store(&self.data_store).map_err(|e| {
+            ManagementError::DataLoadError(format!("Failed to load data bundle: {}", e))
+        })?;
 
         info!(
             source_id = %source_id,

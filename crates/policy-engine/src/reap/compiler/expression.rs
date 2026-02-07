@@ -3,17 +3,25 @@
 //! This module handles compilation of expressions to ExprType, which represents
 //! operations like method calls, function calls, and indexed access.
 
-use super::helpers::{extract_entity_attr, extract_int_literal, extract_string_array, extract_string_literal};
 use super::super::ast::{ComparisonRight, Expr, Index, MethodName, Operator, Value};
+use super::helpers::{
+    extract_entity_attr, extract_int_literal, extract_string_array, extract_string_literal,
+};
 use crate::evaluators::reaper_dsl::{
     AttrCompareOp, ChainMethod, Condition as DslCondition, ExprIndexType, ExprType, LiteralValue,
 };
 use reaper_core::ReaperError;
 
 /// Compile an expression assignment: x := user.name.lower()
-pub fn compile_expression_assignment(variable: String, expr: Expr) -> Result<DslCondition, ReaperError> {
+pub fn compile_expression_assignment(
+    variable: String,
+    expr: Expr,
+) -> Result<DslCondition, ReaperError> {
     let expr_type = compile_expr_to_type(expr)?;
-    Ok(DslCondition::ExpressionAssignment { variable, expr_type })
+    Ok(DslCondition::ExpressionAssignment {
+        variable,
+        expr_type,
+    })
 }
 
 /// Compile an expression comparison assignment: x := user.name.count() > 0
@@ -131,7 +139,10 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                         // .slice(start, end)
                         if args.len() != 2 {
                             return Err(ReaperError::InvalidPolicy {
-                                reason: format!(".slice() requires 2 arguments, got {}", args.len()),
+                                reason: format!(
+                                    ".slice() requires 2 arguments, got {}",
+                                    args.len()
+                                ),
                             });
                         }
                         let start = extract_int_literal(&args[0])?;
@@ -159,7 +170,10 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                         // .difference(other_collection) - need to parse other entity.attr
                         if args.len() != 1 {
                             return Err(ReaperError::InvalidPolicy {
-                                reason: format!(".difference() requires 1 argument, got {}", args.len()),
+                                reason: format!(
+                                    ".difference() requires 1 argument, got {}",
+                                    args.len()
+                                ),
                             });
                         }
                         // args[0] should be an entity attribute like user.forbidden_content
@@ -179,7 +193,10 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                         // .intersection(other_collection) - parse entity.attr
                         if args.len() != 1 {
                             return Err(ReaperError::InvalidPolicy {
-                                reason: format!(".intersection() requires 1 argument, got {}", args.len()),
+                                reason: format!(
+                                    ".intersection() requires 1 argument, got {}",
+                                    args.len()
+                                ),
                             });
                         }
                         let (other_entity_type, other_attribute) = extract_entity_attr(&args[0])?;
@@ -459,7 +476,10 @@ mod tests {
         let result = compile_expr_to_type(expr).unwrap();
         assert!(matches!(
             result,
-            ExprType::ChainedMethod { method: ChainMethod::Lower, .. }
+            ExprType::ChainedMethod {
+                method: ChainMethod::Lower,
+                ..
+            }
         ));
     }
 }

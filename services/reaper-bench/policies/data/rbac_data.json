@@ -5,7 +5,7 @@
     {"id": "manager_carol", "type": "User", "attributes": {"id": "manager_carol", "role": "manager", "department": "engineering"}},
     {"id": "manager_dave", "type": "User", "attributes": {"id": "manager_dave", "role": "manager", "department": "sales"}},
     {"id": "engineer_eve", "type": "User", "attributes": {"id": "engineer_eve", "role": "engineer", "department": "engineering"}},
-    {"id": "engineer_frank", "type": "User", "attributes": {"id": "engineer_frank", "role": "engineer", "department": "engineering"}},
+    {"id": "rbac_frank", "type": "User", "attributes": {"id": "rbac_frank", "role": "engineer", "department": "engineering"}},
     {"id": "viewer_grace", "type": "User", "attributes": {"id": "viewer_grace", "role": "viewer", "department": "marketing"}},
     {"id": "viewer_henry", "type": "User", "attributes": {"id": "viewer_henry", "role": "viewer", "department": "sales"}},
     {"id": "marketing_iris", "type": "User", "attributes": {"id": "marketing_iris", "role": "viewer", "department": "marketing"}},

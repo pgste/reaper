@@ -10,7 +10,7 @@ policy comprehensions {
     rule filtered_set_comprehension {
         allow if {
             user.numbers != null &&
-            resource == "set_result" &&
+            resource.type == "set_result" &&
             evens := {n | n := user.numbers[_]; n > 5} &&
             even_count := evens.count() &&
             even_count >= 3
@@ -21,7 +21,7 @@ policy comprehensions {
     rule ordered_array_comprehension {
         allow if {
             user.items != null &&
-            resource == "array_result" &&
+            resource.type == "array_result" &&
             filtered := [item | item := user.items[_]; item.priority == "high"] &&
             filtered_count := filtered.count() &&
             filtered_count >= 2
@@ -32,7 +32,7 @@ policy comprehensions {
     rule object_mapping_comprehension {
         allow if {
             user.records != null &&
-            resource == "object_result" &&
+            resource.type == "object_result" &&
             mapping := {r.id: r.value | r := user.records[_]; r.active == true} &&
             map_count := mapping.count() &&
             map_count >= 2
@@ -43,7 +43,7 @@ policy comprehensions {
     rule multi_filter_comprehension {
         allow if {
             user.data != null &&
-            resource == "complex_filter" &&
+            resource.type == "complex_filter" &&
             filtered := [d | d := user.data[_]; d.score > 80; d.verified == true] &&
             filtered_count := filtered.count() &&
             filtered_count >= 2
@@ -54,7 +54,7 @@ policy comprehensions {
     rule nested_comprehension {
         allow if {
             user.nested != null &&
-            resource == "nested_result" &&
+            resource.type == "nested_result" &&
             // Collect all groups that have items
             groups_with_items := [g | g := user.nested[_]; g.items != null] &&
             groups_count := groups_with_items.count() &&
@@ -66,7 +66,7 @@ policy comprehensions {
     rule transform_comprehension {
         allow if {
             user.strings != null &&
-            resource == "transformed_data" &&
+            resource.type == "transformed_data" &&
             uppers := [s.upper() | s := user.strings[_]; s.contains("a")] &&
             uppers_count := uppers.count() &&
             uppers_count >= 2

@@ -13,12 +13,8 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 
-# HTTP client with TLS
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "http2"] }
-
-# TLS/mTLS
-rustls = "0.23"
-rustls-pemfile = "2.1"
+# Reaper SDK for agent communication (TCP + UDS transport)
+reaper-sdk = { path = "../../crates/reaper-sdk" }
 
 # Serialization
 serde = { workspace = true }
@@ -46,6 +42,9 @@ thiserror = { workspace = true }
 # HTML templating
 askama = { version = "0.12", features = ["with-axum"] }
 askama_axum = "0.4"
+
+# HTTP client for eOPA comparison benchmarks
+reqwest = { workspace = true, features = ["json"] }
 
 # Async utilities
 async-trait = { workspace = true }

@@ -1,0 +1,21 @@
+{
+  "entities": [
+    {"id": "json_user1", "type": "User", "attributes": {"id": "json_user1", "payload": {"valid": true, "data": "test"}, "profile": {"name": "Alice", "email": "alice@co.com", "phone": "555-1234", "address": "123 Main St"}, "name": "Alice", "name_length": 5, "age": 25, "verified": true, "address": {"street": "123 Main St", "city": "NYC"}}},
+    {"id": "json_user2", "type": "User", "attributes": {"id": "json_user2", "payment": {"card": {"number": "4111111111111111", "expiry": "12/25"}, "billing_address": {"street": "456 Oak Ave", "city": "LA"}}, "order_items": ["item1", "item2", "item3"], "form_data": {"name": "Bob", "age": 30, "active": true}}},
+    {"id": "json_user3", "type": "User", "attributes": {"id": "json_user3", "primary_data": {"name": "Carol", "email": "carol@co.com"}, "secondary_data": {"phone": "555-5678", "address": "789 Elm Dr"}, "name": "Carol", "name_length": 5, "age": 17, "verified": false}},
+    {"id": "json_user4", "type": "User", "attributes": {"id": "json_user4", "payload": {"valid": false}, "profile": {"name": "Dave"}, "order_items": [], "form_data": {"name": 123, "age": "thirty", "active": "yes"}}},
+    {"id": "json_user5", "type": "User", "attributes": {"id": "json_user5", "name": "Eve", "name_length": 3, "age": 21, "verified": true, "address": {"street": "321 Pine Ln", "city": "Chicago"}, "payment": {"card": {"number": "5500000000000004"}, "billing_address": {"street": "321 Pine Ln"}}}},
+    {"id": "json_empty", "type": "User", "attributes": {"id": "json_empty"}},
+    {"id": "json_res_api", "type": "Resource", "attributes": {"id": "json_res_api", "type": "api_endpoint"}},
+    {"id": "json_res_profile", "type": "Resource", "attributes": {"id": "json_res_profile", "type": "user_profile"}},
+    {"id": "json_res_payment", "type": "Resource", "attributes": {"id": "json_res_payment", "type": "payment"}},
+    {"id": "json_res_order", "type": "Resource", "attributes": {"id": "json_res_order", "type": "order"}},
+    {"id": "json_res_form", "type": "Resource", "attributes": {"id": "json_res_form", "type": "form_data"}},
+    {"id": "json_res_text", "type": "Resource", "attributes": {"id": "json_res_text", "type": "text_field"}},
+    {"id": "json_res_number", "type": "Resource", "attributes": {"id": "json_res_number", "type": "number_field"}},
+    {"id": "json_res_bool", "type": "Resource", "attributes": {"id": "json_res_bool", "type": "boolean_field"}},
+    {"id": "json_res_struct", "type": "Resource", "attributes": {"id": "json_res_struct", "type": "structured_data"}},
+    {"id": "json_res_merge", "type": "Resource", "attributes": {"id": "json_res_merge", "type": "data_merge"}},
+    {"id": "json_res_none", "type": "Resource", "attributes": {"id": "json_res_none", "type": "unknown"}}
+  ]
+}

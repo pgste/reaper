@@ -126,7 +126,11 @@ impl ReaperPolicy {
 
     /// Get the policy package name (defaults to "default" if not specified)
     pub fn package(&self) -> &str {
-        self.ast.metadata.get("package").map(|s| s.as_str()).unwrap_or("default")
+        self.ast
+            .metadata
+            .get("package")
+            .map(|s| s.as_str())
+            .unwrap_or("default")
     }
 
     /// Get the policy description (if any)

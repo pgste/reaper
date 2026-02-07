@@ -7,7 +7,7 @@ use crate::data::{InternedString, StringInterner};
 use serde::{Deserialize, Serialize};
 
 use super::core::EntityType;
-use super::operators::{NumericOp, StringOp, CountOp};
+use super::operators::{CountOp, NumericOp, StringOp};
 
 // ============================================================================
 // UNCOMPILED V2 TYPES
@@ -274,15 +274,18 @@ impl AttributeComparison {
         let attribute = interner.intern(&self.attribute);
         let target = match &self.target {
             CompareTarget::LiteralNum(n) => CompiledCompareTarget::LiteralNum(*n),
-            CompareTarget::LiteralString(s) => CompiledCompareTarget::LiteralString(interner.intern(s)),
+            CompareTarget::LiteralString(s) => {
+                CompiledCompareTarget::LiteralString(interner.intern(s))
+            }
             CompareTarget::LiteralBool(b) => CompiledCompareTarget::LiteralBool(*b),
             CompareTarget::LiteralNull => CompiledCompareTarget::LiteralNull,
-            CompareTarget::EntityAttr { entity_type, attribute: attr } => {
-                CompiledCompareTarget::EntityAttr {
-                    entity_type: entity_type.clone(),
-                    attribute: interner.intern(attr),
-                }
-            }
+            CompareTarget::EntityAttr {
+                entity_type,
+                attribute: attr,
+            } => CompiledCompareTarget::EntityAttr {
+                entity_type: entity_type.clone(),
+                attribute: interner.intern(attr),
+            },
             CompareTarget::Variable(v) => CompiledCompareTarget::Variable(interner.intern(v)),
         };
         CompiledAttributeComparison {

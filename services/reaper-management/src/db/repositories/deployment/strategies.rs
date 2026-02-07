@@ -170,7 +170,10 @@ impl<'a> StrategyOps<'a> {
         let result = sqlx::query(sql).bind(id.to_string()).execute(pool).await?;
 
         if result.rows_affected() == 0 {
-            return Err(DatabaseError::NotFound(format!("Strategy {} not found", id)));
+            return Err(DatabaseError::NotFound(format!(
+                "Strategy {} not found",
+                id
+            )));
         }
 
         Ok(())

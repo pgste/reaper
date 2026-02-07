@@ -143,9 +143,7 @@ impl DeploymentService {
                         .collect();
 
                     if !wave_agents.is_empty() {
-                        let wave = repo
-                            .create_wave(rollout.id, i as u32, &wave_agents)
-                            .await?;
+                        let wave = repo.create_wave(rollout.id, i as u32, &wave_agents).await?;
                         waves.push(wave);
                         assigned += wave_agents.len();
                     }
@@ -212,7 +210,10 @@ impl DeploymentService {
                 bundle_id: bundle.id,
                 org_id: bundle.org_id,
                 namespace_id: rollout.namespace_id,
-                version: bundle.checksum.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                version: bundle
+                    .checksum
+                    .clone()
+                    .unwrap_or_else(|| "1.0.0".to_string()),
                 download_url,
             });
         }

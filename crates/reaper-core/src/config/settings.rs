@@ -277,7 +277,6 @@ pub struct ManagementSettings {
     // ========================================================================
     // SSE Push Notification Settings
     // ========================================================================
-
     /// Enable SSE push notifications for real-time updates (default: true)
     /// When enabled, the agent receives instant notifications of bundle promotions
     /// and data refreshes. Polling is used as a fallback.
@@ -341,6 +340,48 @@ fn default_sse_reconnect_max() -> u64 {
 
 fn default_poll_interval_with_sse() -> u64 {
     300
+}
+
+// ============================================================================
+// Unix Domain Socket Settings
+// ============================================================================
+
+/// Unix Domain Socket (UDS) listener settings.
+///
+/// When enabled, the agent listens on a Unix socket in addition to TCP.
+/// UDS bypasses the TCP/IP stack for lower latency same-host IPC.
+/// Only applicable on Unix-like systems (Linux, macOS).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdsSettings {
+    /// Enable UDS listener (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to the Unix socket file
+    #[serde(default = "default_uds_path")]
+    pub socket_path: PathBuf,
+
+    /// Socket file permissions (octal, e.g. 0o660)
+    #[serde(default = "default_socket_permissions")]
+    pub socket_permissions: u32,
+}
+
+impl Default for UdsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            socket_path: default_uds_path(),
+            socket_permissions: default_socket_permissions(),
+        }
+    }
+}
+
+fn default_uds_path() -> PathBuf {
+    PathBuf::from("/var/run/reaper/agent.sock")
+}
+
+fn default_socket_permissions() -> u32 {
+    0o660
 }
 
 // ============================================================================
@@ -417,5 +458,16 @@ mod tests {
         let settings = TlsSettings::default();
         assert!(!settings.enabled);
         assert!(!settings.require_client_cert);
+    }
+
+    #[test]
+    fn test_uds_settings_default() {
+        let settings = UdsSettings::default();
+        assert!(!settings.enabled);
+        assert_eq!(
+            settings.socket_path,
+            PathBuf::from("/var/run/reaper/agent.sock")
+        );
+        assert_eq!(settings.socket_permissions, 0o660);
     }
 }

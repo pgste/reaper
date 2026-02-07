@@ -5,10 +5,12 @@
 //!
 //! Uses V2 consolidated types for cleaner code.
 
-use super::variable::{compile_chained_variable_method_comparison, compile_variable_method_comparison};
+use super::variable::{
+    compile_chained_variable_method_comparison, compile_variable_method_comparison,
+};
 use crate::evaluators::reaper_dsl::{
-    AttrCompareOp, Condition as DslCondition, CountCondition, CountOp, LiteralValue,
-    StringOp, StringOperationCondition,
+    AttrCompareOp, Condition as DslCondition, CountCondition, CountOp, LiteralValue, StringOp,
+    StringOperationCondition,
 };
 use crate::reap::ast::{ComparisonRight, Expr, MethodName, Operator, Value};
 use crate::reap::compiler::helpers::extract_entity_attr;
@@ -123,14 +125,14 @@ pub fn compile_expr_comparison(
                     op: StringOp::LowerEquals,
                     value,
                 })),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(
-                    DslCondition::StringOp(StringOperationCondition {
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringOp(
+                    StringOperationCondition {
                         entity_type,
                         attribute,
                         op: StringOp::LowerEquals,
                         value,
-                    }),
-                ))),
+                    },
+                )))),
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!(
                         "Operator {:?} not supported for .lower() comparisons. Use == or !=",
@@ -159,14 +161,14 @@ pub fn compile_expr_comparison(
                     op: StringOp::UpperEquals,
                     value,
                 })),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(
-                    DslCondition::StringOp(StringOperationCondition {
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringOp(
+                    StringOperationCondition {
                         entity_type,
                         attribute,
                         op: StringOp::UpperEquals,
                         value,
-                    }),
-                ))),
+                    },
+                )))),
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!(
                         "Operator {:?} not supported for .upper() comparisons. Use == or !=",
@@ -190,17 +192,10 @@ pub fn compile_expr_comparison(
         // Handle null comparisons specially
         if let ComparisonRight::Value(Value::Null) = right {
             return match op {
-                Operator::Equal => Ok(DslCondition::VariableIsNull {
-                    variable: var_name,
-                }),
-                Operator::NotEqual => Ok(DslCondition::VariableIsNotNull {
-                    variable: var_name,
-                }),
+                Operator::Equal => Ok(DslCondition::VariableIsNull { variable: var_name }),
+                Operator::NotEqual => Ok(DslCondition::VariableIsNotNull { variable: var_name }),
                 _ => Err(ReaperError::InvalidPolicy {
-                    reason: format!(
-                        "Null comparisons only support == and !=, got {:?}",
-                        op
-                    ),
+                    reason: format!("Null comparisons only support == and !=, got {:?}", op),
                 }),
             };
         }

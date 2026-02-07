@@ -9,13 +9,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError,
-    api::orgs::resolve_org,
-    auth::middleware::RequireAuth,
-    db::repositories::OrganizationRepository,
-    deployment::DeploymentService,
-    domain::deployment::CreateDeploymentStrategy,
-    state::AppState,
+    api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
+    db::repositories::OrganizationRepository, deployment::DeploymentService,
+    domain::deployment::CreateDeploymentStrategy, state::AppState,
 };
 
 use super::types::{CreateStrategyRequest, StrategiesQuery, StrategyResponse};
@@ -139,14 +135,15 @@ pub async fn delete_strategy(
     let service = DeploymentService::new(state.db.clone());
 
     // Verify strategy belongs to this org
-    let strategy = service.get_strategy(strategy_id).await.map_err(|e| {
-        match e {
+    let strategy = service
+        .get_strategy(strategy_id)
+        .await
+        .map_err(|e| match e {
             crate::deployment::DeploymentError::StrategyNotFound(_) => {
                 ApiError::NotFound("Strategy not found".to_string())
             }
             e => ApiError::Internal(e.to_string()),
-        }
-    })?;
+        })?;
 
     if strategy.org_id != organization.id {
         return Err(ApiError::NotFound("Strategy not found".to_string()));

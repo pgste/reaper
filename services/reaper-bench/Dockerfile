@@ -34,6 +34,9 @@ COPY --from=builder /build/target/release/reaper-bench /app/reaper-bench
 # Copy policies
 COPY services/reaper-bench/policies /app/policies
 
+# Copy OPA .rego policies for comparison benchmarks
+COPY benchmarks/reaper-vs-opa/policies/opa /app/opa-policies
+
 # Default port
 EXPOSE 3000
 

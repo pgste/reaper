@@ -221,6 +221,7 @@ impl OptimizedPolicyEngine {
                 let decision = PolicyDecision {
                     decision: precomputed.decision.clone(),
                     policy_id: precomputed.policy_id,
+                    policy_name: String::new(),
                     policy_version: precomputed.policy_version,
                     evaluation_time_ns: 76, // From benchmarks
                     matched_rule: None,

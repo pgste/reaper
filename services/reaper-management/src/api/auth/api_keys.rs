@@ -22,8 +22,8 @@ use crate::{
 };
 
 use super::types::{
-    ApiKeyCreated, ApiKeySummary, CreateApiKeyRequest, ListApiKeysResponse,
-    RefreshTokenRequest, TokenResponse,
+    ApiKeyCreated, ApiKeySummary, CreateApiKeyRequest, ListApiKeysResponse, RefreshTokenRequest,
+    TokenResponse,
 };
 
 /// Refresh a JWT token

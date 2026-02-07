@@ -5,8 +5,8 @@
 
 use policy_engine::data::{AttributeValue, DataStore};
 use policy_engine::reaper_dsl::{
-    AttributeComparison, CompareTarget, Condition, EntityType, IndexExpr, LiteralValue,
-    NumericOp, ReaperDSLEvaluator, Rule,
+    AttributeComparison, CompareTarget, Condition, EntityType, IndexExpr, LiteralValue, NumericOp,
+    ReaperDSLEvaluator, Rule,
 };
 use policy_engine::{EntityBuilder, PolicyAction, PolicyEvaluator, PolicyRequest};
 use rustc_hash::FxHashSet;

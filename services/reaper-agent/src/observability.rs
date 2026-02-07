@@ -26,11 +26,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 // ============================================================================
 
 lazy_static! {
-    /// Total decisions by outcome, policy name, and policy ID.
+    /// Total decisions by outcome and policy name.
     pub static ref DECISIONS_TOTAL: CounterVec = register_counter_vec!(
         "reaper_decisions_total",
         "Total policy decisions made",
-        &["decision", "policy_name", "policy_id"]
+        &["decision", "policy_name"]
     )
     .expect("Failed to register DECISIONS_TOTAL metric");
 
@@ -113,9 +113,9 @@ lazy_static! {
 }
 
 /// Record a policy decision in Prometheus metrics.
-pub fn record_decision(decision: &str, policy_name: &str, policy_id: &str, duration_secs: f64) {
+pub fn record_decision(decision: &str, policy_name: &str, _policy_id: &str, duration_secs: f64) {
     DECISIONS_TOTAL
-        .with_label_values(&[decision, policy_name, policy_id])
+        .with_label_values(&[decision, policy_name])
         .inc();
     DECISION_DURATION
         .with_label_values(&[policy_name])

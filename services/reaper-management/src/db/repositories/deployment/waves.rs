@@ -74,7 +74,10 @@ impl<'a> WaveOps<'a> {
     }
 
     /// Get waves for a rollout
-    pub async fn get_for_rollout(&self, rollout_id: Uuid) -> Result<Vec<RolloutWave>, DatabaseError> {
+    pub async fn get_for_rollout(
+        &self,
+        rollout_id: Uuid,
+    ) -> Result<Vec<RolloutWave>, DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()

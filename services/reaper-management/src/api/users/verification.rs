@@ -1,10 +1,6 @@
 //! Email verification handlers.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-};
+use axum::{extract::State, http::StatusCode, response::Json};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -35,7 +31,9 @@ pub async fn verify_email(
         .ok_or_else(|| ApiError::BadRequest("Invalid verification token".to_string()))?;
 
     if !token.is_valid() {
-        return Err(ApiError::BadRequest("Verification token has expired".to_string()));
+        return Err(ApiError::BadRequest(
+            "Verification token has expired".to_string(),
+        ));
     }
 
     // Get user and verify they exist

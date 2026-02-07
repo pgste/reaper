@@ -6,6 +6,7 @@ mod observability;
 mod state;
 mod tls;
 mod types;
+mod uds;
 
 use axum::{
     body::Bytes,
@@ -38,30 +39,47 @@ use uuid::Uuid;
 
 // Import from extracted modules
 use handlers::{
-    // Health handlers
-    health_check, liveness_check, metrics, readiness_check,
     // Evaluation handlers
-    batch_evaluate_policy, evaluate_policy, fast_evaluate_policy,
-    // Policy management handlers
-    deploy_bundle, deploy_compiled_policy, deploy_policy, get_policy_current_version,
-    get_policy_versions, list_policies,
-    // Data handlers
-    load_data_handler, load_data_stream_handler, sync_data,
+    batch_evaluate_policy,
     // Entity handlers
-    batch_upsert_handler, debug_datastore, delete_entity_handler, get_entity_handler,
-    list_entities_handler, upsert_entity_handler,
+    batch_upsert_handler,
+    debug_datastore,
+    delete_entity_handler,
+    // Policy management handlers
+    deploy_bundle,
+    deploy_compiled_policy,
+    deploy_policy,
+    evaluate_policy,
     // Decision handlers
-    export_decisions, get_decision_stats, get_decisions,
+    export_decisions,
+    fast_evaluate_policy,
+    get_decision_stats,
+    get_decisions,
+    get_entity_handler,
+    get_policy_current_version,
+    get_policy_versions,
+    // Health handlers
+    health_check,
+    list_entities_handler,
+    list_policies,
+    liveness_check,
+    // Data handlers
+    load_data_handler,
+    load_data_stream_handler,
+    metrics,
+    readiness_check,
+    sync_data,
+    upsert_entity_handler,
 };
 use observability::{
-    init_observability, record_decision, record_denial, set_active_policies,
-    ACTIVE_POLICIES, CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISION_DURATION,
-    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DECISIONS_TOTAL,
-    DENIALS_TOTAL, ERRORS_TOTAL,
+    init_observability, record_decision, record_denial, set_active_policies, ACTIVE_POLICIES,
+    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISIONS_TOTAL, DECISION_DURATION,
+    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DENIALS_TOTAL,
+    ERRORS_TOTAL,
 };
 use opentelemetry::{global, trace::TraceContextExt, KeyValue};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 use state::{AgentState, AgentStats};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use types::{
     BatchEvaluateRequest, BatchRequestItem, BatchResponseItem, DecisionQuery, DeployBundleRequest,
     DeployBundleResponse, DeployCompiledRequest, DeployPolicyRequest, EvaluateRequest,
@@ -228,8 +246,8 @@ async fn main() -> anyhow::Result<()> {
                 match cache.load_policies().await {
                     Ok(policies) => {
                         for mut policy in policies {
-                            // Build evaluator for cached policy using get_evaluator (builds if needed)
-                            if let Err(e) = policy.get_evaluator() {
+                            // Build evaluator for cached policy (evaluator is not serialized)
+                            if let Err(e) = policy.build_evaluator() {
                                 warn!(
                                     "Failed to build evaluator for cached policy {}: {}",
                                     policy.name, e
@@ -261,7 +279,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Create shared stats for both management sync and request handling
     // Enhanced metrics (histogram, CPU, memory) are controlled by config
-    let stats = Arc::new(AgentStats::new(config.observability.enable_enhanced_metrics));
+    let stats = Arc::new(AgentStats::new(
+        config.observability.enable_enhanced_metrics,
+    ));
     let started_at = std::time::Instant::now();
 
     if config.observability.enable_enhanced_metrics {
@@ -473,6 +493,13 @@ async fn main() -> anyhow::Result<()> {
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
         .with_state(state);
 
+    // Clone router for UDS listener before the TCP server consumes it
+    let uds_app = if config.uds.enabled {
+        Some(app.clone())
+    } else {
+        None
+    };
+
     let bind_addr = format!("{}:{}", config.agent.bind_address, config.agent.port);
 
     info!(bind_addr = %bind_addr, "Reaper Agent listening");
@@ -489,6 +516,21 @@ async fn main() -> anyhow::Result<()> {
     info!("  Traces: OpenTelemetry → Tempo");
     info!("  Metrics: Prometheus format");
     info!("");
+
+    // Spawn UDS listener if enabled
+    if let Some(uds_app) = uds_app {
+        let socket_path = config.uds.socket_path.clone();
+        let socket_permissions = config.uds.socket_permissions;
+        info!(
+            path = %socket_path.display(),
+            "Starting UDS listener"
+        );
+        tokio::spawn(async move {
+            if let Err(e) = uds::serve_uds(socket_path, socket_permissions, uds_app).await {
+                error!("UDS server error: {}", e);
+            }
+        });
+    }
 
     // Run server with TLS if configured
     let result = if config.tls.enabled {
@@ -513,7 +555,9 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("🚀 Ready for sub-microsecond policy enforcement!");
         let listener = TcpListener::bind(&bind_addr).await?;
-        axum::serve(listener, app).await.map_err(|e| anyhow::anyhow!("Server error: {}", e))
+        axum::serve(listener, app)
+            .await
+            .map_err(|e| anyhow::anyhow!("Server error: {}", e))
     };
 
     // Signal shutdown to sync service

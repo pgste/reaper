@@ -31,7 +31,11 @@ pub(super) use math::{
 pub(super) use regex::escape as regex_escape;
 
 // Re-export json functions
-pub(super) use json::{is_valid as json_is_valid, parse as json_parse, stringify as json_stringify};
+pub(super) use json::{
+    is_valid as json_is_valid, parse as json_parse, stringify as json_stringify,
+};
 
 // Re-export type check functions
-pub(super) use type_check::{concat, is_array, is_bool, is_null, is_number, is_object, is_set, is_string};
+pub(super) use type_check::{
+    concat, is_array, is_bool, is_null, is_number, is_object, is_set, is_string,
+};

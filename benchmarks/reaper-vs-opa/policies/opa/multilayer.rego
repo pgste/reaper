@@ -1,112 +1,121 @@
 package reaper.multilayer
 
-import future.keywords.if
-import future.keywords.in
+import rego.v1
 
-# Default deny
+# Multilayer Enterprise Policy — mirrors multilayer_enterprise.reap exactly
+# 9 layers combining RBAC, ABAC, and ReBAC with deny precedence
+# Rules:
+#   Deny: deny_suspended, deny_intern_classified
+#   Allow: admin, owner+clearance, team_lead, team_senior, dept+clearance,
+#          shared, collaborator, executive, manager_hierarchy, public
+
 default allow := false
 
-# Direct O(1) entity lookups (entities pre-indexed as map)
-user := data.entities[input.principal]
-resource := data.entities[input.resource]
+# Entity lookups — .attributes shorthand
+user := data.entities[input.principal.id].attributes
+
+resource := data.entities[input.resource].attributes
 
 # ===== DENY RULES (highest priority) =====
 
-# Suspended users blocked
-allow := false if {
-    user.attributes.suspended == true
+# Suspended users are blocked regardless of other factors
+deny if {
+    user.suspended == true
 }
 
-# Interns cannot access classified
-allow := false if {
-    user.attributes.role == "intern"
-    resource.attributes.classification == "secret"
+# Interns cannot access classified documents
+deny if {
+    user.role == "intern"
+    resource.classification == "secret"
 }
 
-# ===== ADMIN OVERRIDE =====
+# ===== Layer 2: RBAC - Admin Override =====
 
-# Admins with high clearance have full access
-allow := true if {
-    user.attributes.role == "admin"
-    user.attributes.high_clearance == true
-    not user.attributes.suspended
+# Admins have full access (except suspended)
+allow if {
+    not deny
+    user.role == "admin"
 }
 
-# ===== OWNERSHIP + CLEARANCE =====
+# ===== Layer 3: ReBAC + ABAC - Ownership with Clearance =====
 
 # Owners can access if they have clearance
-allow := true if {
-    user.id == resource.attributes.owner_id
-    user.attributes.clearance_level >= resource.attributes.clearance_level
-    user.attributes.status == "active"
+allow if {
+    not deny
+    user.id == resource.owner_id
+    user.high_clearance == true
+    resource.archived != true
 }
 
-# ===== TEAM ACCESS + ROLE =====
+# ===== Layer 4: ReBAC + RBAC - Team Access with Role =====
 
 # Team leads can access all team resources
-allow := true if {
-    user.attributes.team_role == "lead"
-    user.attributes.team_id == resource.attributes.team_id
+allow if {
+    not deny
+    user.team_role == "lead"
+    user.team_id == resource.team_id
 }
 
-# Senior team members with clearance
-allow := true if {
-    user.attributes.team_id == resource.attributes.team_id
-    user.attributes.role == "senior"
-    user.attributes.clearance_level >= resource.attributes.clearance_level
-    resource.attributes.team_accessible == true
+# Team members can access if manager or senior
+allow if {
+    not deny
+    user.team_id == resource.team_id
+    user.role == "manager"
+    user.team_role != "pending"
 }
 
-# ===== DEPARTMENT + CLEARANCE =====
+# ===== Layer 5: ABAC + ReBAC - Department with Clearance =====
 
-# Same department with clearance match
-allow := true if {
-    user.attributes.department == resource.attributes.department
-    user.attributes.clearance_level >= resource.attributes.clearance_level
-    user.attributes.status == "active"
-    resource.attributes.classification != "secret"
+# Same department access with clearance match
+allow if {
+    not deny
+    user.department == resource.department
+    user.clearance_match == true
+    resource.archived != true
+    resource.classification != "secret"
 }
 
-# ===== COLLABORATION =====
-
-# Active collaborators (but cannot delete)
-allow := true if {
-    user.id == resource.attributes.collaborator_id
-    resource.attributes.collaboration_status == "active"
-    input.action != "delete"
-}
+# ===== Layer 6: ReBAC - Sharing and Collaboration =====
 
 # Shared resources
-allow := true if {
-    user.id == resource.attributes.shared_with
-    resource.attributes.share_active == true
+allow if {
+    not deny
+    user.id == resource.shared_with_user
 }
 
-# ===== EXECUTIVE ACCESS =====
-
-# Executives with high clearance
-allow := true if {
-    user.attributes.role == "executive"
-    user.attributes.high_clearance == true
-    resource.attributes.classification != "secret"
-    user.attributes.status == "active"
+# Active collaborators
+allow if {
+    not deny
+    user.id == resource.collaborator_id
+    resource.collaboration_status == "active"
 }
 
-# ===== HIERARCHICAL ACCESS =====
+# ===== Layer 7: RBAC + ABAC - Executive Access =====
 
-# Senior managers can read dept resources
-allow := true if {
-    user.attributes.is_senior_manager == true
-    user.attributes.department == resource.attributes.department
-    resource.attributes.visible_to_managers == true
-    input.action == "read"
+# Executives with high clearance can access most things
+allow if {
+    not deny
+    user.role == "executive"
+    user.high_clearance == true
+    resource.archived != true
 }
 
-# ===== PUBLIC ACCESS =====
+# ===== Layer 8: ReBAC - Hierarchical Access =====
 
-# Public resources for active users
-allow := true if {
-    resource.attributes.classification == "public"
-    user.attributes.status == "active"
-    input.action == "read"
+# Senior managers can access subordinate resources
+allow if {
+    not deny
+    user.is_senior_manager == true
+    user.department == resource.owner_department
+    resource.public_in_dept == true
+}
+
+# ===== Layer 9: ABAC - Public Resources =====
+
+# Public resources accessible to anyone active
+allow if {
+    not deny
+    resource.classification == "public"
+    user.status == "active"
+    resource.archived != true
 }

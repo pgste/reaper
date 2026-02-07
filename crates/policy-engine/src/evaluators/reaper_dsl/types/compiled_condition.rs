@@ -10,8 +10,8 @@ use super::expression::{VariableCollectionMethod, VariableMethod, VariableString
 use super::operators::{AttrCompareOp, ComprehensionFilterOp};
 use super::v2::{
     CompiledAttributeComparison, CompiledCountCondition, CompiledCrossEntityComparison,
-    CompiledRegexMatch, CompiledStringOperation, CompiledTimeCondition,
-    CompiledVariableStringOp, CompiledWildcardComparison,
+    CompiledRegexMatch, CompiledStringOperation, CompiledTimeCondition, CompiledVariableStringOp,
+    CompiledWildcardComparison,
 };
 
 /// Compiled condition with pre-interned strings for zero-lookup evaluation.
@@ -30,8 +30,12 @@ pub enum CompiledCondition {
 
     // ============ Core Conditions ============
     Always,
-    ActionEquals { value: InternedString },
-    ResourceIdEquals { value: InternedString },
+    ActionEquals {
+        value: InternedString,
+    },
+    ResourceIdEquals {
+        value: InternedString,
+    },
 
     // ============ Same Entity Comparisons ============
     SameEntityAttrCompare {
@@ -67,9 +71,18 @@ pub enum CompiledCondition {
     },
 
     // ============ Type Checks ============
-    IsString { entity_type: EntityType, attribute: InternedString },
-    IsNumber { entity_type: EntityType, attribute: InternedString },
-    IsBool { entity_type: EntityType, attribute: InternedString },
+    IsString {
+        entity_type: EntityType,
+        attribute: InternedString,
+    },
+    IsNumber {
+        entity_type: EntityType,
+        attribute: InternedString,
+    },
+    IsBool {
+        entity_type: EntityType,
+        attribute: InternedString,
+    },
 
     // ============ Set Operations ============
     SetIntersectionCountGreater {
@@ -122,8 +135,12 @@ pub enum CompiledCondition {
         op: AttrCompareOp,
         value: CompiledLiteralValue,
     },
-    VariableIsNull { variable: InternedString },
-    VariableIsNotNull { variable: InternedString },
+    VariableIsNull {
+        variable: InternedString,
+    },
+    VariableIsNotNull {
+        variable: InternedString,
+    },
     ComparisonAssignment {
         variable: InternedString,
         entity_type: EntityType,
@@ -147,12 +164,26 @@ pub enum CompiledCondition {
         value: CompiledLiteralValue,
         variable: InternedString,
     },
-    VariableIsString { variable: InternedString },
-    VariableIsNumber { variable: InternedString },
-    VariableIsBool { variable: InternedString },
-    VariableIsTruthy { variable: InternedString },
-    VariableEqualsVariable { left: InternedString, right: InternedString },
-    VariableNotEqualsVariable { left: InternedString, right: InternedString },
+    VariableIsString {
+        variable: InternedString,
+    },
+    VariableIsNumber {
+        variable: InternedString,
+    },
+    VariableIsBool {
+        variable: InternedString,
+    },
+    VariableIsTruthy {
+        variable: InternedString,
+    },
+    VariableEqualsVariable {
+        left: InternedString,
+        right: InternedString,
+    },
+    VariableNotEqualsVariable {
+        left: InternedString,
+        right: InternedString,
+    },
     VariableMethodWithLiteralArray {
         variable: InternedString,
         method: VariableCollectionMethod,
@@ -184,8 +215,14 @@ pub enum CompiledCondition {
         op: AttrCompareOp,
         value: CompiledLiteralValue,
     },
-    VariableAttrEqualsNull { variable: InternedString, attribute: InternedString },
-    VariableAttrNotEqualsNull { variable: InternedString, attribute: InternedString },
+    VariableAttrEqualsNull {
+        variable: InternedString,
+        attribute: InternedString,
+    },
+    VariableAttrNotEqualsNull {
+        variable: InternedString,
+        attribute: InternedString,
+    },
     VarAttrNullCompareAssignment {
         result_variable: InternedString,
         source_variable: InternedString,

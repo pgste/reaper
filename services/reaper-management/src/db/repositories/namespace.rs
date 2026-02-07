@@ -246,10 +246,7 @@ impl<'a> NamespaceRepository<'a> {
         updates.push("updated_at = ?");
         bindings.push(Utc::now().to_rfc3339());
 
-        let sql = format!(
-            "UPDATE namespaces SET {} WHERE id = ?",
-            updates.join(", ")
-        );
+        let sql = format!("UPDATE namespaces SET {} WHERE id = ?", updates.join(", "));
 
         let mut query = sqlx::query(&sql);
         for binding in &bindings {
@@ -294,11 +291,11 @@ impl<'a> NamespaceRepository<'a> {
             .map_err(|e| DatabaseError::Config(format!("Invalid org UUID: {}", e)))?;
 
         let parent_id_str: Option<String> = row.get("parent_id");
-        let parent_id = parent_id_str
-            .and_then(|s| Uuid::parse_str(&s).ok());
+        let parent_id = parent_id_str.and_then(|s| Uuid::parse_str(&s).ok());
 
         let settings_str: String = row.get("settings");
-        let settings = serde_json::from_str(&settings_str).unwrap_or_else(|_| serde_json::json!({}));
+        let settings =
+            serde_json::from_str(&settings_str).unwrap_or_else(|_| serde_json::json!({}));
 
         let is_active: bool = row.get("is_active");
 
@@ -462,13 +459,12 @@ impl<'a> NamespaceRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query(
-            "DELETE FROM agent_subscriptions WHERE agent_id = ? AND namespace_id = ?",
-        )
-        .bind(agent_id.to_string())
-        .bind(namespace_id.to_string())
-        .execute(pool)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM agent_subscriptions WHERE agent_id = ? AND namespace_id = ?")
+                .bind(agent_id.to_string())
+                .bind(namespace_id.to_string())
+                .execute(pool)
+                .await?;
 
         Ok(result.rows_affected() > 0)
     }

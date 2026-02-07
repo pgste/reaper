@@ -8,7 +8,10 @@
 
 use policy_engine::data::DataLoader;
 use policy_engine::reap::ReaperPolicy;
-use policy_engine::{DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest, PolicyRule};
+use policy_engine::{
+    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest,
+    PolicyRule,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -469,10 +472,7 @@ fn test_entity_many_attributes() {
 
     // Should handle many attributes efficiently
     let bytes_per_entity = stats.estimated_memory_bytes;
-    println!(
-        "Entity with 100 attributes: {} bytes",
-        bytes_per_entity
-    );
+    println!("Entity with 100 attributes: {} bytes", bytes_per_entity);
 
     // Should be less than 50KB per entity even with 100 attributes
     // Note: Includes overhead from indexes and attribute storage

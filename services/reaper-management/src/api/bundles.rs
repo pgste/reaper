@@ -73,10 +73,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Get promoted bundle
         .route("/orgs/{org}/bundles/promoted", get(get_promoted_bundle))
         // Bundle diff/preview
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/diff",
-            get(get_bundle_diff),
-        )
+        .route("/orgs/{org}/bundles/{bundle_id}/diff", get(get_bundle_diff))
 }
 
 /// List bundles for an organization
@@ -384,18 +381,20 @@ async fn get_bundle_diff(
         .ok_or_else(|| ApiError::NotFound(format!("New bundle not found: {}", bundle_id)))?;
 
     // Get policies for both bundles
-    let base_policies = bundle_repo.get_policies(query.base).await.map_err(ApiError::from)?;
-    let new_policies = bundle_repo.get_policies(bundle_id).await.map_err(ApiError::from)?;
+    let base_policies = bundle_repo
+        .get_policies(query.base)
+        .await
+        .map_err(ApiError::from)?;
+    let new_policies = bundle_repo
+        .get_policies(bundle_id)
+        .await
+        .map_err(ApiError::from)?;
 
     // Build lookup maps by policy_id
-    let base_map: HashMap<Uuid, &crate::domain::bundle::BundlePolicy> = base_policies
-        .iter()
-        .map(|bp| (bp.policy_id, bp))
-        .collect();
-    let new_map: HashMap<Uuid, &crate::domain::bundle::BundlePolicy> = new_policies
-        .iter()
-        .map(|bp| (bp.policy_id, bp))
-        .collect();
+    let base_map: HashMap<Uuid, &crate::domain::bundle::BundlePolicy> =
+        base_policies.iter().map(|bp| (bp.policy_id, bp)).collect();
+    let new_map: HashMap<Uuid, &crate::domain::bundle::BundlePolicy> =
+        new_policies.iter().map(|bp| (bp.policy_id, bp)).collect();
 
     // Calculate diffs
     let mut policies_added = Vec::new();

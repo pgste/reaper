@@ -3,9 +3,7 @@
 //! YAML-based test suite runner for policy engine integration tests.
 //! Loads real policies and data, runs test cases, and validates results.
 
-use policy_engine::{
-    DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy,
-};
+use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest, ReaperPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -91,7 +89,10 @@ pub fn load_suite(path: &Path) -> Result<TestSuite, Box<dyn std::error::Error>> 
 }
 
 /// Run a test suite against the policy engine
-pub fn run_suite(suite: &TestSuite, base_path: &Path) -> Result<SuiteResult, Box<dyn std::error::Error>> {
+pub fn run_suite(
+    suite: &TestSuite,
+    base_path: &Path,
+) -> Result<SuiteResult, Box<dyn std::error::Error>> {
     // Load data into store
     let store = DataStore::new();
     let loader = DataLoader::new(store.clone());
@@ -100,7 +101,8 @@ pub fn run_suite(suite: &TestSuite, base_path: &Path) -> Result<SuiteResult, Box
         let full_path = base_path.join(&data_path.path);
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| format!("Failed to read data file {}: {}", full_path.display(), e))?;
-        loader.load_json(&content)
+        loader
+            .load_json(&content)
             .map_err(|e| format!("Failed to load data from {}: {:?}", full_path.display(), e))?;
     }
 
@@ -163,10 +165,7 @@ pub fn run_suite(suite: &TestSuite, base_path: &Path) -> Result<SuiteResult, Box
 }
 
 /// Run a single test case against all evaluators
-fn run_test_case(
-    evaluators: &[Box<dyn PolicyEvaluator>],
-    case: &TestCase,
-) -> TestCaseResult {
+fn run_test_case(evaluators: &[Box<dyn PolicyEvaluator>], case: &TestCase) -> TestCaseResult {
     let start = Instant::now();
 
     // Build the request with principal in context
@@ -215,8 +214,14 @@ fn run_test_case(
 /// Print suite results in a readable format
 pub fn print_results(result: &SuiteResult) {
     println!("\n=== {} ===", result.suite_name);
-    println!("Total: {} | Passed: {} | Failed: {}", result.total, result.passed, result.failed);
-    println!("Avg time: {}µs | P99: {}µs", result.avg_evaluation_time_us, result.p99_evaluation_time_us);
+    println!(
+        "Total: {} | Passed: {} | Failed: {}",
+        result.total, result.passed, result.failed
+    );
+    println!(
+        "Avg time: {}µs | P99: {}µs",
+        result.avg_evaluation_time_us, result.p99_evaluation_time_us
+    );
     println!();
 
     for case_result in &result.results {

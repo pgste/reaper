@@ -330,18 +330,14 @@ fn test_cedar_forbid_overrides_permit() {
 fn test_cedar_invalid_syntax_rejected() {
     let invalid_policies = vec![
         "not valid cedar at all",
-        "permit(principal, action, resource",  // Missing closing paren
-        "permit();",                            // Empty permit
+        "permit(principal, action, resource", // Missing closing paren
+        "permit();",                          // Empty permit
         "allow(principal, action, resource);", // Wrong keyword
     ];
 
     for policy in invalid_policies {
         let result = CedarPolicyEvaluator::new(policy.to_string());
-        assert!(
-            result.is_err(),
-            "Should reject invalid policy: {}",
-            policy
-        );
+        assert!(result.is_err(), "Should reject invalid policy: {}", policy);
     }
 }
 
@@ -457,7 +453,10 @@ fn test_cedar_evaluator_metadata() {
     let metadata = evaluator.metadata();
 
     // Metadata should be present
-    assert!(metadata.is_some(), "Cedar evaluator should provide metadata");
+    assert!(
+        metadata.is_some(),
+        "Cedar evaluator should provide metadata"
+    );
 
     let meta = metadata.unwrap();
     assert!(meta.rule_count >= 1, "Should have at least 1 rule");

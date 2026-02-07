@@ -14,7 +14,10 @@
 
 mod benchmark;
 mod client;
+mod comparison_scenarios;
+pub mod eopa_client;
 mod packages;
+pub mod policy_mapping;
 mod report;
 mod scenarios;
 mod simulation;
@@ -34,8 +37,9 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use benchmark::{BenchmarkConfig, BenchmarkResult};
+use benchmark::{BenchmarkConfig, BenchmarkResult, ComparisonReport, MultiPolicyComparisonReport};
 use client::AgentClient;
+use eopa_client::EopaClient;
 use report::BenchmarkReport;
 use simulation::{SimulationConfig, SimulationResult};
 
@@ -48,9 +52,21 @@ struct Args {
     #[arg(short, long, default_value = "3000")]
     port: u16,
 
-    /// Reaper Agent URL
-    #[arg(long, env = "REAPER_AGENT_URL", default_value = "http://localhost:8080")]
+    /// Reaper Agent URL (used for HTTP/HTTPS transport)
+    #[arg(
+        long,
+        env = "REAPER_AGENT_URL",
+        default_value = "http://localhost:8080"
+    )]
     agent_url: String,
+
+    /// Unix Domain Socket path for agent connection (overrides agent_url when set)
+    #[arg(long, env = "REAPER_AGENT_UDS_PATH")]
+    agent_uds_path: Option<String>,
+
+    /// Enterprise OPA URL for comparison benchmarks
+    #[arg(long, env = "EOPA_URL")]
+    eopa_url: Option<String>,
 
     /// TLS CA certificate file
     #[arg(long, env = "REAPER_TLS_CA")]
@@ -68,9 +84,14 @@ struct Args {
 /// Application state shared across handlers
 #[derive(Clone)]
 struct AppState {
+    /// Primary agent client (UDS when available, HTTP otherwise)
     client: Arc<AgentClient>,
+    /// TCP-only agent client for transport comparison benchmarks
+    tcp_client: Arc<AgentClient>,
     agent_url: String,
     results_cache: Arc<DashMap<String, BenchmarkReport>>,
+    eopa_client: Option<Arc<EopaClient>>,
+    comparison_cache: Arc<DashMap<String, ComparisonReport>>,
 }
 
 /// Request body for running benchmarks
@@ -173,24 +194,55 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Reaper Benchmark Service");
     info!("  Agent URL: {}", args.agent_url);
+    if let Some(ref uds) = args.agent_uds_path {
+        info!("  Agent UDS: {}", uds);
+    }
     info!("  Listen port: {}", args.port);
 
-    // Create agent client
+    // Create primary agent client (UDS takes priority over HTTP when set)
     let client = client::create_agent_client(
+        &args.agent_url,
+        args.agent_uds_path.as_deref(),
         args.tls_ca.as_deref(),
         args.tls_cert.as_deref(),
         args.tls_key.as_deref(),
     )?;
 
-    info!(
-        "Client configured with TLS: {}",
-        args.tls_ca.is_some() && args.tls_cert.is_some()
-    );
+    // Create TCP-only client for transport comparison (always HTTP, no UDS)
+    let tcp_client = client::create_agent_client(
+        &args.agent_url,
+        None, // force HTTP by passing None for UDS
+        args.tls_ca.as_deref(),
+        args.tls_cert.as_deref(),
+        args.tls_key.as_deref(),
+    )?;
+
+    let transport_mode = if args.agent_uds_path.is_some() {
+        "UDS"
+    } else if args.tls_ca.is_some() && args.tls_cert.is_some() {
+        "HTTPS/mTLS"
+    } else {
+        "HTTP"
+    };
+    info!("Primary client transport: {}", transport_mode);
+    info!("TCP comparison client transport: HTTP");
+
+    // Create eOPA client if URL is configured
+    let eopa_client = args.eopa_url.as_ref().map(|url| {
+        info!("  eOPA URL: {}", url);
+        Arc::new(EopaClient::new(url))
+    });
+    if eopa_client.is_none() {
+        info!("  eOPA: not configured (set EOPA_URL to enable comparison benchmarks)");
+    }
 
     let state = AppState {
         client: Arc::new(client),
+        tcp_client: Arc::new(tcp_client),
         agent_url: args.agent_url.clone(),
         results_cache: Arc::new(DashMap::new()),
+        eopa_client,
+        comparison_cache: Arc::new(DashMap::new()),
     };
 
     // Build router
@@ -217,11 +269,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/packages/{name}/run", post(run_package))
         // Agent package evaluation endpoints (live agent)
         .route("/agent-packages", get(list_agent_packages))
-        .route("/agent-packages/{name}/evaluate", post(evaluate_agent_package))
-        .route("/agent-packages/{name}/benchmark", post(benchmark_agent_package))
+        .route(
+            "/agent-packages/{name}/evaluate",
+            post(evaluate_agent_package),
+        )
+        .route(
+            "/agent-packages/{name}/benchmark",
+            post(benchmark_agent_package),
+        )
         .route("/agent-evaluate-all", post(evaluate_all_agent_policies))
         .route("/agent-benchmark-all", post(benchmark_all_policies))
         .route("/compare-modes", post(compare_execution_modes))
+        // eOPA comparison endpoints
+        .route("/eopa-health", get(eopa_health_check))
+        .route("/init-eopa", post(initialize_eopa))
+        .route("/init-all", post(initialize_all))
+        .route("/run-comparison", post(run_comparison))
+        .route("/run-comparison-all", post(run_comparison_all))
+        .route("/compare/{policy}", post(compare_single_policy))
         .with_state(state);
 
     // Start server
@@ -242,13 +307,21 @@ async fn main() -> anyhow::Result<()> {
     info!("  GET  /packages/:name                - Get package details");
     info!("  POST /packages/:name/run            - Run package tests");
     info!("");
-    info!("Agent Package Endpoints (NEW):");
+    info!("Agent Package Endpoints:");
     info!("  GET  /agent-packages                - List packages from agent");
     info!("  POST /agent-packages/:name/evaluate - Evaluate request against package");
     info!("  POST /agent-packages/:name/benchmark- Benchmark package evaluation");
     info!("  POST /agent-evaluate-all            - Evaluate against ALL policies");
     info!("  POST /agent-benchmark-all           - Benchmark all policies evaluation");
     info!("  POST /compare-modes                 - Compare individual vs package modes");
+    info!("");
+    info!("eOPA Comparison Endpoints:");
+    info!("  GET  /eopa-health                   - eOPA health check");
+    info!("  POST /init-eopa                     - Load .rego policies + data into eOPA");
+    info!("  POST /init-all                      - Initialize both Reaper agent and eOPA");
+    info!("  POST /run-comparison                - Run Reaper vs eOPA comparison");
+    info!("  POST /run-comparison-all            - Run all 12 policies comparison");
+    info!("  POST /compare/:policy               - Quick single-policy comparison");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -355,7 +428,11 @@ async fn initialize_agent(
                             .unwrap_or_else(|| filename.trim_end_matches(".reap").to_string());
                         info!("Deploying policy: {} (from {})", policy_name, filename);
 
-                        match state.client.deploy_policy(&state.agent_url, &policy_name, &content).await {
+                        match state
+                            .client
+                            .deploy_policy(&state.agent_url, &policy_name, &content)
+                            .await
+                        {
                             Ok(_) => {
                                 info!("  ✓ Deployed {}", policy_name);
                                 deployed_policies.push(policy_name);
@@ -408,10 +485,7 @@ async fn dashboard_view() -> impl IntoResponse {
 }
 
 /// View saved benchmark results
-async fn results_view(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn results_view(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
     if let Some(report) = state.results_cache.get(&id) {
         let html = report::render_results_html(&report);
         Html(html).into_response()
@@ -455,7 +529,9 @@ async fn run_benchmark(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Cache the report
-    state.results_cache.insert(report.id.clone(), report.clone());
+    state
+        .results_cache
+        .insert(report.id.clone(), report.clone());
 
     Ok(Json(report))
 }
@@ -480,7 +556,9 @@ async fn run_single_volume(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    state.results_cache.insert(report.id.clone(), report.clone());
+    state
+        .results_cache
+        .insert(report.id.clone(), report.clone());
 
     Ok(Json(report))
 }
@@ -591,7 +669,9 @@ struct PackageSummary {
 }
 
 /// Get details for a specific package
-async fn get_package(Path(name): Path<String>) -> Result<Json<packages::PolicyPackage>, StatusCode> {
+async fn get_package(
+    Path(name): Path<String>,
+) -> Result<Json<packages::PolicyPackage>, StatusCode> {
     packages::get_package(&name)
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
@@ -646,8 +726,10 @@ async fn run_package(
     Path(name): Path<String>,
     Json(request): Json<RunPackageRequest>,
 ) -> Result<Json<PackageTestResult>, (StatusCode, String)> {
-    let package = packages::get_package(&name)
-        .ok_or((StatusCode::NOT_FOUND, format!("Package '{}' not found", name)))?;
+    let package = packages::get_package(&name).ok_or((
+        StatusCode::NOT_FOUND,
+        format!("Package '{}' not found", name),
+    ))?;
 
     info!(
         "Running package '{}': {} scenarios, {} iterations each",
@@ -662,16 +744,14 @@ async fn run_package(
         info!("Loading data from: {}", data_path);
 
         match std::fs::read_to_string(&data_path) {
-            Ok(data_json) => {
-                match state.client.load_data(&state.agent_url, &data_json).await {
-                    Ok(result) => {
-                        info!("Data loaded successfully: {:?}", result);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to load data: {}", e);
-                    }
+            Ok(data_json) => match state.client.load_data(&state.agent_url, &data_json).await {
+                Ok(result) => {
+                    info!("Data loaded successfully: {:?}", result);
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("Failed to load data: {}", e);
+                }
+            },
             Err(e) => {
                 tracing::warn!("Failed to read data file {}: {}", data_path, e);
             }
@@ -683,8 +763,10 @@ async fn run_package(
     let mut failed = 0;
 
     // Get the first policy name for this package
-    let policy_name = package.policies.first()
-        .ok_or((StatusCode::BAD_REQUEST, "Package has no policies".to_string()))?;
+    let policy_name = package.policies.first().ok_or((
+        StatusCode::BAD_REQUEST,
+        "Package has no policies".to_string(),
+    ))?;
 
     for scenario in &package.scenarios {
         let mut scenario_passed = true;
@@ -695,12 +777,16 @@ async fn run_package(
         for _ in 0..request.iterations {
             let policy_req = client::PolicyRequest {
                 policy_name: policy_name.clone(),
-                principal: scenario.user.get("id")
+                principal: scenario
+                    .user
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string(),
                 action: scenario.action.clone(),
-                resource: scenario.resource.get("id")
+                resource: scenario
+                    .resource
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string(),
@@ -736,7 +822,11 @@ async fn run_package(
         scenario_results.push(ScenarioResult {
             name: scenario.name.clone(),
             expected: scenario.expected.clone(),
-            actual: if scenario_passed { scenario.expected.clone() } else { "different".to_string() },
+            actual: if scenario_passed {
+                scenario.expected.clone()
+            } else {
+                "different".to_string()
+            },
             passed: scenario_passed,
             latency_us: last_latency,
             error: error_msg,
@@ -849,6 +939,9 @@ fn get_data_file_for_policy(policy_name: &str) -> Option<&'static str> {
         "collection_operations" => Some("data/collection_data.json"),
         "conditionals" => Some("data/conditional_data.json"),
         "time_based_access" => Some("data/time_data.json"),
+        "comprehensions" | "comprehension_test" => Some("data/comprehension_data.json"),
+        "json_operations" | "json_processing" => Some("data/json_data.json"),
+        "mega_policy" => Some("data/mega_data.json"),
         _ => None,
     }
 }
@@ -870,7 +963,10 @@ async fn list_agent_packages(
             "packages": packages,
             "total": packages.len()
         }))),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("Failed to list packages from agent: {}", e))),
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to list packages from agent: {}", e),
+        )),
     }
 }
 
@@ -899,7 +995,11 @@ async fn evaluate_agent_package(
         context: request.context,
     };
 
-    match state.client.evaluate_package(&state.agent_url, &package, &eval_req).await {
+    match state
+        .client
+        .evaluate_package(&state.agent_url, &package, &eval_req)
+        .await
+    {
         Ok(response) => Ok(Json(serde_json::json!({
             "package": response.package,
             "decision": response.decision,
@@ -907,7 +1007,10 @@ async fn evaluate_agent_package(
             "policies_evaluated": response.policies_evaluated,
             "evaluation_time_microseconds": response.total_evaluation_time_microseconds
         }))),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("Package evaluation failed: {}", e))),
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Package evaluation failed: {}", e),
+        )),
     }
 }
 
@@ -933,7 +1036,10 @@ async fn evaluate_all_agent_policies(
             "packages_evaluated": response.packages_evaluated,
             "evaluation_time_microseconds": response.total_evaluation_time_microseconds
         }))),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("All policies evaluation failed: {}", e))),
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("All policies evaluation failed: {}", e),
+        )),
     }
 }
 
@@ -952,7 +1058,10 @@ async fn benchmark_agent_package(
     Path(package): Path<String>,
     Json(request): Json<PackageBenchmarkRequest>,
 ) -> Result<Json<BenchmarkResult>, (StatusCode, String)> {
-    info!("Running package benchmark for '{}': {} requests", package, request.volume);
+    info!(
+        "Running package benchmark for '{}': {} requests",
+        package, request.volume
+    );
 
     match benchmark::run_package_benchmark(
         &state.client,
@@ -970,7 +1079,10 @@ async fn benchmark_agent_package(
             );
             Ok(Json(result))
         }
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Package benchmark failed: {}", e))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Package benchmark failed: {}", e),
+        )),
     }
 }
 
@@ -979,7 +1091,10 @@ async fn benchmark_all_policies(
     State(state): State<AppState>,
     Json(request): Json<PackageBenchmarkRequest>,
 ) -> Result<Json<BenchmarkResult>, (StatusCode, String)> {
-    info!("Running all-policies benchmark: {} requests", request.volume);
+    info!(
+        "Running all-policies benchmark: {} requests",
+        request.volume
+    );
 
     match benchmark::run_all_policies_benchmark(
         &state.client,
@@ -996,7 +1111,10 @@ async fn benchmark_all_policies(
             );
             Ok(Json(result))
         }
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("All-policies benchmark failed: {}", e))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("All-policies benchmark failed: {}", e),
+        )),
     }
 }
 
@@ -1013,7 +1131,10 @@ async fn compare_execution_modes(
     State(state): State<AppState>,
     Json(request): Json<CompareModeRequest>,
 ) -> Result<Json<benchmark::ModeComparisonResult>, (StatusCode, String)> {
-    info!("Comparing execution modes for package '{}': {} requests", request.package, request.volume);
+    info!(
+        "Comparing execution modes for package '{}': {} requests",
+        request.package, request.volume
+    );
 
     match benchmark::compare_execution_modes(
         &state.client,
@@ -1031,6 +1152,325 @@ async fn compare_execution_modes(
             );
             Ok(Json(result))
         }
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Mode comparison failed: {}", e))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Mode comparison failed: {}", e),
+        )),
     }
+}
+
+// =============================================================================
+// eOPA Comparison Endpoints
+// =============================================================================
+
+/// Helper: return the eOPA client or 503 if not configured.
+fn require_eopa(state: &AppState) -> Result<Arc<EopaClient>, (StatusCode, String)> {
+    state.eopa_client.clone().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "eOPA not configured. Set EOPA_URL to enable comparison benchmarks.".to_string(),
+    ))
+}
+
+/// eOPA health check
+async fn eopa_health_check(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eopa = require_eopa(&state)?;
+    match eopa.health().await {
+        Ok(true) => Ok(Json(serde_json::json!({
+            "status": "healthy",
+            "eopa_url": eopa.base_url()
+        }))),
+        Ok(false) => Err((
+            StatusCode::BAD_GATEWAY,
+            "eOPA health check returned non-success status".to_string(),
+        )),
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("eOPA health check failed: {}", e),
+        )),
+    }
+}
+
+/// Initialize eOPA with .rego policies and data.
+///
+/// POST /init-eopa
+/// Loads all .rego policies from /app/opa-policies/ and data from /app/policies/data/*.json
+async fn initialize_eopa(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eopa = require_eopa(&state)?;
+    info!("Initializing eOPA with policies and data...");
+
+    // Load .rego policies
+    let loaded_policies = eopa_client::load_rego_policies_from_dir(&eopa, "/app/opa-policies")
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load rego policies: {}", e),
+            )
+        })?;
+
+    // Load data files — merge ALL entity data into a single document before loading.
+    // OPA's PUT /v1/data replaces all data, so we must merge first to avoid overwrites.
+    let mut loaded_data_files = Vec::new();
+    let mut merged_entities = serde_json::Map::new();
+    let data_dir = std::path::Path::new("/app/policies/data");
+    if data_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(data_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "json").unwrap_or(false) {
+                    let filename = path.file_name().unwrap().to_string_lossy().to_string();
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                            let opa_data = eopa_client::transform_entities_for_opa(&data);
+                            // Merge entities from this file into the accumulated map
+                            if let Some(entities) = opa_data.get("entities") {
+                                if let Some(obj) = entities.as_object() {
+                                    for (k, v) in obj {
+                                        merged_entities.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            }
+                            info!(
+                                "  eOPA data merged: {} ({} entities)",
+                                filename,
+                                opa_data
+                                    .get("entities")
+                                    .and_then(|e| e.as_object())
+                                    .map(|o| o.len())
+                                    .unwrap_or(0)
+                            );
+                            loaded_data_files.push(filename);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Load the merged entity data into eOPA in a single PUT
+    if !merged_entities.is_empty() {
+        let merged_data = serde_json::json!({"entities": merged_entities});
+        let entity_count = merged_data
+            .get("entities")
+            .and_then(|e| e.as_object())
+            .map(|o| o.len())
+            .unwrap_or(0);
+        match eopa.load_data(&merged_data).await {
+            Ok(_) => info!(
+                "  eOPA merged data loaded: {} total entities from {} files",
+                entity_count,
+                loaded_data_files.len()
+            ),
+            Err(e) => tracing::warn!("  eOPA merged data load failed: {}", e),
+        }
+    }
+
+    info!(
+        "eOPA initialization complete: {} policies, {} data files",
+        loaded_policies.len(),
+        loaded_data_files.len()
+    );
+
+    Ok(Json(serde_json::json!({
+        "status": "initialized",
+        "loaded_policies": loaded_policies,
+        "loaded_data_files": loaded_data_files,
+        "summary": {
+            "total_policies": loaded_policies.len(),
+            "total_data_files": loaded_data_files.len()
+        }
+    })))
+}
+
+/// Initialize both Reaper agent and eOPA.
+///
+/// POST /init-all
+async fn initialize_all(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    info!("Initializing both Reaper agent and eOPA...");
+
+    // Initialize Reaper agent (reuse existing logic)
+    let agent_result = initialize_agent(State(state.clone())).await;
+    let agent_json = match agent_result {
+        Ok(Json(v)) => v,
+        Err((code, msg)) => serde_json::json!({"error": msg, "status_code": code.as_u16()}),
+    };
+
+    // Initialize eOPA if configured
+    let eopa_json = if state.eopa_client.is_some() {
+        match initialize_eopa(State(state.clone())).await {
+            Ok(Json(v)) => v,
+            Err((code, msg)) => serde_json::json!({"error": msg, "status_code": code.as_u16()}),
+        }
+    } else {
+        serde_json::json!({"status": "skipped", "reason": "eOPA not configured"})
+    };
+
+    Ok(Json(serde_json::json!({
+        "agent": agent_json,
+        "eopa": eopa_json
+    })))
+}
+
+fn default_comparison_concurrency() -> u32 {
+    1
+}
+
+/// Request for running a comparison benchmark
+#[derive(Debug, Deserialize)]
+struct RunComparisonRequest {
+    /// Reaper policy name to compare
+    #[serde(default = "default_comparison_policy")]
+    policy_name: String,
+    /// Request volumes to test
+    #[serde(default = "default_comparison_volumes")]
+    volumes: Vec<u32>,
+    /// Warmup requests
+    #[serde(default = "default_warmup")]
+    warmup_requests: u32,
+    /// Concurrency level (1 = sequential, >1 = concurrent individual requests)
+    #[serde(default = "default_comparison_concurrency")]
+    concurrency: u32,
+}
+
+fn default_comparison_policy() -> String {
+    "rbac_simple".to_string()
+}
+
+fn default_comparison_volumes() -> Vec<u32> {
+    vec![100, 1000, 10000]
+}
+
+/// Run a full comparison benchmark (Reaper UDS vs Reaper TCP vs eOPA).
+///
+/// POST /run-comparison
+async fn run_comparison(
+    State(state): State<AppState>,
+    Json(request): Json<RunComparisonRequest>,
+) -> Result<Json<ComparisonReport>, (StatusCode, String)> {
+    let eopa = require_eopa(&state)?;
+
+    info!(
+        "Running comparison: policy='{}', volumes={:?}",
+        request.policy_name, request.volumes
+    );
+
+    // Load data for the policy into both engines
+    load_data_for_comparison(&state, &eopa, &request.policy_name).await;
+
+    let report = benchmark::run_comparison_benchmark(
+        &state.client,
+        &state.tcp_client,
+        &state.agent_url,
+        &eopa,
+        &request.policy_name,
+        &request.volumes,
+        request.warmup_requests,
+        request.concurrency,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Comparison benchmark failed: {}", e),
+        )
+    })?;
+
+    // Cache the report
+    state
+        .comparison_cache
+        .insert(report.id.clone(), report.clone());
+
+    Ok(Json(report))
+}
+
+/// Request for running all comparison benchmarks
+#[derive(Debug, Deserialize)]
+struct RunComparisonAllRequest {
+    /// Request volumes to test
+    #[serde(default = "default_comparison_volumes")]
+    volumes: Vec<u32>,
+    /// Warmup requests
+    #[serde(default = "default_warmup")]
+    warmup_requests: u32,
+    /// Concurrency level (1 = sequential, >1 = concurrent individual requests)
+    #[serde(default = "default_comparison_concurrency")]
+    concurrency: u32,
+}
+
+/// Run comparison benchmarks for all 12 policy types (Reaper UDS vs Reaper TCP vs eOPA).
+///
+/// POST /run-comparison-all
+async fn run_comparison_all(
+    State(state): State<AppState>,
+    Json(request): Json<RunComparisonAllRequest>,
+) -> Result<Json<MultiPolicyComparisonReport>, (StatusCode, String)> {
+    let eopa = require_eopa(&state)?;
+
+    info!(
+        "Running ALL policy comparisons at volumes {:?}",
+        request.volumes
+    );
+
+    // Pre-load data for all policies into both engines
+    for policy_name in policy_mapping::available_policy_names() {
+        load_data_for_comparison(&state, &eopa, policy_name).await;
+    }
+
+    let report = benchmark::run_all_comparison_benchmarks(
+        &state.client,
+        &state.tcp_client,
+        &state.agent_url,
+        &eopa,
+        &request.volumes,
+        request.warmup_requests,
+        request.concurrency,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("All-policy comparison failed: {}", e),
+        )
+    })?;
+
+    info!(
+        "All-policy comparison complete: {} policies, avg speedup {:.1}x",
+        report.overall_summary.total_policies, report.overall_summary.avg_speedup
+    );
+
+    Ok(Json(report))
+}
+
+/// Load data for a policy into both Reaper agent and eOPA.
+async fn load_data_for_comparison(state: &AppState, _eopa: &EopaClient, policy_name: &str) {
+    if let Some(data_file) = get_data_file_for_policy(policy_name) {
+        let data_path = format!("/app/policies/{}", data_file);
+        if let Ok(data_json) = std::fs::read_to_string(&data_path) {
+            // Load into Reaper agent (additive — DataStore accumulates entities)
+            let _ = state.client.load_data(&state.agent_url, &data_json).await;
+
+            // NOTE: Do NOT reload into eOPA here. OPA's PUT /v1/data replaces ALL data,
+            // which would discard entities from other data files. All data is pre-loaded
+            // during init-eopa as a single merged document.
+        }
+    }
+}
+
+/// Quick single-policy comparison
+///
+/// POST /compare/{policy}
+async fn compare_single_policy(
+    State(state): State<AppState>,
+    Path(policy): Path<String>,
+    Json(request): Json<RunComparisonRequest>,
+) -> Result<Json<ComparisonReport>, (StatusCode, String)> {
+    let mut req = request;
+    req.policy_name = policy;
+    run_comparison(State(state), Json(req)).await
 }

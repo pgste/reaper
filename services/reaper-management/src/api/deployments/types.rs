@@ -9,7 +9,9 @@ use crate::{
         StrategyInfo as ServiceStrategyInfo,
     },
     domain::agent_deployment::{AgentDeployment, DeploymentSummary, RollbackConfig},
-    domain::deployment::{DeploymentStrategy, Rollout, RolloutWave, StrategyConfig, StrategyType, VersionPin},
+    domain::deployment::{
+        DeploymentStrategy, Rollout, RolloutWave, StrategyConfig, StrategyType, VersionPin,
+    },
 };
 
 // ==================== Strategy Types ====================

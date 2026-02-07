@@ -145,9 +145,8 @@ impl Config {
         if self.storage.storage_type == "filesystem" {
             let path = &self.storage.filesystem.path;
             if !path.exists() {
-                std::fs::create_dir_all(path).map_err(|_| {
-                    ConfigError::PathNotWritable(path.display().to_string())
-                })?;
+                std::fs::create_dir_all(path)
+                    .map_err(|_| ConfigError::PathNotWritable(path.display().to_string()))?;
             }
         }
 
@@ -158,9 +157,8 @@ impl Config {
             &self.sync.bundle_storage_path,
         ] {
             if !path.exists() {
-                std::fs::create_dir_all(path).map_err(|_| {
-                    ConfigError::PathNotWritable(path.display().to_string())
-                })?;
+                std::fs::create_dir_all(path)
+                    .map_err(|_| ConfigError::PathNotWritable(path.display().to_string()))?;
             }
         }
 

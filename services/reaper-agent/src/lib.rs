@@ -22,6 +22,7 @@ pub mod observability;
 pub mod state;
 pub mod tls;
 pub mod types;
+pub mod uds;
 
 // Re-export commonly used types
 pub use state::{AgentState, AgentStats};

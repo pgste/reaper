@@ -13,18 +13,15 @@ use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
     audit::{actions, ActorType, AuditEntry, ClientInfo, ResourceType},
-    auth::{
-        middleware::RequireAuth,
-        users::UserOrgRepository,
-    },
+    auth::{middleware::RequireAuth, users::UserOrgRepository},
     db::repositories::OrganizationRepository,
     state::AppState,
 };
 
 use super::helpers::{encrypt_token, get_github_token, get_user_id_from_session};
 use super::types::{
-    AuthorizeParams, CallbackParams, CreateSourceFromGitHubRequest, GitHubRepo, GitHubTokenResponse,
-    GitHubUser, OAuthState,
+    AuthorizeParams, CallbackParams, CreateSourceFromGitHubRequest, GitHubRepo,
+    GitHubTokenResponse, GitHubUser, OAuthState,
 };
 
 /// Initiate GitHub OAuth flow

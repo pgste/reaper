@@ -45,9 +45,9 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user (UID 1000)
 RUN useradd -r -u 1000 -s /bin/false reaper
 
-# Create directories
-RUN mkdir -p /data /policies /var/log/reaper && \
-    chown -R reaper:reaper /data /policies /var/log/reaper
+# Create directories (including UDS socket directory)
+RUN mkdir -p /data /policies /var/log/reaper /var/run/reaper && \
+    chown -R reaper:reaper /data /policies /var/log/reaper /var/run/reaper
 
 WORKDIR /app
 

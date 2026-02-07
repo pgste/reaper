@@ -25,27 +25,21 @@ use super::types::{CompiledTimeCondition, EntityType, NumericOp};
 
 /// Evaluate a V2 time operation
 #[inline]
-pub fn eval_time_operation(
-    cond: &CompiledTimeCondition,
-    user: &Entity,
-    resource: &Entity,
-) -> bool {
+pub fn eval_time_operation(cond: &CompiledTimeCondition, user: &Entity, resource: &Entity) -> bool {
     let entity = match get_entity_for_type(&cond.entity_type, user, resource) {
         Some(e) => e,
         None => return false,
     };
 
     match entity.get_attribute(cond.attribute) {
-        Some(AttributeValue::Int(ts)) => {
-            match cond.op {
-                NumericOp::Greater => *ts > cond.threshold,
-                NumericOp::GreaterEqual => *ts >= cond.threshold,
-                NumericOp::Less => *ts < cond.threshold,
-                NumericOp::LessEqual => *ts <= cond.threshold,
-                NumericOp::Equal => *ts == cond.threshold,
-                NumericOp::NotEqual => *ts != cond.threshold,
-            }
-        }
+        Some(AttributeValue::Int(ts)) => match cond.op {
+            NumericOp::Greater => *ts > cond.threshold,
+            NumericOp::GreaterEqual => *ts >= cond.threshold,
+            NumericOp::Less => *ts < cond.threshold,
+            NumericOp::LessEqual => *ts <= cond.threshold,
+            NumericOp::Equal => *ts == cond.threshold,
+            NumericOp::NotEqual => *ts != cond.threshold,
+        },
         Some(AttributeValue::Float(ts)) => {
             let ts_int = *ts as i64;
             match cond.op {

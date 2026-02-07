@@ -150,10 +150,7 @@ impl JwksValidator {
         // Decode header to get kid
         let header = decode_header(token).map_err(|e| JwksError::TokenDecode(e.to_string()))?;
 
-        let kid = header
-            .kid
-            .as_ref()
-            .ok_or_else(|| JwksError::MissingKid)?;
+        let kid = header.kid.as_ref().ok_or_else(|| JwksError::MissingKid)?;
 
         // Get or fetch JWKS
         let keys = self.get_or_fetch_keys(config).await?;
@@ -387,7 +384,10 @@ impl<'a> JwksConfigRepository<'a> {
     }
 
     /// Get a JWKS configuration by ID
-    pub async fn get_by_id(&self, id: Uuid) -> Result<Option<JwksConfig>, crate::db::DatabaseError> {
+    pub async fn get_by_id(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()
@@ -485,12 +485,13 @@ impl<'a> JwksConfigRepository<'a> {
 
         let now = Utc::now();
 
-        let result = sqlx::query("UPDATE jwks_configs SET is_active = ?, updated_at = ? WHERE id = ?")
-            .bind(is_active as i32)
-            .bind(now.to_rfc3339())
-            .bind(id.to_string())
-            .execute(pool)
-            .await?;
+        let result =
+            sqlx::query("UPDATE jwks_configs SET is_active = ?, updated_at = ? WHERE id = ?")
+                .bind(is_active as i32)
+                .bind(now.to_rfc3339())
+                .bind(id.to_string())
+                .execute(pool)
+                .await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -598,7 +599,8 @@ mod tests {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
         let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://auth.example.com","sub":"user123"}"#);
+        let payload =
+            URL_SAFE_NO_PAD.encode(r#"{"iss":"https://auth.example.com","sub":"user123"}"#);
         let signature = "test_signature";
 
         let token = format!("{}.{}.{}", header, payload, signature);

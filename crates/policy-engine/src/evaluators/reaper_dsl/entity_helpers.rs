@@ -186,11 +186,10 @@ pub fn is_nested_attr_null(
     resource: &Entity,
     interner: &StringInterner,
 ) -> bool {
-    match get_nested_attr(entity_type, attribute, user, resource, interner) {
-        None => true,
-        Some(AttributeValue::Null) => true,
-        _ => false,
-    }
+    matches!(
+        get_nested_attr(entity_type, attribute, user, resource, interner),
+        None | Some(AttributeValue::Null)
+    )
 }
 
 /// Compare a string attribute to a literal value.
@@ -247,7 +246,9 @@ pub fn attr_gt(
     user: &Entity,
     resource: &Entity,
 ) -> bool {
-    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| a > t)
+    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| {
+        a > t
+    })
 }
 
 /// Check if attribute value is less than or equal to threshold.
@@ -273,7 +274,9 @@ pub fn attr_lt(
     user: &Entity,
     resource: &Entity,
 ) -> bool {
-    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| a < t)
+    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| {
+        a < t
+    })
 }
 
 /// Get the count of elements in a List or Set attribute.
@@ -305,7 +308,14 @@ mod tests {
 
     fn create_test_entities(
         interner: &StringInterner,
-    ) -> (Entity, Entity, InternedString, InternedString, InternedString, InternedString) {
+    ) -> (
+        Entity,
+        Entity,
+        InternedString,
+        InternedString,
+        InternedString,
+        InternedString,
+    ) {
         // Intern keys
         let role_key = interner.intern("role");
         let level_key = interner.intern("level");
@@ -414,9 +424,27 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
-        assert!(attr_gte(&EntityType::User, level_key, 5.0, &user, &resource));
-        assert!(attr_gte(&EntityType::User, level_key, 4.0, &user, &resource));
-        assert!(!attr_gte(&EntityType::User, level_key, 6.0, &user, &resource));
+        assert!(attr_gte(
+            &EntityType::User,
+            level_key,
+            5.0,
+            &user,
+            &resource
+        ));
+        assert!(attr_gte(
+            &EntityType::User,
+            level_key,
+            4.0,
+            &user,
+            &resource
+        ));
+        assert!(!attr_gte(
+            &EntityType::User,
+            level_key,
+            6.0,
+            &user,
+            &resource
+        ));
     }
 
     #[test]
@@ -425,8 +453,20 @@ mod tests {
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
         assert!(attr_gt(&EntityType::User, level_key, 4.0, &user, &resource));
-        assert!(!attr_gt(&EntityType::User, level_key, 5.0, &user, &resource));
-        assert!(!attr_gt(&EntityType::User, level_key, 6.0, &user, &resource));
+        assert!(!attr_gt(
+            &EntityType::User,
+            level_key,
+            5.0,
+            &user,
+            &resource
+        ));
+        assert!(!attr_gt(
+            &EntityType::User,
+            level_key,
+            6.0,
+            &user,
+            &resource
+        ));
     }
 
     #[test]
@@ -434,8 +474,20 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
-        assert!(attr_lte(&EntityType::User, level_key, 5.0, &user, &resource));
-        assert!(attr_lte(&EntityType::User, level_key, 6.0, &user, &resource));
+        assert!(attr_lte(
+            &EntityType::User,
+            level_key,
+            5.0,
+            &user,
+            &resource
+        ));
+        assert!(attr_lte(
+            &EntityType::User,
+            level_key,
+            6.0,
+            &user,
+            &resource
+        ));
         assert!(!attr_lte(
             &EntityType::User,
             level_key,
@@ -451,8 +503,20 @@ mod tests {
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
         assert!(attr_lt(&EntityType::User, level_key, 6.0, &user, &resource));
-        assert!(!attr_lt(&EntityType::User, level_key, 5.0, &user, &resource));
-        assert!(!attr_lt(&EntityType::User, level_key, 4.0, &user, &resource));
+        assert!(!attr_lt(
+            &EntityType::User,
+            level_key,
+            5.0,
+            &user,
+            &resource
+        ));
+        assert!(!attr_lt(
+            &EntityType::User,
+            level_key,
+            4.0,
+            &user,
+            &resource
+        ));
     }
 
     #[test]
@@ -470,10 +534,28 @@ mod tests {
         let resource_type = interner.intern("Resource");
         let resource = Entity::new(resource_id, resource_type, HashMap::new());
 
-        assert!(attr_gte(&EntityType::User, score_key, 7.5, &user, &resource));
-        assert!(attr_gte(&EntityType::User, score_key, 7.0, &user, &resource));
+        assert!(attr_gte(
+            &EntityType::User,
+            score_key,
+            7.5,
+            &user,
+            &resource
+        ));
+        assert!(attr_gte(
+            &EntityType::User,
+            score_key,
+            7.0,
+            &user,
+            &resource
+        ));
         assert!(attr_gt(&EntityType::User, score_key, 7.0, &user, &resource));
-        assert!(!attr_gt(&EntityType::User, score_key, 7.5, &user, &resource));
+        assert!(!attr_gt(
+            &EntityType::User,
+            score_key,
+            7.5,
+            &user,
+            &resource
+        ));
     }
 
     #[test]

@@ -137,7 +137,8 @@ mod tests {
         let result = method_split(
             &EvalValue::String("a,b,c".to_string()),
             &EvalValue::String(",".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
 
         if let EvalValue::Array(parts) = result {
             assert_eq!(parts.len(), 3);
@@ -153,7 +154,8 @@ mod tests {
             method_contains(
                 &EvalValue::String("hello world".to_string()),
                 &EvalValue::String("world".to_string())
-            ).unwrap(),
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
     }
@@ -164,7 +166,8 @@ mod tests {
             method_startswith(
                 &EvalValue::String("hello".to_string()),
                 &EvalValue::String("hel".to_string())
-            ).unwrap(),
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
     }
@@ -175,7 +178,8 @@ mod tests {
             method_endswith(
                 &EvalValue::String("hello".to_string()),
                 &EvalValue::String("lo".to_string())
-            ).unwrap(),
+            )
+            .unwrap(),
             EvalValue::Boolean(true)
         );
     }

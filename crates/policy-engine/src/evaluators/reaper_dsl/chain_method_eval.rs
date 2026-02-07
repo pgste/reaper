@@ -51,13 +51,9 @@ pub(super) fn evaluate_chained_method(
             AttributeValue::List(items) => Some(AttributeValue::Int(items.len() as i64)),
             AttributeValue::Set(items) => Some(AttributeValue::Int(items.len() as i64)),
             AttributeValue::Object(map) => Some(AttributeValue::Int(map.len() as i64)),
-            AttributeValue::String(s) => {
-                if let Some(resolved) = interner.resolve(s) {
-                    Some(AttributeValue::Int(resolved.len() as i64))
-                } else {
-                    None
-                }
-            }
+            AttributeValue::String(s) => interner
+                .resolve(s)
+                .map(|resolved| AttributeValue::Int(resolved.len() as i64)),
             _ => None,
         },
         CompiledChainMethod::Contains { substring } => {
@@ -168,13 +164,15 @@ pub(super) fn evaluate_chained_method(
         },
         CompiledChainMethod::Keys => match base_value {
             AttributeValue::Object(map) => {
-                let keys: Vec<AttributeValue> = map.keys().copied().map(AttributeValue::String).collect();
+                let keys: Vec<AttributeValue> =
+                    map.keys().copied().map(AttributeValue::String).collect();
                 Some(AttributeValue::List(keys))
             }
             _ => None,
         },
         CompiledChainMethod::Intersection { values } => {
-            let literal_set: std::collections::HashSet<InternedString> = values.iter().copied().collect();
+            let literal_set: std::collections::HashSet<InternedString> =
+                values.iter().copied().collect();
             let filter_fn = |item: &AttributeValue| -> bool {
                 if let AttributeValue::String(s) = item {
                     literal_set.contains(s)
@@ -184,11 +182,13 @@ pub(super) fn evaluate_chained_method(
             };
             match base_value {
                 AttributeValue::List(items) => {
-                    let result: Vec<AttributeValue> = items.iter().filter(|i| filter_fn(i)).cloned().collect();
+                    let result: Vec<AttributeValue> =
+                        items.iter().filter(|i| filter_fn(i)).cloned().collect();
                     Some(AttributeValue::List(result))
                 }
                 AttributeValue::Set(items) => {
-                    let result: Vec<AttributeValue> = items.iter().filter(|i| filter_fn(i)).cloned().collect();
+                    let result: Vec<AttributeValue> =
+                        items.iter().filter(|i| filter_fn(i)).cloned().collect();
                     Some(AttributeValue::List(result))
                 }
                 _ => None,
@@ -218,7 +218,8 @@ pub(super) fn evaluate_chained_method(
             _ => None,
         },
         CompiledChainMethod::Difference { values } => {
-            let literal_set: std::collections::HashSet<InternedString> = values.iter().copied().collect();
+            let literal_set: std::collections::HashSet<InternedString> =
+                values.iter().copied().collect();
             let filter_fn = |item: &AttributeValue| -> bool {
                 if let AttributeValue::String(s) = item {
                     !literal_set.contains(s)
@@ -228,11 +229,13 @@ pub(super) fn evaluate_chained_method(
             };
             match base_value {
                 AttributeValue::List(items) => {
-                    let result: Vec<AttributeValue> = items.iter().filter(|i| filter_fn(i)).cloned().collect();
+                    let result: Vec<AttributeValue> =
+                        items.iter().filter(|i| filter_fn(i)).cloned().collect();
                     Some(AttributeValue::List(result))
                 }
                 AttributeValue::Set(items) => {
-                    let result: Vec<AttributeValue> = items.iter().filter(|i| filter_fn(i)).cloned().collect();
+                    let result: Vec<AttributeValue> =
+                        items.iter().filter(|i| filter_fn(i)).cloned().collect();
                     Some(AttributeValue::List(result))
                 }
                 _ => None,

@@ -40,6 +40,10 @@ pub enum ReaperError {
     #[error("Entity operation failed: {0}")]
     EntityError(String),
 
+    /// Unix socket connection failed
+    #[error("Unix socket error: {0}")]
+    UnixSocketError(String),
+
     /// Generic error
     #[error("{0}")]
     Other(String),

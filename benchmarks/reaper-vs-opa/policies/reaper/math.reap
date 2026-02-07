@@ -9,7 +9,7 @@ policy math_validation {
     // Credit Score Threshold (>= 700)
     rule credit_score_check {
         allow if {
-            resource == "premium_loan" &&
+            resource.type == "premium_loan" &&
             user.credit_score >= 700
         }
     }
@@ -17,7 +17,7 @@ policy math_validation {
     // Budget Limit Check (order_total <= budget_limit)
     rule budget_check {
         allow if {
-            resource == "shopping_cart" &&
+            resource.type == "shopping_cart" &&
             user.order_total <= user.budget_limit
         }
     }
@@ -25,7 +25,7 @@ policy math_validation {
     // Average Rating Check (>= 4.0)
     rule rating_check {
         allow if {
-            resource == "featured_listing" &&
+            resource.type == "featured_listing" &&
             user.average_rating >= 4.0
         }
     }
@@ -33,7 +33,7 @@ policy math_validation {
     // Price Range Check
     rule price_range_check {
         allow if {
-            resource == "marketplace" &&
+            resource.type == "marketplace" &&
             user.list_price >= 1 &&
             user.list_price <= 10000
         }
@@ -42,7 +42,7 @@ policy math_validation {
     // Tier Upgrade Check (score >= 90.0)
     rule tier_upgrade {
         allow if {
-            resource == "premium_tier" &&
+            resource.type == "premium_tier" &&
             user.score >= 90.0
         }
     }
@@ -50,7 +50,7 @@ policy math_validation {
     // Temperature Range Check
     rule temperature_check {
         allow if {
-            resource == "temperature_monitor" &&
+            resource.type == "temperature_monitor" &&
             user.temperature >= -50 &&
             user.temperature <= 50
         }
@@ -59,7 +59,7 @@ policy math_validation {
     // Loyalty Points Check (>= 1000)
     rule loyalty_points {
         allow if {
-            resource == "loyalty_reward" &&
+            resource.type == "loyalty_reward" &&
             user.total_points >= 1000
         }
     }
@@ -67,7 +67,7 @@ policy math_validation {
     // Discount Percentage Check (0-50%)
     rule discount_check {
         allow if {
-            resource == "sale_item" &&
+            resource.type == "sale_item" &&
             user.discount_percentage >= 0 &&
             user.discount_percentage <= 50
         }

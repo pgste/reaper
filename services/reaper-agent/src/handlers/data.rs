@@ -5,12 +5,7 @@
 //! - `load_data_stream_handler` - Load entity data using streaming (memory-efficient)
 //! - `sync_data` - Synchronize entity data from external source
 
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    response::Json,
-};
+use axum::{body::Bytes, extract::State, http::StatusCode, response::Json};
 use policy_engine::{AttributeValue, DataLoader, EntityBuilder, StreamingLoader, StringInterner};
 use serde::Deserialize;
 use serde_json::{json, Value};

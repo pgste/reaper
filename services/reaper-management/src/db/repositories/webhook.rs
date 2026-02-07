@@ -254,9 +254,10 @@ impl<'a> WebhookRepository<'a> {
             query_builder = query_builder.bind(input.secret.as_ref().unwrap());
         }
         if has_events {
-            let events_json = serde_json::to_string(input.events.as_ref().unwrap()).map_err(
-                |e| DatabaseError::Migration(format!("Failed to serialize events: {}", e)),
-            )?;
+            let events_json =
+                serde_json::to_string(input.events.as_ref().unwrap()).map_err(|e| {
+                    DatabaseError::Migration(format!("Failed to serialize events: {}", e))
+                })?;
             query_builder = query_builder.bind(events_json);
         }
         if has_active {
@@ -275,11 +276,7 @@ impl<'a> WebhookRepository<'a> {
     }
 
     /// Record a webhook trigger (success or failure)
-    pub async fn record_trigger(
-        &self,
-        id: Uuid,
-        success: bool,
-    ) -> Result<(), DatabaseError> {
+    pub async fn record_trigger(&self, id: Uuid, success: bool) -> Result<(), DatabaseError> {
         let pool = self
             .db
             .sqlite_pool()

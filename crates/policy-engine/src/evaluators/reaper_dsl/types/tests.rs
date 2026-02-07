@@ -8,7 +8,10 @@ mod tests {
     #[test]
     fn test_numeric_op_conversion() {
         assert_eq!(AttrCompareOp::from(NumericOp::Equal), AttrCompareOp::Equal);
-        assert_eq!(AttrCompareOp::from(NumericOp::Greater), AttrCompareOp::Greater);
+        assert_eq!(
+            AttrCompareOp::from(NumericOp::Greater),
+            AttrCompareOp::Greater
+        );
         assert_eq!(NumericOp::from(AttrCompareOp::Less), NumericOp::Less);
     }
 
@@ -309,11 +312,20 @@ mod tests {
 
     #[test]
     fn test_count_op_to_attr_compare_op() {
-        assert_eq!(AttrCompareOp::from(CountOp::GreaterEqual), AttrCompareOp::GreaterEqual);
-        assert_eq!(AttrCompareOp::from(CountOp::Greater), AttrCompareOp::Greater);
+        assert_eq!(
+            AttrCompareOp::from(CountOp::GreaterEqual),
+            AttrCompareOp::GreaterEqual
+        );
+        assert_eq!(
+            AttrCompareOp::from(CountOp::Greater),
+            AttrCompareOp::Greater
+        );
         assert_eq!(AttrCompareOp::from(CountOp::Equal), AttrCompareOp::Equal);
         assert_eq!(AttrCompareOp::from(CountOp::Less), AttrCompareOp::Less);
-        assert_eq!(AttrCompareOp::from(CountOp::LessEqual), AttrCompareOp::LessEqual);
+        assert_eq!(
+            AttrCompareOp::from(CountOp::LessEqual),
+            AttrCompareOp::LessEqual
+        );
     }
 
     // ============================================================================

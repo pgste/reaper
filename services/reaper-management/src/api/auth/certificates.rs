@@ -33,9 +33,7 @@ pub async fn list_certificates(
 ) -> ApiResult<Json<ListCertificatesResponse>> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -67,9 +65,7 @@ pub async fn register_certificate(
 ) -> ApiResult<(StatusCode, Json<CertificateSummary>)> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -83,7 +79,9 @@ pub async fn register_certificate(
     }
 
     // Validate fingerprint format (should be hex-encoded SHA-256)
-    if request.fingerprint.len() != 64 || !request.fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
+    if request.fingerprint.len() != 64
+        || !request.fingerprint.chars().all(|c| c.is_ascii_hexdigit())
+    {
         return Err(ApiError::BadRequest(
             "Fingerprint must be a 64-character hex-encoded SHA-256 hash".to_string(),
         ));
@@ -92,7 +90,11 @@ pub async fn register_certificate(
     let cert_repo = ClientCertificateRepository::new(&state.db);
 
     // Check if fingerprint already exists
-    if cert_repo.get_by_fingerprint(&request.fingerprint).await?.is_some() {
+    if cert_repo
+        .get_by_fingerprint(&request.fingerprint)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(
             "Certificate with this fingerprint already registered".to_string(),
         ));
@@ -120,9 +122,7 @@ pub async fn get_certificate(
 ) -> ApiResult<Json<CertificateSummary>> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -157,9 +157,7 @@ pub async fn delete_certificate(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -198,9 +196,7 @@ pub async fn revoke_certificate(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -226,7 +222,9 @@ pub async fn revoke_certificate(
     }
 
     if cert.is_revoked {
-        return Err(ApiError::Conflict("Certificate is already revoked".to_string()));
+        return Err(ApiError::Conflict(
+            "Certificate is already revoked".to_string(),
+        ));
     }
 
     cert_repo.revoke(cert_id, request.reason.as_deref()).await?;
@@ -243,9 +241,7 @@ pub async fn bind_certificate(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -294,9 +290,7 @@ pub async fn unbind_certificate(
 ) -> ApiResult<StatusCode> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Missing org:admin scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing org:admin scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);

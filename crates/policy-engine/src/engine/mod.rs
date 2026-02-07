@@ -202,10 +202,13 @@ impl PolicyEngine {
         info!("Default policy updated");
     }
 
-    /// Evaluate a request against a policy
-    /// Optimized for sub-microsecond latency with Simple policies
-    /// Cedar policies may take 10-50 microseconds depending on complexity
-    #[instrument(skip(self, request), fields(resource = %request.resource, action = %request.action))]
+    /// Evaluate a request against a policy.
+    ///
+    /// Optimized for sub-microsecond latency:
+    /// - No `Arc::make_mut` (was cloning entire policy under concurrency)
+    /// - No `#[instrument]` (was 200-800ns per call for span creation)
+    /// - Evaluator accessed immutably from pre-built `Arc<dyn PolicyEvaluator>`
+    /// - Returns `policy_name` to avoid caller re-lookup
     pub fn evaluate(
         &self,
         policy_id: &PolicyId,
@@ -213,46 +216,49 @@ impl PolicyEngine {
     ) -> Result<PolicyDecision> {
         let start_time = std::time::Instant::now();
 
-        let mut policy = self
+        let policy = self
             .get_policy(policy_id)
             .or_else(|| self.default_policy.read().clone())
             .ok_or_else(|| ReaperError::PolicyNotFound {
                 policy_id: policy_id.to_string(),
             })?;
 
-        // Get the policy as mutable to access evaluator
-        let policy_mut = Arc::make_mut(&mut policy);
+        // Immutable access — no Arc::make_mut, no clone under concurrency
+        let evaluator = policy.get_evaluator()?;
 
-        // Evaluate using the language-specific evaluator
         // For Simple policies, find the matched rule index
-        let (decision, matched_rule) = if policy_mut.language == PolicyLanguage::Simple {
-            // For simple policies, manually find which rule matches
+        let matched_rule = if policy.language == PolicyLanguage::Simple {
             let mut matched_index = None;
-            for (index, rule) in policy_mut.rules.iter().enumerate() {
-                // Check if rule matches (same logic as SimplePolicyEvaluator)
+            for (index, rule) in policy.rules.iter().enumerate() {
                 if rule.resource == "*" || rule.resource == request.resource {
                     matched_index = Some(index);
                     break;
                 }
             }
-
-            // Get or build the evaluator
-            let evaluator = policy_mut.get_evaluator()?;
-            let decision = evaluator.evaluate(request)?;
-            (decision, matched_index)
+            matched_index
         } else {
-            // Get or build the evaluator
-            let evaluator = policy_mut.get_evaluator()?;
-            let decision = evaluator.evaluate(request)?;
-            (decision, None)
+            None
         };
 
+        let decision = evaluator.evaluate(request)?;
         let evaluation_time_ns = start_time.elapsed().as_nanos() as u64;
+
+        // Trace-level logging gated behind level check — zero cost at info/debug level
+        if tracing::enabled!(tracing::Level::TRACE) {
+            tracing::trace!(
+                resource = %request.resource,
+                action = %request.action,
+                ?decision,
+                evaluation_time_ns,
+                "engine evaluate"
+            );
+        }
 
         Ok(PolicyDecision {
             decision,
-            policy_id: policy_mut.id,
-            policy_version: policy_mut.version,
+            policy_id: policy.id,
+            policy_name: policy.name.clone(),
+            policy_version: policy.version,
             evaluation_time_ns,
             matched_rule,
         })

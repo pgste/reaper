@@ -77,7 +77,10 @@ fn test_string_operations_suite() {
 
     // Note: String operations suite may have context-dependent results
     // For now, just verify it runs without errors
-    println!("String operations suite completed: {}/{} passed", result.passed, result.total);
+    println!(
+        "String operations suite completed: {}/{} passed",
+        result.passed, result.total
+    );
 }
 
 /// Run all suites in the test-fixtures/suites directory
@@ -87,7 +90,10 @@ fn test_all_suites() {
     let suites_dir = fixtures.join("suites");
 
     if !suites_dir.exists() {
-        eprintln!("Skipping test: suites directory not found at {:?}", suites_dir);
+        eprintln!(
+            "Skipping test: suites directory not found at {:?}",
+            suites_dir
+        );
         return;
     }
 
@@ -100,24 +106,26 @@ fn test_all_suites() {
         let entry = entry.expect("Failed to read directory entry");
         let path = entry.path();
 
-        if path.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
+        if path
+            .extension()
+            .map(|e| e == "yaml" || e == "yml")
+            .unwrap_or(false)
+        {
             suite_count += 1;
             println!("\n--- Running suite: {:?} ---", path.file_name().unwrap());
 
             match load_suite(&path) {
-                Ok(suite) => {
-                    match run_suite(&suite, &base_path) {
-                        Ok(result) => {
-                            print_results(&result);
-                            total_passed += result.passed;
-                            total_failed += result.failed;
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to run suite: {}", e);
-                            total_failed += 1;
-                        }
+                Ok(suite) => match run_suite(&suite, &base_path) {
+                    Ok(result) => {
+                        print_results(&result);
+                        total_passed += result.passed;
+                        total_failed += result.failed;
                     }
-                }
+                    Err(e) => {
+                        eprintln!("Failed to run suite: {}", e);
+                        total_failed += 1;
+                    }
+                },
                 Err(e) => {
                     eprintln!("Failed to load suite: {}", e);
                     total_failed += 1;
@@ -127,7 +135,10 @@ fn test_all_suites() {
     }
 
     println!("\n=== TOTAL RESULTS ===");
-    println!("Suites: {} | Passed: {} | Failed: {}", suite_count, total_passed, total_failed);
+    println!(
+        "Suites: {} | Passed: {} | Failed: {}",
+        suite_count, total_passed, total_failed
+    );
 
     // Fail the test if any test cases failed
     assert_eq!(total_failed, 0, "Some test cases failed");

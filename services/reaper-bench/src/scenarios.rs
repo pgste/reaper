@@ -131,11 +131,21 @@ mod tests {
         // Check distribution
         let admin_count = requests
             .iter()
-            .filter(|r| r.context.as_ref().map(|c| c.get("role") == Some(&"admin".to_string())).unwrap_or(false))
+            .filter(|r| {
+                r.context
+                    .as_ref()
+                    .map(|c| c.get("role") == Some(&"admin".to_string()))
+                    .unwrap_or(false)
+            })
             .count();
         let guest_count = requests
             .iter()
-            .filter(|r| r.context.as_ref().map(|c| c.get("role") == Some(&"guest".to_string())).unwrap_or(false))
+            .filter(|r| {
+                r.context
+                    .as_ref()
+                    .map(|c| c.get("role") == Some(&"guest".to_string()))
+                    .unwrap_or(false)
+            })
             .count();
 
         // Approximately 30% admin, 20% guest

@@ -19,8 +19,8 @@ use crate::{
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::{AgentRepository, NamespaceRepository, OrganizationRepository},
     domain::namespace::{
-        build_namespace_tree, CreateAgentSubscription, CreateNamespace,
-        Namespace, NamespaceTree, UpdateNamespace,
+        build_namespace_tree, CreateAgentSubscription, CreateNamespace, Namespace, NamespaceTree,
+        UpdateNamespace,
     },
     state::AppState,
 };
@@ -29,10 +29,15 @@ use crate::{
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Namespace CRUD
-        .route("/orgs/{org}/namespaces", get(list_namespaces).post(create_namespace))
+        .route(
+            "/orgs/{org}/namespaces",
+            get(list_namespaces).post(create_namespace),
+        )
         .route(
             "/orgs/{org}/namespaces/{namespace}",
-            get(get_namespace).put(update_namespace).delete(delete_namespace),
+            get(get_namespace)
+                .put(update_namespace)
+                .delete(delete_namespace),
         )
         // Namespace tree view
         .route("/orgs/{org}/namespaces/tree", get(get_namespace_tree))
@@ -289,10 +294,7 @@ async fn create_namespace(
     let ns_repo = NamespaceRepository::new(&state.db);
 
     // Check for duplicate slug
-    if let Some(_existing) = ns_repo
-        .get_by_slug(organization.id, &request.slug)
-        .await?
-    {
+    if let Some(_existing) = ns_repo.get_by_slug(organization.id, &request.slug).await? {
         return Err(ApiError::Conflict(format!(
             "Namespace with slug '{}' already exists",
             request.slug
@@ -303,7 +305,9 @@ async fn create_namespace(
     if let Some(parent_id) = request.parent_id {
         let parent = ns_repo.get_by_id(parent_id).await?;
         if parent.is_none() || parent.map(|p| p.org_id) != Some(organization.id) {
-            return Err(ApiError::Validation("Parent namespace not found".to_string()));
+            return Err(ApiError::Validation(
+                "Parent namespace not found".to_string(),
+            ));
         }
     }
 
@@ -454,10 +458,7 @@ async fn list_agent_subscriptions(
     // Get namespace slugs for display
     let mut summaries = Vec::with_capacity(subscriptions.len());
     for sub in subscriptions {
-        let ns_slug = ns_repo
-            .get_by_id(sub.namespace_id)
-            .await?
-            .map(|ns| ns.slug);
+        let ns_slug = ns_repo.get_by_id(sub.namespace_id).await?.map(|ns| ns.slug);
 
         summaries.push(SubscriptionSummary {
             agent_id: sub.agent_id,
@@ -484,9 +485,7 @@ async fn create_agent_subscription(
     Json(request): Json<CreateSubscriptionRequest>,
 ) -> ApiResult<(StatusCode, Json<SubscriptionSummary>)> {
     if !user.has_permission(Scope::AgentWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden(
-            "Missing agent:write scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing agent:write scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -546,9 +545,7 @@ async fn delete_agent_subscription(
     Path((org, agent_id, namespace_id)): Path<(String, Uuid, Uuid)>,
 ) -> ApiResult<StatusCode> {
     if !user.has_permission(Scope::AgentWrite) && !user.has_permission(Scope::OrgAdmin) {
-        return Err(ApiError::Forbidden(
-            "Missing agent:write scope".to_string(),
-        ));
+        return Err(ApiError::Forbidden("Missing agent:write scope".to_string()));
     }
 
     let org_repo = OrganizationRepository::new(&state.db);
@@ -585,15 +582,24 @@ fn is_valid_slug(slug: &str) -> bool {
 
     // Must start and end with alphanumeric
     let chars: Vec<char> = slug.chars().collect();
-    if !chars.first().map(|c| c.is_ascii_alphanumeric()).unwrap_or(false) {
+    if !chars
+        .first()
+        .map(|c| c.is_ascii_alphanumeric())
+        .unwrap_or(false)
+    {
         return false;
     }
-    if !chars.last().map(|c| c.is_ascii_alphanumeric()).unwrap_or(false) {
+    if !chars
+        .last()
+        .map(|c| c.is_ascii_alphanumeric())
+        .unwrap_or(false)
+    {
         return false;
     }
 
     // Only lowercase letters, numbers, hyphens, and forward slashes
-    slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '/')
+    slug.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '/')
 }
 
 #[cfg(test)]

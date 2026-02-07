@@ -9,7 +9,7 @@ policy collection_operations {
     // Array Contains Check - check if user has required permission
     rule has_read_permission {
         allow if {
-            resource == "document" &&
+            resource.type == "document" &&
             "read" in user.permissions
         }
     }
@@ -17,7 +17,7 @@ policy collection_operations {
     // Check for write permission
     rule has_write_permission {
         allow if {
-            resource == "document" &&
+            resource.type == "document" &&
             "write" in user.permissions
         }
     }
@@ -25,7 +25,7 @@ policy collection_operations {
     // Check for admin permission
     rule has_admin_permission {
         allow if {
-            resource == "document" &&
+            resource.type == "document" &&
             "admin" in user.permissions
         }
     }
@@ -33,7 +33,7 @@ policy collection_operations {
     // Array Length Check - minimum 5 skills for senior position
     rule minimum_skills {
         allow if {
-            resource == "senior_position" &&
+            resource.type == "senior_position" &&
             user.skills.count() >= 5
         }
     }
@@ -41,7 +41,7 @@ policy collection_operations {
     // Check if user is in engineering group
     rule engineering_access {
         allow if {
-            resource == "shared_resource" &&
+            resource.type == "shared_resource" &&
             "engineering" in user.groups
         }
     }
@@ -49,7 +49,7 @@ policy collection_operations {
     // Check if user is in platform group
     rule platform_access {
         allow if {
-            resource == "shared_resource" &&
+            resource.type == "shared_resource" &&
             "platform" in user.groups
         }
     }
@@ -57,7 +57,7 @@ policy collection_operations {
     // Check if user is in admin group
     rule admin_group_access {
         allow if {
-            resource == "shared_resource" &&
+            resource.type == "shared_resource" &&
             "admin" in user.groups
         }
     }
@@ -65,7 +65,7 @@ policy collection_operations {
     // Check if user is admin
     rule has_admin_role {
         allow if {
-            resource == "system" &&
+            resource.type == "system" &&
             "admin" in user.roles
         }
     }

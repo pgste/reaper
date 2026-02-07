@@ -191,16 +191,16 @@ impl EnhancedPolicy {
         Ok(())
     }
 
-    /// Get the evaluator, building it if necessary
-    pub fn get_evaluator(&mut self) -> Result<Arc<dyn PolicyEvaluator>> {
-        if self.evaluator.is_none() {
-            self.build_evaluator()?;
-        }
-
+    /// Get the evaluator (must be pre-built at deploy time).
+    ///
+    /// Takes `&self` — no mutation needed during evaluation.
+    /// Evaluators are always built during `deploy_policy()` / `new()` / `new_with_language()`,
+    /// so this should never return `None` on a properly deployed policy.
+    pub fn get_evaluator(&self) -> Result<&Arc<dyn PolicyEvaluator>> {
         self.evaluator
-            .clone()
+            .as_ref()
             .ok_or_else(|| ReaperError::EvaluationError {
-                reason: "Failed to build evaluator".to_string(),
+                reason: "Evaluator not built — policy was not properly deployed".to_string(),
             })
     }
 

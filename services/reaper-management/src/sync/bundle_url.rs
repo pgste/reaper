@@ -82,9 +82,9 @@ impl BundleUrlSyncer {
     ) -> Result<FetchedBundle, BundleUrlSyncError> {
         let start = std::time::Instant::now();
 
-        let config = source
-            .bundle_url_config()
-            .ok_or_else(|| BundleUrlSyncError::Config("Invalid BundleUrl configuration".to_string()))?;
+        let config = source.bundle_url_config().ok_or_else(|| {
+            BundleUrlSyncError::Config("Invalid BundleUrl configuration".to_string())
+        })?;
 
         // Build the request
         let mut request = self.client.get(bundle_url);
@@ -157,9 +157,9 @@ impl BundleUrlSyncer {
 
     /// Sync a policy source (for scheduled syncs - checks base_url if configured)
     pub async fn sync(&self, source: &PolicySource) -> Result<SyncResult, BundleUrlSyncError> {
-        let config = source
-            .bundle_url_config()
-            .ok_or_else(|| BundleUrlSyncError::Config("Invalid BundleUrl configuration".to_string()))?;
+        let config = source.bundle_url_config().ok_or_else(|| {
+            BundleUrlSyncError::Config("Invalid BundleUrl configuration".to_string())
+        })?;
 
         // BundleUrl sources are typically webhook-driven
         // If base_url is configured, we can poll it for the latest version
@@ -211,7 +211,8 @@ impl BundleUrlSyncer {
             format!("bundle-{}.{}", version, ext)
         } else {
             // Use first 8 chars of checksum (skip the "sha256:" prefix if present)
-            let checksum_short = bundle.checksum
+            let checksum_short = bundle
+                .checksum
                 .split(':')
                 .last()
                 .unwrap_or(&bundle.checksum)
@@ -224,7 +225,10 @@ impl BundleUrlSyncer {
         let bundle_path = bundle_dir.join(&filename);
         std::fs::write(&bundle_path, &bundle.data)?;
 
-        debug!("Stored bundle at {:?} (format: {:?})", bundle_path, bundle.format);
+        debug!(
+            "Stored bundle at {:?} (format: {:?})",
+            bundle_path, bundle.format
+        );
 
         Ok(bundle_path)
     }
@@ -253,8 +257,8 @@ impl BundleUrlSyncer {
         }
 
         // Compute HMAC
-        use sha2::Sha256;
         use hmac::{Hmac, Mac};
+        use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
 
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
@@ -321,7 +325,9 @@ pub const BUNDLE_EXTENSIONS: &[&str] = &["rbb", "rpp"];
 /// Check if a URL points to a supported bundle format
 pub fn is_bundle_url(url: &str) -> bool {
     let url_lower = url.to_lowercase();
-    BUNDLE_EXTENSIONS.iter().any(|ext| url_lower.ends_with(&format!(".{}", ext)))
+    BUNDLE_EXTENSIONS
+        .iter()
+        .any(|ext| url_lower.ends_with(&format!(".{}", ext)))
 }
 
 /// Get bundle format from URL
@@ -361,18 +367,9 @@ mod tests {
 
     #[test]
     fn test_normalize_checksum() {
-        assert_eq!(
-            normalize_checksum("abc123"),
-            "sha256:abc123"
-        );
-        assert_eq!(
-            normalize_checksum("sha256:abc123"),
-            "sha256:abc123"
-        );
-        assert_eq!(
-            normalize_checksum("md5:abc123"),
-            "md5:abc123"
-        );
+        assert_eq!(normalize_checksum("abc123"), "sha256:abc123");
+        assert_eq!(normalize_checksum("sha256:abc123"), "sha256:abc123");
+        assert_eq!(normalize_checksum("md5:abc123"), "md5:abc123");
     }
 
     #[test]
@@ -426,8 +423,14 @@ mod tests {
 
     #[test]
     fn test_get_bundle_format() {
-        assert_eq!(get_bundle_format("https://example.com/policy.rbb"), Some(BundleFormat::Rbb));
-        assert_eq!(get_bundle_format("https://example.com/package.rpp"), Some(BundleFormat::Rpp));
+        assert_eq!(
+            get_bundle_format("https://example.com/policy.rbb"),
+            Some(BundleFormat::Rbb)
+        );
+        assert_eq!(
+            get_bundle_format("https://example.com/package.rpp"),
+            Some(BundleFormat::Rpp)
+        );
         assert_eq!(get_bundle_format("https://example.com/file.txt"), None);
     }
 

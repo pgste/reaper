@@ -103,6 +103,7 @@ impl PolicyEngine {
                 let policy_decision = PolicyDecision {
                     decision: decision.clone(),
                     policy_id: policy.id,
+                    policy_name: policy.name.clone(),
                     policy_version: policy.version,
                     evaluation_time_ns: eval_time,
                     matched_rule: None,

@@ -18,7 +18,9 @@ use crate::{
     api::orgs::resolve_org,
     billing::{BillingError, BillingService},
     db::repositories::OrganizationRepository,
-    domain::billing::{BillingSummary, CheckoutSessionResponse, PlanLimits, PlanTier, PortalSessionResponse},
+    domain::billing::{
+        BillingSummary, CheckoutSessionResponse, PlanLimits, PlanTier, PortalSessionResponse,
+    },
     state::AppState,
 };
 
@@ -45,7 +47,11 @@ pub struct BillingSummaryResponse {
 impl From<BillingSummary> for BillingSummaryResponse {
     fn from(s: BillingSummary) -> Self {
         Self {
-            plan_tier: s.subscription.as_ref().map(|sub| sub.plan_tier).unwrap_or(PlanTier::Free),
+            plan_tier: s
+                .subscription
+                .as_ref()
+                .map(|sub| sub.plan_tier)
+                .unwrap_or(PlanTier::Free),
             limits: s.limits,
             is_within_limits: s.within_limits,
             exceeded_limits: s.exceeded_limits,
@@ -121,7 +127,8 @@ async fn create_checkout(
         Ok(config) => BillingService::new(state.db.clone(), config),
         Err(_) => {
             return Err(ApiError::Internal(
-                "Billing not configured. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET.".to_string(),
+                "Billing not configured. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET."
+                    .to_string(),
             ))
         }
     };
@@ -164,11 +171,7 @@ async fn create_portal(
     // Get billing service with config
     let billing_service = match crate::billing::BillingConfig::from_env() {
         Ok(config) => BillingService::new(state.db.clone(), config),
-        Err(_) => {
-            return Err(ApiError::Internal(
-                "Billing not configured".to_string(),
-            ))
-        }
+        Err(_) => return Err(ApiError::Internal("Billing not configured".to_string())),
     };
 
     // For portal, we need existing customer ID
@@ -203,7 +206,7 @@ async fn list_plans(
             description: "For small teams getting started".to_string(),
             limits: PlanLimits::starter(),
             price_monthly_cents: Some(2900), // $29/month
-            price_yearly_cents: Some(29000),  // $290/year
+            price_yearly_cents: Some(29000), // $290/year
         },
         PlanInfo {
             tier: PlanTier::Professional,
@@ -211,7 +214,7 @@ async fn list_plans(
             description: "For growing teams with advanced needs".to_string(),
             limits: PlanLimits::professional(),
             price_monthly_cents: Some(9900), // $99/month
-            price_yearly_cents: Some(99000),  // $990/year
+            price_yearly_cents: Some(99000), // $990/year
         },
         PlanInfo {
             tier: PlanTier::Enterprise,
@@ -243,9 +246,7 @@ async fn stripe_webhook(
     // Get billing service with config
     let billing_service = match crate::billing::BillingConfig::from_env() {
         Ok(config) => BillingService::new(state.db.clone(), config),
-        Err(_) => {
-            return Err(ApiError::Internal("Billing not configured".to_string()))
-        }
+        Err(_) => return Err(ApiError::Internal("Billing not configured".to_string())),
     };
 
     billing_service
@@ -261,9 +262,7 @@ fn billing_error_to_api(e: BillingError) -> ApiError {
     match e {
         BillingError::NotFound => ApiError::NotFound("Subscription not found".to_string()),
         BillingError::InvalidPlan(msg) => ApiError::BadRequest(msg),
-        BillingError::NotConfigured => {
-            ApiError::Internal("Billing not configured".to_string())
-        }
+        BillingError::NotConfigured => ApiError::Internal("Billing not configured".to_string()),
         BillingError::Config(msg) => ApiError::Internal(format!("Billing config error: {}", msg)),
         BillingError::Database(e) => ApiError::Internal(format!("Database error: {}", e)),
         BillingError::Stripe(msg) => ApiError::Internal(format!("Stripe error: {}", msg)),

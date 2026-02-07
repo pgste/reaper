@@ -1,0 +1,21 @@
+{
+  "entities": [
+    {"id": "mega_user1", "type": "User", "attributes": {"id": "mega_user1", "credit_score": 750, "order_total": 150, "budget_limit": 200, "average_rating": 4.5, "list_price": 50, "score": 92.0, "temperature": 22, "total_points": 1500, "email": "alice@company.com", "username": "admin_alice", "phone": "+1 (555) 123-4567", "url": "https://example.com", "uuid": "550e8400-e29b-41d4-a716-446655440000", "credit_card": "4111-1111-1111-1111", "zip_code": "90210", "hex_color": "#FF5733", "date_iso": "2025-01-15", "time_24h": "14:30", "domain_name": "example.com", "username_pattern": "alice_admin", "mac_address": "00:1B:44:11:3A:B7", "ipv6_address": "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "semver": "1.2.3", "ip_address": "192.168.1.1", "token_expires_at": 1800000000000000000, "role": "employee", "work_start_time": 1765180000000000000, "work_end_time": 1765190000000000000, "birthdate": 900000000, "lease_end_time": 1800000000000000000, "session_start_time": 1765180000000000000, "event_scheduled_time": 1800000000000000000, "subscription_expires": 1800000000000000000, "trial_ends": 1800000000000000000, "contract_start": 1765180000000000000, "contract_end": 1800000000000000000, "certification_expires": 1800000000000000000, "permissions": ["read", "write", "delete"], "skills": ["rust", "go", "python", "java", "typescript"], "age": 25, "verified": true}},
+    {"id": "mega_user2", "type": "User", "attributes": {"id": "mega_user2", "credit_score": 650, "order_total": 250, "budget_limit": 200, "average_rating": 3.5, "list_price": 500, "score": 65.0, "temperature": -10, "total_points": 300, "email": "bob@partner.com", "username": "mgr_bob", "phone": "5551234567", "token_expires_at": 1700000000000000000, "role": "employee", "work_start_time": 1765190000000000000, "work_end_time": 1765195000000000000, "birthdate": 1200000000, "lease_end_time": 1700000000000000000, "session_start_time": 1765190000000000000, "subscription_expires": 1700000000000000000, "trial_ends": 1700000000000000000, "permissions": ["read"], "skills": ["excel", "word"], "age": 16, "verified": false}},
+    {"id": "mega_user3", "type": "User", "attributes": {"id": "mega_user3", "email": "carol@external.com", "username": "user_carol", "role": "event_planner", "event_scheduled_time": 1800000000000000000, "permissions": ["read", "write"], "skills": ["python", "sql", "r"]}},
+    {"id": "mega_empty", "type": "User", "attributes": {"id": "mega_empty", "role": "guest"}},
+    {"id": "premium_loan", "type": "Resource", "attributes": {"id": "premium_loan", "type": "premium_loan"}},
+    {"id": "shopping_cart", "type": "Resource", "attributes": {"id": "shopping_cart", "type": "shopping_cart"}},
+    {"id": "featured_listing", "type": "Resource", "attributes": {"id": "featured_listing", "type": "featured_listing"}},
+    {"id": "gold_tier", "type": "Resource", "attributes": {"id": "gold_tier", "type": "gold_tier"}},
+    {"id": "company_docs", "type": "Resource", "attributes": {"id": "company_docs", "type": "company_docs"}},
+    {"id": "partner_docs", "type": "Resource", "attributes": {"id": "partner_docs", "type": "partner_docs"}},
+    {"id": "admin_panel", "type": "Resource", "attributes": {"id": "admin_panel", "type": "admin_panel"}},
+    {"id": "email_validation", "type": "Resource", "attributes": {"id": "email_validation", "type": "email_validation"}},
+    {"id": "api_endpoint", "type": "Resource", "attributes": {"id": "api_endpoint", "type": "api_endpoint"}},
+    {"id": "doc_read", "type": "Resource", "attributes": {"id": "doc_read", "type": "doc_read"}},
+    {"id": "doc_write", "type": "Resource", "attributes": {"id": "doc_write", "type": "doc_write"}},
+    {"id": "senior_position", "type": "Resource", "attributes": {"id": "senior_position", "type": "senior_position"}},
+    {"id": "verification_check", "type": "Resource", "attributes": {"id": "verification_check", "type": "verification_check"}}
+  ]
+}

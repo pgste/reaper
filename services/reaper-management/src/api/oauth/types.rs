@@ -52,11 +52,9 @@ impl OAuthState {
     }
 
     pub fn decode(encoded: &str) -> Option<Self> {
-        let bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            encoded,
-        )
-        .ok()?;
+        let bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, encoded)
+                .ok()?;
         let json = String::from_utf8(bytes).ok()?;
         serde_json::from_str(&json).ok()
     }

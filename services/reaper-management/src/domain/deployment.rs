@@ -184,7 +184,10 @@ impl Rollout {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status,
-            RolloutStatus::Completed | RolloutStatus::Failed | RolloutStatus::RolledBack | RolloutStatus::Cancelled
+            RolloutStatus::Completed
+                | RolloutStatus::Failed
+                | RolloutStatus::RolledBack
+                | RolloutStatus::Cancelled
         )
     }
 
@@ -323,17 +326,38 @@ mod tests {
 
     #[test]
     fn test_strategy_type_parsing() {
-        assert_eq!("immediate".parse::<StrategyType>().unwrap(), StrategyType::Immediate);
-        assert_eq!("canary".parse::<StrategyType>().unwrap(), StrategyType::Canary);
-        assert_eq!("percentage".parse::<StrategyType>().unwrap(), StrategyType::Percentage);
-        assert_eq!("label_selector".parse::<StrategyType>().unwrap(), StrategyType::LabelSelector);
+        assert_eq!(
+            "immediate".parse::<StrategyType>().unwrap(),
+            StrategyType::Immediate
+        );
+        assert_eq!(
+            "canary".parse::<StrategyType>().unwrap(),
+            StrategyType::Canary
+        );
+        assert_eq!(
+            "percentage".parse::<StrategyType>().unwrap(),
+            StrategyType::Percentage
+        );
+        assert_eq!(
+            "label_selector".parse::<StrategyType>().unwrap(),
+            StrategyType::LabelSelector
+        );
     }
 
     #[test]
     fn test_rollout_status_parsing() {
-        assert_eq!("pending".parse::<RolloutStatus>().unwrap(), RolloutStatus::Pending);
-        assert_eq!("in_progress".parse::<RolloutStatus>().unwrap(), RolloutStatus::InProgress);
-        assert_eq!("completed".parse::<RolloutStatus>().unwrap(), RolloutStatus::Completed);
+        assert_eq!(
+            "pending".parse::<RolloutStatus>().unwrap(),
+            RolloutStatus::Pending
+        );
+        assert_eq!(
+            "in_progress".parse::<RolloutStatus>().unwrap(),
+            RolloutStatus::InProgress
+        );
+        assert_eq!(
+            "completed".parse::<RolloutStatus>().unwrap(),
+            RolloutStatus::Completed
+        );
     }
 
     #[test]

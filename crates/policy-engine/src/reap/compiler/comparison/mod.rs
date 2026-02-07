@@ -167,8 +167,8 @@ pub fn compile_comparison_assignment(
     // Check for null comparison first
     if let ComparisonRight::Value(Value::Null) = &right {
         let is_null_check = match op {
-            Operator::Equal => true,      // x := entity.field == null
-            Operator::NotEqual => false,  // x := entity.field != null
+            Operator::Equal => true,     // x := entity.field == null
+            Operator::NotEqual => false, // x := entity.field != null
             _ => {
                 return Err(ReaperError::InvalidPolicy {
                     reason: "Null comparisons only support == and != operators".to_string(),

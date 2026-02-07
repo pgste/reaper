@@ -180,9 +180,9 @@ impl BillingService {
     ) -> Result<CheckoutSessionResponse, BillingError> {
         let config = self.config()?;
 
-        let price_id = config
-            .get_price_id(plan_tier, yearly)
-            .ok_or_else(|| BillingError::InvalidPlan(format!("No price for tier: {}", plan_tier)))?;
+        let price_id = config.get_price_id(plan_tier, yearly).ok_or_else(|| {
+            BillingError::InvalidPlan(format!("No price for tier: {}", plan_tier))
+        })?;
 
         debug!(
             customer_id = %customer_id,
@@ -232,7 +232,10 @@ impl BillingService {
 
         // Return placeholder
         Ok(PortalSessionResponse {
-            url: format!("{}/billing/portal?customer={}", config.base_url, customer_id),
+            url: format!(
+                "{}/billing/portal?customer={}",
+                config.base_url, customer_id
+            ),
         })
     }
 

@@ -130,7 +130,14 @@ fn test_eval_string_split() {
 
     let email_key = interner.intern("email");
 
-    let result = eval_string_split(&EntityType::User, email_key, "@", &user, &resource, &interner);
+    let result = eval_string_split(
+        &EntityType::User,
+        email_key,
+        "@",
+        &user,
+        &resource,
+        &interner,
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::List(parts)) = result {
         assert_eq!(parts.len(), 2);
@@ -147,7 +154,15 @@ fn test_eval_string_replace() {
 
     let email_key = interner.intern("email");
 
-    let result = eval_string_replace(&EntityType::User, email_key, "example", "test", &user, &resource, &interner);
+    let result = eval_string_replace(
+        &EntityType::User,
+        email_key,
+        "example",
+        "test",
+        &user,
+        &resource,
+        &interner,
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::String(s)) = result {
         let resolved = interner.resolve(s).unwrap();
@@ -342,10 +357,24 @@ fn test_eval_map_access() {
 
     let metadata_key = interner.intern("metadata");
 
-    let result = eval_map_access(&EntityType::User, metadata_key, "level", &user, &resource, &interner);
+    let result = eval_map_access(
+        &EntityType::User,
+        metadata_key,
+        "level",
+        &user,
+        &resource,
+        &interner,
+    );
     assert_eq!(result, Some(AttributeValue::Int(3)));
 
-    let result = eval_map_access(&EntityType::User, metadata_key, "unknown", &user, &resource, &interner);
+    let result = eval_map_access(
+        &EntityType::User,
+        metadata_key,
+        "unknown",
+        &user,
+        &resource,
+        &interner,
+    );
     assert_eq!(result, None);
 }
 

@@ -270,7 +270,9 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
                                 }
                             }
                         } else {
-                            tracing::debug!("Could not extract issuer from token for JWKS validation");
+                            tracing::debug!(
+                                "Could not extract issuer from token for JWKS validation"
+                            );
                         }
                     }
                 }

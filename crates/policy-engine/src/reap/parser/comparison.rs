@@ -15,7 +15,9 @@ use crate::reap::ast::*;
 use reaper_core::ReaperError;
 
 /// Parse assignment expression: x := value
-pub(super) fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> Result<Condition, ReaperError> {
+pub(super) fn parse_assignment(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Condition, ReaperError> {
     let mut inner = pair.into_inner();
 
     let variable = inner.next().unwrap().as_str().to_string();
@@ -151,7 +153,9 @@ pub(super) fn parse_assignment_value(
 }
 
 /// Parse comparison expression: left op right
-pub(super) fn parse_comparison(pair: pest::iterators::Pair<Rule>) -> Result<Condition, ReaperError> {
+pub(super) fn parse_comparison(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Condition, ReaperError> {
     let mut inner = pair.into_inner();
 
     let first_pair = inner.next().unwrap();

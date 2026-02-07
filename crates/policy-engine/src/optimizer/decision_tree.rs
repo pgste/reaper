@@ -115,6 +115,7 @@ impl DecisionTree {
         result.map(|(decision, matched_rule)| PolicyDecision {
             decision,
             policy_id,
+            policy_name: String::new(),
             policy_version,
             evaluation_time_ns,
             matched_rule,

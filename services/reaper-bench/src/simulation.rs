@@ -595,9 +595,11 @@ fn detect_bottleneck(results: &[ParameterTestResult]) -> Option<String> {
     let low_concurrency: Vec<_> = results.iter().filter(|r| r.concurrency <= 5).collect();
 
     if !high_concurrency.is_empty() && !low_concurrency.is_empty() {
-        let high_avg_latency: f64 =
-            high_concurrency.iter().map(|r| r.p99_us as f64).sum::<f64>()
-                / high_concurrency.len() as f64;
+        let high_avg_latency: f64 = high_concurrency
+            .iter()
+            .map(|r| r.p99_us as f64)
+            .sum::<f64>()
+            / high_concurrency.len() as f64;
         let low_avg_latency: f64 = low_concurrency.iter().map(|r| r.p99_us as f64).sum::<f64>()
             / low_concurrency.len() as f64;
 

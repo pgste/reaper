@@ -19,12 +19,12 @@ pub mod policy_compilation;
 pub mod reap;
 pub mod regex_cache;
 
+pub use engine::PolicyVersion as EngineVersion;
 pub use engine::{
     AllPoliciesEvaluationResult, DenyInfo, EnhancedPolicy, PackageEvaluationResult, PackageInfo,
     PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage, PolicyRequest,
     PolicyRule, PolicySource, PolicySourceMetadata, SimpleAction, SimpleRule, StagedPackage,
 };
-pub use engine::PolicyVersion as EngineVersion;
 
 pub use evaluators::{
     CedarPolicyEvaluator, EvaluatorMetadata, PolicyEvaluator, SimplePolicyEvaluator,
@@ -61,8 +61,8 @@ pub use compiled_evaluator::CompiledPolicyEvaluator;
 
 pub use data::{
     AttributeValue, Attributes, DataBundle, DataBundleMetadata, DataFormat, DataLoader, DataStore,
-    Entity, EntityId, EntityType, IndexStrategy, InternedString, QueryBuilder, StreamingLoader,
-    StreamingStats, StringInterner, StringTable,
+    DataStoreConfig, Entity, EntityId, EntityType, IndexStrategy, InternedString, QueryBuilder,
+    StreamingLoader, StreamingStats, StringInterner, StringTable,
 };
 
 // Re-export entity builder for convenience

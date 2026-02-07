@@ -153,7 +153,9 @@ impl<'a> DeploymentRepository<'a> {
         wave_number: u32,
         target_agents: &[Uuid],
     ) -> Result<RolloutWave, DatabaseError> {
-        self.waves().create(rollout_id, wave_number, target_agents).await
+        self.waves()
+            .create(rollout_id, wave_number, target_agents)
+            .await
     }
 
     /// Get a wave by ID
@@ -467,10 +469,7 @@ mod tests {
             .unwrap();
 
         let agent_ids = vec![Uuid::new_v4(), Uuid::new_v4()];
-        let wave = repo
-            .create_wave(rollout.id, 1, &agent_ids)
-            .await
-            .unwrap();
+        let wave = repo.create_wave(rollout.id, 1, &agent_ids).await.unwrap();
         assert_eq!(wave.wave_number, 1);
         assert_eq!(wave.target_agents.len(), 2);
         assert_eq!(wave.status, WaveStatus::Pending);

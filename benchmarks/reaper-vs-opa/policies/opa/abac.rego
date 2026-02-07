@@ -1,51 +1,54 @@
 package reaper.abac
 
-import future.keywords.if
-import future.keywords.in
+import rego.v1
 
-# Default deny
+# ABAC Policy — mirrors abac_clearance.reap exactly
+# Rules:
+#   1. deny_suspended_users: deny if user.suspended == true
+#   2. clearance_and_department: user.clearance_match && same dept && !archived
+#   3. high_clearance_access: user.high_clearance && same dept && !secret && !archived
+#   4. owner_access: user.id == resource.owner_id && user.status == "active"
+#   5. executive_access: user.role == "executive" && !archived
+
 default allow := false
 
-# Direct O(1) entity lookups (entities pre-indexed as map)
-user := data.entities[input.principal]
-resource := data.entities[input.resource]
+# Entity lookups — .attributes shorthand so user.role works directly
+user := data.entities[input.principal.id].attributes
 
-# Deny suspended users immediately
-allow := false if {
-    user.attributes.suspended == true
+resource := data.entities[input.resource].attributes
+
+# Deny suspended users immediately (highest priority)
+deny if {
+    user.suspended == true
 }
 
-# Admin with high clearance can access everything
-allow := true if {
-    user.attributes.role == "admin"
-    user.attributes.high_clearance == true
-    not user.attributes.suspended
+# Allow same department with matching clearance level
+allow if {
+    not deny
+    user.clearance_match == true
+    user.department == resource.department
+    resource.archived != true
 }
 
-# Same department access with clearance match
-allow := true if {
-    user.attributes.department == resource.attributes.department
-    user.attributes.clearance_level >= resource.attributes.clearance_level
-    user.attributes.status == "active"
+# High clearance users can access confidential docs in their dept (not archived)
+allow if {
+    not deny
+    user.high_clearance == true
+    user.department == resource.department
+    resource.classification != "secret"
+    resource.archived != true
 }
 
-# High clearance users can access non-secret resources in their dept
-allow := true if {
-    user.attributes.high_clearance == true
-    user.attributes.department == resource.attributes.department
-    resource.attributes.classification != "secret"
-    input.action == "read"
+# Document owners can always access (unless suspended)
+allow if {
+    not deny
+    user.id == resource.owner_id
+    user.status == "active"
 }
 
-# Resource owners can always access (if active)
-allow := true if {
-    user.id == resource.attributes.owner_id
-    user.attributes.status == "active"
-}
-
-# Public resources accessible to active users
-allow := true if {
-    resource.attributes.classification == "public"
-    user.attributes.status == "active"
-    input.action == "read"
+# Executive full access (except archived)
+allow if {
+    not deny
+    user.role == "executive"
+    resource.archived != true
 }

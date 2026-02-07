@@ -41,7 +41,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         // SSE event stream (org-wide)
         .route("/orgs/{org}/events", get(events_stream))
         // SSE event stream for agent (filtered by subscriptions)
-        .route("/orgs/{org}/agents/{agent_id}/events", get(agent_events_stream))
+        .route(
+            "/orgs/{org}/agents/{agent_id}/events",
+            get(agent_events_stream),
+        )
 }
 
 /// SSE event stream for an organization (with optional namespace filtering)
@@ -89,7 +92,9 @@ async fn events_stream(
                         return None;
                     }
                     // Apply namespace filter if specified
-                    if !namespace_filter.is_empty() && !event.matches_subscriptions(&namespace_filter) {
+                    if !namespace_filter.is_empty()
+                        && !event.matches_subscriptions(&namespace_filter)
+                    {
                         return None;
                     }
                     Some(event_to_sse(event))

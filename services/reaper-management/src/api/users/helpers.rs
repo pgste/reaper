@@ -35,10 +35,14 @@ pub fn get_session_token(headers: &HeaderMap) -> ApiResult<String> {
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".to_string()))?;
+        .ok_or_else(|| {
+            ApiError::Unauthorized("Missing or invalid Authorization header".to_string())
+        })?;
 
     if !auth_header.starts_with("rst_") {
-        return Err(ApiError::Unauthorized("Invalid session token format".to_string()));
+        return Err(ApiError::Unauthorized(
+            "Invalid session token format".to_string(),
+        ));
     }
 
     Ok(auth_header.to_string())

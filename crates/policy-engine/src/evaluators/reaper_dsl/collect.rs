@@ -193,7 +193,9 @@ pub fn collect_strings_for_interning(
                 intern(s);
             }
         }
-        Condition::VariableCompare { variable, value, .. } => {
+        Condition::VariableCompare {
+            variable, value, ..
+        } => {
             intern(variable);
             if let LiteralValue::String(s) = value {
                 intern(s);
@@ -247,13 +249,17 @@ pub fn collect_strings_for_interning(
                 intern(v);
             }
         }
-        Condition::VariableMethodCompare { variable, value, .. } => {
+        Condition::VariableMethodCompare {
+            variable, value, ..
+        } => {
             intern(variable);
             if let LiteralValue::String(s) = value {
                 intern(s);
             }
         }
-        Condition::VariableChainedMethodCompare { variable, value, .. } => {
+        Condition::VariableChainedMethodCompare {
+            variable, value, ..
+        } => {
             intern(variable);
             if let LiteralValue::String(s) = value {
                 intern(s);
@@ -283,8 +289,14 @@ pub fn collect_strings_for_interning(
                 intern(s);
             }
         }
-        Condition::VariableAttrEqualsNull { variable, attribute }
-        | Condition::VariableAttrNotEqualsNull { variable, attribute } => {
+        Condition::VariableAttrEqualsNull {
+            variable,
+            attribute,
+        }
+        | Condition::VariableAttrNotEqualsNull {
+            variable,
+            attribute,
+        } => {
             intern(variable);
             intern(attribute);
         }
@@ -496,7 +508,10 @@ fn collect_output_strings(
         UncompiledOutput::Variable(var) => {
             intern(var);
         }
-        UncompiledOutput::VarAttr { variable, attribute } => {
+        UncompiledOutput::VarAttr {
+            variable,
+            attribute,
+        } => {
             intern(variable);
             intern(attribute);
         }

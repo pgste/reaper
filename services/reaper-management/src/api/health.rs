@@ -276,11 +276,12 @@ async fn check_database(state: &AppState) -> ComponentHealth {
 /// Quick database check (no latency measurement)
 async fn quick_check_database(state: &AppState) -> bool {
     match state.db.sqlite_pool() {
-        Some(pool) => {
-            tokio::time::timeout(Duration::from_secs(2), sqlx::query("SELECT 1").fetch_one(pool))
-                .await
-                .is_ok()
-        }
+        Some(pool) => tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query("SELECT 1").fetch_one(pool),
+        )
+        .await
+        .is_ok(),
         None => false,
     }
 }

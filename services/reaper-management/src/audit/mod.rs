@@ -217,7 +217,11 @@ pub struct AuditEntry {
 
 impl AuditEntry {
     /// Create a new audit entry builder
-    pub fn builder(action: &str, actor_type: ActorType, actor_id: impl Into<String>) -> AuditEntryBuilder {
+    pub fn builder(
+        action: &str,
+        actor_type: ActorType,
+        actor_id: impl Into<String>,
+    ) -> AuditEntryBuilder {
         AuditEntryBuilder {
             org_id: None,
             actor_type,
@@ -439,19 +443,22 @@ impl<'a> AuditRepository<'a> {
         }
 
         // Execute with bindings
-        let mut q = sqlx::query_as::<_, (
-            String,
-            Option<String>,
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        )>(&query);
+        let mut q = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+            ),
+        >(&query);
 
         for binding in &bindings {
             q = q.bind(binding);
@@ -459,10 +466,8 @@ impl<'a> AuditRepository<'a> {
 
         let rows = q.fetch_all(pool).await?;
 
-        let entries: Result<Vec<AuditEntry>, _> = rows
-            .into_iter()
-            .map(|row| self.row_to_entry(row))
-            .collect();
+        let entries: Result<Vec<AuditEntry>, _> =
+            rows.into_iter().map(|row| self.row_to_entry(row)).collect();
 
         entries
     }
@@ -484,7 +489,11 @@ impl<'a> AuditRepository<'a> {
     }
 
     /// Get recent audit entries for an org
-    pub async fn for_org(&self, org_id: Uuid, limit: Option<u32>) -> Result<Vec<AuditEntry>, AuditError> {
+    pub async fn for_org(
+        &self,
+        org_id: Uuid,
+        limit: Option<u32>,
+    ) -> Result<Vec<AuditEntry>, AuditError> {
         self.query(&AuditQuery {
             org_id: Some(org_id),
             limit,
@@ -553,7 +562,10 @@ impl<'a> AuditRepository<'a> {
         Ok(AuditEntry {
             id: Uuid::parse_str(&row.0).map_err(|e| sqlx::Error::Decode(e.into()))?,
             org_id: row.1.map(|s| Uuid::parse_str(&s).ok()).flatten(),
-            actor_type: row.2.parse().map_err(|e: String| sqlx::Error::Decode(e.into()))?,
+            actor_type: row
+                .2
+                .parse()
+                .map_err(|e: String| sqlx::Error::Decode(e.into()))?,
             actor_id: row.3,
             action: row.4,
             resource_type: row.5.map(|s| s.parse().ok()).flatten(),
@@ -615,8 +627,14 @@ mod tests {
     #[test]
     fn test_resource_type_parsing() {
         assert_eq!("org".parse::<ResourceType>().unwrap(), ResourceType::Org);
-        assert_eq!("bundle".parse::<ResourceType>().unwrap(), ResourceType::Bundle);
-        assert_eq!("agent".parse::<ResourceType>().unwrap(), ResourceType::Agent);
+        assert_eq!(
+            "bundle".parse::<ResourceType>().unwrap(),
+            ResourceType::Bundle
+        );
+        assert_eq!(
+            "agent".parse::<ResourceType>().unwrap(),
+            ResourceType::Agent
+        );
     }
 
     #[test]

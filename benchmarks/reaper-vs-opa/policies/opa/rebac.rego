@@ -1,70 +1,61 @@
 package reaper.rebac
 
-import future.keywords.if
-import future.keywords.in
+import rego.v1
 
-# Default deny
+# ReBAC Policy — mirrors rebac_relationships.reap exactly
+# Rules:
+#   1. owner_full_access: user.id == resource.owner_id
+#   2. team_member_access: same team && not pending
+#   3. shared_access: user.id == resource.shared_with_user
+#   4. parent_resource_access: user.id == resource.parent_owner_id && inherit_permissions
+#   5. manager_subordinate_access: manager role && same dept && senior manager
+#   6. collaborator_access: user.id == resource.collaborator_id && active
+#   7. group_member_access: same group && group_member
+
 default allow := false
 
-# Direct O(1) entity lookups (entities pre-indexed as map)
-user := data.entities[input.principal]
-resource := data.entities[input.resource]
+# Entity lookups — .attributes shorthand
+user := data.entities[input.principal.id].attributes
+
+resource := data.entities[input.resource].attributes
 
 # Owners have full access to their resources
-allow := true if {
-    user.id == resource.attributes.owner_id
+allow if {
+    user.id == resource.owner_id
 }
 
-# Team members can access team resources (if not pending)
-allow := true if {
-    user.attributes.team_id == resource.attributes.team_id
-    user.attributes.team_role != "pending"
-    resource.attributes.team_accessible == true
-}
-
-# Team leads have full access to team resources
-allow := true if {
-    user.attributes.team_role == "lead"
-    user.attributes.team_id == resource.attributes.team_id
+# Team members can access team resources
+allow if {
+    user.team_id == resource.team_id
+    user.team_role != "pending"
 }
 
 # Shared resources - users in share list can access
-allow := true if {
-    user.id == resource.attributes.shared_with
-    resource.attributes.share_active == true
+allow if {
+    user.id == resource.shared_with_user
 }
 
-# Active collaborators can edit (but not delete)
-allow := true if {
-    user.id == resource.attributes.collaborator_id
-    resource.attributes.collaboration_status == "active"
-    input.action != "delete"
+# Parent-child relationship - access parent's resources
+allow if {
+    user.id == resource.parent_owner_id
+    resource.inherit_permissions == true
 }
 
-# Parent-child relationship - access parent's resources (read only)
-allow := true if {
-    user.id == resource.attributes.parent_owner
-    resource.attributes.inherit_permissions == true
-    input.action == "read"
+# Organization hierarchy - managers can access subordinate resources
+allow if {
+    user.role == "manager"
+    user.department == resource.owner_department
+    user.is_senior_manager == true
 }
 
-# Senior managers can access subordinate resources in their dept (read only)
-allow := true if {
-    user.attributes.is_senior_manager == true
-    user.attributes.department == resource.attributes.department
-    resource.attributes.visible_to_managers == true
-    input.action == "read"
+# Collaborators on specific resources
+allow if {
+    user.id == resource.collaborator_id
+    resource.collaboration_status == "active"
 }
 
-# Group members can access group resources
-allow := true if {
-    user.attributes.group_id == resource.attributes.group_id
-    user.attributes.group_member == true
-    resource.attributes.group_accessible == true
-}
-
-# Delegates can access on behalf of others
-allow := true if {
-    user.id == resource.attributes.delegated_to
-    resource.attributes.delegation_active == true
+# Group membership access
+allow if {
+    user.group_id == resource.group_id
+    user.group_member == true
 }

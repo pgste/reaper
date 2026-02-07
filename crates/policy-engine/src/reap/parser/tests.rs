@@ -2,22 +2,22 @@ use super::*;
 
 #[test]
 fn test_parse_simple_policy() {
-        let input = r#"
+    let input = r#"
             policy test {
                 default: deny,
                 rule admin { allow if user.role == "admin" }
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        assert_eq!(policy.name, "test");
-        assert_eq!(policy.rules.len(), 1);
-        assert_eq!(policy.rules[0].name, "admin");
-    }
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.name, "test");
+    assert_eq!(policy.rules.len(), 1);
+    assert_eq!(policy.rules[0].name, "admin");
+}
 
-    #[test]
-    fn test_parse_with_metadata() {
-        let input = r#"
+#[test]
+fn test_parse_with_metadata() {
+    let input = r#"
             policy test {
                 version: "1.0.0",
                 description: "Test policy",
@@ -26,13 +26,13 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        assert_eq!(policy.metadata.get("version"), Some(&"1.0.0".to_string()));
-    }
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.metadata.get("version"), Some(&"1.0.0".to_string()));
+}
 
-    #[test]
-    fn test_parse_complex_condition() {
-        let input = r#"
+#[test]
+fn test_parse_complex_condition() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule complex {
@@ -44,13 +44,13 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        assert_eq!(policy.rules.len(), 1);
-    }
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
+}
 
-    #[test]
-    fn test_parse_array_values() {
-        let input = r#"
+#[test]
+fn test_parse_array_values() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule array_test {
@@ -59,71 +59,71 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        assert_eq!(policy.rules.len(), 1);
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules.len(), 1);
 
-        // Verify it's a comparison with an array value
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Array(arr)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(arr.len(), 3);
-        } else {
-            panic!("Expected array value");
-        }
+    // Verify it's a comparison with an array value
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Array(arr)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(arr.len(), 3);
+    } else {
+        panic!("Expected array value");
     }
+}
 
-    #[test]
-    fn test_parse_empty_array() {
-        let input = r#"
+#[test]
+fn test_parse_empty_array() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule empty_array { allow if user.items == [] }
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Array(arr)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(arr.len(), 0);
-        } else {
-            panic!("Expected empty array");
-        }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Array(arr)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(arr.len(), 0);
+    } else {
+        panic!("Expected empty array");
     }
+}
 
-    #[test]
-    fn test_parse_nested_array() {
-        let input = r#"
+#[test]
+fn test_parse_nested_array() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule nested { allow if user.matrix == [[1, 2], [3, 4]] }
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Array(arr)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(arr.len(), 2);
-            if let Value::Array(inner) = &arr[0] {
-                assert_eq!(inner.len(), 2);
-            } else {
-                panic!("Expected nested array");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Array(arr)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(arr.len(), 2);
+        if let Value::Array(inner) = &arr[0] {
+            assert_eq!(inner.len(), 2);
         } else {
-            panic!("Expected array value");
+            panic!("Expected nested array");
         }
+    } else {
+        panic!("Expected array value");
     }
+}
 
-    #[test]
-    fn test_parse_object_values() {
-        let input = r#"
+#[test]
+fn test_parse_object_values() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule object_test {
@@ -132,27 +132,27 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Object(obj)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(obj.len(), 2);
-            assert_eq!(obj[0].0, "timeout");
-            if let Value::Integer(val) = obj[0].1 {
-                assert_eq!(val, 30);
-            } else {
-                panic!("Expected integer value");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Object(obj)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj[0].0, "timeout");
+        if let Value::Integer(val) = obj[0].1 {
+            assert_eq!(val, 30);
         } else {
-            panic!("Expected object value");
+            panic!("Expected integer value");
         }
+    } else {
+        panic!("Expected object value");
     }
+}
 
-    #[test]
-    fn test_parse_set_values() {
-        let input = r#"
+#[test]
+fn test_parse_set_values() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule set_test {
@@ -161,42 +161,42 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Set(set)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(set.len(), 3);
-        } else {
-            panic!("Expected set value");
-        }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Set(set)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(set.len(), 3);
+    } else {
+        panic!("Expected set value");
     }
+}
 
-    #[test]
-    fn test_parse_empty_set() {
-        let input = r#"
+#[test]
+fn test_parse_empty_set() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule empty_set { allow if user.tags == {} }
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Set(set)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(set.len(), 0);
-        } else {
-            panic!("Expected empty set");
-        }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Set(set)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(set.len(), 0);
+    } else {
+        panic!("Expected empty set");
     }
+}
 
-    #[test]
-    fn test_parse_nested_object() {
-        let input = r#"
+#[test]
+fn test_parse_nested_object() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule nested {
@@ -205,27 +205,27 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Object(obj)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(obj.len(), 2);
-            if let Value::Object(inner) = &obj[1].1 {
-                assert_eq!(inner.len(), 1);
-                assert_eq!(inner[0].0, "theme");
-            } else {
-                panic!("Expected nested object");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Object(obj)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(obj.len(), 2);
+        if let Value::Object(inner) = &obj[1].1 {
+            assert_eq!(inner.len(), 1);
+            assert_eq!(inner[0].0, "theme");
         } else {
-            panic!("Expected object value");
+            panic!("Expected nested object");
         }
+    } else {
+        panic!("Expected object value");
     }
+}
 
-    #[test]
-    fn test_parse_mixed_types_in_array() {
-        let input = r#"
+#[test]
+fn test_parse_mixed_types_in_array() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule mixed {
@@ -234,26 +234,26 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison {
-            right: ComparisonRight::Value(Value::Array(arr)),
-            ..
-        } = &policy.rules[0].condition
-        {
-            assert_eq!(arr.len(), 5);
-            assert!(matches!(arr[0], Value::Integer(_)));
-            assert!(matches!(arr[1], Value::String(_)));
-            assert!(matches!(arr[2], Value::Boolean(_)));
-            assert!(matches!(arr[3], Value::Null));
-            assert!(matches!(arr[4], Value::Array(_)));
-        } else {
-            panic!("Expected array with mixed types");
-        }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison {
+        right: ComparisonRight::Value(Value::Array(arr)),
+        ..
+    } = &policy.rules[0].condition
+    {
+        assert_eq!(arr.len(), 5);
+        assert!(matches!(arr[0], Value::Integer(_)));
+        assert!(matches!(arr[1], Value::String(_)));
+        assert!(matches!(arr[2], Value::Boolean(_)));
+        assert!(matches!(arr[3], Value::Null));
+        assert!(matches!(arr[4], Value::Array(_)));
+    } else {
+        panic!("Expected array with mixed types");
     }
+}
 
-    #[test]
-    fn test_parse_bracket_notation_numeric() {
-        let input = r#"
+#[test]
+fn test_parse_bracket_notation_numeric() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule array_index {
@@ -262,27 +262,27 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison { left, .. } = &policy.rules[0].condition {
-            if let ComparisonLeft::EntityAttr(attr) = left {
-                assert_eq!(attr.attribute, "roles");
-                assert!(attr.index.is_some());
-                if let Some(Index::Number(n)) = &attr.index {
-                    assert_eq!(n, &0);
-                } else {
-                    panic!("Expected numeric index");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison { left, .. } = &policy.rules[0].condition {
+        if let ComparisonLeft::EntityAttr(attr) = left {
+            assert_eq!(attr.attribute, "roles");
+            assert!(attr.index.is_some());
+            if let Some(Index::Number(n)) = &attr.index {
+                assert_eq!(n, &0);
             } else {
-                panic!("Expected entity attribute");
+                panic!("Expected numeric index");
             }
         } else {
-            panic!("Expected comparison");
+            panic!("Expected entity attribute");
         }
+    } else {
+        panic!("Expected comparison");
     }
+}
 
-    #[test]
-    fn test_parse_bracket_notation_string() {
-        let input = r#"
+#[test]
+fn test_parse_bracket_notation_string() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule object_key {
@@ -291,27 +291,27 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison { left, .. } = &policy.rules[0].condition {
-            if let ComparisonLeft::EntityAttr(attr) = left {
-                assert_eq!(attr.attribute, "data");
-                assert!(attr.index.is_some());
-                if let Some(Index::String(s)) = &attr.index {
-                    assert_eq!(s, "department");
-                } else {
-                    panic!("Expected string index");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison { left, .. } = &policy.rules[0].condition {
+        if let ComparisonLeft::EntityAttr(attr) = left {
+            assert_eq!(attr.attribute, "data");
+            assert!(attr.index.is_some());
+            if let Some(Index::String(s)) = &attr.index {
+                assert_eq!(s, "department");
             } else {
-                panic!("Expected entity attribute");
+                panic!("Expected string index");
             }
         } else {
-            panic!("Expected comparison");
+            panic!("Expected entity attribute");
         }
+    } else {
+        panic!("Expected comparison");
     }
+}
 
-    #[test]
-    fn test_parse_in_operator() {
-        let input = r#"
+#[test]
+fn test_parse_in_operator() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule membership {
@@ -320,29 +320,29 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        // "admin" in user.roles is parsed as: left=user.roles, op=In, right="admin"
-        if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
-            assert_eq!(*op, Operator::In);
-            if let ComparisonLeft::EntityAttr(attr) = left {
-                assert_eq!(attr.entity, Entity::User);
-                assert_eq!(attr.attribute, "roles");
-            } else {
-                panic!("Expected entity attribute");
-            }
-            if let ComparisonRight::Value(Value::String(s)) = right {
-                assert_eq!(s, "admin");
-            } else {
-                panic!("Expected string value on right side");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    // "admin" in user.roles is parsed as: left=user.roles, op=In, right="admin"
+    if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
+        assert_eq!(*op, Operator::In);
+        if let ComparisonLeft::EntityAttr(attr) = left {
+            assert_eq!(attr.entity, Entity::User);
+            assert_eq!(attr.attribute, "roles");
         } else {
-            panic!("Expected comparison");
+            panic!("Expected entity attribute");
         }
+        if let ComparisonRight::Value(Value::String(s)) = right {
+            assert_eq!(s, "admin");
+        } else {
+            panic!("Expected string value on right side");
+        }
+    } else {
+        panic!("Expected comparison");
     }
+}
 
-    #[test]
-    fn test_parse_in_operator_with_variable() {
-        let input = r#"
+#[test]
+fn test_parse_in_operator_with_variable() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule check_permission {
@@ -351,29 +351,29 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
-            assert_eq!(*op, Operator::In);
-            if let ComparisonLeft::EntityAttr(attr) = left {
-                assert_eq!(attr.entity, Entity::Context);
-                assert_eq!(attr.attribute, "action");
-            } else {
-                panic!("Expected entity attribute on left side");
-            }
-            if let ComparisonRight::EntityAttr(attr) = right {
-                assert_eq!(attr.entity, Entity::Resource);
-                assert_eq!(attr.attribute, "allowed_actions");
-            } else {
-                panic!("Expected entity attribute on right side");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
+        assert_eq!(*op, Operator::In);
+        if let ComparisonLeft::EntityAttr(attr) = left {
+            assert_eq!(attr.entity, Entity::Context);
+            assert_eq!(attr.attribute, "action");
         } else {
-            panic!("Expected comparison");
+            panic!("Expected entity attribute on left side");
         }
+        if let ComparisonRight::EntityAttr(attr) = right {
+            assert_eq!(attr.entity, Entity::Resource);
+            assert_eq!(attr.attribute, "allowed_actions");
+        } else {
+            panic!("Expected entity attribute on right side");
+        }
+    } else {
+        panic!("Expected comparison");
     }
+}
 
-    #[test]
-    fn test_parse_variable_assignment() {
-        let input = r#"
+#[test]
+fn test_parse_variable_assignment() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule with_variable {
@@ -382,25 +382,25 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        // The condition should be a simple assignment
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "role");
-            if let AssignmentValue::EntityAttr(attr) = value {
-                assert_eq!(attr.entity, Entity::User);
-                assert_eq!(attr.attribute, "role");
-            } else {
-                panic!("Expected entity attr in assignment");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    // The condition should be a simple assignment
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "role");
+        if let AssignmentValue::EntityAttr(attr) = value {
+            assert_eq!(attr.entity, Entity::User);
+            assert_eq!(attr.attribute, "role");
         } else {
-            panic!("Expected assignment");
+            panic!("Expected entity attr in assignment");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_assignment_value_types() {
-        // Test assignment from literal value
-        let input = r#"
+#[test]
+fn test_parse_assignment_value_types() {
+    // Test assignment from literal value
+    let input = r#"
             policy test {
                 default: deny,
                 rule literal_assign {
@@ -409,22 +409,22 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "x");
-            if let AssignmentValue::Value(Value::String(s)) = value {
-                assert_eq!(s, "admin");
-            } else {
-                panic!("Expected string value");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "x");
+        if let AssignmentValue::Value(Value::String(s)) = value {
+            assert_eq!(s, "admin");
         } else {
-            panic!("Expected assignment");
+            panic!("Expected string value");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_comparison_with_variable_right() {
-        let input = r#"
+#[test]
+fn test_parse_comparison_with_variable_right() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule compare_var {
@@ -433,30 +433,30 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
-            if let ComparisonLeft::EntityAttr(attr) = left {
-                assert_eq!(attr.entity, Entity::User);
-                assert_eq!(attr.attribute, "role");
-            } else {
-                panic!("Expected entity attribute on left side");
-            }
-            assert_eq!(*op, Operator::Equal);
-            if let ComparisonRight::Variable(var) = right {
-                assert_eq!(var, "role_var");
-            } else {
-                panic!("Expected variable on right side");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Comparison { left, op, right } = &policy.rules[0].condition {
+        if let ComparisonLeft::EntityAttr(attr) = left {
+            assert_eq!(attr.entity, Entity::User);
+            assert_eq!(attr.attribute, "role");
         } else {
-            panic!("Expected comparison");
+            panic!("Expected entity attribute on left side");
         }
+        assert_eq!(*op, Operator::Equal);
+        if let ComparisonRight::Variable(var) = right {
+            assert_eq!(var, "role_var");
+        } else {
+            panic!("Expected variable on right side");
+        }
+    } else {
+        panic!("Expected comparison");
     }
+}
 
-    // ========== COMPREHENSION PARSER TESTS ==========
+// ========== COMPREHENSION PARSER TESTS ==========
 
-    #[test]
-    fn test_parse_set_comprehension_simple() {
-        let input = r#"
+#[test]
+fn test_parse_set_comprehension_simple() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule collect_names {
@@ -465,50 +465,50 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "admin_names");
-            if let AssignmentValue::Comprehension(Comprehension::Set {
-                output,
-                iterator,
-                filters,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "admin_names");
+        if let AssignmentValue::Comprehension(Comprehension::Set {
+            output,
+            iterator,
+            filters,
+        }) = value
+        {
+            // Check output expression: u.name
+            if let Expr::AttributeAccess {
+                variable: var,
+                attribute: attr,
+            } = output.as_ref()
             {
-                // Check output expression: u.name
-                if let Expr::AttributeAccess {
-                    variable: var,
-                    attribute: attr,
-                } = output.as_ref()
-                {
-                    assert_eq!(var, "u");
-                    assert_eq!(attr, "name");
-                } else {
-                    panic!("Expected attribute access in output");
-                }
-
-                // Check iterator: u := user.team[_]
-                assert_eq!(iterator.variable, "u");
-                if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
-                    assert_eq!(entity_attr.entity, Entity::User);
-                    assert_eq!(entity_attr.attribute, "team");
-                    assert!(matches!(entity_attr.index, Some(Index::Wildcard)));
-                } else {
-                    panic!("Expected EntityAttr in collection");
-                }
-
-                // No filters
-                assert_eq!(filters.len(), 0);
+                assert_eq!(var, "u");
+                assert_eq!(attr, "name");
             } else {
-                panic!("Expected set comprehension");
+                panic!("Expected attribute access in output");
             }
-        } else {
-            panic!("Expected assignment");
-        }
-    }
 
-    #[test]
-    fn test_parse_array_comprehension_simple() {
-        let input = r#"
+            // Check iterator: u := user.team[_]
+            assert_eq!(iterator.variable, "u");
+            if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
+                assert_eq!(entity_attr.entity, Entity::User);
+                assert_eq!(entity_attr.attribute, "team");
+                assert!(matches!(entity_attr.index, Some(Index::Wildcard)));
+            } else {
+                panic!("Expected EntityAttr in collection");
+            }
+
+            // No filters
+            assert_eq!(filters.len(), 0);
+        } else {
+            panic!("Expected set comprehension");
+        }
+    } else {
+        panic!("Expected assignment");
+    }
+}
+
+#[test]
+fn test_parse_array_comprehension_simple() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule collect_emails {
@@ -517,49 +517,49 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "all_emails");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator,
-                filters,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "all_emails");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator,
+            filters,
+        }) = value
+        {
+            // Check output expression: u.email
+            if let Expr::AttributeAccess {
+                variable: var,
+                attribute: attr,
+            } = output.as_ref()
             {
-                // Check output expression: u.email
-                if let Expr::AttributeAccess {
-                    variable: var,
-                    attribute: attr,
-                } = output.as_ref()
-                {
-                    assert_eq!(var, "u");
-                    assert_eq!(attr, "email");
-                } else {
-                    panic!("Expected attribute access in output");
-                }
-
-                // Check iterator
-                assert_eq!(iterator.variable, "u");
-                if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
-                    assert_eq!(entity_attr.entity, Entity::User);
-                    assert_eq!(entity_attr.attribute, "contacts");
-                } else {
-                    panic!("Expected EntityAttr in collection");
-                }
-
-                // No filters
-                assert_eq!(filters.len(), 0);
+                assert_eq!(var, "u");
+                assert_eq!(attr, "email");
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected attribute access in output");
             }
-        } else {
-            panic!("Expected assignment");
-        }
-    }
 
-    #[test]
-    fn test_parse_object_comprehension_simple() {
-        let input = r#"
+            // Check iterator
+            assert_eq!(iterator.variable, "u");
+            if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
+                assert_eq!(entity_attr.entity, Entity::User);
+                assert_eq!(entity_attr.attribute, "contacts");
+            } else {
+                panic!("Expected EntityAttr in collection");
+            }
+
+            // No filters
+            assert_eq!(filters.len(), 0);
+        } else {
+            panic!("Expected array comprehension");
+        }
+    } else {
+        panic!("Expected assignment");
+    }
+}
+
+#[test]
+fn test_parse_object_comprehension_simple() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule create_user_map {
@@ -568,61 +568,61 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "user_map");
-            if let AssignmentValue::Comprehension(Comprehension::Object {
-                key,
-                value: val,
-                iterator,
-                filters,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "user_map");
+        if let AssignmentValue::Comprehension(Comprehension::Object {
+            key,
+            value: val,
+            iterator,
+            filters,
+        }) = value
+        {
+            // Check key expression: u.id
+            if let Expr::AttributeAccess {
+                variable: var,
+                attribute: attr,
+            } = key.as_ref()
             {
-                // Check key expression: u.id
-                if let Expr::AttributeAccess {
-                    variable: var,
-                    attribute: attr,
-                } = key.as_ref()
-                {
-                    assert_eq!(var, "u");
-                    assert_eq!(attr, "id");
-                } else {
-                    panic!("Expected attribute access in key");
-                }
-
-                // Check value expression: u.name
-                if let Expr::AttributeAccess {
-                    variable: var,
-                    attribute: attr,
-                } = val.as_ref()
-                {
-                    assert_eq!(var, "u");
-                    assert_eq!(attr, "name");
-                } else {
-                    panic!("Expected attribute access in value");
-                }
-
-                // Check iterator
-                assert_eq!(iterator.variable, "u");
-                if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
-                    assert_eq!(entity_attr.entity, Entity::User);
-                } else {
-                    panic!("Expected EntityAttr in collection");
-                }
-
-                // No filters
-                assert_eq!(filters.len(), 0);
+                assert_eq!(var, "u");
+                assert_eq!(attr, "id");
             } else {
-                panic!("Expected object comprehension");
+                panic!("Expected attribute access in key");
             }
-        } else {
-            panic!("Expected assignment");
-        }
-    }
 
-    #[test]
-    fn test_parse_comprehension_with_single_filter() {
-        let input = r#"
+            // Check value expression: u.name
+            if let Expr::AttributeAccess {
+                variable: var,
+                attribute: attr,
+            } = val.as_ref()
+            {
+                assert_eq!(var, "u");
+                assert_eq!(attr, "name");
+            } else {
+                panic!("Expected attribute access in value");
+            }
+
+            // Check iterator
+            assert_eq!(iterator.variable, "u");
+            if let IterationSource::EntityAttr(entity_attr) = &iterator.collection {
+                assert_eq!(entity_attr.entity, Entity::User);
+            } else {
+                panic!("Expected EntityAttr in collection");
+            }
+
+            // No filters
+            assert_eq!(filters.len(), 0);
+        } else {
+            panic!("Expected object comprehension");
+        }
+    } else {
+        panic!("Expected assignment");
+    }
+}
+
+#[test]
+fn test_parse_comprehension_with_single_filter() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule active_users {
@@ -631,46 +631,46 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "active");
-            if let AssignmentValue::Comprehension(Comprehension::Set {
-                output: _,
-                iterator,
-                filters,
-            }) = value
-            {
-                assert_eq!(iterator.variable, "u");
-                assert_eq!(filters.len(), 1);
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "active");
+        if let AssignmentValue::Comprehension(Comprehension::Set {
+            output: _,
+            iterator,
+            filters,
+        }) = value
+        {
+            assert_eq!(iterator.variable, "u");
+            assert_eq!(filters.len(), 1);
 
-                // Check filter: u.active == true
-                if let Condition::Comparison { left, op, right } = &filters[0] {
-                    if let ComparisonLeft::VarAttr(var_attr) = left {
-                        assert_eq!(var_attr.variable, "u");
-                        assert_eq!(var_attr.attribute, "active");
-                    } else {
-                        panic!("Expected var attribute in filter");
-                    }
-                    assert_eq!(*op, Operator::Equal);
-                    if let ComparisonRight::Value(Value::Boolean(b)) = right {
-                        assert!(*b);
-                    } else {
-                        panic!("Expected boolean value");
-                    }
+            // Check filter: u.active == true
+            if let Condition::Comparison { left, op, right } = &filters[0] {
+                if let ComparisonLeft::VarAttr(var_attr) = left {
+                    assert_eq!(var_attr.variable, "u");
+                    assert_eq!(var_attr.attribute, "active");
                 } else {
-                    panic!("Expected comparison in filter");
+                    panic!("Expected var attribute in filter");
+                }
+                assert_eq!(*op, Operator::Equal);
+                if let ComparisonRight::Value(Value::Boolean(b)) = right {
+                    assert!(*b);
+                } else {
+                    panic!("Expected boolean value");
                 }
             } else {
-                panic!("Expected set comprehension");
+                panic!("Expected comparison in filter");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected set comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_comprehension_with_multiple_filters() {
-        let input = r#"
+#[test]
+fn test_parse_comprehension_with_multiple_filters() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule senior_devs {
@@ -683,79 +683,79 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "senior_dev_emails");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator,
-                filters,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "senior_dev_emails");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator,
+            filters,
+        }) = value
+        {
+            // Check output: u.email
+            if let Expr::AttributeAccess {
+                variable: var,
+                attribute: attr,
+            } = output.as_ref()
             {
-                // Check output: u.email
-                if let Expr::AttributeAccess {
-                    variable: var,
-                    attribute: attr,
-                } = output.as_ref()
-                {
-                    assert_eq!(var, "u");
-                    assert_eq!(attr, "email");
+                assert_eq!(var, "u");
+                assert_eq!(attr, "email");
+            } else {
+                panic!("Expected attribute access");
+            }
+
+            // Check iterator
+            assert_eq!(iterator.variable, "u");
+
+            // Check two filters
+            assert_eq!(filters.len(), 2);
+
+            // Filter 1: u.role == "developer"
+            if let Condition::Comparison { left, op, right } = &filters[0] {
+                if let ComparisonLeft::VarAttr(var_attr) = left {
+                    assert_eq!(var_attr.variable, "u");
+                    assert_eq!(var_attr.attribute, "role");
                 } else {
-                    panic!("Expected attribute access");
+                    panic!("Expected var attribute in first filter");
                 }
-
-                // Check iterator
-                assert_eq!(iterator.variable, "u");
-
-                // Check two filters
-                assert_eq!(filters.len(), 2);
-
-                // Filter 1: u.role == "developer"
-                if let Condition::Comparison { left, op, right } = &filters[0] {
-                    if let ComparisonLeft::VarAttr(var_attr) = left {
-                        assert_eq!(var_attr.variable, "u");
-                        assert_eq!(var_attr.attribute, "role");
-                    } else {
-                        panic!("Expected var attribute in first filter");
-                    }
-                    assert_eq!(*op, Operator::Equal);
-                    if let ComparisonRight::Value(Value::String(s)) = right {
-                        assert_eq!(s, "developer");
-                    } else {
-                        panic!("Expected string value");
-                    }
+                assert_eq!(*op, Operator::Equal);
+                if let ComparisonRight::Value(Value::String(s)) = right {
+                    assert_eq!(s, "developer");
                 } else {
-                    panic!("Expected comparison in first filter");
-                }
-
-                // Filter 2: u.years_experience >= 5
-                if let Condition::Comparison { left, op, right } = &filters[1] {
-                    if let ComparisonLeft::VarAttr(var_attr) = left {
-                        assert_eq!(var_attr.variable, "u");
-                        assert_eq!(var_attr.attribute, "years_experience");
-                    } else {
-                        panic!("Expected var attribute in second filter");
-                    }
-                    assert_eq!(*op, Operator::GreaterEqual);
-                    if let ComparisonRight::Value(Value::Integer(i)) = right {
-                        assert_eq!(*i, 5);
-                    } else {
-                        panic!("Expected integer value");
-                    }
-                } else {
-                    panic!("Expected comparison in second filter");
+                    panic!("Expected string value");
                 }
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected comparison in first filter");
+            }
+
+            // Filter 2: u.years_experience >= 5
+            if let Condition::Comparison { left, op, right } = &filters[1] {
+                if let ComparisonLeft::VarAttr(var_attr) = left {
+                    assert_eq!(var_attr.variable, "u");
+                    assert_eq!(var_attr.attribute, "years_experience");
+                } else {
+                    panic!("Expected var attribute in second filter");
+                }
+                assert_eq!(*op, Operator::GreaterEqual);
+                if let ComparisonRight::Value(Value::Integer(i)) = right {
+                    assert_eq!(*i, 5);
+                } else {
+                    panic!("Expected integer value");
+                }
+            } else {
+                panic!("Expected comparison in second filter");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_comprehension_with_literal_output() {
-        let input = r#"
+#[test]
+fn test_parse_comprehension_with_literal_output() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule count_users {
@@ -764,32 +764,32 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "counts");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                // Check output: literal 1
-                if let Expr::Literal(Value::Integer(i)) = output.as_ref() {
-                    assert_eq!(*i, 1);
-                } else {
-                    panic!("Expected literal integer in output");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "counts");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            // Check output: literal 1
+            if let Expr::Literal(Value::Integer(i)) = output.as_ref() {
+                assert_eq!(*i, 1);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected literal integer in output");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_comprehension_with_variable_output() {
-        let input = r#"
+#[test]
+fn test_parse_comprehension_with_variable_output() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule collect_vars {
@@ -798,33 +798,33 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "collected");
-            if let AssignmentValue::Comprehension(Comprehension::Set {
-                output,
-                iterator,
-                filters: _,
-            }) = value
-            {
-                // Check output: variable u
-                if let Expr::Variable(var) = output.as_ref() {
-                    assert_eq!(var, "u");
-                    assert_eq!(var, &iterator.variable); // Same as iterator variable
-                } else {
-                    panic!("Expected variable in output");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "collected");
+        if let AssignmentValue::Comprehension(Comprehension::Set {
+            output,
+            iterator,
+            filters: _,
+        }) = value
+        {
+            // Check output: variable u
+            if let Expr::Variable(var) = output.as_ref() {
+                assert_eq!(var, "u");
+                assert_eq!(var, &iterator.variable); // Same as iterator variable
             } else {
-                panic!("Expected set comprehension");
+                panic!("Expected variable in output");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected set comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_comprehension_with_indexed_output() {
-        let input = r#"
+#[test]
+fn test_parse_comprehension_with_indexed_output() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule first_roles {
@@ -833,39 +833,39 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "first_roles");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "first_roles");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            // Check output: u.roles[0]
+            if let Expr::IndexedAccess {
+                variable: var,
+                attribute: attr,
+                index,
+            } = output.as_ref()
             {
-                // Check output: u.roles[0]
-                if let Expr::IndexedAccess {
-                    variable: var,
-                    attribute: attr,
-                    index,
-                } = output.as_ref()
-                {
-                    assert_eq!(var, "u");
-                    assert_eq!(attr, "roles");
-                    assert!(matches!(index, Index::Number(0)));
-                } else {
-                    panic!("Expected indexed access in output");
-                }
+                assert_eq!(var, "u");
+                assert_eq!(attr, "roles");
+                assert!(matches!(index, Index::Number(0)));
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected indexed access in output");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_comprehension_in_and_condition() {
-        let input = r#"
+#[test]
+fn test_parse_comprehension_in_and_condition() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule complex_check {
@@ -877,49 +877,49 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        // The condition should be an AND
-        if let Condition::And(conditions) = &policy.rules[0].condition {
-            assert_eq!(conditions.len(), 2);
+    let policy = ReapParser::parse(input).unwrap();
+    // The condition should be an AND
+    if let Condition::And(conditions) = &policy.rules[0].condition {
+        assert_eq!(conditions.len(), 2);
 
-            // First condition: assignment with comprehension
-            if let Condition::Assignment { variable, value } = &conditions[0] {
-                assert_eq!(variable, "admin_names");
-                assert!(matches!(
-                    value,
-                    AssignmentValue::Comprehension(Comprehension::Set { .. })
-                ));
+        // First condition: assignment with comprehension
+        if let Condition::Assignment { variable, value } = &conditions[0] {
+            assert_eq!(variable, "admin_names");
+            assert!(matches!(
+                value,
+                AssignmentValue::Comprehension(Comprehension::Set { .. })
+            ));
+        } else {
+            panic!("Expected assignment in first AND condition");
+        }
+
+        // Second condition: membership test
+        if let Condition::Comparison { left, op, right } = &conditions[1] {
+            if let ComparisonLeft::EntityAttr(attr) = left {
+                assert_eq!(attr.entity, Entity::User);
+                assert_eq!(attr.attribute, "name");
             } else {
-                panic!("Expected assignment in first AND condition");
+                panic!("Expected entity attribute in second condition");
             }
-
-            // Second condition: membership test
-            if let Condition::Comparison { left, op, right } = &conditions[1] {
-                if let ComparisonLeft::EntityAttr(attr) = left {
-                    assert_eq!(attr.entity, Entity::User);
-                    assert_eq!(attr.attribute, "name");
-                } else {
-                    panic!("Expected entity attribute in second condition");
-                }
-                assert_eq!(*op, Operator::In);
-                if let ComparisonRight::Variable(var) = right {
-                    assert_eq!(var, "admin_names");
-                } else {
-                    panic!("Expected variable reference");
-                }
+            assert_eq!(*op, Operator::In);
+            if let ComparisonRight::Variable(var) = right {
+                assert_eq!(var, "admin_names");
             } else {
-                panic!("Expected comparison in second AND condition");
+                panic!("Expected variable reference");
             }
         } else {
-            panic!("Expected AND condition");
+            panic!("Expected comparison in second AND condition");
         }
+    } else {
+        panic!("Expected AND condition");
     }
+}
 
-    // ===== Built-in Function Tests =====
+// ===== Built-in Function Tests =====
 
-    #[test]
-    fn test_parse_method_call_count() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_count() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule count_check {
@@ -928,18 +928,18 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value: _ } = &policy.rules[0].condition {
-            assert_eq!(variable, "perm_count");
-            // Method call in comprehension output - valid syntax
-        } else {
-            panic!("Expected assignment");
-        }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value: _ } = &policy.rules[0].condition {
+        assert_eq!(variable, "perm_count");
+        // Method call in comprehension output - valid syntax
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_in_comprehension_output() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_in_comprehension_output() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule lower_names {
@@ -948,49 +948,49 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "names");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "names");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            // Output should be a method call: u.name.lower()
+            if let Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } = output.as_ref()
             {
-                // Output should be a method call: u.name.lower()
-                if let Expr::MethodCall {
-                    receiver,
-                    method,
-                    args,
-                } = output.as_ref()
+                // Receiver should be u.name (attribute access)
+                if let Expr::AttributeAccess {
+                    variable,
+                    attribute,
+                } = receiver.as_ref()
                 {
-                    // Receiver should be u.name (attribute access)
-                    if let Expr::AttributeAccess {
-                        variable,
-                        attribute,
-                    } = receiver.as_ref()
-                    {
-                        assert_eq!(variable, "u");
-                        assert_eq!(attribute, "name");
-                    } else {
-                        panic!("Expected attribute access as receiver");
-                    }
-                    assert_eq!(*method, MethodName::Lower);
-                    assert_eq!(args.len(), 0);
+                    assert_eq!(variable, "u");
+                    assert_eq!(attribute, "name");
                 } else {
-                    panic!("Expected method call in output");
+                    panic!("Expected attribute access as receiver");
                 }
+                assert_eq!(*method, MethodName::Lower);
+                assert_eq!(args.len(), 0);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call in output");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_sum() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_sum() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule sum_test {
@@ -999,31 +999,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "total");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Sum);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "total");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Sum);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_with_args() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_with_args() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule split_test {
@@ -1032,50 +1032,50 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "parts");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "parts");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } = output.as_ref()
             {
-                if let Expr::MethodCall {
-                    receiver,
-                    method,
-                    args,
-                } = output.as_ref()
+                if let Expr::AttributeAccess {
+                    variable,
+                    attribute,
+                } = receiver.as_ref()
                 {
-                    if let Expr::AttributeAccess {
-                        variable,
-                        attribute,
-                    } = receiver.as_ref()
-                    {
-                        assert_eq!(variable, "u");
-                        assert_eq!(attribute, "email");
-                    }
-                    assert_eq!(*method, MethodName::Split);
-                    assert_eq!(args.len(), 1);
-                    if let Expr::Literal(Value::String(s)) = &args[0] {
-                        assert_eq!(s, "@");
-                    } else {
-                        panic!("Expected string argument");
-                    }
+                    assert_eq!(variable, "u");
+                    assert_eq!(attribute, "email");
+                }
+                assert_eq!(*method, MethodName::Split);
+                assert_eq!(args.len(), 1);
+                if let Expr::Literal(Value::String(s)) = &args[0] {
+                    assert_eq!(s, "@");
                 } else {
-                    panic!("Expected method call");
+                    panic!("Expected string argument");
                 }
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_function_call_is_string() {
-        let input = r#"
+#[test]
+fn test_parse_function_call_is_string() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule type_check {
@@ -1084,30 +1084,30 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "strings");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output: _,
-                iterator: _,
-                filters,
-            }) = value
-            {
-                assert_eq!(filters.len(), 1);
-                // The filter should parse but we're testing the function call syntax here
-                // Since filters are Condition not Expr, function calls in conditions need different handling
-                // For now, let's test function calls in comprehension output
-            } else {
-                panic!("Expected array comprehension");
-            }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "strings");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output: _,
+            iterator: _,
+            filters,
+        }) = value
+        {
+            assert_eq!(filters.len(), 1);
+            // The filter should parse but we're testing the function call syntax here
+            // Since filters are Condition not Expr, function calls in conditions need different handling
+            // For now, let's test function calls in comprehension output
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_max() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_max() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule max_test {
@@ -1116,31 +1116,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "max_val");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Max);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "max_val");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Max);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_min() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_min() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule min_test {
@@ -1149,31 +1149,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "min_val");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Min);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "min_val");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Min);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_upper() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_upper() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule upper_test {
@@ -1182,31 +1182,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "codes");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Upper);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "codes");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Upper);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_trim() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_trim() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule trim_test {
@@ -1215,31 +1215,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "names");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Trim);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "names");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Trim);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_contains() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_contains() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule contains_test {
@@ -1248,18 +1248,18 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value: _ } = &policy.rules[0].condition {
-            assert_eq!(variable, "matches");
-            // Test parses successfully with contains() in output expression
-        } else {
-            panic!("Expected assignment");
-        }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value: _ } = &policy.rules[0].condition {
+        assert_eq!(variable, "matches");
+        // Test parses successfully with contains() in output expression
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_startswith() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_startswith() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule prefix_test {
@@ -1268,13 +1268,13 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        assert_eq!(policy.rules[0].name, "prefix_test");
-    }
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules[0].name, "prefix_test");
+}
 
-    #[test]
-    fn test_parse_method_call_endswith() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_endswith() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule suffix_test {
@@ -1283,13 +1283,13 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        assert_eq!(policy.rules[0].name, "suffix_test");
-    }
+    let policy = ReapParser::parse(input).unwrap();
+    assert_eq!(policy.rules[0].name, "suffix_test");
+}
 
-    #[test]
-    fn test_parse_method_call_union() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_union() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule union_test {
@@ -1298,32 +1298,32 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "all_perms");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, args, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Union);
-                    assert_eq!(args.len(), 1);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "all_perms");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, args, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Union);
+                assert_eq!(args.len(), 1);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_intersection() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_intersection() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule intersection_test {
@@ -1332,31 +1332,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "common");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Intersection);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "common");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Intersection);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_difference() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_difference() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule difference_test {
@@ -1365,31 +1365,31 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "diff");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
-            {
-                if let Expr::MethodCall { method, .. } = output.as_ref() {
-                    assert_eq!(*method, MethodName::Difference);
-                } else {
-                    panic!("Expected method call");
-                }
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "diff");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::MethodCall { method, .. } = output.as_ref() {
+                assert_eq!(*method, MethodName::Difference);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_function_call_concat() {
-        let input = r#"
+#[test]
+fn test_parse_function_call_concat() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule concat_test {
@@ -1398,38 +1398,38 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "full_names");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "full_names");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            if let Expr::FunctionCall {
+                namespace,
+                function,
+                args,
+            } = output.as_ref()
             {
-                if let Expr::FunctionCall {
-                    namespace,
-                    function,
-                    args,
-                } = output.as_ref()
-                {
-                    assert_eq!(namespace, &None);
-                    assert_eq!(function, "concat");
-                    assert_eq!(args.len(), 3);
-                } else {
-                    panic!("Expected function call");
-                }
+                assert_eq!(namespace, &None);
+                assert_eq!(function, "concat");
+                assert_eq!(args.len(), 3);
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected function call");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
-    #[test]
-    fn test_parse_method_call_chaining() {
-        let input = r#"
+#[test]
+fn test_parse_method_call_chaining() {
+    let input = r#"
             policy test {
                 default: deny,
                 rule chain_test {
@@ -1438,56 +1438,56 @@ fn test_parse_simple_policy() {
             }
         "#;
 
-        let policy = ReapParser::parse(input).unwrap();
-        if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
-            assert_eq!(variable, "clean_names");
-            if let AssignmentValue::Comprehension(Comprehension::Array {
-                output,
-                iterator: _,
-                filters: _,
-            }) = value
+    let policy = ReapParser::parse(input).unwrap();
+    if let Condition::Assignment { variable, value } = &policy.rules[0].condition {
+        assert_eq!(variable, "clean_names");
+        if let AssignmentValue::Comprehension(Comprehension::Array {
+            output,
+            iterator: _,
+            filters: _,
+        }) = value
+        {
+            // Output should be a chained method call: u.name.trim().lower()
+            if let Expr::MethodCall {
+                receiver,
+                method,
+                args: _,
+            } = output.as_ref()
             {
-                // Output should be a chained method call: u.name.trim().lower()
+                // Outer call is .lower()
+                assert_eq!(*method, MethodName::Lower);
+                // Receiver should be u.name.trim() (another method call)
                 if let Expr::MethodCall {
-                    receiver,
-                    method,
+                    receiver: inner_receiver,
+                    method: inner_method,
                     args: _,
-                } = output.as_ref()
+                } = receiver.as_ref()
                 {
-                    // Outer call is .lower()
-                    assert_eq!(*method, MethodName::Lower);
-                    // Receiver should be u.name.trim() (another method call)
-                    if let Expr::MethodCall {
-                        receiver: inner_receiver,
-                        method: inner_method,
-                        args: _,
-                    } = receiver.as_ref()
+                    assert_eq!(*inner_method, MethodName::Trim);
+                    // Inner receiver should be u.name
+                    if let Expr::AttributeAccess {
+                        variable,
+                        attribute,
+                    } = inner_receiver.as_ref()
                     {
-                        assert_eq!(*inner_method, MethodName::Trim);
-                        // Inner receiver should be u.name
-                        if let Expr::AttributeAccess {
-                            variable,
-                            attribute,
-                        } = inner_receiver.as_ref()
-                        {
-                            assert_eq!(variable, "u");
-                            assert_eq!(attribute, "name");
-                        } else {
-                            panic!("Expected attribute access in inner receiver");
-                        }
+                        assert_eq!(variable, "u");
+                        assert_eq!(attribute, "name");
                     } else {
-                        panic!("Expected method call as receiver for chaining");
+                        panic!("Expected attribute access in inner receiver");
                     }
                 } else {
-                    panic!("Expected method call in output");
+                    panic!("Expected method call as receiver for chaining");
                 }
             } else {
-                panic!("Expected array comprehension");
+                panic!("Expected method call in output");
             }
         } else {
-            panic!("Expected assignment");
+            panic!("Expected array comprehension");
         }
+    } else {
+        panic!("Expected assignment");
     }
+}
 
 #[test]
 fn test_parse_time_now_ns() {

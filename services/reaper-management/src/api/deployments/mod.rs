@@ -24,8 +24,14 @@ pub use types::*;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Deployment strategies
-        .route("/orgs/{org}/deployment-strategies", get(strategies::list_strategies))
-        .route("/orgs/{org}/deployment-strategies", post(strategies::create_strategy))
+        .route(
+            "/orgs/{org}/deployment-strategies",
+            get(strategies::list_strategies),
+        )
+        .route(
+            "/orgs/{org}/deployment-strategies",
+            post(strategies::create_strategy),
+        )
         .route(
             "/orgs/{org}/deployment-strategies/{strategy_id}",
             get(strategies::get_strategy),
@@ -35,9 +41,15 @@ pub fn routes() -> Router<Arc<AppState>> {
             delete(strategies::delete_strategy),
         )
         // Rollouts
-        .route("/orgs/{org}/bundles/{bundle_id}/rollout", post(rollouts::start_rollout))
+        .route(
+            "/orgs/{org}/bundles/{bundle_id}/rollout",
+            post(rollouts::start_rollout),
+        )
         .route("/orgs/{org}/rollouts", get(rollouts::list_rollouts))
-        .route("/orgs/{org}/rollouts/{rollout_id}", get(rollouts::get_rollout))
+        .route(
+            "/orgs/{org}/rollouts/{rollout_id}",
+            get(rollouts::get_rollout),
+        )
         .route(
             "/orgs/{org}/rollouts/{rollout_id}/approve",
             post(rollouts::approve_wave),
@@ -55,7 +67,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Version pins
         .route("/orgs/{org}/agents/{agent_id}/pin", post(pins::create_pin))
         .route("/orgs/{org}/agents/{agent_id}/pin", get(pins::get_pin))
-        .route("/orgs/{org}/agents/{agent_id}/pin", delete(pins::delete_pin))
+        .route(
+            "/orgs/{org}/agents/{agent_id}/pin",
+            delete(pins::delete_pin),
+        )
         .route("/orgs/{org}/pins", get(pins::list_pins))
         // Deployment status tracking
         .route(
@@ -75,8 +90,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(status::get_agent_deployment),
         )
         // Auto-rollback configuration
-        .route("/orgs/{org}/auto-rollback", get(rollback_config::get_rollback_config))
-        .route("/orgs/{org}/auto-rollback", post(rollback_config::update_rollback_config))
+        .route(
+            "/orgs/{org}/auto-rollback",
+            get(rollback_config::get_rollback_config),
+        )
+        .route(
+            "/orgs/{org}/auto-rollback",
+            post(rollback_config::update_rollback_config),
+        )
         .route(
             "/orgs/{org}/namespaces/{namespace}/auto-rollback",
             get(rollback_config::get_namespace_rollback_config),

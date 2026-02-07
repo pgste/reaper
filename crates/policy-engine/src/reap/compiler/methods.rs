@@ -5,11 +5,11 @@
 //!
 //! Uses V2 consolidated types for cleaner code.
 
-use super::helpers::{extract_entity_attr, extract_string_array, extract_string_literal};
 use super::super::ast::{Expr, MethodName};
+use super::helpers::{extract_entity_attr, extract_string_array, extract_string_literal};
 use crate::evaluators::reaper_dsl::{
-    Condition as DslCondition, EntityType as DslEntityType, StringOp,
-    StringOperationCondition, VariableCollectionMethod, VariableStringOperationCondition,
+    Condition as DslCondition, EntityType as DslEntityType, StringOp, StringOperationCondition,
+    VariableCollectionMethod, VariableStringOperationCondition,
 };
 use reaper_core::ReaperError;
 
@@ -47,7 +47,11 @@ pub fn compile_method_call(
 
     // Check if receiver is a variable attribute (e.g., d.permissions for comprehension variable d)
     // This happens when the variable is NOT an entity (user/resource/context)
-    if let Expr::AttributeAccess { variable, attribute } = &receiver {
+    if let Expr::AttributeAccess {
+        variable,
+        attribute,
+    } = &receiver
+    {
         let is_entity = matches!(variable.as_str(), "user" | "resource" | "context");
         if !is_entity {
             // It's a variable attribute method call, like d.permissions.contains("execute")

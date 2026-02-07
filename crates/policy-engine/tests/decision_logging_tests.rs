@@ -447,13 +447,19 @@ fn test_audit_trail_completeness() {
 
     // Verify all audit-critical fields
     assert!(!entry.timestamp.is_empty(), "Timestamp required for audit");
-    assert!(!entry.decision_id.is_empty(), "Decision ID required for audit");
+    assert!(
+        !entry.decision_id.is_empty(),
+        "Decision ID required for audit"
+    );
     assert!(!entry.principal.is_empty(), "Principal required for audit");
     assert!(!entry.action.is_empty(), "Action required for audit");
     assert!(!entry.resource.is_empty(), "Resource required for audit");
     assert!(!entry.decision.is_empty(), "Decision required for audit");
     assert!(!entry.policy_id.is_empty(), "Policy ID required for audit");
-    assert!(!entry.policy_name.is_empty(), "Policy name required for audit");
+    assert!(
+        !entry.policy_name.is_empty(),
+        "Policy name required for audit"
+    );
 
     // Context for forensics
     assert!(
@@ -529,7 +535,10 @@ fn test_timestamp_ordering() {
     for i in 0..entries.len() - 1 {
         let t1 = chrono::DateTime::parse_from_rfc3339(&entries[i].timestamp).unwrap();
         let t2 = chrono::DateTime::parse_from_rfc3339(&entries[i + 1].timestamp).unwrap();
-        assert!(t1 >= t2, "Entries should be ordered by timestamp descending");
+        assert!(
+            t1 >= t2,
+            "Entries should be ordered by timestamp descending"
+        );
     }
 }
 
@@ -547,7 +556,10 @@ fn test_default_config() {
     assert!(config.log_allows, "Should log allows by default");
     assert!(config.log_denies, "Should log denies by default");
     assert!(config.include_context, "Should include context by default");
-    assert!(config.buffer_capacity > 0, "Should have positive buffer_capacity");
+    assert!(
+        config.buffer_capacity > 0,
+        "Should have positive buffer_capacity"
+    );
 }
 
 /// Test configuration with context stripping

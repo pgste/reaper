@@ -232,6 +232,7 @@ impl IndexedPolicyEngine {
                 return Some(PolicyDecision {
                     decision: rule.action.clone(),
                     policy_id: policy.id,
+                    policy_name: policy.name.clone(),
                     policy_version: policy.version,
                     evaluation_time_ns: 0,
                     matched_rule: None,
@@ -304,6 +305,7 @@ impl IndexedPolicyEngine {
         Ok(PolicyDecision {
             decision: PolicyAction::Deny,
             policy_id: Uuid::nil(),
+            policy_name: String::new(),
             policy_version: 0,
             evaluation_time_ns: 0,
             matched_rule: None,

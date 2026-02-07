@@ -452,10 +452,9 @@ impl DeploymentService {
             let bundles = bundle_repo
                 .list_by_org(org_id, Some(BundleStatus::Deprecated))
                 .await?;
-            bundles
-                .into_iter()
-                .next()
-                .ok_or_else(|| DeploymentError::BundleNotFound("No previous bundle found".to_string()))?
+            bundles.into_iter().next().ok_or_else(|| {
+                DeploymentError::BundleNotFound("No previous bundle found".to_string())
+            })?
         };
 
         info!(

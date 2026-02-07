@@ -10,7 +10,9 @@ use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
 use std::collections::HashMap;
 
 use super::entity_helpers::get_entity_for_type;
-use super::types::{CompiledLiteralValue, CompiledOutput, ComprehensionFilterOp, EntityType, OutputMethod};
+use super::types::{
+    CompiledLiteralValue, CompiledOutput, ComprehensionFilterOp, EntityType, OutputMethod,
+};
 
 /// Compare compiled values for comprehension filters
 #[inline]
@@ -22,44 +24,70 @@ pub fn compare_compiled_values(
 ) -> bool {
     match (field_val, filter_value, filter_op) {
         // String equality
-        (AttributeValue::String(s), CompiledLiteralValue::String(expected), ComprehensionFilterOp::Equal) => {
-            *s == *expected
-        }
-        (AttributeValue::String(s), CompiledLiteralValue::String(expected), ComprehensionFilterOp::NotEqual) => {
-            *s != *expected
-        }
+        (
+            AttributeValue::String(s),
+            CompiledLiteralValue::String(expected),
+            ComprehensionFilterOp::Equal,
+        ) => *s == *expected,
+        (
+            AttributeValue::String(s),
+            CompiledLiteralValue::String(expected),
+            ComprehensionFilterOp::NotEqual,
+        ) => *s != *expected,
 
         // Int equality
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), ComprehensionFilterOp::Equal) => {
-            *i == *expected
-        }
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), ComprehensionFilterOp::NotEqual) => {
-            *i != *expected
-        }
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), ComprehensionFilterOp::GreaterThan) => {
-            *i > *expected
-        }
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), ComprehensionFilterOp::LessThan) => {
-            *i < *expected
-        }
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), ComprehensionFilterOp::GreaterEqual) => {
-            *i >= *expected
-        }
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), ComprehensionFilterOp::LessEqual) => {
-            *i <= *expected
-        }
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            ComprehensionFilterOp::Equal,
+        ) => *i == *expected,
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            ComprehensionFilterOp::NotEqual,
+        ) => *i != *expected,
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            ComprehensionFilterOp::GreaterThan,
+        ) => *i > *expected,
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            ComprehensionFilterOp::LessThan,
+        ) => *i < *expected,
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            ComprehensionFilterOp::GreaterEqual,
+        ) => *i >= *expected,
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            ComprehensionFilterOp::LessEqual,
+        ) => *i <= *expected,
 
         // Bool equality
-        (AttributeValue::Bool(b), CompiledLiteralValue::Bool(expected), ComprehensionFilterOp::Equal) => {
-            *b == *expected
-        }
-        (AttributeValue::Bool(b), CompiledLiteralValue::Bool(expected), ComprehensionFilterOp::NotEqual) => {
-            *b != *expected
-        }
+        (
+            AttributeValue::Bool(b),
+            CompiledLiteralValue::Bool(expected),
+            ComprehensionFilterOp::Equal,
+        ) => *b == *expected,
+        (
+            AttributeValue::Bool(b),
+            CompiledLiteralValue::Bool(expected),
+            ComprehensionFilterOp::NotEqual,
+        ) => *b != *expected,
 
         // String contains check
-        (AttributeValue::String(s), CompiledLiteralValue::String(substr), ComprehensionFilterOp::Contains) => {
-            if let (Some(resolved), Some(substr_resolved)) = (interner.resolve(*s), interner.resolve(*substr)) {
+        (
+            AttributeValue::String(s),
+            CompiledLiteralValue::String(substr),
+            ComprehensionFilterOp::Contains,
+        ) => {
+            if let (Some(resolved), Some(substr_resolved)) =
+                (interner.resolve(*s), interner.resolve(*substr))
+            {
                 resolved.contains(&*substr_resolved)
             } else {
                 false
@@ -72,6 +100,7 @@ pub fn compare_compiled_values(
 
 /// Evaluate comprehension count >= threshold
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub fn eval_comprehension_count_gte(
     entity_type: &EntityType,
     attribute: InternedString,
@@ -112,6 +141,7 @@ pub fn eval_comprehension_count_gte(
 
 /// Evaluate comprehension count == threshold
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub fn eval_comprehension_count_eq(
     entity_type: &EntityType,
     attribute: InternedString,
@@ -165,7 +195,10 @@ pub fn get_comprehension_output(
             let var_name = interner.resolve(*var)?;
             variables.get(&*var_name).cloned()
         }
-        CompiledOutput::VarAttr { variable, attribute } => {
+        CompiledOutput::VarAttr {
+            variable,
+            attribute,
+        } => {
             let var_name = interner.resolve(*variable)?;
             let var_val = variables.get(&*var_name)?;
             if let AttributeValue::Object(obj) = var_val {
@@ -224,22 +257,21 @@ pub fn get_comprehension_output_as_string(
                 None
             }
         }
-        CompiledOutput::VarAttr { variable, attribute } => {
+        CompiledOutput::VarAttr {
+            variable,
+            attribute,
+        } => {
             let var_name = interner.resolve(*variable)?;
-            if let Some(val) = variables.get(&*var_name) {
-                if let AttributeValue::Object(map) = val {
-                    let attr_val = map.get(attribute).or_else(|| {
-                        let attr_name = interner.resolve(*attribute)?;
-                        let attr_interned = interner.intern(&attr_name);
-                        map.get(&attr_interned)
-                    })?;
-                    match attr_val {
-                        AttributeValue::String(s) => Some(*s),
-                        AttributeValue::Int(i) => Some(interner.intern(&i.to_string())),
-                        _ => None,
-                    }
-                } else {
-                    None
+            if let Some(AttributeValue::Object(map)) = variables.get(&*var_name) {
+                let attr_val = map.get(attribute).or_else(|| {
+                    let attr_name = interner.resolve(*attribute)?;
+                    let attr_interned = interner.intern(&attr_name);
+                    map.get(&attr_interned)
+                })?;
+                match attr_val {
+                    AttributeValue::String(s) => Some(*s),
+                    AttributeValue::Int(i) => Some(interner.intern(&i.to_string())),
+                    _ => None,
                 }
             } else {
                 None
@@ -252,18 +284,14 @@ pub fn get_comprehension_output_as_string(
         },
         CompiledOutput::VarMethodCall { variable, method } => {
             let var_name = interner.resolve(*variable)?;
-            if let Some(val) = variables.get(&*var_name) {
-                if let AttributeValue::String(s) = val {
-                    let str_val = interner.resolve(*s)?;
-                    let result = match method {
-                        OutputMethod::Lower => str_val.to_lowercase(),
-                        OutputMethod::Upper => str_val.to_uppercase(),
-                        OutputMethod::Trim => str_val.trim().to_string(),
-                    };
-                    Some(interner.intern(&result))
-                } else {
-                    None
-                }
+            if let Some(AttributeValue::String(s)) = variables.get(&*var_name) {
+                let str_val = interner.resolve(*s)?;
+                let result = match method {
+                    OutputMethod::Lower => str_val.to_lowercase(),
+                    OutputMethod::Upper => str_val.to_uppercase(),
+                    OutputMethod::Trim => str_val.trim().to_string(),
+                };
+                Some(interner.intern(&result))
             } else {
                 None
             }
@@ -440,7 +468,7 @@ mod tests {
         // Test: get r.id
         let key_output = CompiledOutput::VarAttr {
             variable: var_key,
-            attribute: id_attr
+            attribute: id_attr,
         };
         let key_result = get_comprehension_output_as_string(&key_output, &vars, &interner);
 
@@ -450,12 +478,16 @@ mod tests {
         // Test: get r.value
         let value_output = Some(CompiledOutput::VarAttr {
             variable: var_key,
-            attribute: value_attr
+            attribute: value_attr,
         });
         let value_result = get_comprehension_output(&value_output, &vars, &interner);
 
         assert!(value_result.is_some(), "Expected to get r.value");
-        assert_eq!(value_result.unwrap(), AttributeValue::Int(100), "r.value should be 100");
+        assert_eq!(
+            value_result.unwrap(),
+            AttributeValue::Int(100),
+            "r.value should be 100"
+        );
     }
 
     /// Test VarAttr output with an object loaded from JSON-like data
@@ -484,7 +516,7 @@ mod tests {
         // Test getting r.id using the same interner
         let id_output = CompiledOutput::VarAttr {
             variable: var_r,
-            attribute: id_key,  // Same InternedString used for the key
+            attribute: id_key, // Same InternedString used for the key
         };
         let id_result = get_comprehension_output_as_string(&id_output, &vars, &interner);
 
@@ -500,6 +532,10 @@ mod tests {
         });
         let value_result = get_comprehension_output(&value_output, &vars, &interner);
 
-        assert_eq!(value_result, Some(AttributeValue::Int(100)), "r.value should be 100");
+        assert_eq!(
+            value_result,
+            Some(AttributeValue::Int(100)),
+            "r.value should be 100"
+        );
     }
 }

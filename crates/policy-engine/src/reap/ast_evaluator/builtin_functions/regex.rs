@@ -47,7 +47,11 @@ pub fn matches_uncached(text: &str, pattern: &str) -> Result<bool, ReaperError> 
 /// Helper to compile a regex and replace all matches
 /// For use when caching is not available
 #[inline]
-pub fn replace_uncached(text: &str, pattern: &str, replacement: &str) -> Result<String, ReaperError> {
+pub fn replace_uncached(
+    text: &str,
+    pattern: &str,
+    replacement: &str,
+) -> Result<String, ReaperError> {
     let re = regex::Regex::new(pattern).map_err(|e| ReaperError::InvalidPolicy {
         reason: format!("Invalid regex pattern '{}': {}", pattern, e),
     })?;

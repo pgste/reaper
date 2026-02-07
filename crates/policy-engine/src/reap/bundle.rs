@@ -40,7 +40,8 @@ pub struct PolicyBundle {
 
 impl PolicyBundle {
     const MAGIC_BYTES: &'static [u8; 4] = b"REAP";
-    const FORMAT_VERSION: u32 = 1;
+    /// Format version 2: postcard serialization (replaces bincode v1.3, RUSTSEC-2025-0141)
+    const FORMAT_VERSION: u32 = 2;
 
     /// Create a new bundle from a policy
     pub fn new(policy: Policy) -> Self {
@@ -68,8 +69,8 @@ impl PolicyBundle {
         // Magic bytes
         bytes.extend_from_slice(Self::MAGIC_BYTES);
 
-        // Serialize bundle
-        let bundle_bytes = bincode::serialize(self).map_err(|e| ReaperError::InvalidPolicy {
+        // Serialize bundle with postcard (replaces bincode — RUSTSEC-2025-0141)
+        let bundle_bytes = postcard::to_allocvec(self).map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("Failed to serialize bundle: {}", e),
         })?;
 
@@ -87,9 +88,9 @@ impl PolicyBundle {
             });
         }
 
-        // Deserialize
+        // Deserialize with postcard
         let bundle: Self =
-            bincode::deserialize(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
+            postcard::from_bytes(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to deserialize bundle: {}", e),
             })?;
 
@@ -371,7 +372,8 @@ pub struct PackageMetadata {
 
 impl PolicyPackage {
     const MAGIC_BYTES: &'static [u8; 4] = b"REPP"; // Reaper Policy Package
-    const FORMAT_VERSION: u32 = 1;
+    /// Format version 2: postcard serialization (replaces bincode v1.3, RUSTSEC-2025-0141)
+    const FORMAT_VERSION: u32 = 2;
 
     /// Create a new package from multiple policies
     ///
@@ -458,7 +460,7 @@ impl PolicyPackage {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(Self::MAGIC_BYTES);
 
-        let bundle_bytes = bincode::serialize(self).map_err(|e| ReaperError::InvalidPolicy {
+        let bundle_bytes = postcard::to_allocvec(self).map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("Failed to serialize policy package: {}", e),
         })?;
 
@@ -475,7 +477,7 @@ impl PolicyPackage {
         }
 
         let bundle: Self =
-            bincode::deserialize(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
+            postcard::from_bytes(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
                 reason: format!("Failed to deserialize policy package: {}", e),
             })?;
 

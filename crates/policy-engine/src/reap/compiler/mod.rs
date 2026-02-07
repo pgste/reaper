@@ -120,12 +120,8 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                         Entity::Context => DslEntityType::Context,
                     };
                     let index = attr.index.map(|i| match i {
-                        Index::Number(n) => {
-                            crate::evaluators::reaper_dsl::IndexExpr::Number(n)
-                        }
-                        Index::String(s) => {
-                            crate::evaluators::reaper_dsl::IndexExpr::String(s)
-                        }
+                        Index::Number(n) => crate::evaluators::reaper_dsl::IndexExpr::Number(n),
+                        Index::String(s) => crate::evaluators::reaper_dsl::IndexExpr::String(s),
                         Index::Wildcard => crate::evaluators::reaper_dsl::IndexExpr::Wildcard,
                     });
                     Ok(DslCondition::Assignment {
@@ -141,9 +137,7 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                     // Variable-to-variable assignment: use ExpressionAssignment with VariableRef
                     Ok(DslCondition::ExpressionAssignment {
                         variable,
-                        expr_type: ExprType::VariableRef {
-                            variable: var_ref,
-                        },
+                        expr_type: ExprType::VariableRef { variable: var_ref },
                     })
                 }
 
@@ -445,8 +439,8 @@ fn compile_comprehension_assignment(
 mod tests {
     use super::*;
     use crate::evaluators::PolicyEvaluator;
-    use crate::PolicyRequest;
     use crate::reap::ast::{ComparisonLeft, ComparisonRight, EntityAttr, Operator, Value};
+    use crate::PolicyRequest;
     use crate::{data::DataStore, EntityBuilder};
     use std::collections::HashMap;
 

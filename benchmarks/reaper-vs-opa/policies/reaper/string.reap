@@ -9,23 +9,23 @@ policy string_operations {
     // Email domain check - uses .endswith()
     rule company_email {
         allow if {
-            resource == "internal_docs" &&
+            resource.type == "internal_docs" &&
             user.email.endswith("@company.com")
         }
     }
 
-    // Partner email check - uses .contains()
-    rule partner_email {
+    // Access code check - uses .contains()
+    rule access_code_check {
         allow if {
-            resource == "partner_portal" &&
-            user.email.contains("partner")
+            resource.type == "code_entry" &&
+            user.access_code.contains("admin")
         }
     }
 
     // Admin username check - uses .startswith()
     rule admin_user {
         allow if {
-            resource == "admin_panel" &&
+            resource.type == "system_settings" &&
             user.username.startswith("admin_")
         }
     }
@@ -33,16 +33,17 @@ policy string_operations {
     // Government email check - uses .endswith()
     rule gov_email {
         allow if {
-            resource == "gov_service" &&
+            resource.type == "classified_docs" &&
             user.email.endswith(".gov")
         }
     }
 
-    // Test username check - uses .contains()
-    rule test_user {
+    // Case insensitive name check - uses .lower()
+    rule case_insensitive_name {
         allow if {
-            resource == "test_environment" &&
-            user.username.contains("test")
+            resource.type == "case_insensitive" &&
+            user.name != null &&
+            user.name.lower() == "john doe"
         }
     }
 }

@@ -11,7 +11,7 @@ policy json_operations {
         allow if {
             user.payload != null &&
             user.payload.valid == true &&
-            resource == "api_endpoint"
+            resource.type == "api_endpoint"
         }
     }
 
@@ -23,7 +23,7 @@ policy json_operations {
             user.profile.email != null &&
             user.profile.phone != null &&
             user.profile.address != null &&
-            resource == "user_profile"
+            resource.type == "user_profile"
         }
     }
 
@@ -35,7 +35,7 @@ policy json_operations {
             user.payment.card.number != null &&
             user.payment.billing_address != null &&
             user.payment.billing_address.street != null &&
-            resource == "payment"
+            resource.type == "payment"
         }
     }
 
@@ -46,7 +46,7 @@ policy json_operations {
             items := user.order_items &&
             item_count := items.count() &&
             item_count > 0 &&
-            resource == "order"
+            resource.type == "order"
         }
     }
 
@@ -57,7 +57,7 @@ policy json_operations {
             user.form_data.name != null &&
             user.form_data.age != null &&
             user.form_data.active != null &&
-            resource == "form_data" &&
+            resource.type == "form_data" &&
             // Type validation: name should be string, age should be number (>= 0), active should be boolean
             name_str := user.form_data.name &&
             age_val := user.form_data.age &&
@@ -72,7 +72,7 @@ policy json_operations {
     rule valid_string_field {
         allow if {
             user.name != null &&
-            resource == "text_field" &&
+            resource.type == "text_field" &&
             user.name_length > 0
         }
     }
@@ -81,7 +81,7 @@ policy json_operations {
     rule valid_number_field {
         allow if {
             user.age != null &&
-            resource == "number_field" &&
+            resource.type == "number_field" &&
             user.age >= 18
         }
     }
@@ -90,7 +90,7 @@ policy json_operations {
     rule valid_boolean_field {
         allow if {
             user.verified != null &&
-            resource == "boolean_field" &&
+            resource.type == "boolean_field" &&
             user.verified == true
         }
     }
@@ -101,7 +101,7 @@ policy json_operations {
             user.address != null &&
             user.address.street != null &&
             user.address.city != null &&
-            resource == "structured_data"
+            resource.type == "structured_data"
         }
     }
 
@@ -114,7 +114,7 @@ policy json_operations {
             user.secondary_data != null &&
             user.secondary_data.phone != null &&
             user.secondary_data.address != null &&
-            resource == "data_merge"
+            resource.type == "data_merge"
         }
     }
 }

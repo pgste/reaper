@@ -9,14 +9,14 @@
 //! ```text
 //! Magic: "REDB" (4 bytes)
 //! Version: u32
-//! Metadata (bincode):
+//! Metadata (postcard):
 //!   - name
 //!   - version
 //!   - created_at
 //!   - entity_count
-//! String Table (bincode):
+//! String Table (postcard):
 //!   - Vec<String> indexed by InternedString ID
-//! Entities (bincode):
+//! Entities (postcard):
 //!   - Vec<SerializedEntity>
 //! Checksum: SHA256 (32 bytes)
 //! ```
@@ -33,8 +33,8 @@ use super::store::DataStore;
 /// Magic bytes for data bundle format
 pub const DATA_BUNDLE_MAGIC: &[u8; 4] = b"REDB";
 
-/// Current bundle format version
-pub const DATA_BUNDLE_VERSION: u32 = 1;
+/// Current bundle format version (v2: postcard serialization, replaces bincode — RUSTSEC-2025-0141)
+pub const DATA_BUNDLE_VERSION: u32 = 2;
 
 /// Metadata for a data bundle
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,15 +281,15 @@ impl DataBundle {
         // Version
         bytes.extend_from_slice(&DATA_BUNDLE_VERSION.to_le_bytes());
 
-        // Serialize metadata
-        let metadata_bytes = bincode::serialize(&self.metadata).map_err(|e| {
+        // Serialize metadata with postcard (replaces bincode — RUSTSEC-2025-0141)
+        let metadata_bytes = postcard::to_allocvec(&self.metadata).map_err(|e| {
             ReaperError::BinarySerializationError(format!("Failed to serialize metadata: {}", e))
         })?;
         bytes.extend_from_slice(&(metadata_bytes.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&metadata_bytes);
 
         // Serialize string table
-        let string_table_bytes = bincode::serialize(&self.string_table).map_err(|e| {
+        let string_table_bytes = postcard::to_allocvec(&self.string_table).map_err(|e| {
             ReaperError::BinarySerializationError(format!(
                 "Failed to serialize string table: {}",
                 e
@@ -299,7 +299,7 @@ impl DataBundle {
         bytes.extend_from_slice(&string_table_bytes);
 
         // Serialize entities
-        let entities_bytes = bincode::serialize(&self.entities).map_err(|e| {
+        let entities_bytes = postcard::to_allocvec(&self.entities).map_err(|e| {
             ReaperError::BinarySerializationError(format!("Failed to serialize entities: {}", e))
         })?;
         bytes.extend_from_slice(&(entities_bytes.len() as u32).to_le_bytes());
@@ -367,7 +367,7 @@ impl DataBundle {
             ));
         }
         let metadata: DataBundleMetadata =
-            bincode::deserialize(&bytes[offset..offset + metadata_len])
+            postcard::from_bytes(&bytes[offset..offset + metadata_len])
                 .map_err(|e| ReaperError::ParseError(format!("Failed to parse metadata: {}", e)))?;
         offset += metadata_len;
 
@@ -391,7 +391,7 @@ impl DataBundle {
             ));
         }
         let string_table: StringTable =
-            bincode::deserialize(&bytes[offset..offset + string_table_len]).map_err(|e| {
+            postcard::from_bytes(&bytes[offset..offset + string_table_len]).map_err(|e| {
                 ReaperError::ParseError(format!("Failed to parse string table: {}", e))
             })?;
         offset += string_table_len;
@@ -416,7 +416,7 @@ impl DataBundle {
             ));
         }
         let entities: Vec<SerializedEntity> =
-            bincode::deserialize(&bytes[offset..offset + entities_len])
+            postcard::from_bytes(&bytes[offset..offset + entities_len])
                 .map_err(|e| ReaperError::ParseError(format!("Failed to parse entities: {}", e)))?;
         offset += entities_len;
 
@@ -501,7 +501,7 @@ impl DataBundle {
                 ReaperError::ParseError(format!("Invalid attribute key index: {}", key_idx))
             })?;
 
-            let attr_value = self.deserialize_attribute_value(value, string_map)?;
+            let attr_value = Self::deserialize_attribute_value(value, string_map)?;
             attributes.insert(key, attr_value);
         }
 
@@ -523,7 +523,6 @@ impl DataBundle {
 
     /// Deserialize an attribute value
     fn deserialize_attribute_value(
-        &self,
         value: &SerializedAttributeValue,
         string_map: &[InternedString],
     ) -> Result<AttributeValue, ReaperError> {
@@ -540,7 +539,7 @@ impl DataBundle {
             SerializedAttributeValue::List(list) => {
                 let mut deserialized = Vec::with_capacity(list.len());
                 for v in list {
-                    deserialized.push(self.deserialize_attribute_value(v, string_map)?);
+                    deserialized.push(Self::deserialize_attribute_value(v, string_map)?);
                 }
                 Ok(AttributeValue::List(deserialized))
             }
@@ -550,7 +549,7 @@ impl DataBundle {
                     let key = *string_map.get(*key_idx as usize).ok_or_else(|| {
                         ReaperError::ParseError(format!("Invalid object key index: {}", key_idx))
                     })?;
-                    let value = self.deserialize_attribute_value(v, string_map)?;
+                    let value = Self::deserialize_attribute_value(v, string_map)?;
                     map.insert(key, value);
                 }
                 Ok(AttributeValue::Object(map))
@@ -558,7 +557,7 @@ impl DataBundle {
             SerializedAttributeValue::Set(items) => {
                 let mut set = rustc_hash::FxHashSet::default();
                 for v in items {
-                    set.insert(self.deserialize_attribute_value(v, string_map)?);
+                    set.insert(Self::deserialize_attribute_value(v, string_map)?);
                 }
                 Ok(AttributeValue::Set(set))
             }

@@ -62,46 +62,98 @@ pub fn get_package(name: &str) -> Option<PolicyPackage> {
 fn rbac_package() -> PolicyPackage {
     PolicyPackage {
         name: "rbac".to_string(),
-        description: "Role-Based Access Control - Tests role permissions and ownership rules".to_string(),
+        description: "Role-Based Access Control - Tests role permissions and ownership rules"
+            .to_string(),
         policies: vec!["rbac_simple".to_string()],
         data_file: Some("data/rbac_data.json".to_string()),
         scenarios: vec![
             // Admin scenarios - should all allow
             TestScenario {
                 name: "admin_full_access".to_string(),
-                user: [("id".to_string(), json!("admin_alice")), ("role".to_string(), json!("admin"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("any_resource")), ("type".to_string(), json!("report"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("admin_alice")),
+                    ("role".to_string(), json!("admin")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("any_resource")),
+                    ("type".to_string(), json!("report")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "delete".to_string(),
                 expected: "allow".to_string(),
             },
             // Manager scenarios
             TestScenario {
                 name: "manager_read_report".to_string(),
-                user: [("id".to_string(), json!("manager_carol")), ("role".to_string(), json!("manager"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("report_001")), ("type".to_string(), json!("report"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("manager_carol")),
+                    ("role".to_string(), json!("manager")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("report_001")),
+                    ("type".to_string(), json!("report")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "read".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "manager_non_report_deny".to_string(),
-                user: [("id".to_string(), json!("manager_carol")), ("role".to_string(), json!("manager"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("api_data")), ("type".to_string(), json!("api"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("manager_carol")),
+                    ("role".to_string(), json!("manager")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("api_data")),
+                    ("type".to_string(), json!("api")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "read".to_string(),
                 expected: "deny".to_string(),
             },
             // Owner scenarios
             TestScenario {
                 name: "owner_access_own_resource".to_string(),
-                user: [("id".to_string(), json!("engineer_eve")), ("role".to_string(), json!("engineer"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("report_001")), ("owner_id".to_string(), json!("engineer_eve"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("engineer_eve")),
+                    ("role".to_string(), json!("engineer")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("report_001")),
+                    ("owner_id".to_string(), json!("engineer_eve")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "delete".to_string(),
                 expected: "allow".to_string(),
             },
             // Guest scenarios - should deny
             TestScenario {
                 name: "guest_denied".to_string(),
-                user: [("id".to_string(), json!("guest_jack")), ("role".to_string(), json!("guest"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("report_001")), ("type".to_string(), json!("report")), ("owner_id".to_string(), json!("other"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("guest_jack")),
+                    ("role".to_string(), json!("guest")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("report_001")),
+                    ("type".to_string(), json!("report")),
+                    ("owner_id".to_string(), json!("other")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "read".to_string(),
                 expected: "deny".to_string(),
             },
@@ -308,7 +360,12 @@ fn benchmark_package() -> PolicyPackage {
             // Admin scenarios
             TestScenario {
                 name: "admin_any_action".to_string(),
-                user: [("id".to_string(), json!("admin_1")), ("role".to_string(), json!("admin"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("admin_1")),
+                    ("role".to_string(), json!("admin")),
+                ]
+                .into_iter()
+                .collect(),
                 resource: [("id".to_string(), json!("any"))].into_iter().collect(),
                 action: "delete".to_string(),
                 expected: "allow".to_string(),
@@ -316,21 +373,36 @@ fn benchmark_package() -> PolicyPackage {
             // Engineer scenarios
             TestScenario {
                 name: "engineer_read".to_string(),
-                user: [("id".to_string(), json!("eng_1")), ("role".to_string(), json!("engineer"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("eng_1")),
+                    ("role".to_string(), json!("engineer")),
+                ]
+                .into_iter()
+                .collect(),
                 resource: [("id".to_string(), json!("api"))].into_iter().collect(),
                 action: "read".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "engineer_write".to_string(),
-                user: [("id".to_string(), json!("eng_1")), ("role".to_string(), json!("engineer"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("eng_1")),
+                    ("role".to_string(), json!("engineer")),
+                ]
+                .into_iter()
+                .collect(),
                 resource: [("id".to_string(), json!("api"))].into_iter().collect(),
                 action: "write".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "engineer_delete_denied".to_string(),
-                user: [("id".to_string(), json!("eng_1")), ("role".to_string(), json!("engineer"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("eng_1")),
+                    ("role".to_string(), json!("engineer")),
+                ]
+                .into_iter()
+                .collect(),
                 resource: [("id".to_string(), json!("api"))].into_iter().collect(),
                 action: "delete".to_string(),
                 expected: "deny".to_string(),
@@ -338,22 +410,41 @@ fn benchmark_package() -> PolicyPackage {
             // Viewer scenarios
             TestScenario {
                 name: "viewer_read".to_string(),
-                user: [("id".to_string(), json!("viewer_1")), ("role".to_string(), json!("viewer"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("dashboard"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("viewer_1")),
+                    ("role".to_string(), json!("viewer")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [("id".to_string(), json!("dashboard"))]
+                    .into_iter()
+                    .collect(),
                 action: "read".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "viewer_write_denied".to_string(),
-                user: [("id".to_string(), json!("viewer_1")), ("role".to_string(), json!("viewer"))].into_iter().collect(),
-                resource: [("id".to_string(), json!("dashboard"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("viewer_1")),
+                    ("role".to_string(), json!("viewer")),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [("id".to_string(), json!("dashboard"))]
+                    .into_iter()
+                    .collect(),
                 action: "write".to_string(),
                 expected: "deny".to_string(),
             },
             // Guest denied
             TestScenario {
                 name: "guest_denied".to_string(),
-                user: [("id".to_string(), json!("guest_1")), ("role".to_string(), json!("guest"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("guest_1")),
+                    ("role".to_string(), json!("guest")),
+                ]
+                .into_iter()
+                .collect(),
                 resource: [("id".to_string(), json!("any"))].into_iter().collect(),
                 action: "read".to_string(),
                 expected: "deny".to_string(),
@@ -420,49 +511,112 @@ fn string_package() -> PolicyPackage {
 fn math_package() -> PolicyPackage {
     PolicyPackage {
         name: "math".to_string(),
-        description: "Math Operations - Tests numeric comparisons, thresholds, and range checks".to_string(),
+        description: "Math Operations - Tests numeric comparisons, thresholds, and range checks"
+            .to_string(),
         policies: vec!["math_validation".to_string()],
         data_file: Some("data/math_data.json".to_string()),
         scenarios: vec![
             TestScenario {
                 name: "credit_score_approved".to_string(),
-                user: [("id".to_string(), json!("math_user1")), ("credit_score".to_string(), json!(750))].into_iter().collect(),
-                resource: [("id".to_string(), json!("math_loan1")), ("type".to_string(), json!("premium_loan"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("math_user1")),
+                    ("credit_score".to_string(), json!(750)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("math_loan1")),
+                    ("type".to_string(), json!("premium_loan")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "apply".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "credit_score_denied".to_string(),
-                user: [("id".to_string(), json!("math_user2")), ("credit_score".to_string(), json!(650))].into_iter().collect(),
-                resource: [("id".to_string(), json!("math_loan1")), ("type".to_string(), json!("premium_loan"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("math_user2")),
+                    ("credit_score".to_string(), json!(650)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("math_loan1")),
+                    ("type".to_string(), json!("premium_loan")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "apply".to_string(),
                 expected: "deny".to_string(),
             },
             TestScenario {
                 name: "budget_within_limit".to_string(),
-                user: [("id".to_string(), json!("math_user3")), ("order_total".to_string(), json!(150)), ("budget_limit".to_string(), json!(200))].into_iter().collect(),
-                resource: [("id".to_string(), json!("math_cart1")), ("type".to_string(), json!("shopping_cart"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("math_user3")),
+                    ("order_total".to_string(), json!(150)),
+                    ("budget_limit".to_string(), json!(200)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("math_cart1")),
+                    ("type".to_string(), json!("shopping_cart")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "checkout".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "budget_exceeded".to_string(),
-                user: [("id".to_string(), json!("math_user4")), ("order_total".to_string(), json!(250)), ("budget_limit".to_string(), json!(200))].into_iter().collect(),
-                resource: [("id".to_string(), json!("math_cart1")), ("type".to_string(), json!("shopping_cart"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("math_user4")),
+                    ("order_total".to_string(), json!(250)),
+                    ("budget_limit".to_string(), json!(200)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("math_cart1")),
+                    ("type".to_string(), json!("shopping_cart")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "checkout".to_string(),
                 expected: "deny".to_string(),
             },
             TestScenario {
                 name: "high_rating_featured".to_string(),
-                user: [("id".to_string(), json!("math_user5")), ("average_rating".to_string(), json!(4.5))].into_iter().collect(),
-                resource: [("id".to_string(), json!("math_listing1")), ("type".to_string(), json!("featured_listing"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("math_user5")),
+                    ("average_rating".to_string(), json!(4.5)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("math_listing1")),
+                    ("type".to_string(), json!("featured_listing")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "feature".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "loyalty_points_reward".to_string(),
-                user: [("id".to_string(), json!("math_user6")), ("total_points".to_string(), json!(1500))].into_iter().collect(),
-                resource: [("id".to_string(), json!("math_reward1")), ("type".to_string(), json!("loyalty_reward"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("math_user6")),
+                    ("total_points".to_string(), json!(1500)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("math_reward1")),
+                    ("type".to_string(), json!("loyalty_reward")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "redeem".to_string(),
                 expected: "allow".to_string(),
             },
@@ -636,49 +790,129 @@ fn conditional_package() -> PolicyPackage {
 fn time_package() -> PolicyPackage {
     PolicyPackage {
         name: "time".to_string(),
-        description: "Time-Based Access Control - Tests token expiration, business hours, and time windows".to_string(),
+        description:
+            "Time-Based Access Control - Tests token expiration, business hours, and time windows"
+                .to_string(),
         policies: vec!["time_based_access".to_string()],
         data_file: Some("data/time_data.json".to_string()),
         scenarios: vec![
             TestScenario {
                 name: "valid_token_access".to_string(),
-                user: [("id".to_string(), json!("time_user1")), ("token_expires_at".to_string(), json!(1800000000000000000i64))].into_iter().collect(),
-                resource: [("id".to_string(), json!("time_api1")), ("type".to_string(), json!("api_endpoint"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("time_user1")),
+                    (
+                        "token_expires_at".to_string(),
+                        json!(1800000000000000000i64),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("time_api1")),
+                    ("type".to_string(), json!("api_endpoint")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "call".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "expired_token_denied".to_string(),
-                user: [("id".to_string(), json!("time_user2")), ("token_expires_at".to_string(), json!(1700000000000000000i64))].into_iter().collect(),
-                resource: [("id".to_string(), json!("time_api1")), ("type".to_string(), json!("api_endpoint"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("time_user2")),
+                    (
+                        "token_expires_at".to_string(),
+                        json!(1700000000000000000i64),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("time_api1")),
+                    ("type".to_string(), json!("api_endpoint")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "call".to_string(),
                 expected: "deny".to_string(),
             },
             TestScenario {
                 name: "active_lease_access".to_string(),
-                user: [("id".to_string(), json!("time_user3")), ("lease_end_time".to_string(), json!(1800000000000000000i64))].into_iter().collect(),
-                resource: [("id".to_string(), json!("time_apt1")), ("type".to_string(), json!("apartment"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("time_user3")),
+                    ("lease_end_time".to_string(), json!(1800000000000000000i64)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("time_apt1")),
+                    ("type".to_string(), json!("apartment")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "access".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "expired_lease_denied".to_string(),
-                user: [("id".to_string(), json!("time_user4")), ("lease_end_time".to_string(), json!(1700000000000000000i64))].into_iter().collect(),
-                resource: [("id".to_string(), json!("time_apt1")), ("type".to_string(), json!("apartment"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("time_user4")),
+                    ("lease_end_time".to_string(), json!(1700000000000000000i64)),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("time_apt1")),
+                    ("type".to_string(), json!("apartment")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "access".to_string(),
                 expected: "deny".to_string(),
             },
             TestScenario {
                 name: "future_event_scheduling".to_string(),
-                user: [("id".to_string(), json!("time_user5")), ("role".to_string(), json!("event_planner")), ("event_scheduled_time".to_string(), json!(1800000000000000000i64))].into_iter().collect(),
-                resource: [("id".to_string(), json!("time_room1")), ("type".to_string(), json!("conference_room"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("time_user5")),
+                    ("role".to_string(), json!("event_planner")),
+                    (
+                        "event_scheduled_time".to_string(),
+                        json!(1800000000000000000i64),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("time_room1")),
+                    ("type".to_string(), json!("conference_room")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "schedule".to_string(),
                 expected: "allow".to_string(),
             },
             TestScenario {
                 name: "contractor_temp_access".to_string(),
-                user: [("id".to_string(), json!("time_user6")), ("role".to_string(), json!("contractor")), ("access_grant_start".to_string(), json!(1700000000000000000i64)), ("access_grant_end".to_string(), json!(1800000000000000000i64))].into_iter().collect(),
-                resource: [("id".to_string(), json!("time_files1")), ("type".to_string(), json!("project_files"))].into_iter().collect(),
+                user: [
+                    ("id".to_string(), json!("time_user6")),
+                    ("role".to_string(), json!("contractor")),
+                    (
+                        "access_grant_start".to_string(),
+                        json!(1700000000000000000i64),
+                    ),
+                    (
+                        "access_grant_end".to_string(),
+                        json!(1800000000000000000i64),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                resource: [
+                    ("id".to_string(), json!("time_files1")),
+                    ("type".to_string(), json!("project_files")),
+                ]
+                .into_iter()
+                .collect(),
                 action: "read".to_string(),
                 expected: "allow".to_string(),
             },
@@ -688,10 +922,18 @@ fn time_package() -> PolicyPackage {
 
 /// Helper macro for JSON values
 macro_rules! json {
-    (null) => { serde_json::Value::Null };
-    (true) => { serde_json::Value::Bool(true) };
-    (false) => { serde_json::Value::Bool(false) };
-    ($e:expr) => { serde_json::json!($e) };
+    (null) => {
+        serde_json::Value::Null
+    };
+    (true) => {
+        serde_json::Value::Bool(true)
+    };
+    (false) => {
+        serde_json::Value::Bool(false)
+    };
+    ($e:expr) => {
+        serde_json::json!($e)
+    };
 }
 
 use json;

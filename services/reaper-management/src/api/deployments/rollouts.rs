@@ -9,13 +9,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError,
-    api::orgs::resolve_org,
-    auth::middleware::RequireAuth,
-    db::repositories::OrganizationRepository,
-    deployment::DeploymentService,
-    domain::deployment::StartRollout,
-    state::AppState,
+    api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
+    db::repositories::OrganizationRepository, deployment::DeploymentService,
+    domain::deployment::StartRollout, state::AppState,
 };
 
 use super::types::{
@@ -46,7 +42,12 @@ pub async fn start_rollout(
     // Handle dry-run mode
     if request.dry_run {
         let result = service
-            .dry_run_rollout(organization.id, bundle_id, request.strategy_id, request.namespace_id)
+            .dry_run_rollout(
+                organization.id,
+                bundle_id,
+                request.strategy_id,
+                request.namespace_id,
+            )
             .await
             .map_err(|e| match e {
                 crate::deployment::DeploymentError::BundleNotFound(_) => {
@@ -58,10 +59,7 @@ pub async fn start_rollout(
                 e => ApiError::Internal(e.to_string()),
             })?;
 
-        return Ok((
-            StatusCode::OK,
-            Json(RolloutOrDryRun::DryRun(result.into())),
-        ));
+        return Ok((StatusCode::OK, Json(RolloutOrDryRun::DryRun(result.into()))));
     }
 
     // Actual rollout
@@ -78,9 +76,7 @@ pub async fn start_rollout(
             crate::deployment::DeploymentError::BundleNotFound(_) => {
                 ApiError::NotFound("Bundle not found".to_string())
             }
-            crate::deployment::DeploymentError::BundleNotReady(msg) => {
-                ApiError::BadRequest(msg)
-            }
+            crate::deployment::DeploymentError::BundleNotReady(msg) => ApiError::BadRequest(msg),
             crate::deployment::DeploymentError::ActiveRolloutExists(_) => {
                 ApiError::Conflict("Active rollout already exists for this bundle".to_string())
             }
@@ -145,15 +141,16 @@ pub async fn get_rollout(
     }
 
     let service = DeploymentService::new(state.db.clone());
-    let (rollout, waves) = service
-        .get_rollout_with_waves(rollout_id)
-        .await
-        .map_err(|e| match e {
-            crate::deployment::DeploymentError::RolloutNotFound(_) => {
-                ApiError::NotFound("Rollout not found".to_string())
-            }
-            e => ApiError::Internal(e.to_string()),
-        })?;
+    let (rollout, waves) =
+        service
+            .get_rollout_with_waves(rollout_id)
+            .await
+            .map_err(|e| match e {
+                crate::deployment::DeploymentError::RolloutNotFound(_) => {
+                    ApiError::NotFound("Rollout not found".to_string())
+                }
+                e => ApiError::Internal(e.to_string()),
+            })?;
 
     Ok(Json(RolloutDetailResponse {
         rollout: rollout.into(),
@@ -186,9 +183,7 @@ pub async fn approve_wave(
             crate::deployment::DeploymentError::RolloutNotFound(_) => {
                 ApiError::NotFound("Rollout not found".to_string())
             }
-            crate::deployment::DeploymentError::InvalidState(msg) => {
-                ApiError::BadRequest(msg)
-            }
+            crate::deployment::DeploymentError::InvalidState(msg) => ApiError::BadRequest(msg),
             e => ApiError::Internal(e.to_string()),
         })?;
 
@@ -221,9 +216,7 @@ pub async fn cancel_rollout(
             crate::deployment::DeploymentError::RolloutNotFound(_) => {
                 ApiError::NotFound("Rollout not found".to_string())
             }
-            crate::deployment::DeploymentError::InvalidState(msg) => {
-                ApiError::BadRequest(msg)
-            }
+            crate::deployment::DeploymentError::InvalidState(msg) => ApiError::BadRequest(msg),
             e => ApiError::Internal(e.to_string()),
         })?;
 
@@ -267,9 +260,7 @@ pub async fn rollback_namespace(
         )
         .await
         .map_err(|e| match e {
-            crate::deployment::DeploymentError::BundleNotFound(msg) => {
-                ApiError::NotFound(msg)
-            }
+            crate::deployment::DeploymentError::BundleNotFound(msg) => ApiError::NotFound(msg),
             e => ApiError::Internal(e.to_string()),
         })?;
 
@@ -312,9 +303,7 @@ pub async fn rollback_org(
         )
         .await
         .map_err(|e| match e {
-            crate::deployment::DeploymentError::BundleNotFound(msg) => {
-                ApiError::NotFound(msg)
-            }
+            crate::deployment::DeploymentError::BundleNotFound(msg) => ApiError::NotFound(msg),
             e => ApiError::Internal(e.to_string()),
         })?;
 

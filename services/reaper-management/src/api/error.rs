@@ -116,9 +116,7 @@ impl From<crate::auth::users::UserError> for ApiError {
             UserError::SessionExpired => ApiError::Unauthorized("Session expired".to_string()),
             UserError::SessionNotFound => ApiError::Unauthorized("Session not found".to_string()),
             UserError::AccountSuspended => ApiError::Forbidden("Account suspended".to_string()),
-            UserError::EmailNotVerified => {
-                ApiError::Forbidden("Email not verified".to_string())
-            }
+            UserError::EmailNotVerified => ApiError::Forbidden("Email not verified".to_string()),
             UserError::InvalidToken => ApiError::BadRequest("Invalid token".to_string()),
             UserError::TokenExpired => ApiError::BadRequest("Token expired".to_string()),
             UserError::PasswordHash(msg) => ApiError::Internal(format!("Password error: {}", msg)),

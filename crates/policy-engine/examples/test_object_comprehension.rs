@@ -2,12 +2,12 @@
 //
 // Tests the full pipeline: parse policy, load data, compile, evaluate
 
-use std::sync::Arc;
-use std::collections::HashMap;
-use policy_engine::data::{DataLoader, DataStore, AttributeValue};
+use policy_engine::data::{AttributeValue, DataLoader, DataStore};
 use policy_engine::reap::ReaperPolicy;
-use policy_engine::PolicyRequest;
 use policy_engine::PolicyEvaluator;
+use policy_engine::PolicyRequest;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 fn main() {
     // Create data store

@@ -63,9 +63,11 @@ pub fn eval_variable_compare(
 
     match (var_val, value, op) {
         // Integer comparisons
-        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::GreaterEqual) => {
-            *i >= *expected
-        }
+        (
+            AttributeValue::Int(i),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::GreaterEqual,
+        ) => *i >= *expected,
         (AttributeValue::Int(i), CompiledLiteralValue::Int(expected), AttrCompareOp::Greater) => {
             *i > *expected
         }
@@ -82,15 +84,19 @@ pub fn eval_variable_compare(
             *i != *expected
         }
         // Float comparisons
-        (AttributeValue::Float(f), CompiledLiteralValue::Int(expected), AttrCompareOp::GreaterEqual) => {
-            *f >= (*expected as f64)
-        }
+        (
+            AttributeValue::Float(f),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::GreaterEqual,
+        ) => *f >= (*expected as f64),
         (AttributeValue::Float(f), CompiledLiteralValue::Int(expected), AttrCompareOp::Greater) => {
             *f > (*expected as f64)
         }
-        (AttributeValue::Float(f), CompiledLiteralValue::Int(expected), AttrCompareOp::LessEqual) => {
-            *f <= (*expected as f64)
-        }
+        (
+            AttributeValue::Float(f),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::LessEqual,
+        ) => *f <= (*expected as f64),
         (AttributeValue::Float(f), CompiledLiteralValue::Int(expected), AttrCompareOp::Less) => {
             *f < (*expected as f64)
         }
@@ -106,11 +112,7 @@ pub fn eval_variable_is_null(
     interner: &StringInterner,
 ) -> bool {
     match interner.resolve(variable) {
-        Some(var_name) => match variables.get(&*var_name) {
-            None => true,
-            Some(AttributeValue::Null) => true,
-            _ => false,
-        },
+        Some(var_name) => matches!(variables.get(&*var_name), None | Some(AttributeValue::Null)),
         None => true, // Can't resolve variable name, treat as null
     }
 }
@@ -123,11 +125,7 @@ pub fn eval_variable_is_not_null(
     interner: &StringInterner,
 ) -> bool {
     match interner.resolve(variable) {
-        Some(var_name) => match variables.get(&*var_name) {
-            None => false,
-            Some(AttributeValue::Null) => false,
-            _ => true,
-        },
+        Some(var_name) => !matches!(variables.get(&*var_name), None | Some(AttributeValue::Null)),
         None => false,
     }
 }
@@ -151,15 +149,15 @@ pub fn eval_variable_membership_test(
     };
 
     match (collection, value) {
-        (AttributeValue::List(items), CompiledLiteralValue::String(s)) => {
-            items.iter().any(|item| matches!(item, AttributeValue::String(v) if *v == *s))
-        }
+        (AttributeValue::List(items), CompiledLiteralValue::String(s)) => items
+            .iter()
+            .any(|item| matches!(item, AttributeValue::String(v) if *v == *s)),
         (AttributeValue::Set(items), CompiledLiteralValue::String(s)) => {
             items.contains(&AttributeValue::String(*s))
         }
-        (AttributeValue::List(items), CompiledLiteralValue::Int(i)) => {
-            items.iter().any(|item| matches!(item, AttributeValue::Int(v) if *v == *i))
-        }
+        (AttributeValue::List(items), CompiledLiteralValue::Int(i)) => items
+            .iter()
+            .any(|item| matches!(item, AttributeValue::Int(v) if *v == *i)),
         (AttributeValue::Set(items), CompiledLiteralValue::Int(i)) => {
             items.contains(&AttributeValue::Int(*i))
         }
@@ -376,7 +374,9 @@ pub fn eval_variable_attr_equals_literal(
     };
 
     match (attr_val.as_ref(), value) {
-        (Some(AttributeValue::String(s)), CompiledLiteralValue::String(expected)) => *s == *expected,
+        (Some(AttributeValue::String(s)), CompiledLiteralValue::String(expected)) => {
+            *s == *expected
+        }
         (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected)) => *i == *expected,
         (Some(AttributeValue::Bool(b)), CompiledLiteralValue::Bool(expected)) => *b == *expected,
         _ => false,
@@ -411,31 +411,47 @@ pub fn eval_variable_attr_compare(
 
     match (attr_val.as_ref(), value, op) {
         // Integer comparisons
-        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected), AttrCompareOp::GreaterEqual) => {
-            *i >= *expected
-        }
-        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected), AttrCompareOp::Greater) => {
-            *i > *expected
-        }
-        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected), AttrCompareOp::LessEqual) => {
-            *i <= *expected
-        }
-        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected), AttrCompareOp::Less) => {
-            *i < *expected
-        }
-        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected), AttrCompareOp::Equal) => {
-            *i == *expected
-        }
-        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected), AttrCompareOp::NotEqual) => {
-            *i != *expected
-        }
+        (
+            Some(AttributeValue::Int(i)),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::GreaterEqual,
+        ) => *i >= *expected,
+        (
+            Some(AttributeValue::Int(i)),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::Greater,
+        ) => *i > *expected,
+        (
+            Some(AttributeValue::Int(i)),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::LessEqual,
+        ) => *i <= *expected,
+        (
+            Some(AttributeValue::Int(i)),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::Less,
+        ) => *i < *expected,
+        (
+            Some(AttributeValue::Int(i)),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::Equal,
+        ) => *i == *expected,
+        (
+            Some(AttributeValue::Int(i)),
+            CompiledLiteralValue::Int(expected),
+            AttrCompareOp::NotEqual,
+        ) => *i != *expected,
         // String comparisons for equality
-        (Some(AttributeValue::String(s)), CompiledLiteralValue::String(expected), AttrCompareOp::Equal) => {
-            *s == *expected
-        }
-        (Some(AttributeValue::String(s)), CompiledLiteralValue::String(expected), AttrCompareOp::NotEqual) => {
-            *s != *expected
-        }
+        (
+            Some(AttributeValue::String(s)),
+            CompiledLiteralValue::String(expected),
+            AttrCompareOp::Equal,
+        ) => *s == *expected,
+        (
+            Some(AttributeValue::String(s)),
+            CompiledLiteralValue::String(expected),
+            AttrCompareOp::NotEqual,
+        ) => *s != *expected,
         _ => false,
     }
 }
@@ -459,11 +475,9 @@ pub fn eval_variable_attr_equals_null(
     };
 
     match var_val {
-        AttributeValue::Object(obj) => match obj.get(&attribute) {
-            None => true,
-            Some(AttributeValue::Null) => true,
-            _ => false,
-        },
+        AttributeValue::Object(obj) => {
+            matches!(obj.get(&attribute), None | Some(AttributeValue::Null))
+        }
         _ => true, // Not an object, attribute doesn't exist
     }
 }
@@ -487,11 +501,9 @@ pub fn eval_variable_attr_not_equals_null(
     };
 
     match var_val {
-        AttributeValue::Object(obj) => match obj.get(&attribute) {
-            None => false,
-            Some(AttributeValue::Null) => false,
-            _ => true,
-        },
+        AttributeValue::Object(obj) => {
+            !matches!(obj.get(&attribute), None | Some(AttributeValue::Null))
+        }
         _ => false,
     }
 }
@@ -637,15 +649,13 @@ pub fn eval_variable_chained_method_compare(
     // Step 1: Apply transform method to get a string
     let transformed: Option<String> = match var_val {
         AttributeValue::String(s) => {
-            if let Some(string_val) = interner.resolve(*s) {
-                Some(match transform_method {
+            interner
+                .resolve(*s)
+                .map(|string_val| match transform_method {
                     VariableStringTransform::Trim => string_val.trim().to_string(),
                     VariableStringTransform::Lower => string_val.to_lowercase(),
                     VariableStringTransform::Upper => string_val.to_uppercase(),
                 })
-            } else {
-                None
-            }
         }
         _ => None,
     };
@@ -690,7 +700,9 @@ mod tests {
         variables.insert("myvar".to_string(), AttributeValue::String(value_key));
 
         let value = CompiledLiteralValue::String(value_key);
-        assert!(eval_variable_equals_literal(var_key, &value, &variables, &interner));
+        assert!(eval_variable_equals_literal(
+            var_key, &value, &variables, &interner
+        ));
     }
 
     #[test]
@@ -740,9 +752,27 @@ mod tests {
         variables.insert("count".to_string(), AttributeValue::Int(10));
 
         let value = CompiledLiteralValue::Int(5);
-        assert!(eval_variable_compare(var_key, &AttrCompareOp::GreaterEqual, &value, &variables, &interner));
-        assert!(eval_variable_compare(var_key, &AttrCompareOp::Greater, &value, &variables, &interner));
-        assert!(!eval_variable_compare(var_key, &AttrCompareOp::Less, &value, &variables, &interner));
+        assert!(eval_variable_compare(
+            var_key,
+            &AttrCompareOp::GreaterEqual,
+            &value,
+            &variables,
+            &interner
+        ));
+        assert!(eval_variable_compare(
+            var_key,
+            &AttrCompareOp::Greater,
+            &value,
+            &variables,
+            &interner
+        ));
+        assert!(!eval_variable_compare(
+            var_key,
+            &AttrCompareOp::Less,
+            &value,
+            &variables,
+            &interner
+        ));
     }
 
     #[test]
@@ -755,7 +785,8 @@ mod tests {
         let id_key = interner.intern("id");
         let rec1 = interner.intern("rec1");
 
-        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> = std::collections::HashMap::new();
+        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> =
+            std::collections::HashMap::new();
         obj_map.insert(active_key, AttributeValue::Bool(true));
         obj_map.insert(id_key, AttributeValue::String(rec1));
 
@@ -768,12 +799,24 @@ mod tests {
 
         // Test: r.active == true should return true
         let value_true = CompiledLiteralValue::Bool(true);
-        let result = eval_variable_attr_equals_literal(var_r, active_key, &value_true, &variables, &interner);
+        let result = eval_variable_attr_equals_literal(
+            var_r,
+            active_key,
+            &value_true,
+            &variables,
+            &interner,
+        );
         assert!(result, "r.active == true should be true");
 
         // Test: r.active == false should return false
         let value_false = CompiledLiteralValue::Bool(false);
-        let result = eval_variable_attr_equals_literal(var_r, active_key, &value_false, &variables, &interner);
+        let result = eval_variable_attr_equals_literal(
+            var_r,
+            active_key,
+            &value_false,
+            &variables,
+            &interner,
+        );
         assert!(!result, "r.active == false should be false");
     }
 
@@ -786,7 +829,8 @@ mod tests {
         let rec1_val = interner.intern("rec1");
         let rec2_val = interner.intern("rec2");
 
-        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> = std::collections::HashMap::new();
+        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> =
+            std::collections::HashMap::new();
         obj_map.insert(id_key, AttributeValue::String(rec1_val));
 
         let record = AttributeValue::Object(obj_map);
@@ -797,12 +841,14 @@ mod tests {
 
         // Test: r.id == "rec1" should return true
         let value_rec1 = CompiledLiteralValue::String(rec1_val);
-        let result = eval_variable_attr_equals_literal(var_r, id_key, &value_rec1, &variables, &interner);
+        let result =
+            eval_variable_attr_equals_literal(var_r, id_key, &value_rec1, &variables, &interner);
         assert!(result, "r.id == 'rec1' should be true");
 
         // Test: r.id == "rec2" should return false
         let value_rec2 = CompiledLiteralValue::String(rec2_val);
-        let result = eval_variable_attr_equals_literal(var_r, id_key, &value_rec2, &variables, &interner);
+        let result =
+            eval_variable_attr_equals_literal(var_r, id_key, &value_rec2, &variables, &interner);
         assert!(!result, "r.id == 'rec2' should be false");
     }
 
@@ -813,7 +859,8 @@ mod tests {
 
         let value_key = interner.intern("value");
 
-        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> = std::collections::HashMap::new();
+        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> =
+            std::collections::HashMap::new();
         obj_map.insert(value_key, AttributeValue::Int(100));
 
         let record = AttributeValue::Object(obj_map);
@@ -824,12 +871,14 @@ mod tests {
 
         // Test: r.value == 100 should return true
         let value_100 = CompiledLiteralValue::Int(100);
-        let result = eval_variable_attr_equals_literal(var_r, value_key, &value_100, &variables, &interner);
+        let result =
+            eval_variable_attr_equals_literal(var_r, value_key, &value_100, &variables, &interner);
         assert!(result, "r.value == 100 should be true");
 
         // Test: r.value == 200 should return false
         let value_200 = CompiledLiteralValue::Int(200);
-        let result = eval_variable_attr_equals_literal(var_r, value_key, &value_200, &variables, &interner);
+        let result =
+            eval_variable_attr_equals_literal(var_r, value_key, &value_200, &variables, &interner);
         assert!(!result, "r.value == 200 should be false");
     }
 }

@@ -919,7 +919,10 @@ async fn test_jwks_config_lifecycle() {
         .expect("Should get")
         .expect("Should exist");
     assert_eq!(retrieved.name, "auth0-config");
-    assert_eq!(retrieved.jwks_url, "https://tenant.auth0.com/.well-known/jwks.json");
+    assert_eq!(
+        retrieved.jwks_url,
+        "https://tenant.auth0.com/.well-known/jwks.json"
+    );
     assert_eq!(retrieved.audience, Some("my-api".to_string()));
 
     // List active for org
@@ -1270,12 +1273,7 @@ async fn test_org_member_list() {
     let org_slug = body["org"]["slug"].as_str().unwrap();
 
     // List members
-    let list_req = session_request(
-        "GET",
-        &format!("/orgs/{}/members", org_slug),
-        None,
-        token,
-    );
+    let list_req = session_request("GET", &format!("/orgs/{}/members", org_slug), None, token);
     let response = env.app.clone().oneshot(list_req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -1394,12 +1392,7 @@ async fn test_session_token_with_api_endpoints() {
     let org_slug = body["org"]["slug"].as_str().unwrap();
 
     // Use session token to access API endpoints (should work with owner role)
-    let list_agents = session_request(
-        "GET",
-        &format!("/orgs/{}/agents", org_slug),
-        None,
-        token,
-    );
+    let list_agents = session_request("GET", &format!("/orgs/{}/agents", org_slug), None, token);
     let response = env.app.clone().oneshot(list_agents).await.unwrap();
     // Owner has admin scope, so this should work
     assert_eq!(response.status(), StatusCode::OK);

@@ -371,7 +371,10 @@ impl ManagementClient {
     pub fn get_current_bundle_sync(&self) -> (Option<Uuid>, Option<String>) {
         // Use try_read to avoid blocking, return None if lock is contended
         match self.state.try_read() {
-            Ok(state) => (state.current_bundle_id, state.current_bundle_checksum.clone()),
+            Ok(state) => (
+                state.current_bundle_id,
+                state.current_bundle_checksum.clone(),
+            ),
             Err(_) => (None, None),
         }
     }
@@ -379,7 +382,10 @@ impl ManagementClient {
     /// Download a data bundle by source ID
     ///
     /// Used to sync data from a data source (e.g., after receiving a DataRefresh SSE event).
-    pub async fn download_data_bundle(&self, source_id: Uuid) -> ManagementResult<DataBundleDownload> {
+    pub async fn download_data_bundle(
+        &self,
+        source_id: Uuid,
+    ) -> ManagementResult<DataBundleDownload> {
         let state = self.state.read().await;
         let token = state
             .token

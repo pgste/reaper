@@ -48,9 +48,7 @@ impl ApiRateLimiter {
         let quota = Quota::per_second(
             NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::new(100).unwrap()),
         )
-        .allow_burst(
-            NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::new(200).unwrap()),
-        );
+        .allow_burst(NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::new(200).unwrap()));
 
         let global = Arc::new(RateLimiter::direct(quota));
 
@@ -72,9 +70,7 @@ impl ApiRateLimiter {
         let path_prefix = get_path_prefix(path);
         if let Some(limiter) = self.get_path_limiter(&path_prefix).await {
             if limiter.limiter.check().is_err() {
-                return Err(RateLimitError::PathLimitExceeded {
-                    path: path_prefix,
-                });
+                return Err(RateLimitError::PathLimitExceeded { path: path_prefix });
             }
         }
 
@@ -223,10 +219,7 @@ pub async fn rate_limit_middleware(
 
             (
                 StatusCode::TOO_MANY_REQUESTS,
-                [
-                    ("Retry-After", "60"),
-                    ("X-RateLimit-Remaining", "0"),
-                ],
+                [("Retry-After", "60"), ("X-RateLimit-Remaining", "0")],
                 "Too many requests. Please try again later.",
             )
                 .into_response()

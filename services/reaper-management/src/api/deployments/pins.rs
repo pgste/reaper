@@ -9,13 +9,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError,
-    api::orgs::resolve_org,
-    auth::middleware::RequireAuth,
-    db::repositories::OrganizationRepository,
-    deployment::DeploymentService,
-    domain::deployment::CreateVersionPin,
-    state::AppState,
+    api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
+    db::repositories::OrganizationRepository, deployment::DeploymentService,
+    domain::deployment::CreateVersionPin, state::AppState,
 };
 
 use super::types::{CreatePinRequest, PinResponse};
@@ -108,9 +104,9 @@ pub async fn delete_pin(
 
     let service = DeploymentService::new(state.db.clone());
     service.delete_pin(agent_id).await.map_err(|e| match e {
-        crate::deployment::DeploymentError::Database(
-            crate::db::DatabaseError::NotFound(_),
-        ) => ApiError::NotFound("Pin not found".to_string()),
+        crate::deployment::DeploymentError::Database(crate::db::DatabaseError::NotFound(_)) => {
+            ApiError::NotFound("Pin not found".to_string())
+        }
         e => ApiError::Internal(e.to_string()),
     })?;
 
