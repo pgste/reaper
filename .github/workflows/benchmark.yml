@@ -102,8 +102,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        lfs: true
 
     - name: Download Reaper Agent
       uses: actions/download-artifact@v4
@@ -130,22 +128,15 @@ jobs:
         sudo mv eopa /usr/local/bin/opa
         opa version
 
-    - name: Verify or Generate Test Data
+    - name: Generate Test Data
       working-directory: benchmarks/reaper-vs-opa
       run: |
         DATA_FILE="data/100k/${{ matrix.scenario }}.json"
-
-        # Check if file exists and is valid JSON (not an LFS pointer)
-        if [ -f "$DATA_FILE" ] && head -1 "$DATA_FILE" | grep -q '"entities"'; then
-          echo "✓ Data file exists and is valid JSON"
-          ENTITY_COUNT=$(jq '.entities | length' "$DATA_FILE")
-          echo "  Contains $ENTITY_COUNT entities"
-        else
-          echo "⚠ Data file missing or is LFS pointer, generating..."
-          mkdir -p data/100k
-          ./bin/generate-data --count 100000 --output "$DATA_FILE" ${{ matrix.scenario }}
-          echo "✓ Generated 100k entities"
-        fi
+        mkdir -p data/100k
+        # Always regenerate to ensure seed entities required by validation tests are present
+        ./bin/generate-data --count 100000 --output "$DATA_FILE" ${{ matrix.scenario }}
+        ENTITY_COUNT=$(jq '.entities | length' "$DATA_FILE")
+        echo "✓ Generated $ENTITY_COUNT entities"
 
     - name: Start Services
       run: |
