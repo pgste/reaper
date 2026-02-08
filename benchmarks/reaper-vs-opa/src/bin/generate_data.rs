@@ -86,10 +86,22 @@ fn generate_rbac_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
+    // Seed entities required by validation tests
+    entities.push(json!({
+        "id": "user_admin",
+        "type": "User",
+        "attributes": { "role": "admin", "department": "engineering", "active": true }
+    }));
+    entities.push(json!({
+        "id": "user_viewer",
+        "type": "User",
+        "attributes": { "role": "viewer", "department": "sales", "active": true }
+    }));
+
     let roles = ["admin", "manager", "developer", "viewer", "guest"];
     let departments = ["engineering", "sales", "hr", "finance", "operations"];
 
-    for i in 0..count {
+    for i in 0..(count - 2) {
         entities.push(json!({
             "id": format!("user_{}", i),
             "type": "user",
@@ -108,10 +120,34 @@ fn generate_abac_data(count: usize) -> Vec<Value> {
     let mut rng = rand::thread_rng();
     let mut entities = Vec::new();
 
+    // Seed entities required by validation tests
+    entities.push(json!({
+        "id": "user_engineer_high",
+        "type": "User",
+        "attributes": {
+            "role": "engineer",
+            "department": "engineering",
+            "clearance_level": 4,
+            "high_clearance": true,
+            "status": "active",
+            "suspended": false
+        }
+    }));
+    entities.push(json!({
+        "id": "resource_eng_confidential",
+        "type": "Resource",
+        "attributes": {
+            "department": "engineering",
+            "clearance_level": 3,
+            "classification": "confidential",
+            "owner_id": "other_user"
+        }
+    }));
+
     let departments = ["engineering", "sales", "hr", "finance", "operations"];
     let clearance_levels = ["public", "internal", "confidential", "secret"];
 
-    for i in 0..count {
+    for i in 0..(count - 2) {
         entities.push(json!({
             "id": format!("user_{}", i),
             "type": "user",

@@ -187,24 +187,26 @@ struct Resource {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let json_output = args.output == "json";
 
-    println!("{}", "\n🚀 Reaper vs OPA Benchmark".bold().cyan());
-    println!("{}", "=".repeat(80).dimmed());
-    println!("  Requests:     {}", args.requests.to_string().yellow());
-    println!("  Concurrency:  {}", args.concurrency.to_string().yellow());
-    println!("  Scenario:     {}", args.scenario.yellow());
-    println!("  Reaper URL:   {}", args.reaper_url.dimmed());
-    println!("  OPA URL:      {}", args.opa_url.dimmed());
-    println!("{}\n", "=".repeat(80).dimmed());
+    // Use eprintln for progress messages so JSON output stays clean on stdout
+    eprintln!("{}", "\n🚀 Reaper vs OPA Benchmark".bold().cyan());
+    eprintln!("{}", "=".repeat(80).dimmed());
+    eprintln!("  Requests:     {}", args.requests.to_string().yellow());
+    eprintln!("  Concurrency:  {}", args.concurrency.to_string().yellow());
+    eprintln!("  Scenario:     {}", args.scenario.yellow());
+    eprintln!("  Reaper URL:   {}", args.reaper_url.dimmed());
+    eprintln!("  OPA URL:      {}", args.opa_url.dimmed());
+    eprintln!("{}\n", "=".repeat(80).dimmed());
 
     // Test connectivity
-    println!("{}", "🔍 Testing connectivity...".bold());
+    eprintln!("{}", "🔍 Testing connectivity...".bold());
     test_connectivity(&args.reaper_url, "Reaper").await?;
     test_connectivity(&args.opa_url, "OPA").await?;
-    println!();
+    eprintln!();
 
     // Validate policy logic with known test cases
-    println!("{}", "🧪 Validating policy logic...".bold());
+    eprintln!("{}", "🧪 Validating policy logic...".bold());
     let scenarios = if args.scenario == "all" {
         vec!["rbac", "abac"]
     } else {
@@ -215,16 +217,16 @@ async fn main() -> Result<()> {
         validate_policy_logic(&args.reaper_url, "Reaper", scenario).await?;
         validate_policy_logic(&args.opa_url, "OPA", scenario).await?;
     }
-    println!("{}", "  ✓ All validation tests passed!".green());
-    println!();
+    eprintln!("{}", "  ✓ All validation tests passed!".green());
+    eprintln!();
 
     // Run benchmarks
 
     let mut all_results = Vec::new();
 
     for scenario in scenarios {
-        println!("{} {}", "📊 Running scenario:".bold(), scenario.yellow());
-        println!();
+        eprintln!("{} {}", "📊 Running scenario:".bold(), scenario.yellow());
+        eprintln!();
 
         // Benchmark Reaper
         let reaper_result = run_benchmark(
@@ -248,7 +250,7 @@ async fn main() -> Result<()> {
         .await?;
         all_results.push(opa_result);
 
-        println!();
+        eprintln!();
     }
 
     // Display results
@@ -257,11 +259,13 @@ async fn main() -> Result<()> {
     // Save results if requested
     if let Some(path) = &args.save {
         save_results(&all_results, path)?;
-        println!("\n{} {}", "💾 Results saved to:".green(), path);
+        eprintln!("\n{} {}", "💾 Results saved to:".green(), path);
     }
 
-    // Display winner
-    display_winner(&all_results);
+    // Display winner (always to stderr so JSON stays clean)
+    if !json_output {
+        display_winner(&all_results);
+    }
 
     Ok(())
 }
@@ -379,7 +383,7 @@ async fn validate_policy_logic(url: &str, engine: &str, scenario: &str) -> Resul
             ));
         }
 
-        println!(
+        eprintln!(
             "  {} {} {}: {} (expected: {})",
             "✓".green(),
             engine.dimmed(),
@@ -398,7 +402,7 @@ async fn test_connectivity(url: &str, name: &str) -> Result<()> {
 
     match client.get(&health_url).send().await {
         Ok(resp) if resp.status().is_success() => {
-            println!("  {} {} is reachable", "✓".green(), name);
+            eprintln!("  {} {} is reachable", "✓".green(), name);
             Ok(())
         }
         Ok(resp) => {
@@ -417,7 +421,7 @@ async fn run_benchmark(
     total_requests: usize,
     concurrency: usize,
 ) -> Result<BenchmarkResult> {
-    println!("  {} {}...", "Testing".dimmed(), engine.bold());
+    eprintln!("  {} {}...", "Testing".dimmed(), engine.bold());
 
     let client = Arc::new(reqwest::Client::new());
     let semaphore = Arc::new(Semaphore::new(concurrency));
@@ -515,7 +519,7 @@ async fn run_benchmark(
         memory_mb: 0.0, // Will be filled in by benchmark.sh script
     };
 
-    println!(
+    eprintln!(
         "  {} {} - {} req/s, p99: {:.0}μs",
         "✓".green(),
         engine.bold(),
@@ -1077,14 +1081,14 @@ async fn send_opa_request(
 }
 
 fn display_results(results: &[BenchmarkResult], format: &str) -> Result<()> {
-    println!("\n{}", "📈 Benchmark Results".bold().cyan());
-    println!("{}", "=".repeat(80).dimmed());
-
     match format {
         "json" => {
+            // JSON goes to stdout (clean, no extra text)
             println!("{}", serde_json::to_string_pretty(results)?);
         }
         "csv" => {
+            eprintln!("\n{}", "📈 Benchmark Results".bold().cyan());
+            eprintln!("{}", "=".repeat(80).dimmed());
             println!("Engine,Scenario,Requests,Success,Failed,Duration(s),RPS,P50(μs),P95(μs),P99(μs),Max(μs)");
             for r in results {
                 println!(
@@ -1105,9 +1109,11 @@ fn display_results(results: &[BenchmarkResult], format: &str) -> Result<()> {
         }
         _ => {
             // Table format
+            eprintln!("\n{}", "📈 Benchmark Results".bold().cyan());
+            eprintln!("{}", "=".repeat(80).dimmed());
             let rows: Vec<BenchmarkRow> = results.iter().map(BenchmarkRow::from).collect();
             let table = Table::new(rows).to_string();
-            println!("{}", table);
+            eprintln!("{}", table);
         }
     }
 
@@ -1121,8 +1127,8 @@ fn save_results(results: &[BenchmarkResult], path: &str) -> Result<()> {
 }
 
 fn display_winner(results: &[BenchmarkResult]) {
-    println!("\n{}", "🏆 Performance Comparison".bold().cyan());
-    println!("{}", "=".repeat(80).dimmed());
+    eprintln!("\n{}", "🏆 Performance Comparison".bold().cyan());
+    eprintln!("{}", "=".repeat(80).dimmed());
 
     // Group by scenario
     let scenarios: Vec<&str> = results.iter().map(|r| r.scenario.as_str()).collect();
@@ -1147,12 +1153,12 @@ fn display_winner(results: &[BenchmarkResult]) {
             .unwrap();
         let opa = scenario_results.iter().find(|r| r.engine == "OPA").unwrap();
 
-        println!("\n{} Scenario:", scenario.bold());
+        eprintln!("\n{} Scenario:", scenario.bold());
 
         // Throughput comparison
         let throughput_diff = ((reaper.throughput_rps / opa.throughput_rps) - 1.0) * 100.0;
         if throughput_diff > 0.0 {
-            println!(
+            eprintln!(
                 "  Throughput: {} is {:.1}% faster ({:.0} vs {:.0} req/s)",
                 "Reaper".green().bold(),
                 throughput_diff,
@@ -1160,7 +1166,7 @@ fn display_winner(results: &[BenchmarkResult]) {
                 opa.throughput_rps
             );
         } else {
-            println!(
+            eprintln!(
                 "  Throughput: {} is {:.1}% faster ({:.0} vs {:.0} req/s)",
                 "OPA".green().bold(),
                 -throughput_diff,
@@ -1172,7 +1178,7 @@ fn display_winner(results: &[BenchmarkResult]) {
         // P99 latency comparison
         let latency_diff = ((opa.latency_p99_us / reaper.latency_p99_us) - 1.0) * 100.0;
         if latency_diff > 0.0 {
-            println!(
+            eprintln!(
                 "  P99 Latency: {} is {:.1}% lower ({:.0}μs vs {:.0}μs)",
                 "Reaper".green().bold(),
                 latency_diff,
@@ -1180,7 +1186,7 @@ fn display_winner(results: &[BenchmarkResult]) {
                 opa.latency_p99_us
             );
         } else {
-            println!(
+            eprintln!(
                 "  P99 Latency: {} is {:.1}% lower ({:.0}μs vs {:.0}μs)",
                 "OPA".green().bold(),
                 -latency_diff,
@@ -1190,5 +1196,5 @@ fn display_winner(results: &[BenchmarkResult]) {
         }
     }
 
-    println!();
+    eprintln!();
 }
