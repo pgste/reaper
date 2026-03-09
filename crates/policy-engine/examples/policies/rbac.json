@@ -1,0 +1,69 @@
+{
+  "name": "rbac_simple",
+  "version": "1.0.0",
+  "description": "Simple role-based access control with ownership",
+  "default_decision": "deny",
+  "rules": [
+    {
+      "name": "admin_full_access",
+      "description": "Administrators have full access",
+      "decision": "allow",
+      "condition": {
+        "operator": "equal",
+        "left": {
+          "entity": "user",
+          "attribute": "role"
+        },
+        "right": {
+          "value": "admin"
+        }
+      }
+    },
+    {
+      "name": "manager_reports",
+      "description": "Managers can access reports",
+      "decision": "allow",
+      "condition": {
+        "operator": "and",
+        "conditions": [
+          {
+            "operator": "equal",
+            "left": {
+              "entity": "user",
+              "attribute": "role"
+            },
+            "right": {
+              "value": "manager"
+            }
+          },
+          {
+            "operator": "equal",
+            "left": {
+              "entity": "resource",
+              "attribute": "type"
+            },
+            "right": {
+              "value": "report"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "user_own_resources",
+      "description": "Users can access resources they own",
+      "decision": "allow",
+      "condition": {
+        "operator": "equal",
+        "left": {
+          "entity": "user",
+          "attribute": "id"
+        },
+        "right": {
+          "entity": "resource",
+          "attribute": "owner_id"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # Reaper Agent
+  reaper:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: reaper-agent
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - OTEL_ENABLED=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - benchmark-net
+
+  # OPA Server (Styra Enterprise OPA - open source)
+  opa:
+    image: ghcr.io/styrainc/enterprise-opa:latest
+    container_name: opa-server
+    ports:
+      - "8181:8181"
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - benchmark-net
+
+networks:
+  benchmark-net:
+    driver: bridge

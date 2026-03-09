@@ -1,0 +1,25 @@
+//! Database repositories
+//!
+//! Provides data access layers for all domain entities.
+
+pub mod agent;
+pub mod agent_deployment;
+pub mod bundle;
+pub mod deployment;
+pub mod namespace;
+pub mod organization;
+pub mod policy;
+pub mod source;
+pub mod team;
+pub mod webhook;
+
+pub use agent::AgentRepository;
+pub use agent_deployment::{AgentDeploymentRepository, RollbackConfigRepository};
+pub use bundle::BundleRepository;
+pub use deployment::DeploymentRepository;
+pub use namespace::NamespaceRepository;
+pub use organization::OrganizationRepository;
+pub use policy::PolicyRepository;
+pub use source::PolicySourceRepository;
+pub use team::TeamRepository;
+pub use webhook::WebhookRepository;

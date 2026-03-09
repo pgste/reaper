@@ -1,0 +1,1594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reaper Benchmark Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .metric-card { transition: transform 0.2s; }
+        .metric-card:hover { transform: translateY(-2px); }
+        .tab-active { border-bottom: 2px solid #3b82f6; color: white; }
+        .tab-inactive { border-bottom: 2px solid transparent; color: #9ca3af; }
+        .scenario-pass { background-color: rgba(34, 197, 94, 0.2); }
+        .scenario-fail { background-color: rgba(239, 68, 68, 0.2); }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-3xl font-bold">Reaper Benchmark</h1>
+                <p class="text-gray-400">Policy Engine Performance Analysis</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <div id="initStatus" class="text-sm text-gray-400"></div>
+                <button onclick="initializeAgent()" id="initBtn"
+                    class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    Initialize Agent
+                </button>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex gap-4 mb-8 border-b border-gray-700">
+            <button onclick="showTab('packages')" id="tab-packages" class="pb-3 px-4 tab-active">
+                Policy Packages
+            </button>
+            <button onclick="showTab('benchmark')" id="tab-benchmark" class="pb-3 px-4 tab-inactive">
+                Performance Benchmark
+            </button>
+            <button onclick="showTab('simulation')" id="tab-simulation" class="pb-3 px-4 tab-inactive">
+                Auto-Tuning Simulation
+            </button>
+            <button onclick="showTab('comparison')" id="tab-comparison" class="pb-3 px-4 tab-inactive">
+                Reaper vs eOPA
+            </button>
+        </div>
+
+        <!-- Policy Packages Tab -->
+        <div id="content-packages">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                <!-- Package List -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4">Available Packages</h2>
+                    <div id="packageList" class="space-y-3">
+                        <div class="text-gray-400">Loading packages...</div>
+                    </div>
+                </div>
+
+                <!-- Package Details -->
+                <div class="bg-gray-800 rounded-lg p-6 lg:col-span-2">
+                    <div id="packageDetails" class="hidden">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-xl font-semibold" id="packageName">-</h2>
+                            <button onclick="runPackage()" id="runPackageBtn"
+                                class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg">
+                                Run Tests
+                            </button>
+                        </div>
+                        <p class="text-gray-400 mb-4" id="packageDescription">-</p>
+                        <div class="grid grid-cols-3 gap-4 mb-4">
+                            <div class="bg-gray-700 rounded p-3 text-center">
+                                <div class="text-2xl font-bold" id="policyCount">0</div>
+                                <div class="text-gray-400 text-sm">Policies</div>
+                            </div>
+                            <div class="bg-gray-700 rounded p-3 text-center">
+                                <div class="text-2xl font-bold" id="scenarioCount">0</div>
+                                <div class="text-gray-400 text-sm">Scenarios</div>
+                            </div>
+                            <div class="bg-gray-700 rounded p-3 text-center">
+                                <div class="text-2xl font-bold" id="passedCount">-</div>
+                                <div class="text-gray-400 text-sm">Passed</div>
+                            </div>
+                        </div>
+                        <h3 class="font-semibold mb-2">Scenarios</h3>
+                        <div id="scenarioList" class="space-y-2 max-h-64 overflow-y-auto">
+                            <!-- Scenarios will be populated here -->
+                        </div>
+                    </div>
+                    <div id="packagePlaceholder" class="text-gray-400 text-center py-8">
+                        Select a package to view details
+                    </div>
+                </div>
+            </div>
+
+            <!-- Package Test Results -->
+            <div id="packageResults" class="hidden bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Test Results</h2>
+                <div id="scenarioResults" class="space-y-2">
+                    <!-- Results will be populated here -->
+                </div>
+                <div id="packageBenchmark" class="hidden mt-6 pt-6 border-t border-gray-700">
+                    <h3 class="font-semibold mb-2">Performance</h3>
+                    <div class="grid grid-cols-4 gap-4">
+                        <div class="bg-gray-700 rounded p-3 text-center">
+                            <div class="text-xl font-bold" id="benchThroughput">-</div>
+                            <div class="text-gray-400 text-sm">Throughput (req/s)</div>
+                        </div>
+                        <div class="bg-gray-700 rounded p-3 text-center">
+                            <div class="text-xl font-bold" id="benchP50">-</div>
+                            <div class="text-gray-400 text-sm">P50 Latency</div>
+                        </div>
+                        <div class="bg-gray-700 rounded p-3 text-center">
+                            <div class="text-xl font-bold" id="benchP99">-</div>
+                            <div class="text-gray-400 text-sm">P99 Latency</div>
+                        </div>
+                        <div class="bg-gray-700 rounded p-3 text-center">
+                            <div class="text-xl font-bold" id="benchSuccessRate">-</div>
+                            <div class="text-gray-400 text-sm">Success Rate</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Benchmark Tab -->
+        <div id="content-benchmark" class="hidden">
+            <!-- Configuration -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold">Configuration</h2>
+                    <button onclick="runBenchmark()" id="runBenchBtn"
+                        class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-semibold">
+                        Run Benchmark
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <div>
+                        <label class="block text-gray-400 mb-2">Policy Package</label>
+                        <select id="benchPolicy" class="w-full bg-gray-700 rounded px-3 py-2">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Volumes</label>
+                        <input type="text" id="volumes" value="10, 100, 1000, 10000"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Concurrency</label>
+                        <input type="number" id="concurrency" value="10"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Batch Size</label>
+                        <input type="number" id="batchSize" value="100"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Modes</label>
+                        <div class="flex gap-4 pt-2">
+                            <label class="flex items-center">
+                                <input type="checkbox" id="latencyMode" checked class="mr-2">
+                                Latency
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="throughputMode" checked class="mr-2">
+                                Throughput
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Summary -->
+            <div id="summary" class="hidden mb-8">
+                <div class="grid grid-cols-1 md:grid-cols-6 gap-4">
+                    <div class="metric-card bg-gradient-to-br from-green-800 to-green-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Peak Throughput</div>
+                        <div id="peakRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">P99 Latency</div>
+                        <div id="p99Latency" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-purple-800 to-purple-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Total Requests</div>
+                        <div id="totalRequests" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">processed</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-emerald-800 to-emerald-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Allowed</div>
+                        <div id="totalAllowed" class="text-3xl font-bold text-green-400">-</div>
+                        <div class="text-gray-400 text-sm">decisions</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-red-800 to-red-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Denied</div>
+                        <div id="totalDenied" class="text-3xl font-bold text-red-400">-</div>
+                        <div class="text-gray-400 text-sm">decisions</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-6">
+                        <div class="text-gray-300 text-sm">Success Rate</div>
+                        <div id="successRate" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">percentage</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts -->
+            <div id="charts" class="hidden grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Latency Distribution</h3>
+                    <canvas id="latencyChart"></canvas>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Throughput by Volume</h3>
+                    <canvas id="throughputChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Detailed Results Table -->
+            <div id="resultsTable" class="hidden bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Detailed Results</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="pb-3">Mode</th>
+                                <th class="pb-3">Volume</th>
+                                <th class="pb-3">Duration</th>
+                                <th class="pb-3">Throughput</th>
+                                <th class="pb-3">P50</th>
+                                <th class="pb-3">P95</th>
+                                <th class="pb-3">P99</th>
+                                <th class="pb-3">Allow/Deny</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Agent Stats & Recommendation -->
+            <div id="agentStatsSection" class="hidden bg-gray-800 rounded-lg p-6 mt-8">
+                <h2 class="text-xl font-semibold mb-4">Reaper Agent Stats</h2>
+                <div class="grid grid-cols-5 gap-4 mb-4">
+                    <div>
+                        <div class="text-gray-400 text-sm">Policies Loaded</div>
+                        <div id="benchAgentPolicies" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Total Evaluations</div>
+                        <div id="benchAgentEvaluations" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Cache Hits</div>
+                        <div id="benchAgentCacheHits" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Cache Misses</div>
+                        <div id="benchAgentCacheMisses" class="text-xl font-bold">-</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400 text-sm">Bench Memory</div>
+                        <div id="benchServiceMemory" class="text-xl font-bold">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recommendation -->
+            <div id="recommendation" class="hidden bg-gray-800 rounded-lg p-6 mt-8">
+                <h2 class="text-xl font-semibold mb-4">Recommendation</h2>
+                <p id="recommendationText" class="text-gray-300"></p>
+            </div>
+        </div>
+
+        <!-- Simulation Tab -->
+        <div id="content-simulation" class="hidden">
+            <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold">Auto-Tuning Simulation</h2>
+                    <button onclick="runSimulation()" id="runSimBtn"
+                        class="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-semibold">
+                        Run Simulation
+                    </button>
+                </div>
+                <p class="text-gray-400 mb-4">Tests a matrix of parameters to find optimal batch size and concurrency settings.</p>
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <div>
+                        <label class="block text-gray-400 mb-2">Policy Package</label>
+                        <select id="simPolicy" class="w-full bg-gray-700 rounded px-3 py-2">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Volumes</label>
+                        <input type="text" id="simVolumes" value="100, 500, 1000"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Batch Sizes</label>
+                        <input type="text" id="simBatchSizes" value="50, 100, 200"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Concurrency Levels</label>
+                        <input type="text" id="simConcurrency" value="5, 10, 20"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Target P99 (µs)</label>
+                        <input type="number" id="simTargetP99" value="1000"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Simulation Results -->
+            <div id="simResults" class="hidden">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                    <!-- Recommendation Card -->
+                    <div class="bg-gradient-to-br from-purple-900 to-purple-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Recommended Configuration</h3>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <div class="text-gray-300 text-sm">Batch Size</div>
+                                <div id="recBatchSize" class="text-3xl font-bold">-</div>
+                            </div>
+                            <div>
+                                <div class="text-gray-300 text-sm">Concurrency</div>
+                                <div id="recConcurrency" class="text-3xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <div class="text-gray-300 text-sm">Expected Throughput</div>
+                                <div id="recThroughput" class="text-xl font-bold">-</div>
+                            </div>
+                            <div>
+                                <div class="text-gray-300 text-sm">Confidence</div>
+                                <div id="recConfidence" class="text-xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <p id="recExplanation" class="text-gray-300 text-sm"></p>
+                    </div>
+
+                    <!-- System Resources & Decisions -->
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Reaper Agent</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <div class="text-gray-400 text-sm">Policies Loaded</div>
+                                <div id="agentPolicies" class="text-xl font-bold">-</div>
+                            </div>
+                            <div>
+                                <div class="text-gray-400 text-sm">Total Evaluations</div>
+                                <div id="agentEvaluations" class="text-xl font-bold">-</div>
+                            </div>
+                            <div>
+                                <div class="text-gray-400 text-sm">Cache Hits</div>
+                                <div id="agentCacheHits" class="text-xl font-bold">-</div>
+                            </div>
+                            <div>
+                                <div class="text-gray-400 text-sm">Bench Memory</div>
+                                <div id="sysMemUsed" class="text-xl font-bold">-</div>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-gray-700">
+                            <h4 class="text-gray-300 font-medium mb-2">Policy Decisions</h4>
+                            <div class="grid grid-cols-3 gap-4">
+                                <div>
+                                    <div class="text-gray-400 text-sm">Total</div>
+                                    <div id="simTotalRequests" class="text-lg font-bold">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-gray-400 text-sm">Allowed</div>
+                                    <div id="simAllowed" class="text-lg font-bold text-green-400">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-gray-400 text-sm">Denied</div>
+                                    <div id="simDenied" class="text-lg font-bold text-red-400">-</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-gray-700">
+                            <div class="text-gray-400 text-sm">Bottleneck Detected</div>
+                            <div id="sysBottleneck" class="text-sm text-yellow-400">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Parameter Results Table -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Parameter Matrix Results</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="pb-3">Batch</th>
+                                    <th class="pb-3">Concurrency</th>
+                                    <th class="pb-3">Volume</th>
+                                    <th class="pb-3">Throughput</th>
+                                    <th class="pb-3">P99</th>
+                                    <th class="pb-3">Allow/Deny</th>
+                                    <th class="pb-3">CPU %</th>
+                                </tr>
+                            </thead>
+                            <tbody id="simResultsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Comparison Tab (Reaper vs eOPA) -->
+        <div id="content-comparison" class="hidden">
+            <!-- Configuration -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold">Reaper vs Enterprise OPA</h2>
+                    <div class="flex gap-3">
+                        <div id="eopaStatus" class="flex items-center gap-2 text-sm text-gray-400">
+                            <span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-gray-500"></span>
+                            eOPA: checking...
+                        </div>
+                        <button onclick="initAll()" id="initAllBtn"
+                            class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg">
+                            Initialize Both Engines
+                        </button>
+                        <button onclick="runComparison()" id="runCompBtn"
+                            class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-semibold">
+                            Run Comparison
+                        </button>
+                        <button onclick="runComparisonAll()" id="runCompAllBtn"
+                            class="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-semibold">
+                            Run All 12 Policies
+                        </button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div>
+                        <label class="block text-gray-400 mb-2">Policy</label>
+                        <select id="compPolicy" class="w-full bg-gray-700 rounded px-3 py-2">
+                            <option value="rbac_simple">RBAC Simple</option>
+                            <option value="abac_clearance">ABAC Clearance</option>
+                            <option value="rebac_relationships">ReBAC Relationships</option>
+                            <option value="multilayer_enterprise">Multilayer Enterprise</option>
+                            <option value="math_validation">Math Validation</option>
+                            <option value="regex_validation">Regex Validation</option>
+                            <option value="string_operations">String Operations</option>
+                            <option value="collection_operations">Collection Operations</option>
+                            <option value="time_based_access">Time Based Access</option>
+                            <option value="comprehension_test">Comprehension</option>
+                            <option value="json_processing">JSON Processing</option>
+                            <option value="mega_policy">Mega Policy</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Volumes</label>
+                        <input type="text" id="compVolumes" value="100, 1000, 10000"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Concurrency</label>
+                        <input type="number" id="compConcurrency" value="1" min="1" max="256"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-2">Warmup Requests</label>
+                        <input type="number" id="compWarmup" value="100"
+                            class="w-full bg-gray-700 rounded px-3 py-2">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hero Metrics -->
+            <div id="compSummary" class="hidden mb-8">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS P99</div>
+                        <div id="compReaperUdsP99" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-cyan-800 to-cyan-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">TCP P99</div>
+                        <div id="compReaperTcpP99" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">eOPA P99</div>
+                        <div id="compEopaP99" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">microseconds</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-green-800 to-green-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS vs eOPA</div>
+                        <div id="compSpeedup" class="text-3xl font-bold text-green-400">-</div>
+                        <div class="text-gray-400 text-sm">times faster</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS RPS</div>
+                        <div id="compReaperUdsRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-cyan-800 to-cyan-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">TCP RPS</div>
+                        <div id="compReaperTcpRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">eOPA RPS</div>
+                        <div id="compEopaRps" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">requests/sec</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-purple-800 to-purple-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS vs TCP</div>
+                        <div id="compUdsTcpRatio" class="text-3xl font-bold">-</div>
+                        <div class="text-gray-400 text-sm">ratio</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts -->
+            <div id="compCharts" class="hidden grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Latency Comparison (P50 / P99)</h3>
+                    <canvas id="compLatencyChart"></canvas>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Throughput Comparison</h3>
+                    <canvas id="compThroughputChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Comparison Table -->
+            <div id="compTable" class="hidden bg-gray-800 rounded-lg p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4">Detailed Comparison</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="pb-3">Volume</th>
+                                <th class="pb-3 text-blue-400">UDS P50</th>
+                                <th class="pb-3 text-cyan-400">TCP P50</th>
+                                <th class="pb-3 text-orange-400">eOPA P50</th>
+                                <th class="pb-3 text-blue-400">UDS P99</th>
+                                <th class="pb-3 text-cyan-400">TCP P99</th>
+                                <th class="pb-3 text-orange-400">eOPA P99</th>
+                                <th class="pb-3 text-blue-400">UDS RPS</th>
+                                <th class="pb-3 text-cyan-400">TCP RPS</th>
+                                <th class="pb-3 text-orange-400">eOPA RPS</th>
+                                <th class="pb-3">Speedup</th>
+                            </tr>
+                        </thead>
+                        <tbody id="compResultsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Fairness Verification Table -->
+            <div id="compFairnessTable" class="hidden bg-gray-800 rounded-lg p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4">Fairness Verification (Allow/Deny Counts)</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="pb-3">Volume</th>
+                                <th class="pb-3 text-blue-400">UDS Allow</th>
+                                <th class="pb-3 text-blue-400">UDS Deny</th>
+                                <th class="pb-3 text-cyan-400">TCP Allow</th>
+                                <th class="pb-3 text-cyan-400">TCP Deny</th>
+                                <th class="pb-3 text-orange-400">eOPA Allow</th>
+                                <th class="pb-3 text-orange-400">eOPA Deny</th>
+                                <th class="pb-3">Match</th>
+                            </tr>
+                        </thead>
+                        <tbody id="compFairnessBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Multi-Policy Results Section (Run All) -->
+            <div id="multiPolicyResults" class="hidden">
+                <!-- Summary Cards -->
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+                    <div class="metric-card bg-gradient-to-br from-purple-800 to-purple-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">Policies Tested</div>
+                        <div id="multiPoliciesCount" class="text-3xl font-bold">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-green-800 to-green-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">Avg Speedup</div>
+                        <div id="multiAvgSpeedup" class="text-3xl font-bold text-green-400">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">UDS Peak RPS</div>
+                        <div id="multiUdsPeakRps" class="text-3xl font-bold">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-cyan-800 to-cyan-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">TCP Peak RPS</div>
+                        <div id="multiTcpPeakRps" class="text-3xl font-bold">-</div>
+                    </div>
+                    <div class="metric-card bg-gradient-to-br from-orange-800 to-orange-900 rounded-lg p-5">
+                        <div class="text-gray-300 text-sm">eOPA Peak RPS</div>
+                        <div id="multiEopaPeakRps" class="text-3xl font-bold">-</div>
+                    </div>
+                </div>
+
+                <!-- Multi-Policy Charts -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">P99 Latency by Policy</h3>
+                        <canvas id="multiLatencyChart"></canvas>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Throughput by Policy</h3>
+                        <canvas id="multiThroughputChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Multi-Policy Fairness Table -->
+                <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                    <h2 class="text-xl font-semibold mb-4">Per-Policy Fairness Verification</h2>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="pb-3">Policy</th>
+                                    <th class="pb-3 text-blue-400">UDS Allow</th>
+                                    <th class="pb-3 text-blue-400">UDS Deny</th>
+                                    <th class="pb-3 text-cyan-400">TCP Allow</th>
+                                    <th class="pb-3 text-cyan-400">TCP Deny</th>
+                                    <th class="pb-3 text-orange-400">eOPA Allow</th>
+                                    <th class="pb-3 text-orange-400">eOPA Deny</th>
+                                    <th class="pb-3">Match</th>
+                                    <th class="pb-3">Speedup</th>
+                                </tr>
+                            </thead>
+                            <tbody id="multiFairnessBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Multi-Policy Performance Table -->
+                <div class="bg-gray-800 rounded-lg p-6 mb-8">
+                    <h2 class="text-xl font-semibold mb-4">Per-Policy Performance</h2>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="pb-3">Policy</th>
+                                    <th class="pb-3 text-blue-400">UDS P99</th>
+                                    <th class="pb-3 text-cyan-400">TCP P99</th>
+                                    <th class="pb-3 text-orange-400">eOPA P99</th>
+                                    <th class="pb-3 text-blue-400">UDS RPS</th>
+                                    <th class="pb-3 text-cyan-400">TCP RPS</th>
+                                    <th class="pb-3 text-orange-400">eOPA RPS</th>
+                                    <th class="pb-3">Speedup</th>
+                                </tr>
+                            </thead>
+                            <tbody id="multiResultsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-gray-800 rounded-lg p-8 text-center">
+                <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                <p id="loadingText">Running...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let latencyChart, throughputChart;
+        let currentPackage = null;
+        let packages = [];
+
+        let compLatencyChart, compThroughputChart, multiLatencyChart, multiThroughputChart;
+
+        // Tab management
+        function showTab(tab) {
+            ['packages', 'benchmark', 'simulation', 'comparison'].forEach(t => {
+                document.getElementById(`content-${t}`).classList.toggle('hidden', t !== tab);
+                document.getElementById(`tab-${t}`).classList.toggle('tab-active', t === tab);
+                document.getElementById(`tab-${t}`).classList.toggle('tab-inactive', t !== tab);
+            });
+            if (tab === 'comparison') checkEopaHealth();
+        }
+
+        // Initialize agent with benchmark policies and data
+        async function initializeAgent() {
+            const btn = document.getElementById('initBtn');
+            const status = document.getElementById('initStatus');
+
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Initializing...';
+            status.textContent = '';
+            status.className = 'text-sm text-gray-400';
+
+            try {
+                const response = await fetch('/init', { method: 'POST' });
+                const result = await response.json();
+
+                if (response.ok) {
+                    status.textContent = `✓ ${result.summary.total_deployed} policies deployed, ${result.summary.total_data_files} data files loaded`;
+                    status.className = 'text-sm text-green-400';
+                    // Reload packages to reflect new state
+                    await loadPackages();
+                } else {
+                    status.textContent = `✗ Initialization failed`;
+                    status.className = 'text-sm text-red-400';
+                }
+            } catch (error) {
+                console.error('Initialization failed:', error);
+                status.textContent = `✗ ${error.message}`;
+                status.className = 'text-sm text-red-400';
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> Initialize Agent';
+        }
+
+        // Load packages on page load
+        async function loadPackages() {
+            try {
+                const response = await fetch('/packages');
+                const packageList = await response.json();
+
+                // Fetch full details for each package to get policies
+                packages = await Promise.all(packageList.map(async (pkg) => {
+                    const detailResponse = await fetch(`/packages/${pkg.name}`);
+                    return await detailResponse.json();
+                }));
+
+                renderPackageList();
+                populatePolicySelectors();
+            } catch (error) {
+                console.error('Failed to load packages:', error);
+            }
+        }
+
+        function populatePolicySelectors() {
+            const benchSelect = document.getElementById('benchPolicy');
+            const simSelect = document.getElementById('simPolicy');
+
+            // Clear and populate both selectors
+            benchSelect.innerHTML = '';
+            simSelect.innerHTML = '';
+
+            packages.forEach(pkg => {
+                if (pkg.policies && pkg.policies.length > 0) {
+                    const policyName = pkg.policies[0];
+                    const optionText = `${pkg.name.toUpperCase()} (${policyName})`;
+
+                    const benchOption = document.createElement('option');
+                    benchOption.value = policyName;
+                    benchOption.textContent = optionText;
+                    benchSelect.appendChild(benchOption);
+
+                    const simOption = document.createElement('option');
+                    simOption.value = policyName;
+                    simOption.textContent = optionText;
+                    simSelect.appendChild(simOption);
+                }
+            });
+        }
+
+        function renderPackageList() {
+            const container = document.getElementById('packageList');
+            container.innerHTML = packages.map(pkg => `
+                <div onclick="selectPackage('${pkg.name}')"
+                     class="p-3 rounded cursor-pointer hover:bg-gray-700 ${currentPackage?.name === pkg.name ? 'bg-gray-700 border border-blue-500' : 'bg-gray-750'}">
+                    <div class="font-semibold">${pkg.name.toUpperCase()}</div>
+                    <div class="text-sm text-gray-400">${pkg.scenario_count} scenarios</div>
+                </div>
+            `).join('');
+        }
+
+        async function selectPackage(name) {
+            try {
+                const response = await fetch(`/packages/${name}`);
+                currentPackage = await response.json();
+                renderPackageList();
+                renderPackageDetails();
+            } catch (error) {
+                console.error('Failed to load package:', error);
+            }
+        }
+
+        function renderPackageDetails() {
+            document.getElementById('packagePlaceholder').classList.add('hidden');
+            document.getElementById('packageDetails').classList.remove('hidden');
+            document.getElementById('packageResults').classList.add('hidden');
+
+            document.getElementById('packageName').textContent = currentPackage.name.toUpperCase();
+            document.getElementById('packageDescription').textContent = currentPackage.description;
+            document.getElementById('policyCount').textContent = currentPackage.policies.length;
+            document.getElementById('scenarioCount').textContent = currentPackage.scenarios.length;
+            document.getElementById('passedCount').textContent = '-';
+
+            const container = document.getElementById('scenarioList');
+            container.innerHTML = currentPackage.scenarios.map(s => `
+                <div class="bg-gray-700 rounded p-2 text-sm">
+                    <span class="font-medium">${s.name}</span>
+                    <span class="text-gray-400 ml-2">expects: ${s.expected}</span>
+                </div>
+            `).join('');
+        }
+
+        async function runPackage() {
+            if (!currentPackage) return;
+
+            showLoading('Running package tests...');
+
+            try {
+                const response = await fetch(`/packages/${currentPackage.name}/run`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ iterations: 5, benchmark: true, benchmark_volume: 1000 })
+                });
+
+                const result = await response.json();
+                renderPackageResults(result);
+            } catch (error) {
+                alert('Package test failed: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderPackageResults(result) {
+            document.getElementById('packageResults').classList.remove('hidden');
+            document.getElementById('passedCount').textContent = `${result.passed}/${result.total_scenarios}`;
+
+            const container = document.getElementById('scenarioResults');
+            container.innerHTML = result.scenario_results.map(s => `
+                <div class="rounded p-3 ${s.passed ? 'scenario-pass' : 'scenario-fail'}">
+                    <div class="flex items-center justify-between">
+                        <span class="font-medium">${s.name}</span>
+                        <span class="${s.passed ? 'text-green-400' : 'text-red-400'}">${s.passed ? 'PASS' : 'FAIL'}</span>
+                    </div>
+                    <div class="text-sm text-gray-400">
+                        Expected: ${s.expected} | Latency: ${s.latency_us}µs
+                        ${s.error ? `<br><span class="text-red-400">${s.error}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+
+            if (result.benchmark_result) {
+                document.getElementById('packageBenchmark').classList.remove('hidden');
+                const br = result.benchmark_result;
+                document.getElementById('benchThroughput').textContent = br.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+                document.getElementById('benchP50').textContent = br.latency.median_us + 'µs';
+                document.getElementById('benchP99').textContent = br.latency.p99_us + 'µs';
+                document.getElementById('benchSuccessRate').textContent = ((br.successful / br.total_requests) * 100).toFixed(1) + '%';
+            }
+        }
+
+        async function runBenchmark() {
+            showLoading('Running benchmark...');
+
+            const modes = [];
+            if (document.getElementById('latencyMode').checked) modes.push('latency');
+            if (document.getElementById('throughputMode').checked) modes.push('throughput');
+
+            const config = {
+                policy_name: document.getElementById('benchPolicy').value,
+                volumes: document.getElementById('volumes').value.split(',').map(v => parseInt(v.trim())),
+                modes: modes,
+                concurrency: parseInt(document.getElementById('concurrency').value),
+                batch_size: parseInt(document.getElementById('batchSize').value),
+                warmup_requests: 100
+            };
+
+            try {
+                const response = await fetch('/run-benchmark', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                await renderBenchmarkResults(data);
+            } catch (error) {
+                alert('Benchmark failed: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function renderBenchmarkResults(data) {
+            document.getElementById('summary').classList.remove('hidden');
+            document.getElementById('charts').classList.remove('hidden');
+            document.getElementById('resultsTable').classList.remove('hidden');
+            document.getElementById('recommendation').classList.remove('hidden');
+            document.getElementById('agentStatsSection').classList.remove('hidden');
+
+            const summary = data.summary;
+            document.getElementById('peakRps').textContent =
+                summary.throughput_mode?.peak_rps?.toLocaleString(undefined, {maximumFractionDigits: 0}) || '-';
+            document.getElementById('p99Latency').textContent =
+                summary.latency_mode?.p99_us?.toLocaleString() || '-';
+            document.getElementById('totalRequests').textContent =
+                summary.total_requests?.toLocaleString() || '-';
+
+            // Calculate total allowed and denied across all results
+            const totalAllowed = data.results.reduce((acc, r) => acc + (r.allowed || 0), 0);
+            const totalDenied = data.results.reduce((acc, r) => acc + (r.denied || 0), 0);
+            document.getElementById('totalAllowed').textContent = totalAllowed.toLocaleString();
+            document.getElementById('totalDenied').textContent = totalDenied.toLocaleString();
+
+            const successRate = data.results.reduce((acc, r) =>
+                acc + (r.successful / r.total_requests * 100), 0) / data.results.length;
+            document.getElementById('successRate').textContent = successRate.toFixed(1) + '%';
+            document.getElementById('recommendationText').textContent = summary.recommendation;
+
+            // Show benchmark service memory from report
+            if (data.system_info) {
+                document.getElementById('benchServiceMemory').textContent = data.system_info.benchmark_service_memory_mb + ' MB';
+            }
+
+            // Fetch and display agent stats
+            const agentStats = await fetchAgentStats();
+            if (agentStats) {
+                document.getElementById('benchAgentPolicies').textContent = agentStats.policies_loaded ?? '-';
+                document.getElementById('benchAgentEvaluations').textContent = agentStats.total_evaluations?.toLocaleString() ?? '-';
+                document.getElementById('benchAgentCacheHits').textContent = agentStats.cache_hits?.toLocaleString() ?? '-';
+                document.getElementById('benchAgentCacheMisses').textContent = agentStats.cache_misses?.toLocaleString() ?? '-';
+            }
+
+            renderLatencyChart(data.results);
+            renderThroughputChart(data.results);
+            renderTable(data.results);
+        }
+
+        function renderLatencyChart(results) {
+            const ctx = document.getElementById('latencyChart').getContext('2d');
+            if (latencyChart) latencyChart.destroy();
+            const latencyResults = results.filter(r => r.mode === 'latency');
+            if (latencyResults.length === 0) return;
+
+            latencyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: latencyResults.map(r => `${r.volume}`),
+                    datasets: [
+                        { label: 'P50', data: latencyResults.map(r => r.latency.median_us), backgroundColor: 'rgba(59, 130, 246, 0.8)' },
+                        { label: 'P95', data: latencyResults.map(r => r.latency.p95_us), backgroundColor: 'rgba(168, 85, 247, 0.8)' },
+                        { label: 'P99', data: latencyResults.map(r => r.latency.p99_us), backgroundColor: 'rgba(239, 68, 68, 0.8)' }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Latency (µs)', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderThroughputChart(results) {
+            const ctx = document.getElementById('throughputChart').getContext('2d');
+            if (throughputChart) throughputChart.destroy();
+            const throughputResults = results.filter(r => r.mode === 'throughput');
+            if (throughputResults.length === 0) return;
+
+            throughputChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: throughputResults.map(r => `${r.volume}`),
+                    datasets: [{
+                        label: 'Throughput (req/s)',
+                        data: throughputResults.map(r => r.throughput_rps),
+                        borderColor: 'rgba(34, 197, 94, 1)',
+                        backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Requests/sec', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderTable(results) {
+            document.getElementById('resultsBody').innerHTML = results.map(r => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-3"><span class="px-2 py-1 rounded text-xs ${r.mode === 'latency' ? 'bg-blue-900' : 'bg-green-900'}">${r.mode}</span></td>
+                    <td class="py-3">${r.volume.toLocaleString()}</td>
+                    <td class="py-3">${r.duration_ms}ms</td>
+                    <td class="py-3">${r.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})} req/s</td>
+                    <td class="py-3">${r.latency.median_us}µs</td>
+                    <td class="py-3">${r.latency.p95_us}µs</td>
+                    <td class="py-3">${r.latency.p99_us}µs</td>
+                    <td class="py-3"><span class="text-green-400">${r.allowed}</span> / <span class="text-red-400">${r.denied}</span></td>
+                </tr>
+            `).join('');
+        }
+
+        async function runSimulation() {
+            showLoading('Running simulation (this may take a while)...');
+
+            const config = {
+                policy_name: document.getElementById('simPolicy').value,
+                volumes: document.getElementById('simVolumes').value.split(',').map(v => parseInt(v.trim())),
+                batch_sizes: document.getElementById('simBatchSizes').value.split(',').map(v => parseInt(v.trim())),
+                concurrency_levels: document.getElementById('simConcurrency').value.split(',').map(v => parseInt(v.trim())),
+                target_p99_us: parseInt(document.getElementById('simTargetP99').value),
+                warmup_requests: 20
+            };
+
+            try {
+                const response = await fetch('/run-simulation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                await renderSimulationResults(data);
+            } catch (error) {
+                alert('Simulation failed: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function fetchAgentStats() {
+            try {
+                const response = await fetch('/agent-stats');
+                if (response.ok) {
+                    return await response.json();
+                }
+            } catch (e) {
+                console.error('Failed to fetch agent stats:', e);
+            }
+            return null;
+        }
+
+        async function renderSimulationResults(data) {
+            document.getElementById('simResults').classList.remove('hidden');
+
+            // Recommendation
+            const rec = data.recommendation;
+            document.getElementById('recBatchSize').textContent = rec.batch_size;
+            document.getElementById('recConcurrency').textContent = rec.concurrency;
+            document.getElementById('recThroughput').textContent = rec.expected_throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0}) + ' req/s';
+            document.getElementById('recConfidence').textContent = rec.confidence + '%';
+            document.getElementById('recExplanation').textContent = rec.explanation;
+
+            // Fetch and display agent stats
+            const agentStats = await fetchAgentStats();
+            if (agentStats) {
+                document.getElementById('agentPolicies').textContent = agentStats.policies_loaded ?? '-';
+                document.getElementById('agentEvaluations').textContent = agentStats.total_evaluations?.toLocaleString() ?? '-';
+                document.getElementById('agentCacheHits').textContent = agentStats.cache_hits?.toLocaleString() ?? '-';
+            }
+
+            // Benchmark service resources
+            const res = data.resources_end;
+            document.getElementById('sysMemUsed').textContent = res.used_memory_mb + ' MB';
+            document.getElementById('sysBottleneck').textContent = data.summary.bottleneck_detected || 'None detected';
+
+            // Calculate total allowed/denied across all parameter results
+            const totalRequests = data.parameter_results.reduce((acc, r) => acc + (r.total_requests || r.volume || 0), 0);
+            const totalAllowed = data.parameter_results.reduce((acc, r) => acc + (r.allowed || 0), 0);
+            const totalDenied = data.parameter_results.reduce((acc, r) => acc + (r.denied || 0), 0);
+            document.getElementById('simTotalRequests').textContent = totalRequests.toLocaleString();
+            document.getElementById('simAllowed').textContent = totalAllowed.toLocaleString();
+            document.getElementById('simDenied').textContent = totalDenied.toLocaleString();
+
+            // Parameter Results
+            document.getElementById('simResultsBody').innerHTML = data.parameter_results.map(r => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-2">${r.batch_size}</td>
+                    <td class="py-2">${r.concurrency}</td>
+                    <td class="py-2">${r.volume}</td>
+                    <td class="py-2">${r.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2">${r.p99_us}µs</td>
+                    <td class="py-2"><span class="text-green-400">${r.allowed || 0}</span> / <span class="text-red-400">${r.denied || 0}</span></td>
+                    <td class="py-2">${r.cpu_usage_percent.toFixed(1)}%</td>
+                </tr>
+            `).join('');
+        }
+
+        function showLoading(text) {
+            document.getElementById('loadingText').textContent = text;
+            document.getElementById('loading').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').classList.add('hidden');
+        }
+
+        // =================================================================
+        // Reaper vs eOPA Comparison Functions
+        // =================================================================
+
+        async function checkEopaHealth() {
+            const dot = document.getElementById('eopaStatusDot');
+            const label = document.getElementById('eopaStatus');
+            try {
+                const resp = await fetch('/eopa-health');
+                if (resp.ok) {
+                    dot.className = 'w-3 h-3 rounded-full bg-green-500';
+                    label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-green-500"></span> eOPA: healthy';
+                } else if (resp.status === 503) {
+                    dot.className = 'w-3 h-3 rounded-full bg-yellow-500';
+                    label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-yellow-500"></span> eOPA: not configured';
+                } else {
+                    dot.className = 'w-3 h-3 rounded-full bg-red-500';
+                    label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-red-500"></span> eOPA: unreachable';
+                }
+            } catch (e) {
+                dot.className = 'w-3 h-3 rounded-full bg-red-500';
+                label.innerHTML = '<span id="eopaStatusDot" class="w-3 h-3 rounded-full bg-red-500"></span> eOPA: error';
+            }
+        }
+
+        async function initAll() {
+            const btn = document.getElementById('initAllBtn');
+            btn.disabled = true;
+            btn.textContent = 'Initializing...';
+            showLoading('Initializing both Reaper and eOPA...');
+
+            try {
+                const resp = await fetch('/init-all', { method: 'POST' });
+                const result = await resp.json();
+
+                const agentOk = result.agent?.summary?.total_deployed ?? 0;
+                const eopaOk = result.eopa?.summary?.total_policies ?? 0;
+                alert(`Initialized: Reaper ${agentOk} policies, eOPA ${eopaOk} policies`);
+                checkEopaHealth();
+            } catch (e) {
+                alert('Initialization failed: ' + e.message);
+            } finally {
+                hideLoading();
+                btn.disabled = false;
+                btn.textContent = 'Initialize Both Engines';
+            }
+        }
+
+        async function runComparison() {
+            const concurrency = parseInt(document.getElementById('compConcurrency').value) || 1;
+            const modeLabel = concurrency > 1 ? `concurrent (c=${concurrency})` : 'sequential';
+            showLoading(`Running Reaper vs eOPA comparison (${modeLabel})...`);
+
+            const config = {
+                policy_name: document.getElementById('compPolicy').value,
+                volumes: document.getElementById('compVolumes').value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
+                warmup_requests: parseInt(document.getElementById('compWarmup').value) || 100,
+                concurrency: concurrency
+            };
+
+            try {
+                const resp = await fetch('/run-comparison', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(errText);
+                }
+
+                const data = await resp.json();
+                renderComparisonResults(data);
+            } catch (e) {
+                alert('Comparison failed: ' + e.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderComparisonResults(data) {
+            // Hide multi-policy results when showing single-policy
+            document.getElementById('multiPolicyResults').classList.add('hidden');
+
+            document.getElementById('compSummary').classList.remove('hidden');
+            document.getElementById('compCharts').classList.remove('hidden');
+            document.getElementById('compTable').classList.remove('hidden');
+            document.getElementById('compFairnessTable').classList.remove('hidden');
+
+            const s = data.summary;
+            const comps = data.comparisons;
+
+            // Use the last volume's data for hero metrics (largest sample)
+            const last = comps[comps.length - 1];
+
+            document.getElementById('compReaperUdsP99').textContent = last.reaper_uds.latency.p99_us.toLocaleString();
+            document.getElementById('compReaperTcpP99').textContent = last.reaper_tcp.latency.p99_us.toLocaleString();
+            document.getElementById('compEopaP99').textContent = last.eopa.latency.p99_us.toLocaleString();
+            document.getElementById('compSpeedup').textContent = s.avg_p99_ratio.toFixed(1) + 'x';
+            document.getElementById('compReaperUdsRps').textContent = s.reaper_uds_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('compReaperTcpRps').textContent = s.reaper_tcp_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('compEopaRps').textContent = s.eopa_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+
+            // UDS vs TCP ratio
+            const udsVsTcp = s.reaper_tcp_peak_rps > 0 ? (s.reaper_uds_peak_rps / s.reaper_tcp_peak_rps).toFixed(2) + 'x' : '-';
+            document.getElementById('compUdsTcpRatio').textContent = udsVsTcp;
+
+            renderCompLatencyChart(comps);
+            renderCompThroughputChart(comps);
+            renderCompTable(comps);
+            renderCompFairnessTable(comps);
+        }
+
+        function renderCompLatencyChart(comps) {
+            const ctx = document.getElementById('compLatencyChart').getContext('2d');
+            if (compLatencyChart) compLatencyChart.destroy();
+
+            const labels = comps.map(c => c.volume.toLocaleString());
+
+            compLatencyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'UDS P50', data: comps.map(c => c.reaper_uds.latency.median_us), backgroundColor: 'rgba(59, 130, 246, 0.7)' },
+                        { label: 'UDS P99', data: comps.map(c => c.reaper_uds.latency.p99_us), backgroundColor: 'rgba(139, 92, 246, 0.7)' },
+                        { label: 'TCP P50', data: comps.map(c => c.reaper_tcp.latency.median_us), backgroundColor: 'rgba(6, 182, 212, 0.7)' },
+                        { label: 'TCP P99', data: comps.map(c => c.reaper_tcp.latency.p99_us), backgroundColor: 'rgba(99, 102, 241, 0.7)' },
+                        { label: 'eOPA P50', data: comps.map(c => c.eopa.latency.median_us), backgroundColor: 'rgba(249, 115, 22, 0.7)' },
+                        { label: 'eOPA P99', data: comps.map(c => c.eopa.latency.p99_us), backgroundColor: 'rgba(239, 68, 68, 0.7)' }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Latency (us)', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { title: { display: true, text: 'Request Volume', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderCompThroughputChart(comps) {
+            const ctx = document.getElementById('compThroughputChart').getContext('2d');
+            if (compThroughputChart) compThroughputChart.destroy();
+
+            const labels = comps.map(c => c.volume.toLocaleString());
+
+            compThroughputChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Reaper UDS',
+                            data: comps.map(c => c.reaper_uds.throughput_rps),
+                            borderColor: 'rgba(34, 197, 94, 1)',
+                            backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Reaper TCP',
+                            data: comps.map(c => c.reaper_tcp.throughput_rps),
+                            borderColor: 'rgba(6, 182, 212, 1)',
+                            backgroundColor: 'rgba(6, 182, 212, 0.15)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'eOPA',
+                            data: comps.map(c => c.eopa.throughput_rps),
+                            borderColor: 'rgba(249, 115, 22, 1)',
+                            backgroundColor: 'rgba(249, 115, 22, 0.15)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Requests/sec', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { title: { display: true, text: 'Request Volume', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderCompTable(comps) {
+            document.getElementById('compResultsBody').innerHTML = comps.map(c => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-3">${c.volume.toLocaleString()}
+                        <span class="text-xs text-gray-500 ml-1">${c.mode !== 'latency' ? c.mode : ''}</span></td>
+                    <td class="py-3 text-blue-400">${c.reaper_uds.latency.median_us}us</td>
+                    <td class="py-3 text-cyan-400">${c.reaper_tcp.latency.median_us}us</td>
+                    <td class="py-3 text-orange-400">${c.eopa.latency.median_us}us</td>
+                    <td class="py-3 text-blue-400">${c.reaper_uds.latency.p99_us}us</td>
+                    <td class="py-3 text-cyan-400">${c.reaper_tcp.latency.p99_us}us</td>
+                    <td class="py-3 text-orange-400">${c.eopa.latency.p99_us}us</td>
+                    <td class="py-3 text-blue-400">${c.reaper_uds.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-3 text-cyan-400">${c.reaper_tcp.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-3 text-orange-400">${c.eopa.throughput_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-3 text-green-400 font-bold">${c.speedup.p99_ratio.toFixed(1)}x</td>
+                </tr>
+            `).join('');
+        }
+
+        function renderCompFairnessTable(comps) {
+            let totalUdsAllow = 0, totalUdsDeny = 0;
+            let totalTcpAllow = 0, totalTcpDeny = 0;
+            let totalEopaAllow = 0, totalEopaDeny = 0;
+            let allMatch = true;
+
+            const rows = comps.map(c => {
+                const ua = c.reaper_uds.allowed, ud = c.reaper_uds.denied;
+                const ta = c.reaper_tcp.allowed, td = c.reaper_tcp.denied;
+                const ea = c.eopa.allowed, ed = c.eopa.denied;
+                totalUdsAllow += ua; totalUdsDeny += ud;
+                totalTcpAllow += ta; totalTcpDeny += td;
+                totalEopaAllow += ea; totalEopaDeny += ed;
+
+                const match = ua === ta && ta === ea && ud === td && td === ed;
+                if (!match) allMatch = false;
+
+                const matchBadge = match
+                    ? '<span class="text-green-400 font-bold">MATCH</span>'
+                    : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+
+                return `<tr class="border-b border-gray-700">
+                    <td class="py-2">${c.volume.toLocaleString()}</td>
+                    <td class="py-2 text-blue-400">${ua}</td>
+                    <td class="py-2 text-blue-400">${ud}</td>
+                    <td class="py-2 text-cyan-400">${ta}</td>
+                    <td class="py-2 text-cyan-400">${td}</td>
+                    <td class="py-2 text-orange-400">${ea}</td>
+                    <td class="py-2 text-orange-400">${ed}</td>
+                    <td class="py-2">${matchBadge}</td>
+                </tr>`;
+            }).join('');
+
+            const overallBadge = allMatch
+                ? '<span class="text-green-400 font-bold">ALL MATCH</span>'
+                : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+
+            const totalsRow = `<tr class="border-t-2 border-gray-500 font-bold">
+                <td class="py-2">TOTAL</td>
+                <td class="py-2 text-blue-400">${totalUdsAllow}</td>
+                <td class="py-2 text-blue-400">${totalUdsDeny}</td>
+                <td class="py-2 text-cyan-400">${totalTcpAllow}</td>
+                <td class="py-2 text-cyan-400">${totalTcpDeny}</td>
+                <td class="py-2 text-orange-400">${totalEopaAllow}</td>
+                <td class="py-2 text-orange-400">${totalEopaDeny}</td>
+                <td class="py-2">${overallBadge}</td>
+            </tr>`;
+
+            document.getElementById('compFairnessBody').innerHTML = rows + totalsRow;
+        }
+
+        // =================================================================
+        // Multi-Policy (Run All) Functions
+        // =================================================================
+
+        async function runComparisonAll() {
+            const concurrency = parseInt(document.getElementById('compConcurrency').value) || 1;
+            const modeLabel = concurrency > 1 ? `concurrent (c=${concurrency})` : 'sequential';
+            showLoading(`Running all 12 policy comparisons (${modeLabel})...`);
+
+            const config = {
+                volumes: document.getElementById('compVolumes').value.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v)),
+                warmup_requests: parseInt(document.getElementById('compWarmup').value) || 100,
+                concurrency: concurrency
+            };
+
+            try {
+                const resp = await fetch('/run-comparison-all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(errText);
+                }
+
+                const data = await resp.json();
+                renderMultiPolicyResults(data);
+            } catch (e) {
+                alert('All-policy comparison failed: ' + e.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function renderMultiPolicyResults(data) {
+            // Hide single-policy results, show multi-policy
+            document.getElementById('compSummary').classList.add('hidden');
+            document.getElementById('compCharts').classList.add('hidden');
+            document.getElementById('compTable').classList.add('hidden');
+            document.getElementById('compFairnessTable').classList.add('hidden');
+            document.getElementById('multiPolicyResults').classList.remove('hidden');
+
+            const s = data.overall_summary;
+
+            document.getElementById('multiPoliciesCount').textContent = s.total_policies;
+            document.getElementById('multiAvgSpeedup').textContent = s.avg_speedup.toFixed(1) + 'x';
+            document.getElementById('multiUdsPeakRps').textContent = s.reaper_uds_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('multiTcpPeakRps').textContent = s.reaper_tcp_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+            document.getElementById('multiEopaPeakRps').textContent = s.eopa_peak_rps.toLocaleString(undefined, {maximumFractionDigits: 0});
+
+            renderMultiLatencyChart(s.per_policy);
+            renderMultiThroughputChart(s.per_policy);
+            renderMultiFairnessTable(s.per_policy);
+            renderMultiResultsTable(s.per_policy);
+        }
+
+        function renderMultiLatencyChart(perPolicy) {
+            const ctx = document.getElementById('multiLatencyChart').getContext('2d');
+            if (multiLatencyChart) multiLatencyChart.destroy();
+
+            const labels = perPolicy.map(p => p.policy_name.replace(/_/g, ' '));
+            const udsData = perPolicy.map(p => p.reaper_uds_avg_p99_us);
+            const tcpData = perPolicy.map(p => p.reaper_tcp_avg_p99_us);
+            const eopaData = perPolicy.map(p => p.eopa_avg_p99_us);
+
+            // Compute averages for dashed lines
+            const avgUds = udsData.reduce((a, b) => a + b, 0) / udsData.length;
+            const avgTcp = tcpData.reduce((a, b) => a + b, 0) / tcpData.length;
+            const avgEopa = eopaData.reduce((a, b) => a + b, 0) / eopaData.length;
+
+            multiLatencyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Reaper UDS P99', data: udsData, backgroundColor: 'rgba(59, 130, 246, 0.7)', order: 2 },
+                        { label: 'Reaper TCP P99', data: tcpData, backgroundColor: 'rgba(6, 182, 212, 0.7)', order: 2 },
+                        { label: 'eOPA P99', data: eopaData, backgroundColor: 'rgba(249, 115, 22, 0.7)', order: 2 },
+                        {
+                            label: 'UDS Avg', type: 'line',
+                            data: Array(labels.length).fill(avgUds),
+                            borderColor: 'rgba(59, 130, 246, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'TCP Avg', type: 'line',
+                            data: Array(labels.length).fill(avgTcp),
+                            borderColor: 'rgba(6, 182, 212, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'eOPA Avg', type: 'line',
+                            data: Array(labels.length).fill(avgEopa),
+                            borderColor: 'rgba(249, 115, 22, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'P99 Latency (us)', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af', maxRotation: 45 } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderMultiThroughputChart(perPolicy) {
+            const ctx = document.getElementById('multiThroughputChart').getContext('2d');
+            if (multiThroughputChart) multiThroughputChart.destroy();
+
+            const labels = perPolicy.map(p => p.policy_name.replace(/_/g, ' '));
+            const udsData = perPolicy.map(p => p.reaper_uds_avg_rps);
+            const tcpData = perPolicy.map(p => p.reaper_tcp_avg_rps);
+            const eopaData = perPolicy.map(p => p.eopa_avg_rps);
+
+            const avgUds = udsData.reduce((a, b) => a + b, 0) / udsData.length;
+            const avgTcp = tcpData.reduce((a, b) => a + b, 0) / tcpData.length;
+            const avgEopa = eopaData.reduce((a, b) => a + b, 0) / eopaData.length;
+
+            multiThroughputChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Reaper UDS', data: udsData, backgroundColor: 'rgba(59, 130, 246, 0.7)', order: 2 },
+                        { label: 'Reaper TCP', data: tcpData, backgroundColor: 'rgba(6, 182, 212, 0.7)', order: 2 },
+                        { label: 'eOPA', data: eopaData, backgroundColor: 'rgba(249, 115, 22, 0.7)', order: 2 },
+                        {
+                            label: 'UDS Avg', type: 'line',
+                            data: Array(labels.length).fill(avgUds),
+                            borderColor: 'rgba(59, 130, 246, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'TCP Avg', type: 'line',
+                            data: Array(labels.length).fill(avgTcp),
+                            borderColor: 'rgba(6, 182, 212, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        },
+                        {
+                            label: 'eOPA Avg', type: 'line',
+                            data: Array(labels.length).fill(avgEopa),
+                            borderColor: 'rgba(249, 115, 22, 1)', borderDash: [5, 5], borderWidth: 2,
+                            pointRadius: 0, fill: false, order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { title: { display: true, text: 'Requests/sec', color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#9ca3af', maxRotation: 45 } }
+                    },
+                    plugins: { legend: { labels: { color: 'white' } } }
+                }
+            });
+        }
+
+        function renderMultiFairnessTable(perPolicy) {
+            let allMatch = true;
+            const rows = perPolicy.map(p => {
+                if (!p.decisions_match) allMatch = false;
+                const matchBadge = p.decisions_match
+                    ? '<span class="text-green-400 font-bold">MATCH</span>'
+                    : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+                return `<tr class="border-b border-gray-700">
+                    <td class="py-2">${p.policy_name}</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_allowed}</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_denied}</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_allowed}</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_denied}</td>
+                    <td class="py-2 text-orange-400">${p.eopa_allowed}</td>
+                    <td class="py-2 text-orange-400">${p.eopa_denied}</td>
+                    <td class="py-2">${matchBadge}</td>
+                    <td class="py-2 text-green-400 font-bold">${p.avg_speedup.toFixed(1)}x</td>
+                </tr>`;
+            }).join('');
+
+            const overallBadge = allMatch
+                ? '<span class="text-green-400 font-bold">ALL MATCH</span>'
+                : '<span class="text-yellow-400 font-bold">MISMATCH</span>';
+
+            const totalsRow = `<tr class="border-t-2 border-gray-500 font-bold">
+                <td class="py-2">OVERALL</td>
+                <td class="py-2" colspan="6"></td>
+                <td class="py-2">${overallBadge}</td>
+                <td class="py-2"></td>
+            </tr>`;
+
+            document.getElementById('multiFairnessBody').innerHTML = rows + totalsRow;
+        }
+
+        function renderMultiResultsTable(perPolicy) {
+            document.getElementById('multiResultsBody').innerHTML = perPolicy.map(p => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-2">${p.policy_name}</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_avg_p99_us.toFixed(0)}us</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_avg_p99_us.toFixed(0)}us</td>
+                    <td class="py-2 text-orange-400">${p.eopa_avg_p99_us.toFixed(0)}us</td>
+                    <td class="py-2 text-blue-400">${p.reaper_uds_avg_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2 text-cyan-400">${p.reaper_tcp_avg_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2 text-orange-400">${p.eopa_avg_rps.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td class="py-2 text-green-400 font-bold">${p.avg_speedup.toFixed(1)}x</td>
+                </tr>
+            `).join('');
+        }
+
+        // Initialize
+        loadPackages();
+    </script>
+</body>
+</html>

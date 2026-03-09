@@ -1,0 +1,296 @@
+{
+  "entities": [
+    {
+      "id": "user_valid_token",
+      "type": "User",
+      "attributes": {
+        "role": "api_user",
+        "token_expires_at": 1800000000000000000
+      }
+    },
+    {
+      "id": "user_expired_token",
+      "type": "User",
+      "attributes": {
+        "role": "api_user",
+        "token_expires_at": 1700000000000000000
+      }
+    },
+    {
+      "id": "employee",
+      "type": "User",
+      "attributes": {
+        "role": "employee",
+        "work_start_time": 1765140000000000000,
+        "work_end_time": 1800000000000000000
+      }
+    },
+    {
+      "id": "employee_after_hours",
+      "type": "User",
+      "attributes": {
+        "role": "employee",
+        "work_start_time": 1700000000000000000,
+        "work_end_time": 1760000000000000000
+      }
+    },
+    {
+      "id": "user_adult",
+      "type": "User",
+      "attributes": {
+        "role": "customer",
+        "birthdate": 946684800
+      }
+    },
+    {
+      "id": "user_minor",
+      "type": "User",
+      "attributes": {
+        "role": "customer",
+        "birthdate": 1577836800
+      }
+    },
+    {
+      "id": "tenant_active",
+      "type": "User",
+      "attributes": {
+        "role": "tenant",
+        "lease_end_time": 1800000000000000000
+      }
+    },
+    {
+      "id": "tenant_expired",
+      "type": "User",
+      "attributes": {
+        "role": "tenant",
+        "lease_end_time": 1700000000000000000
+      }
+    },
+    {
+      "id": "operator",
+      "type": "User",
+      "attributes": {
+        "role": "operator"
+      }
+    },
+    {
+      "id": "operator_wrong_time",
+      "type": "User",
+      "attributes": {
+        "role": "operator"
+      }
+    },
+    {
+      "id": "user_extended_session",
+      "type": "User",
+      "attributes": {
+        "role": "user",
+        "session_start_time": 1765180000000000000,
+        "session_extension_ns": 10000000000
+      }
+    },
+    {
+      "id": "event_planner",
+      "type": "User",
+      "attributes": {
+        "role": "event_planner",
+        "event_scheduled_time": 1800000000000000000
+      }
+    },
+    {
+      "id": "event_planner_past",
+      "type": "User",
+      "attributes": {
+        "role": "event_planner",
+        "event_scheduled_time": 1700000000000000000
+      }
+    },
+    {
+      "id": "contractor_active",
+      "type": "User",
+      "attributes": {
+        "role": "contractor",
+        "access_grant_start": 1765140000000000000,
+        "access_grant_end": 1800000000000000000
+      }
+    },
+    {
+      "id": "contractor_expired",
+      "type": "User",
+      "attributes": {
+        "role": "contractor",
+        "access_grant_start": 1700000000000000000,
+        "access_grant_end": 1760000000000000000
+      }
+    },
+    {
+      "id": "system_with_timestamp",
+      "type": "User",
+      "attributes": {
+        "role": "system",
+        "has_valid_timestamp": true
+      }
+    },
+    {
+      "id": "audit_logger",
+      "type": "User",
+      "attributes": {
+        "role": "audit_logger",
+        "can_log_audit": true
+      }
+    },
+    {
+      "id": "api_client_normal",
+      "type": "User",
+      "attributes": {
+        "role": "api_client",
+        "last_request_time": 1765180000000000000,
+        "rate_limit_window_ns": 1000000000
+      }
+    },
+    {
+      "id": "api_client_exceeded",
+      "type": "User",
+      "attributes": {
+        "role": "api_client",
+        "last_request_time": 1765186200000000000,
+        "rate_limit_window_ns": 1000000000
+      }
+    },
+    {
+      "id": "archiver",
+      "type": "User",
+      "attributes": {
+        "role": "archiver"
+      }
+    },
+    {
+      "id": "retention_policy",
+      "type": "User",
+      "attributes": {
+        "role": "system"
+      }
+    },
+    {
+      "id": "api_endpoint",
+      "type": "Resource",
+      "attributes": {
+        "type": "api_endpoint"
+      }
+    },
+    {
+      "id": "office_system",
+      "type": "Resource",
+      "attributes": {
+        "type": "office_system"
+      }
+    },
+    {
+      "id": "alcohol",
+      "type": "Resource",
+      "attributes": {
+        "type": "product",
+        "requires_age_verification": true
+      }
+    },
+    {
+      "id": "apartment_101",
+      "type": "Resource",
+      "attributes": {
+        "type": "apartment"
+      }
+    },
+    {
+      "id": "production_system",
+      "type": "Resource",
+      "attributes": {
+        "type": "production_system",
+        "maintenance_window_start": 1765140000000000000,
+        "maintenance_window_end": 1800000000000000000
+      }
+    },
+    {
+      "id": "production_system_outside_window",
+      "type": "Resource",
+      "attributes": {
+        "type": "production_system",
+        "maintenance_window_start": 1700000000000000000,
+        "maintenance_window_end": 1760000000000000000
+      }
+    },
+    {
+      "id": "web_session",
+      "type": "Resource",
+      "attributes": {
+        "type": "web_session"
+      }
+    },
+    {
+      "id": "conference_room",
+      "type": "Resource",
+      "attributes": {
+        "type": "conference_room"
+      }
+    },
+    {
+      "id": "project_files",
+      "type": "Resource",
+      "attributes": {
+        "type": "project_files"
+      }
+    },
+    {
+      "id": "timestamp_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "timestamp_data"
+      }
+    },
+    {
+      "id": "audit_trail",
+      "type": "Resource",
+      "attributes": {
+        "type": "audit_trail"
+      }
+    },
+    {
+      "id": "rate_limited_endpoint",
+      "type": "Resource",
+      "attributes": {
+        "type": "rate_limited_endpoint"
+      }
+    },
+    {
+      "id": "old_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "data",
+        "creation_time": 1765180000000000000,
+        "retention_period_ns": 100000000000
+      }
+    },
+    {
+      "id": "expired_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "data",
+        "creation_time": 1700000000000000000,
+        "retention_period_ns": 10000000000
+      }
+    },
+    {
+      "id": "resource_0",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    },
+    {
+      "id": "resource_1",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    }
+  ]
+}

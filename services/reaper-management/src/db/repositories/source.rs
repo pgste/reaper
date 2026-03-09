@@ -1,0 +1,509 @@
+//! Policy source repository for database operations
+//!
+//! Handles persistence of policy source records.
+
+use chrono::Utc;
+use sqlx::Row;
+use uuid::Uuid;
+
+use crate::db::{Database, DatabaseError};
+use crate::domain::source::{
+    CreatePolicySource, PolicySource, SourceType, SyncStatus, UpdatePolicySource,
+};
+
+/// Repository for policy source operations
+pub struct PolicySourceRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> PolicySourceRepository<'a> {
+    /// Create a new policy source repository
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    /// Create a new policy source
+    pub async fn create(
+        &self,
+        org_id: Uuid,
+        input: CreatePolicySource,
+    ) -> Result<PolicySource, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let config_json = serde_json::to_string(&input.config).unwrap_or_else(|_| "{}".to_string());
+
+        sqlx::query(
+            r#"
+            INSERT INTO policy_sources (id, org_id, name, description, source_type, config, sync_interval_secs, sync_status, is_enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(org_id.to_string())
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(input.source_type.to_string())
+        .bind(&config_json)
+        .bind(input.sync_interval_secs as i64)
+        .bind(SyncStatus::Pending.to_string())
+        .bind(true)
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(pool)
+        .await?;
+
+        Ok(PolicySource {
+            id,
+            org_id,
+            name: input.name,
+            description: input.description,
+            source_type: input.source_type,
+            config: input.config,
+            sync_interval_secs: input.sync_interval_secs,
+            sync_status: SyncStatus::Pending,
+            last_sync_at: None,
+            last_sync_error: None,
+            last_sync_commit: None,
+            is_enabled: true,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Get policy source by ID
+    pub async fn get_by_id(&self, id: Uuid) -> Result<Option<PolicySource>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                   sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                   created_at, updated_at
+            FROM policy_sources
+            WHERE id = ?
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(self.row_to_source(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get policy source by name within an organization
+    pub async fn get_by_name(
+        &self,
+        org_id: Uuid,
+        name: &str,
+    ) -> Result<Option<PolicySource>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                   sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                   created_at, updated_at
+            FROM policy_sources
+            WHERE org_id = ? AND name = ?
+            "#,
+        )
+        .bind(org_id.to_string())
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(self.row_to_source(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List policy sources for an organization
+    pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<PolicySource>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                   sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                   created_at, updated_at
+            FROM policy_sources
+            WHERE org_id = ?
+            ORDER BY name ASC
+            "#,
+        )
+        .bind(org_id.to_string())
+        .fetch_all(pool)
+        .await?;
+
+        let mut sources = Vec::with_capacity(rows.len());
+        for row in rows {
+            sources.push(self.row_to_source(row)?);
+        }
+
+        Ok(sources)
+    }
+
+    /// List sources that need syncing
+    pub async fn list_due_for_sync(&self) -> Result<Vec<PolicySource>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        // Get all enabled sources with sync_interval > 0
+        let rows = sqlx::query(
+            r#"
+            SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                   sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                   created_at, updated_at
+            FROM policy_sources
+            WHERE is_enabled = 1
+              AND sync_interval_secs > 0
+              AND sync_status != ?
+            ORDER BY last_sync_at ASC NULLS FIRST
+            "#,
+        )
+        .bind(SyncStatus::Syncing.to_string())
+        .fetch_all(pool)
+        .await?;
+
+        let mut sources = Vec::with_capacity(rows.len());
+        for row in rows {
+            let source = self.row_to_source(row)?;
+            if source.is_sync_due() {
+                sources.push(source);
+            }
+        }
+
+        Ok(sources)
+    }
+
+    /// Update policy source
+    pub async fn update(&self, id: Uuid, input: UpdatePolicySource) -> Result<bool, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let mut updates = Vec::new();
+        let mut bindings: Vec<String> = Vec::new();
+
+        if let Some(name) = &input.name {
+            updates.push("name = ?");
+            bindings.push(name.clone());
+        }
+
+        if let Some(description) = &input.description {
+            updates.push("description = ?");
+            bindings.push(description.clone());
+        }
+
+        if let Some(config) = &input.config {
+            updates.push("config = ?");
+            bindings.push(serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()));
+        }
+
+        if let Some(sync_interval) = input.sync_interval_secs {
+            updates.push("sync_interval_secs = ?");
+            bindings.push(sync_interval.to_string());
+        }
+
+        if let Some(is_enabled) = input.is_enabled {
+            updates.push("is_enabled = ?");
+            bindings.push(if is_enabled {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            });
+        }
+
+        if updates.is_empty() {
+            return Ok(false);
+        }
+
+        updates.push("updated_at = ?");
+        bindings.push(Utc::now().to_rfc3339());
+
+        let sql = format!(
+            "UPDATE policy_sources SET {} WHERE id = ?",
+            updates.join(", ")
+        );
+
+        let mut query = sqlx::query(&sql);
+        for binding in &bindings {
+            query = query.bind(binding);
+        }
+        query = query.bind(id.to_string());
+
+        let result = query.execute(pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update sync status
+    pub async fn update_sync_status(
+        &self,
+        id: Uuid,
+        status: SyncStatus,
+        error: Option<&str>,
+        commit: Option<&str>,
+    ) -> Result<bool, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let now = Utc::now().to_rfc3339();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE policy_sources
+            SET sync_status = ?, last_sync_at = ?, last_sync_error = ?, last_sync_commit = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(status.to_string())
+        .bind(&now)
+        .bind(error)
+        .bind(commit)
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Delete policy source
+    pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let result = sqlx::query("DELETE FROM policy_sources WHERE id = ?")
+            .bind(id.to_string())
+            .execute(pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Convert database row to PolicySource
+    fn row_to_source(&self, row: sqlx::sqlite::SqliteRow) -> Result<PolicySource, DatabaseError> {
+        let id_str: String = row.get("id");
+        let id = Uuid::parse_str(&id_str)
+            .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
+
+        let org_id_str: String = row.get("org_id");
+        let org_id = Uuid::parse_str(&org_id_str)
+            .map_err(|e| DatabaseError::Config(format!("Invalid org UUID: {}", e)))?;
+
+        let source_type_str: String = row.get("source_type");
+        let source_type = source_type_str
+            .parse::<SourceType>()
+            .unwrap_or(SourceType::Git);
+
+        let config_str: String = row.get("config");
+        let config = serde_json::from_str(&config_str).unwrap_or_else(|_| serde_json::json!({}));
+
+        let sync_status_str: String = row.get("sync_status");
+        let sync_status = sync_status_str
+            .parse::<SyncStatus>()
+            .unwrap_or(SyncStatus::Pending);
+
+        let sync_interval: i64 = row.get("sync_interval_secs");
+
+        let last_sync_at: Option<String> = row.get("last_sync_at");
+        let last_sync_at = last_sync_at
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let created_at_str: String = row.get("created_at");
+        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        let updated_at_str: String = row.get("updated_at");
+        let updated_at = chrono::DateTime::parse_from_rfc3339(&updated_at_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        let is_enabled: bool = row.get("is_enabled");
+
+        Ok(PolicySource {
+            id,
+            org_id,
+            name: row.get("name"),
+            description: row.get("description"),
+            source_type,
+            config,
+            sync_interval_secs: sync_interval as u32,
+            sync_status,
+            last_sync_at,
+            last_sync_error: row.get("last_sync_error"),
+            last_sync_commit: row.get("last_sync_commit"),
+            is_enabled,
+            created_at,
+            updated_at,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DatabaseConfig;
+    use crate::db::repositories::OrganizationRepository;
+    use crate::domain::organization::CreateOrganization;
+    use tempfile::TempDir;
+
+    async fn setup_db() -> (TempDir, Database) {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let url = format!("sqlite:{}", db_path.display());
+
+        let config = DatabaseConfig {
+            db_type: "sqlite".to_string(),
+            url,
+            max_connections: 5,
+        };
+
+        let db = Database::new(&config).await.unwrap();
+        db.run_migrations().await.unwrap();
+        (temp_dir, db)
+    }
+
+    async fn create_test_org(db: &Database) -> Uuid {
+        let repo = OrganizationRepository::new(db);
+        let input = CreateOrganization {
+            name: "Test Org".to_string(),
+            slug: "test-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+        };
+        repo.create(input).await.unwrap().id
+    }
+
+    #[tokio::test]
+    async fn test_create_git_source() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = PolicySourceRepository::new(&db);
+
+        let input = CreatePolicySource {
+            name: "main-policies".to_string(),
+            description: Some("Main policy repository".to_string()),
+            source_type: SourceType::Git,
+            config: serde_json::json!({
+                "url": "https://github.com/example/policies.git",
+                "branch": "main",
+                "patterns": ["**/*.reap"]
+            }),
+            sync_interval_secs: 300,
+        };
+
+        let source = repo.create(org_id, input).await.unwrap();
+        assert_eq!(source.name, "main-policies");
+        assert_eq!(source.source_type, SourceType::Git);
+        assert_eq!(source.sync_status, SyncStatus::Pending);
+        assert!(source.is_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_create_api_source() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = PolicySourceRepository::new(&db);
+
+        let input = CreatePolicySource {
+            name: "policy-api".to_string(),
+            description: None,
+            source_type: SourceType::Api,
+            config: serde_json::json!({
+                "url": "https://api.example.com/policies",
+                "method": "GET",
+                "api_key_header": "X-API-Key",
+                "jsonpath": "$.policies[*]"
+            }),
+            sync_interval_secs: 60,
+        };
+
+        let source = repo.create(org_id, input).await.unwrap();
+        assert_eq!(source.name, "policy-api");
+        assert_eq!(source.source_type, SourceType::Api);
+    }
+
+    #[tokio::test]
+    async fn test_update_sync_status() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = PolicySourceRepository::new(&db);
+
+        let input = CreatePolicySource {
+            name: "test-source".to_string(),
+            description: None,
+            source_type: SourceType::Git,
+            config: serde_json::json!({"url": "https://example.com/repo.git"}),
+            sync_interval_secs: 300,
+        };
+
+        let source = repo.create(org_id, input).await.unwrap();
+
+        // Update to syncing
+        repo.update_sync_status(source.id, SyncStatus::Syncing, None, None)
+            .await
+            .unwrap();
+
+        let updated = repo.get_by_id(source.id).await.unwrap().unwrap();
+        assert_eq!(updated.sync_status, SyncStatus::Syncing);
+
+        // Update to success with commit
+        repo.update_sync_status(source.id, SyncStatus::Success, None, Some("abc123"))
+            .await
+            .unwrap();
+
+        let updated = repo.get_by_id(source.id).await.unwrap().unwrap();
+        assert_eq!(updated.sync_status, SyncStatus::Success);
+        assert_eq!(updated.last_sync_commit, Some("abc123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_sources() {
+        let (_temp_dir, db) = setup_db().await;
+        let org_id = create_test_org(&db).await;
+        let repo = PolicySourceRepository::new(&db);
+
+        for i in 0..3 {
+            let input = CreatePolicySource {
+                name: format!("source-{}", i),
+                description: None,
+                source_type: SourceType::Git,
+                config: serde_json::json!({"url": format!("https://example.com/repo{}.git", i)}),
+                sync_interval_secs: 300,
+            };
+            repo.create(org_id, input).await.unwrap();
+        }
+
+        let sources = repo.list_by_org(org_id).await.unwrap();
+        assert_eq!(sources.len(), 3);
+    }
+}

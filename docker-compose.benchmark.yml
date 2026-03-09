@@ -1,0 +1,151 @@
+version: '3.8'
+
+# Reaper Benchmark Stack
+#
+# Usage:
+#   # Start benchmark environment
+#   docker compose -f docker-compose.benchmark.yml up --build
+#
+#   # Open dashboard
+#   open http://localhost:3000
+#
+#   # Run benchmark via API
+#   curl -X POST http://localhost:3000/run-benchmark | jq
+#
+#   # Stop and clean up
+#   docker compose -f docker-compose.benchmark.yml down -v
+
+services:
+  # Certificate generator (init container)
+  cert-init:
+    image: alpine:3.19
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache openssl
+
+        echo "Generating CA certificate..."
+        openssl genrsa -out /certs/ca.key 4096
+        openssl req -new -x509 -days 365 -key /certs/ca.key \
+          -subj "/CN=Reaper CA" -out /certs/ca.crt
+
+        echo "Generating server certificate for agent..."
+        openssl genrsa -out /certs/server.key 2048
+        openssl req -new -key /certs/server.key \
+          -subj "/CN=reaper-agent" -out /certs/server.csr
+
+        # Create config for SANs
+        cat > /certs/server.ext <<EOF
+        subjectAltName=DNS:reaper-agent,DNS:localhost,IP:127.0.0.1
+        EOF
+
+        openssl x509 -req -in /certs/server.csr -CA /certs/ca.crt \
+          -CAkey /certs/ca.key -CAcreateserial \
+          -out /certs/server.crt -days 365 \
+          -extfile /certs/server.ext
+
+        echo "Generating client certificate for benchmark service..."
+        openssl genrsa -out /certs/client.key 2048
+        openssl req -new -key /certs/client.key \
+          -subj "/CN=reaper-bench" -out /certs/client.csr
+
+        # Create config for client cert SANs (required for v3 extension)
+        cat > /certs/client.ext <<EOF
+        basicConstraints=CA:FALSE
+        keyUsage=digitalSignature,keyEncipherment
+        extendedKeyUsage=clientAuth
+        subjectAltName=DNS:reaper-bench,DNS:localhost
+        EOF
+
+        openssl x509 -req -in /certs/client.csr -CA /certs/ca.crt \
+          -CAkey /certs/ca.key -CAcreateserial \
+          -out /certs/client.crt -days 365 \
+          -extfile /certs/client.ext
+
+        chmod 644 /certs/*.crt /certs/*.key
+        echo "Certificates generated successfully"
+        ls -la /certs/
+    volumes:
+      - certs:/certs
+
+  # Reaper Agent with TLS
+  reaper-agent:
+    build:
+      context: .
+      dockerfile: services/reaper-agent/Dockerfile
+    ports:
+      - "8443:8443"
+      - "8080:8080"
+    environment:
+      # Network
+      REAPER_AGENT_PORT: 8443
+      REAPER_AGENT_BIND_ADDRESS: "0.0.0.0"
+      # TLS settings
+      REAPER_TLS_ENABLED: "true"
+      REAPER_TLS_CERT: /certs/server.crt
+      REAPER_TLS_KEY: /certs/server.key
+      REAPER_TLS_CA: /certs/ca.crt
+      REAPER_TLS_REQUIRE_CLIENT_CERT: "true"
+      # Disable decision cache for accurate benchmark
+      REAPER_CACHE_ENABLED: "false"
+      # Logging
+      RUST_LOG: "info,reaper_agent=debug"
+      REAPER_LOG_FORMAT: "pretty"
+    volumes:
+      - certs:/certs:ro
+      - ./services/reaper-bench/policies:/policies:ro
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--ca-certificate=/certs/ca.crt", "--certificate=/certs/client.crt", "--private-key=/certs/client.key", "-q", "-O-", "https://localhost:8443/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    command:
+      - --bootstrap-policies=/policies
+
+  # Benchmark Service
+  reaper-bench:
+    build:
+      context: .
+      dockerfile: services/reaper-bench/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      REAPER_AGENT_URL: "https://reaper-agent:8443"
+      REAPER_TLS_CA: /certs/ca.crt
+      REAPER_TLS_CERT: /certs/client.crt
+      REAPER_TLS_KEY: /certs/client.key
+      RUST_LOG: "info,reaper_bench=debug"
+    volumes:
+      - certs:/certs:ro
+    depends_on:
+      reaper-agent:
+        condition: service_healthy
+
+  # Optional: Non-TLS agent for comparison
+  reaper-agent-notls:
+    build:
+      context: .
+      dockerfile: services/reaper-agent/Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      REAPER_AGENT_PORT: 8080
+      REAPER_TLS_ENABLED: "false"
+      REAPER_CACHE_ENABLED: "false"
+      RUST_LOG: "info"
+    volumes:
+      - ./services/reaper-bench/policies:/policies:ro
+    profiles:
+      - notls
+    command:
+      - --bootstrap-policies=/policies
+
+volumes:
+  certs:
+    driver: local

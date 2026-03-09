@@ -1,0 +1,75 @@
+// Comprehension Expressions Policy
+// Tests set, array, and object comprehensions with filters
+
+policy comprehensions {
+    version: "1.0",
+    description: "Comprehension expressions for integration testing",
+    default: deny,
+
+    // Set comprehension with filter
+    rule filtered_set_comprehension {
+        allow if {
+            user.numbers != null &&
+            resource.type == "set_result" &&
+            evens := {n | n := user.numbers[_]; n > 5} &&
+            even_count := evens.count() &&
+            even_count >= 3
+        }
+    }
+
+    // Array comprehension preserving order
+    rule ordered_array_comprehension {
+        allow if {
+            user.items != null &&
+            resource.type == "array_result" &&
+            filtered := [item | item := user.items[_]; item.priority == "high"] &&
+            filtered_count := filtered.count() &&
+            filtered_count >= 2
+        }
+    }
+
+    // Object comprehension creating mapping
+    rule object_mapping_comprehension {
+        allow if {
+            user.records != null &&
+            resource.type == "object_result" &&
+            mapping := {r.id: r.value | r := user.records[_]; r.active == true} &&
+            map_count := mapping.count() &&
+            map_count >= 2
+        }
+    }
+
+    // Multiple filters in comprehension
+    rule multi_filter_comprehension {
+        allow if {
+            user.data != null &&
+            resource.type == "complex_filter" &&
+            filtered := [d | d := user.data[_]; d.score > 80; d.verified == true] &&
+            filtered_count := filtered.count() &&
+            filtered_count >= 2
+        }
+    }
+
+    // Nested iteration comprehension
+    rule nested_comprehension {
+        allow if {
+            user.nested != null &&
+            resource.type == "nested_result" &&
+            // Collect all groups that have items
+            groups_with_items := [g | g := user.nested[_]; g.items != null] &&
+            groups_count := groups_with_items.count() &&
+            groups_count >= 2
+        }
+    }
+
+    // Comprehension with transformation
+    rule transform_comprehension {
+        allow if {
+            user.strings != null &&
+            resource.type == "transformed_data" &&
+            uppers := [s.upper() | s := user.strings[_]; s.contains("a")] &&
+            uppers_count := uppers.count() &&
+            uppers_count >= 2
+        }
+    }
+}

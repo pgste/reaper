@@ -1,0 +1,49 @@
+// String Operations Policy
+// Tests actual string method calls in compiled mode
+
+policy string_operations {
+    version: "1.0",
+    description: "String operations for integration testing",
+    default: deny,
+
+    // Email domain check - uses .endswith()
+    rule company_email {
+        allow if {
+            resource.type == "internal_docs" &&
+            user.email.endswith("@company.com")
+        }
+    }
+
+    // Access code check - uses .contains()
+    rule access_code_check {
+        allow if {
+            resource.type == "code_entry" &&
+            user.access_code.contains("admin")
+        }
+    }
+
+    // Admin username check - uses .startswith()
+    rule admin_user {
+        allow if {
+            resource.type == "system_settings" &&
+            user.username.startswith("admin_")
+        }
+    }
+
+    // Government email check - uses .endswith()
+    rule gov_email {
+        allow if {
+            resource.type == "classified_docs" &&
+            user.email.endswith(".gov")
+        }
+    }
+
+    // Case insensitive name check - uses .lower()
+    rule case_insensitive_name {
+        allow if {
+            resource.type == "case_insensitive" &&
+            user.name != null &&
+            user.name.lower() == "john doe"
+        }
+    }
+}

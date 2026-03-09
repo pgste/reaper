@@ -1,0 +1,121 @@
+// Error Handling and Edge Case Policy
+// Tests behavior under error conditions
+
+policy error_handling {
+    version: "1.0",
+    description: "Edge case and error handling validation",
+    default: deny,
+
+    // Missing attribute check - requires department
+    rule department_check {
+        allow if {
+            resource.type == "department" &&
+            user.department != null &&
+            user.department == resource.required_dept
+        }
+    }
+
+    // Null role check - requires non-null role
+    rule admin_role_check {
+        allow if {
+            resource.type == "admin" &&
+            user.role != null &&
+            user.role == "admin"
+        }
+    }
+
+    // Empty permissions check - requires non-empty permissions
+    rule permission_check {
+        allow if {
+            resource.type == "permission_check" &&
+            user.permissions != null &&
+            count := user.permissions.count() &&
+            count > 0
+        }
+    }
+
+    // Empty roles check
+    rule role_array_check {
+        allow if {
+            resource.type == "role_check" &&
+            user.roles != null &&
+            count := user.roles.count() &&
+            count > 0
+        }
+    }
+
+    // Deep nested attribute access
+    rule nested_access {
+        allow if {
+            resource.type == "nested" &&
+            user.config != null &&
+            user.config.settings != null &&
+            user.config.settings.security != null &&
+            user.config.settings.security.level == resource.required_level
+        }
+    }
+
+    // Large collection - user has specific permission
+    rule large_collection_check {
+        allow if {
+            resource.type == "performance" &&
+            user.permissions != null &&
+            "target_perm" in user.permissions
+        }
+    }
+
+    // Boolean active check - must be true boolean
+    rule active_check {
+        allow if {
+            resource.type == "active_check" &&
+            user.active == true
+        }
+    }
+
+    // Strict boolean check - string "true" should fail
+    rule strict_bool_check {
+        allow if {
+            resource.type == "strict_bool" &&
+            user.active == true &&
+            user.active != "true"
+        }
+    }
+
+    // Trimmed name check
+    rule name_trim_check {
+        allow if {
+            resource.type == "name_check" &&
+            user.name != null &&
+            trimmed := user.name.trim() &&
+            trimmed == resource.expected_name
+        }
+    }
+
+    // Exact name match (no trim)
+    rule exact_name_check {
+        allow if {
+            resource.type == "exact_match" &&
+            user.name != null &&
+            user.name == resource.expected_name
+        }
+    }
+
+    // Unicode support
+    rule unicode_check {
+        allow if {
+            resource.type == "unicode" &&
+            user.name != null &&
+            user.unicode_enabled == true &&
+            resource.allow_unicode == true
+        }
+    }
+
+    // Age verification with type coercion
+    rule age_verify {
+        allow if {
+            resource.type == "age_verification" &&
+            user.age != null &&
+            user.age >= resource.min_age
+        }
+    }
+}

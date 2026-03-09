@@ -1,4 +1,4 @@
-.PHONY: setup dev test bdd bench coverage clean release check agent platform cli
+.PHONY: setup dev test bdd bench bench-summary coverage clean release check agent platform cli ebpf ebpf-setup ebpf-kern ebpf-test
 
 # One-time setup
 setup:
@@ -6,34 +6,46 @@ setup:
 
 # Development workflow with auto-reload
 dev:
-	cargo watch -x "check --workspace" -x "test --workspace --lib"
+	cargo watch -x "check --workspace $(EXCLUDE_EBPF)" -x "test --workspace $(EXCLUDE_EBPF) --lib"
+
+# Detect OS for eBPF exclusion
+UNAME := $(shell uname)
+ifeq ($(UNAME), Linux)
+	EXCLUDE_EBPF :=
+else
+	EXCLUDE_EBPF := --exclude reaper-ebpf
+endif
 
 # Run all tests (unit + integration + BDD)
 test:
-	@echo "🧪 Running Reaper unit tests..."
-	cargo test --workspace --lib
-	@echo "🥒 Running Reaper BDD scenarios..."
-	cargo test --workspace --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
-	@echo "🔗 Running integration tests..."
-	cargo test --workspace --test '*integration*' 2>/dev/null || echo "Integration tests will be added"
+	@echo "Running Reaper unit tests..."
+	cargo test --workspace $(EXCLUDE_EBPF) --lib
+	@echo "Running Reaper BDD scenarios..."
+	cargo test --workspace $(EXCLUDE_EBPF) --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
+	@echo "Running integration tests..."
+	cargo test --workspace $(EXCLUDE_EBPF) --test '*integration*' 2>/dev/null || echo "Integration tests will be added"
 
 # Run only BDD scenarios
 bdd:
-	cargo test --workspace --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
+	cargo test --workspace $(EXCLUDE_EBPF) --test '*bdd*' 2>/dev/null || echo "BDD tests will be available after first implementation"
 
 # Performance benchmarks
 bench:
-	cargo bench --workspace
+	cargo bench --workspace $(EXCLUDE_EBPF)
+
+# Performance benchmarks with summary report
+bench-summary:
+	@./scripts/bench-summary.sh
 
 # Test coverage report
 coverage:
-	cargo tarpaulin --workspace --out Html --output-dir coverage/ --exclude-files 'target/*' 'tests/*'
+	cargo tarpaulin --workspace $(EXCLUDE_EBPF) --out Html --output-dir coverage/ --exclude-files 'target/*' 'tests/*'
 
 # Code quality checks
-check: 
+check:
 	cargo fmt --check
-	cargo clippy --workspace -- -D warnings
-	cargo test --workspace
+	cargo clippy --workspace $(EXCLUDE_EBPF) -- -D warnings
+	cargo test --workspace $(EXCLUDE_EBPF)
 
 # Build and run Reaper Agent locally
 agent:
@@ -61,8 +73,8 @@ release:
 
 # Quick build check for all Reaper components
 build:
-	cargo build --workspace
-	cargo build --workspace --release
+	cargo build --workspace $(EXCLUDE_EBPF)
+	cargo build --workspace $(EXCLUDE_EBPF) --release
 
 # Run both agent and platform in development
 dev-services:
@@ -91,3 +103,32 @@ status:
 	@echo "  make agent       # Run Reaper Agent"
 	@echo "  make platform    # Run Reaper Platform"
 	@echo "  make cli         # Build Reaper CLI"
+	@echo "  make ebpf        # Build eBPF components"
+
+# eBPF Setup
+ebpf-setup:
+	@echo "🔧 Setting up eBPF build environment..."
+	rustup toolchain install nightly
+	rustup component add rust-src --toolchain nightly
+	rustup +nightly target add bpfel-unknown-none
+	@echo "✅ eBPF toolchain ready!"
+
+# Build eBPF userspace components
+ebpf:
+	@echo "🏗️  Building eBPF userspace components..."
+	cargo build -p reaper-ebpf
+	@echo "✅ eBPF userspace built successfully!"
+
+# Build eBPF kernel program (when implemented)
+ebpf-kern:
+	@echo "🏗️  Building eBPF kernel program..."
+	@echo "⚠️  Kernel program not yet implemented"
+	@echo "📝 See crates/reaper-ebpf/BUILD.md for details"
+	# cd crates/reaper-ebpf/reaper-ebpf-kern && \
+	# cargo +nightly build --target=bpfel-unknown-none -Z build-std=core --release
+
+# Test eBPF components
+ebpf-test:
+	@echo "🧪 Testing eBPF components..."
+	cargo test -p reaper-ebpf
+	@echo "✅ eBPF tests passed!"

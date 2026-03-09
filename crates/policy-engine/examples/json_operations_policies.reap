@@ -1,0 +1,233 @@
+// JSON Operations Policy Examples
+// Demonstrates high-performance JSON parsing, serialization, and validation
+
+policy api_gateway {
+    version: "1.0",
+    description: "JSON-based API request validation and transformation using serde_json",
+    default: deny,
+
+    // Example 1: Validate JSON payloads before processing
+    rule validate_json_payload {
+        allow if payload_strings := user.api_payloads
+        && valid_jsons := [json::is_valid(p) | p := payload_strings[_]]
+        && valid_jsons.all()
+        && resource.type == "api_endpoint"
+        && user.role in ["api_client", "service"]
+    }
+
+    // Example 2: Parse JSON configuration and check structure
+    rule parse_config_json {
+        allow if config_str := user.config_json
+        && is_valid := json::is_valid(config_str)
+        && is_valid == true
+        && resource.requires_config == true
+        && user.role == "admin"
+    }
+
+    // Example 3: Serialize objects to JSON for logging
+    rule serialize_audit_log {
+        allow if audit_objects := user.audit_data
+        && json_logs := [json::stringify(obj) | obj := audit_objects[_]]
+        && json_logs.count() > 0
+        && resource.type == "audit_system"
+        && user.role in ["auditor", "compliance"]
+    }
+
+    // Example 4: Validate webhook payloads
+    rule webhook_validation {
+        allow if webhooks := user.incoming_webhooks
+        && valid_webhooks := [json::is_valid(wh) | wh := webhooks[_]]
+        && valid_webhooks.all()
+        && resource.accepts_webhooks == true
+        && user.role == "webhook_processor"
+    }
+
+    // Example 5: JSON schema validation through parsing
+    rule schema_validation {
+        allow if schemas := resource.json_schemas
+        && valid_schemas := [json::is_valid(s) | s := schemas[_]]
+        && valid_schemas.count() == schemas.count()
+        && context.action == "validate_schema"
+        && user.role == "schema_validator"
+    }
+
+    // Example 6: Parse and re-serialize for normalization
+    rule normalize_json_format {
+        allow if raw_jsons := user.raw_json_data
+        && valid_inputs := [json::is_valid(j) | j := raw_jsons[_]]
+        && valid_inputs.all()
+        && resource.type == "data_normalizer"
+        && context.action == "normalize"
+    }
+
+    // Example 7: Validate API response format
+    rule api_response_validation {
+        allow if responses := resource.api_responses
+        && valid_responses := [json::is_valid(r) | r := responses[_]]
+        && valid_responses.all()
+        && user.role == "api_tester"
+        && context.action == "test_api"
+    }
+
+    // Example 8: Serialize configuration for export
+    rule export_configuration {
+        allow if configs := user.configuration_objects
+        && json_exports := [json::stringify(c) | c := configs[_]]
+        && json_exports.count() > 0
+        && resource.type == "config_export"
+        && user.role in ["admin", "ops"]
+    }
+
+    // Example 9: Validate JSON before storage
+    rule validate_before_storage {
+        allow if documents := user.documents_to_store
+        && valid_docs := [json::is_valid(d) | d := documents[_]]
+        && valid_docs.count() == documents.count()
+        && resource.type == "document_store"
+        && user.role == "document_manager"
+    }
+
+    // Example 10: Parse JSON for content filtering
+    rule content_filter_json {
+        allow if content_jsons := user.content_data
+        && valid_content := [json::is_valid(c) | c := content_jsons[_]]
+        && valid_content.any()
+        && resource.content_filter_enabled == true
+        && user.role == "content_moderator"
+    }
+
+    // Example 11: Serialize user preferences
+    rule serialize_user_preferences {
+        allow if prefs := user.preference_objects
+        && json_prefs := [json::stringify(p) | p := prefs[_]]
+        && json_prefs.count() > 0
+        && resource.type == "user_settings"
+        && context.action == "save_preferences"
+    }
+
+    // Example 12: Validate multi-part JSON messages
+    rule multipart_json_validation {
+        allow if parts := user.message_parts
+        && valid_parts := [json::is_valid(part) | part := parts[_]]
+        && valid_parts.count() == parts.count()
+        && resource.type == "message_broker"
+        && user.role == "publisher"
+    }
+
+    // Example 13: Parse JSON for transformation pipeline
+    rule json_transformation_pipeline {
+        allow if input_jsons := user.pipeline_inputs
+        && valid_inputs := [json::is_valid(inp) | inp := input_jsons[_]]
+        && valid_inputs.all()
+        && resource.type == "data_pipeline"
+        && user.role == "pipeline_operator"
+    }
+
+    // Example 14: Serialize metrics for export
+    rule export_metrics_as_json {
+        allow if metrics := user.metric_objects
+        && json_metrics := [json::stringify(m) | m := metrics[_]]
+        && json_metrics.any()
+        && resource.type == "metrics_export"
+        && user.role in ["analyst", "monitoring"]
+    }
+
+    // Example 15: Validate JSON templates
+    rule template_validation {
+        allow if templates := resource.json_templates
+        && valid_templates := [json::is_valid(t) | t := templates[_]]
+        && valid_templates.all()
+        && context.action == "validate_templates"
+        && user.role == "template_designer"
+    }
+
+    // Example 16: Parse JSON for security scanning
+    rule security_scan_json {
+        allow if payloads := user.security_scan_targets
+        && valid_payloads := [json::is_valid(p) | p := payloads[_]]
+        && valid_payloads.count() > 0
+        && resource.type == "security_scanner"
+        && user.role == "security_analyst"
+    }
+
+    // Example 17: Serialize event data for queuing
+    rule queue_events_as_json {
+        allow if events := user.event_objects
+        && json_events := [json::stringify(e) | e := events[_]]
+        && json_events.count() > 0
+        && resource.type == "event_queue"
+        && user.role == "event_producer"
+    }
+
+    // Example 18: Validate JSON before API call
+    rule validate_api_request {
+        allow if requests := user.api_request_bodies
+        && valid_requests := [json::is_valid(req) | req := requests[_]]
+        && valid_requests.all()
+        && resource.api_endpoint_active == true
+        && user.role == "api_client"
+    }
+
+    // Example 19: Parse JSON configuration files
+    rule parse_config_files {
+        allow if config_files := user.configuration_strings
+        && valid_configs := [json::is_valid(cfg) | cfg := config_files[_]]
+        && valid_configs.count() == config_files.count()
+        && resource.type == "config_loader"
+        && user.role in ["ops", "devops"]
+    }
+
+    // Example 20: Serialize state for persistence
+    rule serialize_application_state {
+        allow if states := user.application_states
+        && json_states := [json::stringify(s) | s := states[_]]
+        && json_states.any()
+        && resource.type == "state_persistence"
+        && user.role == "state_manager"
+    }
+
+    // Example 21: Validate JSON patches
+    rule validate_json_patches {
+        allow if patches := user.json_patch_documents
+        && valid_patches := [json::is_valid(p) | p := patches[_]]
+        && valid_patches.all()
+        && resource.supports_json_patch == true
+        && user.role == "patch_applier"
+    }
+
+    // Example 22: Serialize cache entries
+    rule serialize_cache_data {
+        allow if cache_objects := user.cache_entries
+        && json_cache := [json::stringify(c) | c := cache_objects[_]]
+        && json_cache.count() > 0
+        && resource.type == "cache_system"
+        && user.role == "cache_manager"
+    }
+
+    // Example 23: Validate JSON-RPC requests
+    rule validate_jsonrpc {
+        allow if rpc_requests := user.jsonrpc_calls
+        && valid_rpcs := [json::is_valid(rpc) | rpc := rpc_requests[_]]
+        && valid_rpcs.all()
+        && resource.type == "jsonrpc_server"
+        && user.role == "rpc_client"
+    }
+
+    // Example 24: Parse JSON for data migration
+    rule parse_migration_data {
+        allow if migration_files := user.migration_jsons
+        && valid_migrations := [json::is_valid(m) | m := migration_files[_]]
+        && valid_migrations.count() > 0
+        && resource.type == "data_migration"
+        && user.role == "migration_operator"
+    }
+
+    // Example 25: Serialize reports for distribution
+    rule serialize_reports {
+        allow if reports := user.report_objects
+        && json_reports := [json::stringify(r) | r := reports[_]]
+        && json_reports.any()
+        && resource.type == "report_distribution"
+        && user.role in ["reporter", "analyst"]
+    }
+}

@@ -1,0 +1,581 @@
+// Mega Policy with 50+ Rules
+// Tests all major DSL features: math, string, regex, time, collections, JSON
+// Mirrors mega.rego from benchmarks for fair Reaper vs eOPA comparison
+
+policy mega_policy {
+    version: "1.0",
+    description: "Mega policy with 50+ rules for performance benchmarking",
+    default: deny,
+
+    // ===== MATH OPERATIONS (Rules 1-15) =====
+
+    // Rule 1: Credit Score Check
+    rule credit_score_check {
+        allow if {
+            user.credit_score != null &&
+            resource.type == "premium_loan" &&
+            user.credit_score >= 700
+        }
+    }
+
+    // Rule 2: Budget Limit Check
+    rule budget_check {
+        allow if {
+            user.order_total != null &&
+            user.budget_limit != null &&
+            resource.type == "shopping_cart" &&
+            user.order_total <= user.budget_limit
+        }
+    }
+
+    // Rule 3: Average Rating Check
+    rule rating_check {
+        allow if {
+            user.average_rating != null &&
+            resource.type == "featured_listing" &&
+            user.average_rating >= 4.0
+        }
+    }
+
+    // Rule 4: Price Range Check - Low
+    rule price_range_low {
+        allow if {
+            user.list_price != null &&
+            resource.type == "marketplace_low" &&
+            user.list_price >= 1 &&
+            user.list_price <= 100
+        }
+    }
+
+    // Rule 5: Price Range Check - Medium
+    rule price_range_medium {
+        allow if {
+            user.list_price != null &&
+            resource.type == "marketplace_medium" &&
+            user.list_price >= 100 &&
+            user.list_price <= 1000
+        }
+    }
+
+    // Rule 6: Price Range Check - High
+    rule price_range_high {
+        allow if {
+            user.list_price != null &&
+            resource.type == "marketplace_high" &&
+            user.list_price >= 1000 &&
+            user.list_price <= 10000
+        }
+    }
+
+    // Rule 7: Tier Upgrade - Bronze
+    rule tier_bronze {
+        allow if {
+            user.score != null &&
+            resource.type == "bronze_tier" &&
+            user.score >= 50.0 &&
+            user.score < 70.0
+        }
+    }
+
+    // Rule 8: Tier Upgrade - Silver
+    rule tier_silver {
+        allow if {
+            user.score != null &&
+            resource.type == "silver_tier" &&
+            user.score >= 70.0 &&
+            user.score < 90.0
+        }
+    }
+
+    // Rule 9: Tier Upgrade - Gold
+    rule tier_gold {
+        allow if {
+            user.score != null &&
+            resource.type == "gold_tier" &&
+            user.score >= 90.0
+        }
+    }
+
+    // Rule 10: Temperature Range - Cold
+    rule temp_cold {
+        allow if {
+            user.temperature != null &&
+            resource.type == "cold_storage" &&
+            user.temperature >= -50 &&
+            user.temperature <= 0
+        }
+    }
+
+    // Rule 11: Temperature Range - Normal
+    rule temp_normal {
+        allow if {
+            user.temperature != null &&
+            resource.type == "normal_storage" &&
+            user.temperature >= 0 &&
+            user.temperature <= 25
+        }
+    }
+
+    // Rule 12: Temperature Range - Warm
+    rule temp_warm {
+        allow if {
+            user.temperature != null &&
+            resource.type == "warm_storage" &&
+            user.temperature >= 25 &&
+            user.temperature <= 50
+        }
+    }
+
+    // Rule 13: Loyalty Points - Basic
+    rule loyalty_basic {
+        allow if {
+            user.total_points != null &&
+            resource.type == "loyalty_basic" &&
+            user.total_points >= 100 &&
+            user.total_points < 500
+        }
+    }
+
+    // Rule 14: Loyalty Points - Premium
+    rule loyalty_premium {
+        allow if {
+            user.total_points != null &&
+            resource.type == "loyalty_premium" &&
+            user.total_points >= 500 &&
+            user.total_points < 1000
+        }
+    }
+
+    // Rule 15: Loyalty Points - Elite
+    rule loyalty_elite {
+        allow if {
+            user.total_points != null &&
+            resource.type == "loyalty_elite" &&
+            user.total_points >= 1000
+        }
+    }
+
+    // ===== STRING OPERATIONS (Rules 22-30) =====
+
+    // Rule 22: Email Contains Domain - Company
+    rule email_company {
+        allow if {
+            user.email != null &&
+            resource.type == "company_docs" &&
+            user.email.contains("@company.com")
+        }
+    }
+
+    // Rule 23: Email Contains Domain - Partner
+    rule email_partner {
+        allow if {
+            user.email != null &&
+            resource.type == "partner_docs" &&
+            user.email.contains("@partner.com")
+        }
+    }
+
+    // Rule 24: Email Contains Domain - External
+    rule email_external {
+        allow if {
+            user.email != null &&
+            resource.type == "external_docs" &&
+            user.email.contains("@external.com")
+        }
+    }
+
+    // Rule 25: Username Prefix - Admin
+    rule username_admin {
+        allow if {
+            user.username != null &&
+            resource.type == "admin_panel" &&
+            user.username.startswith("admin_")
+        }
+    }
+
+    // Rule 26: Username Prefix - Manager
+    rule username_manager {
+        allow if {
+            user.username != null &&
+            resource.type == "manager_panel" &&
+            user.username.startswith("mgr_")
+        }
+    }
+
+    // Rule 27: Username Prefix - User
+    rule username_user {
+        allow if {
+            user.username != null &&
+            resource.type == "user_panel" &&
+            user.username.startswith("user_")
+        }
+    }
+
+    // Rule 28: Email Suffix - Gov
+    rule email_gov {
+        allow if {
+            user.email != null &&
+            resource.type == "gov_classified" &&
+            user.email.endswith(".gov")
+        }
+    }
+
+    // Rule 29: Email Suffix - Mil
+    rule email_mil {
+        allow if {
+            user.email != null &&
+            resource.type == "mil_classified" &&
+            user.email.endswith(".mil")
+        }
+    }
+
+    // Rule 30: Email Suffix - Edu
+    rule email_edu {
+        allow if {
+            user.email != null &&
+            resource.type == "edu_resources" &&
+            user.email.endswith(".edu")
+        }
+    }
+
+    // ===== REGEX VALIDATION (Rules 31-45) =====
+
+    // Rule 31: Email Validation
+    rule regex_email {
+        allow if {
+            user.email != null &&
+            resource.type == "email_validation" &&
+            regex::matches(user.email, "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$")
+        }
+    }
+
+    // Rule 32: Phone Validation
+    rule regex_phone {
+        allow if {
+            user.phone != null &&
+            resource.type == "phone_validation" &&
+            regex::matches(user.phone, "^\\+?1?\\s?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$")
+        }
+    }
+
+    // Rule 33: URL Validation
+    rule regex_url {
+        allow if {
+            user.url != null &&
+            resource.type == "url_validation" &&
+            regex::matches(user.url, "^https?://[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$")
+        }
+    }
+
+    // Rule 34: IP Validation
+    rule regex_ip {
+        allow if {
+            user.ip_address != null &&
+            resource.type == "ip_validation" &&
+            regex::matches(user.ip_address, "^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?){4}$")
+        }
+    }
+
+    // Rule 35: UUID Validation
+    rule regex_uuid {
+        allow if {
+            user.uuid != null &&
+            resource.type == "uuid_validation" &&
+            regex::matches(user.uuid, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        }
+    }
+
+    // Rule 36: Credit Card Validation
+    rule regex_credit_card {
+        allow if {
+            user.credit_card != null &&
+            resource.type == "payment_validation" &&
+            regex::matches(user.credit_card, "^\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}$")
+        }
+    }
+
+    // Rule 37: Zip Validation
+    rule regex_zip {
+        allow if {
+            user.zip_code != null &&
+            resource.type == "zip_validation" &&
+            regex::matches(user.zip_code, "^\\d{5}(-\\d{4})?$")
+        }
+    }
+
+    // Rule 38: Color Validation
+    rule regex_color {
+        allow if {
+            user.hex_color != null &&
+            resource.type == "color_validation" &&
+            regex::matches(user.hex_color, "^#[0-9A-Fa-f]{6}$")
+        }
+    }
+
+    // Rule 39: Date Validation
+    rule regex_date {
+        allow if {
+            user.date_iso != null &&
+            resource.type == "date_validation" &&
+            regex::matches(user.date_iso, "^\\d{4}-\\d{2}-\\d{2}$")
+        }
+    }
+
+    // Rule 40: Time Validation
+    rule regex_time {
+        allow if {
+            user.time_24h != null &&
+            resource.type == "time_validation" &&
+            regex::matches(user.time_24h, "^([01]\\d|2[0-3]):[0-5]\\d$")
+        }
+    }
+
+    // Rule 41: Domain Validation
+    rule regex_domain {
+        allow if {
+            user.domain_name != null &&
+            resource.type == "domain_validation" &&
+            regex::matches(user.domain_name, "^([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$")
+        }
+    }
+
+    // Rule 42: Username Validation
+    rule regex_username {
+        allow if {
+            user.username_pattern != null &&
+            resource.type == "username_validation" &&
+            regex::matches(user.username_pattern, "^[a-zA-Z0-9_-]{3,16}$")
+        }
+    }
+
+    // Rule 43: MAC Validation
+    rule regex_mac {
+        allow if {
+            user.mac_address != null &&
+            resource.type == "mac_validation" &&
+            regex::matches(user.mac_address, "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
+        }
+    }
+
+    // Rule 44: IPv6 Validation
+    rule regex_ipv6 {
+        allow if {
+            user.ipv6_address != null &&
+            resource.type == "ipv6_validation" &&
+            regex::matches(user.ipv6_address, "^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$")
+        }
+    }
+
+    // Rule 45: Version Validation
+    rule regex_semver {
+        allow if {
+            user.semver != null &&
+            resource.type == "version_validation" &&
+            regex::matches(user.semver, "^\\d+\\.\\d+\\.\\d+$")
+        }
+    }
+
+    // ===== TIME OPERATIONS (Rules 46-60) =====
+
+    // Rule 46: Token Expiration
+    rule token_valid {
+        allow if {
+            user.token_expires_at != null &&
+            resource.type == "api_endpoint" &&
+            time::is_after(user.token_expires_at, 1765180000000000000)
+        }
+    }
+
+    // Rule 47: Business Hours - Morning
+    rule business_morning {
+        allow if {
+            user.role == "employee" &&
+            resource.type == "office_morning" &&
+            user.work_start_time != null &&
+            time::is_before(user.work_start_time, 1765185000000000000)
+        }
+    }
+
+    // Rule 48: Business Hours - Afternoon
+    rule business_afternoon {
+        allow if {
+            user.role == "employee" &&
+            resource.type == "office_afternoon" &&
+            user.work_end_time != null &&
+            time::is_after(user.work_end_time, 1765185000000000000)
+        }
+    }
+
+    // Rule 49: Age Verification - 18+
+    rule age_18_plus {
+        allow if {
+            user.birthdate != null &&
+            resource.type == "adult_content" &&
+            user.birthdate < 1100000000
+        }
+    }
+
+    // Rule 50: Age Verification - 21+
+    rule age_21_plus {
+        allow if {
+            user.birthdate != null &&
+            resource.type == "alcohol_purchase" &&
+            user.birthdate < 1000000000
+        }
+    }
+
+    // Rule 51: Lease Active
+    rule lease_active {
+        allow if {
+            user.lease_end_time != null &&
+            resource.type == "apartment_access" &&
+            time::is_after(user.lease_end_time, 1765180000000000000)
+        }
+    }
+
+    // Rule 54: Session Valid
+    rule session_valid {
+        allow if {
+            user.session_start_time != null &&
+            resource.type == "web_session" &&
+            time::is_before(user.session_start_time, 1765185000000000000)
+        }
+    }
+
+    // Rule 55: Future Event
+    rule future_event {
+        allow if {
+            user.role == "event_planner" &&
+            resource.type == "conference_room" &&
+            user.event_scheduled_time != null &&
+            time::is_after(user.event_scheduled_time, 1765180000000000000)
+        }
+    }
+
+    // Rule 56: Subscription Active
+    rule subscription_active {
+        allow if {
+            user.subscription_expires != null &&
+            resource.type == "premium_feature" &&
+            time::is_after(user.subscription_expires, 1765180000000000000)
+        }
+    }
+
+    // Rule 57: Trial Active
+    rule trial_active {
+        allow if {
+            user.trial_ends != null &&
+            resource.type == "trial_feature" &&
+            time::is_after(user.trial_ends, 1765180000000000000)
+        }
+    }
+
+    // Rule 58: Contract Started
+    rule contract_started {
+        allow if {
+            user.contract_start != null &&
+            resource.type == "contractor_tools" &&
+            time::is_before(user.contract_start, 1765185000000000000)
+        }
+    }
+
+    // Rule 59: Contract Active
+    rule contract_active {
+        allow if {
+            user.contract_end != null &&
+            resource.type == "contractor_data" &&
+            time::is_after(user.contract_end, 1765185000000000000)
+        }
+    }
+
+    // Rule 60: Certification Valid
+    rule certification_valid {
+        allow if {
+            user.certification_expires != null &&
+            resource.type == "certified_operation" &&
+            time::is_after(user.certification_expires, 1765180000000000000)
+        }
+    }
+
+    // ===== COLLECTION OPERATIONS (Rules 61-66) =====
+
+    // Rule 61: Array Contains - Read
+    rule perm_read {
+        allow if {
+            user.permissions != null &&
+            resource.type == "doc_read" &&
+            "read" in user.permissions
+        }
+    }
+
+    // Rule 62: Array Contains - Write
+    rule perm_write {
+        allow if {
+            user.permissions != null &&
+            resource.type == "doc_write" &&
+            "write" in user.permissions
+        }
+    }
+
+    // Rule 63: Array Contains - Delete
+    rule perm_delete {
+        allow if {
+            user.permissions != null &&
+            resource.type == "doc_delete" &&
+            "delete" in user.permissions
+        }
+    }
+
+    // Rule 64: Array Length - Junior
+    rule skills_junior {
+        allow if {
+            user.skills != null &&
+            resource.type == "junior_position" &&
+            all_skills := [s | s := user.skills[_]] &&
+            skill_count := all_skills.count() &&
+            skill_count >= 2
+        }
+    }
+
+    // Rule 65: Array Length - Mid
+    rule skills_mid {
+        allow if {
+            user.skills != null &&
+            resource.type == "mid_position" &&
+            all_skills := [s | s := user.skills[_]] &&
+            skill_count := all_skills.count() &&
+            skill_count >= 3
+        }
+    }
+
+    // Rule 66: Array Length - Senior
+    rule skills_senior {
+        allow if {
+            user.skills != null &&
+            resource.type == "senior_position" &&
+            all_skills := [s | s := user.skills[_]] &&
+            skill_count := all_skills.count() &&
+            skill_count >= 5
+        }
+    }
+
+    // ===== JSON FIELD VALIDATION =====
+
+    // Rule 101: Valid Number Field
+    rule age_verification {
+        allow if {
+            user.age != null &&
+            resource.type == "age_verification" &&
+            user.age >= 18
+        }
+    }
+
+    // Rule 102: Valid Boolean Field
+    rule verified_check {
+        allow if {
+            user.verified != null &&
+            resource.type == "verification_check" &&
+            user.verified == true
+        }
+    }
+}

@@ -1,0 +1,35 @@
+[package]
+name = "reaper-sync"
+version = "0.1.0"
+edition = "2021"
+description = "Reaper Sync Client - Policy synchronization from management server to agent"
+
+[lib]
+name = "reaper_sync"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reaper-sync"
+path = "src/main.rs"
+
+[dependencies]
+reaper-core = { path = "../../crates/reaper-core" }
+policy-engine = { path = "../../crates/policy-engine" }
+
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+reqwest = { workspace = true, features = ["json"] }
+clap = { version = "4.0", features = ["derive", "env"] }
+thiserror = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+wiremock = "0.5"
+tokio-test = { workspace = true }

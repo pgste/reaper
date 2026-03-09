@@ -1,0 +1,251 @@
+{
+  "entities": [
+    {
+      "id": "user_with_read",
+      "type": "User",
+      "attributes": {
+        "permissions": ["read"],
+        "role": "viewer"
+      }
+    },
+    {
+      "id": "user_no_write",
+      "type": "User",
+      "attributes": {
+        "permissions": ["read"],
+        "role": "viewer"
+      }
+    },
+    {
+      "id": "user_many_skills",
+      "type": "User",
+      "attributes": {
+        "skills": ["rust", "python", "javascript", "go", "java", "c++", "sql"],
+        "role": "senior"
+      }
+    },
+    {
+      "id": "user_few_skills",
+      "type": "User",
+      "attributes": {
+        "skills": ["javascript", "html", "css"],
+        "role": "junior"
+      }
+    },
+    {
+      "id": "user_overlap_groups",
+      "type": "User",
+      "attributes": {
+        "groups": ["engineering", "platform", "admin"],
+        "role": "member"
+      }
+    },
+    {
+      "id": "user_no_overlap",
+      "type": "User",
+      "attributes": {
+        "groups": ["sales", "marketing"],
+        "role": "member"
+      }
+    },
+    {
+      "id": "user_allowed_tags",
+      "type": "User",
+      "attributes": {
+        "tags": ["public", "draft", "review"],
+        "role": "tagger"
+      }
+    },
+    {
+      "id": "user_forbidden_tags",
+      "type": "User",
+      "attributes": {
+        "tags": ["public", "confidential", "review"],
+        "role": "tagger"
+      }
+    },
+    {
+      "id": "user_any_admin",
+      "type": "User",
+      "attributes": {
+        "roles": ["user", "admin", "moderator"],
+        "role": "admin"
+      }
+    },
+    {
+      "id": "user_no_admin",
+      "type": "User",
+      "attributes": {
+        "roles": ["user", "guest"],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_all_active",
+      "type": "User",
+      "attributes": {
+        "projects": [
+          {"name": "alpha", "active": true},
+          {"name": "beta", "active": true},
+          {"name": "gamma", "active": true}
+        ],
+        "role": "manager"
+      }
+    },
+    {
+      "id": "user_some_inactive",
+      "type": "User",
+      "attributes": {
+        "projects": [
+          {"name": "alpha", "active": true},
+          {"name": "beta", "active": false},
+          {"name": "gamma", "active": true}
+        ],
+        "role": "manager"
+      }
+    },
+    {
+      "id": "user_complete_metadata",
+      "type": "User",
+      "attributes": {
+        "metadata": {
+          "name": "John Doe",
+          "email": "john@example.com",
+          "phone": "555-1234"
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_incomplete_metadata",
+      "type": "User",
+      "attributes": {
+        "metadata": {
+          "name": "Jane Doe"
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_verified_emails",
+      "type": "User",
+      "attributes": {
+        "email_addresses": [
+          {"email": "user1@example.com", "verified": true},
+          {"email": "user2@example.com", "verified": true}
+        ],
+        "role": "marketer"
+      }
+    },
+    {
+      "id": "user_unverified_emails",
+      "type": "User",
+      "attributes": {
+        "email_addresses": [
+          {"email": "user3@example.com", "verified": true},
+          {"email": "user4@example.com", "verified": false}
+        ],
+        "role": "marketer"
+      }
+    },
+    {
+      "id": "user_nested_perms",
+      "type": "User",
+      "attributes": {
+        "departments": [
+          {"name": "engineering", "permissions": ["read", "write", "execute"]},
+          {"name": "hr", "permissions": ["read"]}
+        ],
+        "role": "operator"
+      }
+    },
+    {
+      "id": "user_no_nested_perms",
+      "type": "User",
+      "attributes": {
+        "departments": [
+          {"name": "marketing", "permissions": ["read"]},
+          {"name": "sales", "permissions": ["read"]}
+        ],
+        "role": "operator"
+      }
+    },
+    {
+      "id": "document",
+      "type": "Resource",
+      "attributes": {
+        "type": "document"
+      }
+    },
+    {
+      "id": "senior_position",
+      "type": "Resource",
+      "attributes": {
+        "type": "senior_position"
+      }
+    },
+    {
+      "id": "shared_resource",
+      "type": "Resource",
+      "attributes": {
+        "type": "shared_resource"
+      }
+    },
+    {
+      "id": "content",
+      "type": "Resource",
+      "attributes": {
+        "type": "content"
+      }
+    },
+    {
+      "id": "system",
+      "type": "Resource",
+      "attributes": {
+        "type": "system"
+      }
+    },
+    {
+      "id": "invoice",
+      "type": "Resource",
+      "attributes": {
+        "type": "invoice"
+      }
+    },
+    {
+      "id": "profile",
+      "type": "Resource",
+      "attributes": {
+        "type": "profile"
+      }
+    },
+    {
+      "id": "email_campaign",
+      "type": "Resource",
+      "attributes": {
+        "type": "email_campaign"
+      }
+    },
+    {
+      "id": "workflow",
+      "type": "Resource",
+      "attributes": {
+        "type": "workflow"
+      }
+    },
+    {
+      "id": "resource_0",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    },
+    {
+      "id": "resource_1",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    }
+  ]
+}

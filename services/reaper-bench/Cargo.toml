@@ -1,0 +1,60 @@
+[package]
+name = "reaper-bench"
+version = "0.1.0"
+edition = "2021"
+description = "Reaper Benchmark Service - Policy Engine Performance Testing with mTLS"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+
+# Reaper SDK for agent communication (TCP + UDS transport)
+reaper-sdk = { path = "../../crates/reaper-sdk" }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Statistics and histograms
+hdrhistogram = "7.5"
+
+# Utilities
+uuid = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+futures = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+
+# CLI
+clap = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# HTML templating
+askama = { version = "0.12", features = ["with-axum"] }
+askama_axum = "0.4"
+
+# HTTP client for eOPA comparison benchmarks
+reqwest = { workspace = true, features = ["json"] }
+
+# Async utilities
+async-trait = { workspace = true }
+
+# System info
+num_cpus = "1.16"
+sysinfo = "0.31"
+
+# Concurrent data structures
+dashmap = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }

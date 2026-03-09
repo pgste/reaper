@@ -1,0 +1,255 @@
+{
+  "entities": [
+    {
+      "id": "user_valid_json",
+      "type": "User",
+      "attributes": {
+        "payload": {
+          "valid": true,
+          "data": {"key": "value"}
+        },
+        "role": "api_user"
+      }
+    },
+    {
+      "id": "user_invalid_json",
+      "type": "User",
+      "attributes": {
+        "payload": {
+          "valid": false
+        },
+        "role": "api_user"
+      }
+    },
+    {
+      "id": "user_complete_profile",
+      "type": "User",
+      "attributes": {
+        "profile": {
+          "name": "John Doe",
+          "email": "john@example.com",
+          "phone": "555-1234",
+          "address": "123 Main St"
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_incomplete_profile",
+      "type": "User",
+      "attributes": {
+        "profile": {
+          "name": "Jane Doe"
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_nested_data",
+      "type": "User",
+      "attributes": {
+        "payment": {
+          "method": "credit_card",
+          "card": {
+            "number": "****1234",
+            "expiry": "12/25"
+          },
+          "billing_address": {
+            "street": "123 Main St",
+            "city": "Springfield"
+          }
+        },
+        "role": "customer"
+      }
+    },
+    {
+      "id": "user_missing_nested",
+      "type": "User",
+      "attributes": {
+        "payment": {
+          "method": "credit_card"
+        },
+        "role": "customer"
+      }
+    },
+    {
+      "id": "user_array_items",
+      "type": "User",
+      "attributes": {
+        "order_items": [
+          {"id": "item1", "price": 10.99},
+          {"id": "item2", "price": 25.50}
+        ],
+        "role": "shopper"
+      }
+    },
+    {
+      "id": "user_empty_array",
+      "type": "User",
+      "attributes": {
+        "order_items": [],
+        "role": "shopper"
+      }
+    },
+    {
+      "id": "user_correct_types",
+      "type": "User",
+      "attributes": {
+        "form_data": {
+          "name": "John Doe",
+          "age": 30,
+          "active": true
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_wrong_types",
+      "type": "User",
+      "attributes": {
+        "form_data": {
+          "name": 12345,
+          "age": "thirty",
+          "active": "yes"
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_string",
+      "type": "User",
+      "attributes": {
+        "name": "John Doe",
+        "name_length": 8,
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_number",
+      "type": "User",
+      "attributes": {
+        "age": 25,
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_boolean",
+      "type": "User",
+      "attributes": {
+        "verified": true,
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_object",
+      "type": "User",
+      "attributes": {
+        "address": {
+          "street": "123 Main St",
+          "city": "Springfield",
+          "zip": "12345"
+        },
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_merge_data",
+      "type": "User",
+      "attributes": {
+        "primary_data": {
+          "name": "John Doe",
+          "email": "john@example.com"
+        },
+        "secondary_data": {
+          "phone": "555-1234",
+          "address": "123 Main St"
+        },
+        "role": "admin"
+      }
+    },
+    {
+      "id": "api_endpoint",
+      "type": "Resource",
+      "attributes": {
+        "type": "api_endpoint"
+      }
+    },
+    {
+      "id": "user_profile",
+      "type": "Resource",
+      "attributes": {
+        "type": "user_profile"
+      }
+    },
+    {
+      "id": "payment",
+      "type": "Resource",
+      "attributes": {
+        "type": "payment"
+      }
+    },
+    {
+      "id": "order",
+      "type": "Resource",
+      "attributes": {
+        "type": "order"
+      }
+    },
+    {
+      "id": "form_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "form_data"
+      }
+    },
+    {
+      "id": "text_field",
+      "type": "Resource",
+      "attributes": {
+        "type": "text_field"
+      }
+    },
+    {
+      "id": "number_field",
+      "type": "Resource",
+      "attributes": {
+        "type": "number_field"
+      }
+    },
+    {
+      "id": "boolean_field",
+      "type": "Resource",
+      "attributes": {
+        "type": "boolean_field"
+      }
+    },
+    {
+      "id": "structured_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "structured_data"
+      }
+    },
+    {
+      "id": "data_merge",
+      "type": "Resource",
+      "attributes": {
+        "type": "data_merge"
+      }
+    },
+    {
+      "id": "resource_0",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    },
+    {
+      "id": "resource_1",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    }
+  ]
+}

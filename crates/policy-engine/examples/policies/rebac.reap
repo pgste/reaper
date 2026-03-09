@@ -1,0 +1,60 @@
+// Relationship-Based Access Control (ReBAC) Policy
+// Demonstrates access based on relationships between entities
+
+policy rebac_relationships {
+    version: "1.0.0",
+    description: "Relationship-based access control using entity relationships",
+
+    default: deny,
+
+    // Owners have full access to their resources
+    rule owner_full_access {
+        allow if user.id == resource.owner_id
+    }
+
+    // Team members can access team resources
+    rule team_member_access {
+        allow if {
+            user.team_id == resource.team_id &&
+            user.team_role != "pending"
+        }
+    }
+
+    // Shared resources - users in share list can access
+    rule shared_access {
+        allow if user.id == resource.shared_with_user
+    }
+
+    // Parent-child relationship - access parent's resources
+    rule parent_resource_access {
+        allow if {
+            user.id == resource.parent_owner_id &&
+            resource.inherit_permissions == true
+        }
+    }
+
+    // Organization hierarchy - managers can access subordinate resources
+    rule manager_subordinate_access {
+        allow if {
+            user.role == "manager" &&
+            user.department == resource.owner_department &&
+            user.is_senior_manager == true
+        }
+    }
+
+    // Collaborators on specific resources
+    rule collaborator_access {
+        allow if {
+            user.id == resource.collaborator_id &&
+            resource.collaboration_status == "active"
+        }
+    }
+
+    // Group membership access
+    rule group_member_access {
+        allow if {
+            user.group_id == resource.group_id &&
+            user.group_member == true
+        }
+    }
+}

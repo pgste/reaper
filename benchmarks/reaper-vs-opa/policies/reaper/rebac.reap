@@ -1,0 +1,84 @@
+// Relationship-Based Access Control (ReBAC) Benchmark Policy
+// Tests access based on relationships: teams, ownership, sharing, collaboration
+
+policy rebac_benchmark {
+    version: "1.0.0",
+    description: "ReBAC benchmark - relationship-based access control",
+
+    default: deny,
+
+    // Owners have full access to their resources
+    rule owner_full_access {
+        allow if user.id == resource.owner_id
+    }
+
+    // Team members can access team resources (if not pending)
+    rule team_member_access {
+        allow if {
+            user.team_id == resource.team_id &&
+            user.team_role != "pending" &&
+            resource.team_accessible == true
+        }
+    }
+
+    // Team leads have full access to team resources
+    rule team_lead_access {
+        allow if {
+            user.team_role == "lead" &&
+            user.team_id == resource.team_id
+        }
+    }
+
+    // Shared resources - users in share list can access
+    rule shared_access {
+        allow if {
+            user.id == resource.shared_with &&
+            resource.share_active == true
+        }
+    }
+
+    // Active collaborators can edit
+    rule collaborator_access {
+        allow if {
+            user.id == resource.collaborator_id &&
+            resource.collaboration_status == "active" &&
+            action != "delete"
+        }
+    }
+
+    // Parent-child relationship - access parent's resources
+    rule parent_resource_access {
+        allow if {
+            user.id == resource.parent_owner &&
+            resource.inherit_permissions == true &&
+            action == "read"
+        }
+    }
+
+    // Senior managers can access subordinate resources in their dept
+    rule manager_hierarchy_access {
+        allow if {
+            user.is_senior_manager == true &&
+            user.department == resource.department &&
+            resource.visible_to_managers == true &&
+            action == "read"
+        }
+    }
+
+    // Group members can access group resources
+    rule group_member_access {
+        allow if {
+            user.group_id == resource.group_id &&
+            user.group_member == true &&
+            resource.group_accessible == true
+        }
+    }
+
+    // Delegates can access on behalf of others
+    rule delegate_access {
+        allow if {
+            user.id == resource.delegated_to &&
+            resource.delegation_active == true
+        }
+    }
+}

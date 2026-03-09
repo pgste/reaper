@@ -1,0 +1,272 @@
+// Reaper Policy Language Grammar
+// Clean, Rust-like syntax for sub-microsecond policy evaluation
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+// Top-level policy
+policy = { SOI ~ "policy" ~ ident ~ "{" ~ policy_body ~ "}" ~ EOI }
+
+policy_body = {
+    policy_item*
+}
+
+policy_item = _{
+    default_field |
+    rule |
+    metadata_field
+}
+
+// Metadata fields (version, description, etc.)
+metadata_field = {
+    ident ~ ":" ~ string ~ ","?
+}
+
+// Default decision
+default_field = {
+    "default" ~ ":" ~ decision ~ ","?
+}
+
+// Decision types
+decision = { "allow" | "deny" }
+
+// Rule definition
+rule = {
+    "rule" ~ ident ~ "{" ~ decision ~ "if" ~ condition ~ "}"
+}
+
+// Conditions
+condition = {
+    condition_block |
+    condition_expr
+}
+
+condition_block = {
+    "{" ~ condition_expr ~ "}"
+}
+
+condition_expr = {
+    or_expr
+}
+
+or_expr = {
+    and_expr ~ ("||" ~ and_expr)*
+}
+
+and_expr = {
+    not_expr ~ ("&&" ~ not_expr)*
+}
+
+not_expr = {
+    "!" ~ not_expr |
+    primary_expr
+}
+
+primary_expr = {
+    "(" ~ condition_expr ~ ")" |
+    assignment |
+    comparison |
+    entity_method_call |   // Support entity method calls in conditions (e.g., user.email.contains("x"))
+    var_method_call |      // Support variable method calls in conditions (e.g., list.contains(x))
+    comp_function_call |  // Support function calls in conditions (e.g., is_string(x))
+    boolean_literal |
+    ident  // Variable reference (for boolean variables)
+}
+
+// Variable assignment: x := user.role
+assignment = {
+    ident ~ ":=" ~ assignment_value
+}
+
+assignment_value = {
+    comprehension |
+    comparison |            // Comparison expressions (must come before method calls to match entity_method_call > value)
+    comp_function_call |    // Function calls (e.g., time::now_ns())
+    entity_method_call |    // Entity method calls (e.g., user.name.lower())
+    var_method_call |       // Variable method calls (e.g., skills.count())
+    entity_attr |
+    var_attr |              // Variable attribute access (e.g., first_group.items)
+    (ident ~ bracket_index) |  // Indexed variable (e.g., row[_], items[0])
+    value |
+    ident  // Variable reference
+}
+
+// Comprehensions
+comprehension = {
+    set_comprehension |
+    array_comprehension |
+    object_comprehension
+}
+
+set_comprehension = {
+    "{" ~ comp_expr ~ "|" ~ comp_iterator ~ comp_filters ~ "}"
+}
+
+array_comprehension = {
+    "[" ~ comp_expr ~ "|" ~ comp_iterator ~ comp_filters ~ "]"
+}
+
+object_comprehension = {
+    "{" ~ comp_expr ~ ":" ~ comp_expr ~ "|" ~ comp_iterator ~ comp_filters ~ "}"
+}
+
+comp_iterator = {
+    ident ~ ":=" ~ (var_attr | entity_attr | (ident ~ bracket_index))
+}
+
+comp_filters = {
+    (";" ~ condition)*
+}
+
+comp_expr = {
+    comp_function_call |
+    comp_method_or_access |
+    value
+}
+
+// Handle method calls or attribute access in a unified way
+comp_method_or_access = {
+    comp_dot_access_with_methods |   // u.name or u.name.method()
+    (ident ~ comp_method_chain?)     // var or var.method()
+}
+
+// Dot access optionally followed by methods: u.name, u.roles[0], u.name.lower()
+// Use negative lookahead to avoid matching var.method() as attribute access
+comp_dot_access_with_methods = {
+    ident ~ "." ~ ident ~ !("(") ~ bracket_index? ~ comp_method_chain?
+}
+
+// Base expressions that can be receivers for method calls
+comp_base_expr = {
+    comp_dot_access |  // ident.ident with optional [index]
+    comp_variable |    // simple ident
+    value              // literals
+}
+
+// Dot access: covers both attribute access (u.name) and indexed access (u.roles[0])
+comp_dot_access = {
+    ident ~ "." ~ ident ~ bracket_index?
+}
+
+comp_variable = {
+    ident
+}
+
+// Method chain: .method1().method2()...
+comp_method_chain = {
+    comp_single_method_call+
+}
+
+comp_single_method_call = {
+    "." ~ ident ~ "(" ~ comp_arg_list? ~ ")"
+}
+
+// Function call: is_string(x), concat(a, b)
+comp_function_call = {
+    (ident ~ "::" ~ ident ~ "(" ~ comp_arg_list? ~ ")") |  // Namespaced: time::now_ns()
+    (ident ~ "(" ~ comp_arg_list? ~ ")")                    // Global: concat(a, b)
+}
+
+comp_arg_list = {
+    comp_expr ~ ("," ~ comp_expr)*
+}
+
+// Keep old rules for backward compatibility with existing parser code
+comp_attribute_access = {
+    comp_dot_access
+}
+
+comp_indexed_access = {
+    comp_dot_access
+}
+
+// Comparisons
+comparison = {
+    value ~ "in" ~ entity_attr |
+    value ~ "in" ~ var_attr |
+    value ~ "in" ~ ident |
+    entity_method_call ~ op ~ comparison_right |  // Entity method calls: user.name.count() > 0
+    entity_attr ~ op ~ comparison_right |
+    var_method_call ~ op ~ comparison_right |
+    var_attr ~ op ~ comparison_right |
+    ident ~ op ~ comparison_right
+}
+
+comparison_right = {
+    var_method_call |   // Method calls: t.trim().count()
+    entity_attr |
+    var_attr |
+    value |
+    ident  // Variable reference
+}
+
+entity_attr = {
+    entity ~ ("." ~ ident)+ ~ bracket_index?
+}
+
+// Variable attribute access: u.name, u.roles[0], u.data.field
+var_attr = {
+    !entity ~ ident ~ ("." ~ ident)+ ~ bracket_index?
+}
+
+// Entity method call: user.name.lower(), resource.title.upper()
+entity_method_call = {
+    entity ~ ("." ~ ident ~ !("("))+ ~ comp_method_chain
+}
+
+// Variable method call: skills.count(), tags.intersection([...]), d.permissions.contains("x")
+var_method_call = {
+    !entity ~ ident ~ (("." ~ ident ~ !("("))* ~ comp_method_chain)
+}
+
+bracket_index = { "[" ~ bracket_index_value ~ "]" }
+bracket_index_value = { "_" | integer | string }
+
+entity = { "user" | "resource" | "context" }
+
+// Operators
+op = {
+    "==" | "!=" | ">=" | "<=" | ">" | "<" | "in"
+}
+
+// Values
+value = {
+    string |
+    float |
+    integer |
+    boolean_literal |
+    null_literal |
+    array |
+    braced_expr
+}
+
+// Array: [1, 2, 3] or []
+array = { "[" ~ (value ~ ("," ~ value)* ~ ","?)? ~ "]" }
+
+// Braced expression: { ... } - can be object or set, disambiguated in parser
+// Object: {"key": value, "key2": value2}
+// Set: {value1, value2, value3}
+braced_expr = { "{" ~ braced_items? ~ "}" }
+braced_items = { braced_item ~ ("," ~ braced_item)* ~ ","? }
+braced_item = { object_pair | value }
+object_pair = { (string | ident) ~ ":" ~ value }
+
+// Literals
+string = @{ "\"" ~ string_inner ~ "\"" }
+string_inner = @{ (!"\"" ~ ("\\" ~ ANY | ANY))* }
+
+float = @{
+    "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+
+}
+
+integer = @{
+    "-"? ~ ASCII_DIGIT+
+}
+
+boolean_literal = { "true" | "false" }
+null_literal = { "null" }
+
+// Identifiers
+ident = @{
+    ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*
+}

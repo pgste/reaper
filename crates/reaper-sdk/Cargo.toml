@@ -1,0 +1,46 @@
+[package]
+name = "reaper-sdk"
+version = "0.1.0"
+edition = "2021"
+authors = ["Reaper Contributors"]
+description = "High-performance SDK for Reaper policy evaluation"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# SIMD-accelerated JSON (3-5x faster than serde_json)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sonic-rs = "0.3"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# UDS transport (hyper-based)
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+tower = { workspace = true }
+bytes = "1"
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = { workspace = true }
+axum = { workspace = true }
+tempfile = "3"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"

@@ -1,0 +1,240 @@
+{
+  "entities": [
+    {
+      "id": "user_priority_tasks",
+      "type": "User",
+      "attributes": {
+        "tasks": ["urgent", "normal", "low"],
+        "role": "manager"
+      }
+    },
+    {
+      "id": "user_low_priority_first",
+      "type": "User",
+      "attributes": {
+        "tasks": ["low", "normal", "urgent"],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_recent_login",
+      "type": "User",
+      "attributes": {
+        "login_timestamps": [1600000000, 1650000000, 1700000001],
+        "role": "active_user"
+      }
+    },
+    {
+      "id": "user_old_login",
+      "type": "User",
+      "attributes": {
+        "login_timestamps": [1500000000, 1550000000, 1600000000],
+        "role": "inactive_user"
+      }
+    },
+    {
+      "id": "user_top_scores",
+      "type": "User",
+      "attributes": {
+        "scores": [95, 90, 88, 75, 60],
+        "role": "top_performer"
+      }
+    },
+    {
+      "id": "user_low_scores",
+      "type": "User",
+      "attributes": {
+        "scores": [70, 65, 60, 55, 50],
+        "role": "performer"
+      }
+    },
+    {
+      "id": "user_desc_order",
+      "type": "User",
+      "attributes": {
+        "sequence": ["first", "middle", "last"],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_sortable_data",
+      "type": "User",
+      "attributes": {
+        "values": [50, 10, 30, 20, 40],
+        "role": "data_analyst"
+      }
+    },
+    {
+      "id": "user_mixed_types",
+      "type": "User",
+      "attributes": {
+        "values": ["string", 123, "another"],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_unique_skills",
+      "type": "User",
+      "attributes": {
+        "skills": ["rust", "python", "go", "rust", "python", "javascript", "typescript", "sql"],
+        "role": "developer"
+      }
+    },
+    {
+      "id": "user_duplicate_skills",
+      "type": "User",
+      "attributes": {
+        "skills": ["rust", "rust", "python", "python", "go"],
+        "role": "beginner"
+      }
+    },
+    {
+      "id": "user_combined_perms",
+      "type": "User",
+      "attributes": {
+        "primary_perms": ["read", "write", "execute"],
+        "secondary_perms": ["admin", "delete"],
+        "role": "power_user"
+      }
+    },
+    {
+      "id": "user_limited_perms",
+      "type": "User",
+      "attributes": {
+        "primary_perms": ["read", "write"],
+        "secondary_perms": ["list"],
+        "role": "limited_user"
+      }
+    },
+    {
+      "id": "user_filtered_access",
+      "type": "User",
+      "attributes": {
+        "available_content": ["doc1", "doc2", "doc3", "doc4"],
+        "forbidden_content": ["doc4"],
+        "role": "filtered_user"
+      }
+    },
+    {
+      "id": "user_unfiltered_access",
+      "type": "User",
+      "attributes": {
+        "available_content": ["banned_item", "doc1", "doc2"],
+        "forbidden_content": ["doc4"],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_high_max_score",
+      "type": "User",
+      "attributes": {
+        "scores": [80, 85, 95, 90, 88],
+        "role": "competitor"
+      }
+    },
+    {
+      "id": "user_low_max_score",
+      "type": "User",
+      "attributes": {
+        "scores": [70, 75, 80, 85, 90],
+        "role": "participant"
+      }
+    },
+    {
+      "id": "user_consistent_performance",
+      "type": "User",
+      "attributes": {
+        "performance_scores": [75, 80, 85, 90, 95],
+        "role": "quality_performer"
+      }
+    },
+    {
+      "id": "user_inconsistent_performance",
+      "type": "User",
+      "attributes": {
+        "performance_scores": [50, 80, 90, 65, 95],
+        "role": "variable_performer"
+      }
+    },
+    {
+      "id": "task_queue",
+      "type": "Queue",
+      "attributes": {
+        "type": "task_queue",
+        "size": 100
+      }
+    },
+    {
+      "id": "session",
+      "type": "Session",
+      "attributes": {
+        "type": "session",
+        "timeout": 3600
+      }
+    },
+    {
+      "id": "leaderboard",
+      "type": "Leaderboard",
+      "attributes": {
+        "type": "leaderboard",
+        "top_count": 10
+      }
+    },
+    {
+      "id": "items",
+      "type": "Collection",
+      "attributes": {
+        "type": "items",
+        "ordering": "configurable"
+      }
+    },
+    {
+      "id": "records",
+      "type": "Database",
+      "attributes": {
+        "type": "records",
+        "sortable": true
+      }
+    },
+    {
+      "id": "specialized_role",
+      "type": "Position",
+      "attributes": {
+        "type": "specialized_role",
+        "required_skills": 5
+      }
+    },
+    {
+      "id": "multi_function",
+      "type": "Application",
+      "attributes": {
+        "type": "multi_function",
+        "complex": true
+      }
+    },
+    {
+      "id": "filtered_content",
+      "type": "ContentLibrary",
+      "attributes": {
+        "type": "filtered_content",
+        "filtered": true
+      }
+    },
+    {
+      "id": "competition",
+      "type": "Event",
+      "attributes": {
+        "type": "competition",
+        "threshold": 95
+      }
+    },
+    {
+      "id": "quality_check",
+      "type": "Process",
+      "attributes": {
+        "type": "quality_check",
+        "min_threshold": 70
+      }
+    }
+  ]
+}

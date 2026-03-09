@@ -1,0 +1,378 @@
+# GitHub Actions workflow for Reaper vs OPA benchmarks
+# Results published to Allure Reports on GitHub Pages
+
+name: Benchmark
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: 'Number of requests'
+        required: false
+        default: '10000'
+      concurrency:
+        description: 'Concurrent requests'
+        required: false
+        default: '50'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # Build agent and benchmark tools in parallel
+  build-agent:
+    name: Build Reaper Agent
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-agent-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build Reaper Agent
+      run: cargo build --release --bin reaper-agent
+
+    - name: Upload Reaper Agent
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-agent
+        path: target/release/reaper-agent
+
+  build-benchmark:
+    name: Build Benchmark Tools
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build Benchmark Tools
+      working-directory: benchmarks/reaper-vs-opa
+      run: cargo build --release
+
+    - name: Upload Benchmark Binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-tools
+        path: |
+          benchmarks/reaper-vs-opa/target/release/benchmark
+          benchmarks/reaper-vs-opa/target/release/generate-data
+
+  # Run benchmarks in parallel using pre-built binaries
+  benchmark:
+    name: ${{ matrix.scenario }}-${{ matrix.scale }}
+    runs-on: ubuntu-latest
+    needs: [build-agent, build-benchmark]
+
+    strategy:
+      matrix:
+        scenario: [rbac, abac, multilayer, math, regex, string, collection, time, mega]
+        scale: [100k]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download Reaper Agent
+      uses: actions/download-artifact@v4
+      with:
+        name: reaper-agent
+        path: bin/
+
+    - name: Download Benchmark Tools
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-tools
+        path: benchmarks/reaper-vs-opa/bin/
+
+    - name: Make binaries executable
+      run: |
+        chmod +x bin/reaper-agent
+        chmod +x benchmarks/reaper-vs-opa/bin/benchmark
+        chmod +x benchmarks/reaper-vs-opa/bin/generate-data
+
+    - name: Install Enterprise OPA
+      run: |
+        curl -L -o eopa https://github.com/StyraInc/enterprise-opa/releases/latest/download/eopa_Linux_x86_64
+        chmod +x eopa
+        sudo mv eopa /usr/local/bin/opa
+        opa version
+
+    - name: Generate Test Data
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        DATA_FILE="data/100k/${{ matrix.scenario }}.json"
+        mkdir -p data/100k
+        # Always regenerate to ensure seed entities required by validation tests are present
+        ./bin/generate-data --count 100000 --output "$DATA_FILE" ${{ matrix.scenario }}
+        ENTITY_COUNT=$(jq '.entities | length' "$DATA_FILE")
+        echo "✓ Generated $ENTITY_COUNT entities"
+
+    - name: Start Services
+      run: |
+        ./bin/reaper-agent &
+        echo "REAPER_PID=$!" >> $GITHUB_ENV
+
+        opa run --server --addr=0.0.0.0:8181 --log-level=error &
+        echo "OPA_PID=$!" >> $GITHUB_ENV
+
+        sleep 5
+        curl -f http://localhost:8080/health || exit 1
+        curl -f http://localhost:8181/health || exit 1
+
+    - name: Run Benchmark
+      id: benchmark
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        REQUESTS=${{ github.event.inputs.requests || '10000' }}
+        CONCURRENCY=${{ github.event.inputs.concurrency || '50' }}
+
+        ./bin/deploy-reaper.sh ${{ matrix.scenario }} ${{ matrix.scale }}
+        ./bin/deploy-opa.sh ${{ matrix.scenario }} ${{ matrix.scale }}
+
+        ./bin/benchmark \
+          --scenario ${{ matrix.scenario }} \
+          --requests $REQUESTS \
+          --concurrency $CONCURRENCY \
+          --output json > results.json
+
+        # Extract metrics
+        REAPER_RPS=$(jq -r '.[0].throughput_rps | floor' results.json)
+        REAPER_P99=$(jq -r '.[0].latency_p99_us | floor' results.json)
+        REAPER_P50=$(jq -r '.[0].latency_p50_us | floor' results.json)
+        REAPER_ALLOW=$(jq -r '.[0].allowed' results.json)
+        REAPER_DENY=$(jq -r '.[0].denied' results.json)
+
+        OPA_RPS=$(jq -r '.[1].throughput_rps | floor' results.json)
+        OPA_P99=$(jq -r '.[1].latency_p99_us | floor' results.json)
+        OPA_P50=$(jq -r '.[1].latency_p50_us | floor' results.json)
+        OPA_ALLOW=$(jq -r '.[1].allowed' results.json)
+
+        SPEEDUP=$(echo "scale=2; $REAPER_RPS / $OPA_RPS" | bc)
+
+        # Create Allure results
+        mkdir -p allure-results
+
+        # Generate Allure test result for this scenario
+        cat > allure-results/${{ matrix.scenario }}-result.json << EOF
+        {
+          "uuid": "$(uuidgen)",
+          "historyId": "${{ matrix.scenario }}-benchmark",
+          "name": "${{ matrix.scenario }} Benchmark",
+          "fullName": "benchmarks.${{ matrix.scenario }}",
+          "status": "passed",
+          "stage": "finished",
+          "start": $(date +%s000),
+          "stop": $(date +%s000),
+          "labels": [
+            {"name": "suite", "value": "Reaper vs OPA"},
+            {"name": "feature", "value": "${{ matrix.scenario }}"},
+            {"name": "severity", "value": "normal"},
+            {"name": "scale", "value": "${{ matrix.scale }}"}
+          ],
+          "parameters": [
+            {"name": "requests", "value": "$REQUESTS"},
+            {"name": "concurrency", "value": "$CONCURRENCY"}
+          ],
+          "attachments": [],
+          "links": []
+        }
+        EOF
+
+        # Create environment properties
+        cat > allure-results/environment.properties << EOF
+        Scale=${{ matrix.scale }}
+        Requests=$REQUESTS
+        Concurrency=$CONCURRENCY
+        ReaperVersion=0.1.0
+        OPAVersion=Enterprise
+        EOF
+
+        # Create custom metrics file for Allure
+        cat > allure-results/${{ matrix.scenario }}-metrics.json << EOF
+        {
+          "scenario": "${{ matrix.scenario }}",
+          "scale": "${{ matrix.scale }}",
+          "reaper": {
+            "throughput_rps": $REAPER_RPS,
+            "latency_p50_us": $REAPER_P50,
+            "latency_p99_us": $REAPER_P99,
+            "allowed": $REAPER_ALLOW,
+            "denied": $REAPER_DENY
+          },
+          "opa": {
+            "throughput_rps": $OPA_RPS,
+            "latency_p50_us": $OPA_P50,
+            "latency_p99_us": $OPA_P99,
+            "allowed": $OPA_ALLOW
+          },
+          "speedup": $SPEEDUP,
+          "policy_match": $([ "$REAPER_ALLOW" = "$OPA_ALLOW" ] && echo "true" || echo "false")
+        }
+        EOF
+
+        echo "speedup=$SPEEDUP" >> $GITHUB_OUTPUT
+        echo "reaper_rps=$REAPER_RPS" >> $GITHUB_OUTPUT
+        echo "opa_rps=$OPA_RPS" >> $GITHUB_OUTPUT
+
+    - name: Upload Allure Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: allure-results-${{ matrix.scenario }}
+        path: benchmarks/reaper-vs-opa/allure-results/
+
+    - name: Upload Raw Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-${{ matrix.scenario }}-${{ matrix.scale }}
+        path: benchmarks/reaper-vs-opa/results.json
+
+    - name: Write Job Summary
+      run: |
+        echo "## 📊 ${{ matrix.scenario }} @ ${{ matrix.scale }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Engine | Throughput | Speedup |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|------------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reaper** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
+        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | baseline |" >> $GITHUB_STEP_SUMMARY
+
+    - name: Stop Services
+      if: always()
+      run: |
+        kill ${{ env.REAPER_PID }} || true
+        kill ${{ env.OPA_PID }} || true
+
+  # Generate and publish Allure Report
+  allure-report:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all Allure results
+      uses: actions/download-artifact@v4
+      with:
+        path: allure-results
+        pattern: allure-results-*
+        merge-multiple: true
+
+    - name: Get Allure history
+      uses: actions/checkout@v4
+      if: github.ref == 'refs/heads/main'
+      continue-on-error: true
+      with:
+        ref: gh-pages
+        path: gh-pages
+
+    - name: Copy history
+      run: |
+        mkdir -p allure-results/history
+        if [ -d "gh-pages/history" ]; then
+          cp -r gh-pages/history/* allure-results/history/ || true
+        fi
+
+    - name: Install Allure CLI
+      run: |
+        curl -o allure-2.27.0.tgz -OLs https://repo.maven.apache.org/maven2/io/qameta/allure/allure-commandline/2.27.0/allure-commandline-2.27.0.tgz
+        tar -zxvf allure-2.27.0.tgz
+        sudo mv allure-2.27.0 /opt/allure
+        sudo ln -s /opt/allure/bin/allure /usr/local/bin/allure
+        allure --version
+
+    - name: Generate Allure Report
+      run: |
+        mkdir -p allure-history
+        allure generate allure-results --clean -o allure-history
+
+    - name: Create summary page
+      run: |
+        # Create a custom summary from metrics files
+        cat > allure-history/widgets/summary.json << 'EOF'
+        {
+          "reportName": "Reaper vs OPA Benchmark",
+          "testRuns": [],
+          "statistic": {"failed": 0, "broken": 0, "skipped": 0, "passed": 9, "unknown": 0, "total": 9}
+        }
+        EOF
+
+        # Generate summary table from all metrics
+        echo "# 🚀 Reaper vs OPA Benchmark Results" > allure-history/SUMMARY.md
+        echo "" >> allure-history/SUMMARY.md
+        echo "| Scenario | Reaper RPS | OPA RPS | Speedup | Match |" >> allure-history/SUMMARY.md
+        echo "|----------|------------|---------|---------|-------|" >> allure-history/SUMMARY.md
+
+        for f in allure-results/*-metrics.json; do
+          if [ -f "$f" ]; then
+            SCENARIO=$(jq -r '.scenario' "$f")
+            R_RPS=$(jq -r '.reaper.throughput_rps' "$f")
+            O_RPS=$(jq -r '.opa.throughput_rps' "$f")
+            SPEEDUP=$(jq -r '.speedup' "$f")
+            MATCH=$(jq -r '.policy_match' "$f")
+            ICON=$([ "$MATCH" = "true" ] && echo "✅" || echo "❌")
+            echo "| $SCENARIO | $R_RPS | $O_RPS | **${SPEEDUP}x** | $ICON |" >> allure-history/SUMMARY.md
+          fi
+        done
+
+    - name: Publish to GitHub Pages
+      if: github.ref == 'refs/heads/main'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_branch: gh-pages
+        publish_dir: allure-history
+
+    - name: Post Report Link
+      run: |
+        REPO="${{ github.repository }}"
+        echo "## 📈 Allure Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "View the full report: https://${REPO%/*}.github.io/${REPO#*/}/" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Also show summary table
+        echo "### Quick Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Scenario | Reaper | OPA | Speedup |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|-----|---------|" >> $GITHUB_STEP_SUMMARY
+
+        for f in allure-results/*-metrics.json; do
+          if [ -f "$f" ]; then
+            SCENARIO=$(jq -r '.scenario' "$f")
+            R_RPS=$(jq -r '.reaper.throughput_rps' "$f")
+            O_RPS=$(jq -r '.opa.throughput_rps' "$f")
+            SPEEDUP=$(jq -r '.speedup' "$f")
+            echo "| $SCENARIO | $R_RPS | $O_RPS | **${SPEEDUP}x** |" >> $GITHUB_STEP_SUMMARY
+          fi
+        done

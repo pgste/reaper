@@ -7,8 +7,6 @@ description = "Reaper Platform - Distributed agent management"
 [dependencies]
 reaper-core = { path = "../../crates/reaper-core" }
 policy-engine = { path = "../../crates/policy-engine" }
-message-queue = { path = "../../crates/message-queue" }
-metrics = { path = "../../crates/metrics" }
 axum = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -19,6 +17,9 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+reqwest = { workspace = true }
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
 
 [dev-dependencies]
 criterion = { workspace = true }

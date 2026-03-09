@@ -1,0 +1,231 @@
+REAPER ARCHITECTURE - COMPONENT INTERACTION DIAGRAM
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          REAPER CLI (reaper-cli)                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │  eval cmd    │  │ validate cmd │  │ compile cmd  │  │ policy cmds  │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘   │
+└────────────────────────────┬─────────────────┬──────────────────────────────┘
+                             │                 │
+                    ┌────────┴─────────┐       │
+                    │                  │       │
+                    ▼                  ▼       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         REAPER PLATFORM (Port 8081)                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                       HTTP Service (Axum)                            │   │
+│  │  ┌─────────────────────────────────────────────────────────────┐   │   │
+│  │  │ REST API Routes:                                            │   │   │
+│  │  │ • GET/POST  /api/v1/policies           (CRUD policies)    │   │   │
+│  │  │ • PUT/DELETE /api/v1/policies/:id     (Update/Delete)    │   │   │
+│  │  │ • POST /api/v1/policies/:id/deploy    (Deploy to agents)  │   │   │
+│  │  │ • GET /api/v1/agents                  (List agents)       │   │   │
+│  │  │ • GET /health, /metrics               (Observability)     │   │   │
+│  │  └─────────────────────────────────────────────────────────────┘   │   │
+│  │                                  │                                  │   │
+│  │                                  ▼                                  │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
+│  │  │        PolicyEngine (policy-engine crate)                    │  │   │
+│  │  │  ┌────────────────────────────────────────────────────────┐ │  │   │
+│  │  │  │ DashMap<PolicyId, Arc<EnhancedPolicy>>                │ │  │   │
+│  │  │  │ DashMap<String, PolicyId>  (name lookup)             │ │  │   │
+│  │  │  │                                                        │ │  │   │
+│  │  │  │ Methods:                                              │ │  │   │
+│  │  │  │ • deploy_policy(policy)    - atomic hot-swap         │ │  │   │
+│  │  │  │ • evaluate(&policy_id, request)                      │ │  │   │
+│  │  │  │ • get_policy(&id)          - lock-free lookup ~50ns  │ │  │   │
+│  │  │  │ • list_policies()                                    │ │  │   │
+│  │  │  └────────────────────────────────────────────────────────┘ │  │   │
+│  │  │                                                               │  │   │
+│  │  │  PlatformState                                               │  │   │
+│  │  │  • policy_engine: PolicyEngine                               │  │   │
+│  │  │  • deployment_stats: Arc<RwLock<DeploymentStats>>           │  │   │
+│  │  └──────────────────────────────────────────────────────────────┘  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │  deploy_policy()
+                               │  POST /api/v1/policies/deploy
+                               ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        REAPER AGENT (Port 8080)                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                       HTTP Service (Axum)                            │   │
+│  │  ┌─────────────────────────────────────────────────────────────┐   │   │
+│  │  │ REST API Routes:                                            │   │   │
+│  │  │ • POST /api/v1/messages              (Evaluate policy)     │   │   │
+│  │  │ • POST /api/v1/policies/deploy      (Deploy from platform)│   │   │
+│  │  │ • GET  /api/v1/policies             (List active)         │   │   │
+│  │  │ • GET  /health, /metrics            (Observability)       │   │   │
+│  │  └─────────────────────────────────────────────────────────────┘   │   │
+│  │                                  │                                  │   │
+│  │                                  ▼                                  │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
+│  │  │        PolicyEngine (policy-engine crate)                    │  │   │
+│  │  │  ┌────────────────────────────────────────────────────────┐ │  │   │
+│  │  │  │ DashMap<PolicyId, Arc<EnhancedPolicy>>                │ │  │   │
+│  │  │  │ DashMap<String, PolicyId>  (name lookup)             │ │  │   │
+│  │  │  │                                                        │ │  │   │
+│  │  │  │ Sub-microsecond evaluation with language-specific     │ │  │   │
+│  │  │  │ evaluators (Simple, Cedar, ReaperDSL)               │ │  │   │
+│  │  │  └────────────────────────────────────────────────────────┘ │  │   │
+│  │  │                                                               │  │   │
+│  │  │  AgentState                                                  │  │   │
+│  │  │  • policy_engine: PolicyEngine                               │  │   │
+│  │  │  • stats: Arc<AgentStats>                                   │  │   │
+│  │  └──────────────────────────────────────────────────────────────┘  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
+                               ▲
+                               │  PolicyRequest
+                               │  evaluate request
+
+
+POLICY ENGINE INTERNALS - LANGUAGE & EVALUATION FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EnhancedPolicy
+├── id: PolicyId (UUID)
+├── version: u64
+├── name: String
+├── language: PolicyLanguage (Simple | Cedar | Custom)
+├── content: String
+└── evaluator: Option<Arc<dyn PolicyEvaluator>>
+
+                             ▼
+
+PolicyEvaluator Trait (pluggable interface)
+├─ SimplePolicyEvaluator (226 lines)
+│  ├── Wildcard matching ('*')
+│  ├── First-match-wins
+│  └── Performance: < 1µs
+│
+├─ CedarPolicyEvaluator (319 lines)
+│  ├── AWS Cedar policy language
+│  ├── ABAC support
+│  └── Performance: 10-50µs
+│
+└─ ReaperDSLEvaluator (386 lines)
+   ├── Native Reaper DSL
+   ├── Compile-time optimizations
+   └── Performance: < 1µs with optimization
+
+
+POLICY LOADING PIPELINE
+━━━━━━━━━━━━━━━━━━━━━━━
+
+Format Detection & Parsing
+┌─────────────────────────────────────────┐
+│ File: policy.reap / .yaml / .json       │
+└──────────────┬──────────────────────────┘
+               │
+        ┌──────▼──────┐
+        │ Detect Ext. │
+        └──────┬──────┘
+               │
+    ┌──────────┼──────────┐
+    │          │          │
+    ▼          ▼          ▼
+  .reap      .yaml      .json
+    │          │          │
+    ▼          ▼          ▼
+ReapParser YamlPolicy YamlPolicy
+    │          │          │
+    └──────────┼──────────┘
+               │
+               ▼
+            AST
+               │
+               ▼
+        Policy Validation
+               │
+               ▼
+    Build Language-Specific Evaluator
+               │
+        ┌──────┴──────┐
+        │             │
+        ▼             ▼
+    Evaluator   Bundle (binary)
+               │
+               └─► DashMap<PolicyId, Arc<Policy>>
+
+
+DATA STORE ARCHITECTURE (ABAC/ReBAC)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DataStore (data/store.rs)
+├── StringInterner (Arc)
+│   └── ~60% memory savings via deduplication
+│
+├── Primary Index: EntityId -> Arc<Entity>
+│   ├── ID lookup: 20-50ns
+│   └── DashMap for lock-free access
+│
+├── Type Index: EntityType -> HashSet<EntityId>
+│   └── Type lookup: 100-200ns
+│
+├── Attribute Index: (AttrKey, AttrValue) -> HashSet<EntityId>
+│   └── Attribute lookup: 100-300ns (indexed)
+│
+└── Composite Index: (Type, AttrKey, AttrValue) -> HashSet<EntityId>
+    └── Complex queries: optimized
+
+
+Entity Definition
+┌──────────────────────────┐
+│ Entity                   │
+├──────────────────────────┤
+│ id: EntityId (interned)  │
+│ type: EntityType         │
+│ attributes: HashMap      │
+│ parent: Option<EntityId> │
+└──────────────────────────┘
+         │
+         ▼
+AttributeValue (type-safe enum)
+├── String(InternedString)
+├── Int(i64)
+├── Float(f64)
+├── Bool(bool)
+├── List(Vec<AttributeValue>)
+└── Null
+
+
+REQUEST EVALUATION TIMELINE
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Client sends PolicyRequest
+        │
+        ▼
+Agent receives request (port 8080)
+        │
+        ▼
+Extract PolicyRequest
+  resource: String
+  action: String
+  context: HashMap<String, String>
+        │
+        ▼
+PolicyEngine::get_policy() ◄── ~50-200ns (lock-free lookup)
+        │
+        ▼
+Get/Build Evaluator (lazy)
+        │
+        ▼ evaluate(request)
+    ┌───┴─────────────────┬───────────────┐
+    │                     │               │
+    ▼                     ▼               ▼
+Simple Evaluator   Cedar Evaluator   ReaperDSL
+  < 1µs            10-50µs           < 1µs
+    │                     │               │
+    └─────────┬───────────┴───────────────┘
+              │
+              ▼
+        PolicyDecision
+        ├── decision: Allow/Deny/Log
+        ├── policy_id: PolicyId
+        ├── policy_version: u64
+        ├── evaluation_time_ns: u64
+        └── matched_rule: Option<usize>
+              │
+              ▼
+        Response to Client

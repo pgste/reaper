@@ -1,0 +1,465 @@
+// Mega Policy with 50+ Rules (Supported Features Only)
+// Uses only features supported by the compiled evaluator
+// Matches OPA mega.rego logic for comparable benchmarks
+
+policy mega_policy {
+    version: "1.0",
+    description: "Comprehensive mega policy using supported features",
+    default: deny,
+
+    // ===== MATH OPERATIONS (Rules 1-15) =====
+
+    // Rule 1: Credit Score
+    rule credit_score_check {
+        allow if {
+            resource == "premium_loan" &&
+            user.credit_score >= 700
+        }
+    }
+
+    // Rule 2: Budget Limit
+    rule budget_check {
+        allow if {
+            resource == "shopping_cart" &&
+            user.order_total <= user.budget_limit
+        }
+    }
+
+    // Rule 3: Average Rating
+    rule rating_check {
+        allow if {
+            resource == "featured_listing" &&
+            user.average_rating >= 4.0
+        }
+    }
+
+    // Rules 4-6: Price Range
+    rule price_range_low {
+        allow if {
+            resource == "marketplace_low" &&
+            user.list_price >= 1 &&
+            user.list_price <= 100
+        }
+    }
+
+    rule price_range_medium {
+        allow if {
+            resource == "marketplace_medium" &&
+            user.list_price >= 100 &&
+            user.list_price <= 1000
+        }
+    }
+
+    rule price_range_high {
+        allow if {
+            resource == "marketplace_high" &&
+            user.list_price >= 1000 &&
+            user.list_price <= 10000
+        }
+    }
+
+    // Rules 7-9: Tier Upgrades
+    rule tier_bronze {
+        allow if {
+            resource == "bronze_tier" &&
+            user.score >= 50.0 &&
+            user.score < 70.0
+        }
+    }
+
+    rule tier_silver {
+        allow if {
+            resource == "silver_tier" &&
+            user.score >= 70.0 &&
+            user.score < 90.0
+        }
+    }
+
+    rule tier_gold {
+        allow if {
+            resource == "gold_tier" &&
+            user.score >= 90.0
+        }
+    }
+
+    // Rules 10-12: Temperature Ranges
+    rule temp_cold {
+        allow if {
+            resource == "cold_storage" &&
+            user.temperature >= -50 &&
+            user.temperature <= 0
+        }
+    }
+
+    rule temp_normal {
+        allow if {
+            resource == "normal_storage" &&
+            user.temperature >= 0 &&
+            user.temperature <= 25
+        }
+    }
+
+    rule temp_warm {
+        allow if {
+            resource == "warm_storage" &&
+            user.temperature >= 25 &&
+            user.temperature <= 50
+        }
+    }
+
+    // Rules 13-15: Loyalty Points
+    rule loyalty_basic {
+        allow if {
+            resource == "loyalty_basic" &&
+            user.total_points >= 100 &&
+            user.total_points < 500
+        }
+    }
+
+    rule loyalty_premium {
+        allow if {
+            resource == "loyalty_premium" &&
+            user.total_points >= 500 &&
+            user.total_points < 1000
+        }
+    }
+
+    rule loyalty_elite {
+        allow if {
+            resource == "loyalty_elite" &&
+            user.total_points >= 1000
+        }
+    }
+
+    // ===== STRING OPERATIONS (Rules 16-30) =====
+    // Note: .lower() and .upper() not supported, using contains/startswith/endswith
+
+    // Rules 22-24: Email Domain Checks
+    rule email_company {
+        allow if {
+            resource == "company_docs" &&
+            user.email.contains("@company.com")
+        }
+    }
+
+    rule email_partner {
+        allow if {
+            resource == "partner_docs" &&
+            user.email.contains("@partner.com")
+        }
+    }
+
+    rule email_external {
+        allow if {
+            resource == "external_docs" &&
+            user.email.contains("@external.com")
+        }
+    }
+
+    // Rules 25-27: Username Prefix Checks
+    rule prefix_admin {
+        allow if {
+            resource == "admin_panel" &&
+            user.username.startswith("admin_")
+        }
+    }
+
+    rule prefix_manager {
+        allow if {
+            resource == "manager_panel" &&
+            user.username.startswith("mgr_")
+        }
+    }
+
+    rule prefix_user {
+        allow if {
+            resource == "user_panel" &&
+            user.username.startswith("user_")
+        }
+    }
+
+    // Rules 28-30: Email Suffix Checks
+    rule suffix_gov {
+        allow if {
+            resource == "gov_classified" &&
+            user.email.endswith(".gov")
+        }
+    }
+
+    rule suffix_mil {
+        allow if {
+            resource == "mil_classified" &&
+            user.email.endswith(".mil")
+        }
+    }
+
+    rule suffix_edu {
+        allow if {
+            resource == "edu_resources" &&
+            user.email.endswith(".edu")
+        }
+    }
+
+    // ===== REGEX VALIDATION (Rules 31-45) =====
+
+    rule email_validation {
+        allow if {
+            resource == "email_validation" &&
+            regex::matches(user.email, "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$")
+        }
+    }
+
+    rule phone_validation {
+        allow if {
+            resource == "phone_validation" &&
+            regex::matches(user.phone, "^\\+?1?\\s?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$")
+        }
+    }
+
+    rule url_validation {
+        allow if {
+            resource == "url_validation" &&
+            regex::matches(user.url, "^https?://[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$")
+        }
+    }
+
+    rule ip_validation {
+        allow if {
+            resource == "ip_validation" &&
+            regex::matches(user.ip_address, "^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?){4}$")
+        }
+    }
+
+    rule uuid_validation {
+        allow if {
+            resource == "uuid_validation" &&
+            regex::matches(user.uuid, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        }
+    }
+
+    rule credit_card_validation {
+        allow if {
+            resource == "payment_validation" &&
+            regex::matches(user.credit_card, "^\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}$")
+        }
+    }
+
+    rule zip_validation {
+        allow if {
+            resource == "zip_validation" &&
+            regex::matches(user.zip_code, "^\\d{5}(-\\d{4})?$")
+        }
+    }
+
+    rule color_validation {
+        allow if {
+            resource == "color_validation" &&
+            regex::matches(user.hex_color, "^#[0-9A-Fa-f]{6}$")
+        }
+    }
+
+    rule date_validation {
+        allow if {
+            resource == "date_validation" &&
+            regex::matches(user.date_iso, "^\\d{4}-\\d{2}-\\d{2}$")
+        }
+    }
+
+    rule time_validation {
+        allow if {
+            resource == "time_validation" &&
+            regex::matches(user.time_24h, "^([01]\\d|2[0-3]):[0-5]\\d$")
+        }
+    }
+
+    rule domain_validation {
+        allow if {
+            resource == "domain_validation" &&
+            regex::matches(user.domain_name, "^([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$")
+        }
+    }
+
+    rule username_validation {
+        allow if {
+            resource == "username_validation" &&
+            regex::matches(user.username_pattern, "^[a-zA-Z0-9_-]{3,16}$")
+        }
+    }
+
+    rule mac_validation {
+        allow if {
+            resource == "mac_validation" &&
+            regex::matches(user.mac_address, "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
+        }
+    }
+
+    rule ipv6_validation {
+        allow if {
+            resource == "ipv6_validation" &&
+            regex::matches(user.ipv6_address, "^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$")
+        }
+    }
+
+    rule version_validation {
+        allow if {
+            resource == "version_validation" &&
+            regex::matches(user.semver, "^\\d+\\.\\d+\\.\\d+$")
+        }
+    }
+
+    // ===== TIME OPERATIONS (Rules 46-60) =====
+
+    rule token_expiration {
+        allow if {
+            resource == "api_endpoint" &&
+            user.token_expires_at > 1765180000000000000
+        }
+    }
+
+    rule business_morning {
+        allow if {
+            user.role == "employee" &&
+            resource == "office_morning" &&
+            user.work_start_time < 1765185000000000000
+        }
+    }
+
+    rule business_afternoon {
+        allow if {
+            user.role == "employee" &&
+            resource == "office_afternoon" &&
+            user.work_end_time > 1765185000000000000
+        }
+    }
+
+    rule age_18 {
+        allow if {
+            resource == "adult_content" &&
+            user.birthdate < 1100000000
+        }
+    }
+
+    rule age_21 {
+        allow if {
+            resource == "alcohol_purchase" &&
+            user.birthdate < 1000000000
+        }
+    }
+
+    rule lease_active {
+        allow if {
+            resource == "apartment_access" &&
+            user.lease_end_time > 1765180000000000000
+        }
+    }
+
+    rule session_valid {
+        allow if {
+            resource == "web_session" &&
+            user.session_start_time < 1765185000000000000
+        }
+    }
+
+    rule future_event {
+        allow if {
+            user.role == "event_planner" &&
+            resource == "conference_room" &&
+            user.event_scheduled_time > 1765180000000000000
+        }
+    }
+
+    rule subscription_active {
+        allow if {
+            resource == "premium_feature" &&
+            user.subscription_expires > 1765180000000000000
+        }
+    }
+
+    rule trial_active {
+        allow if {
+            resource == "trial_feature" &&
+            user.trial_ends > 1765180000000000000
+        }
+    }
+
+    rule contract_started {
+        allow if {
+            resource == "contractor_tools" &&
+            user.contract_start < 1765185000000000000
+        }
+    }
+
+    rule contract_active {
+        allow if {
+            resource == "contractor_data" &&
+            user.contract_end > 1765185000000000000
+        }
+    }
+
+    rule certification_valid {
+        allow if {
+            resource == "certified_operation" &&
+            user.certification_expires > 1765180000000000000
+        }
+    }
+
+    // ===== COLLECTION OPERATIONS (Rules 61-66) =====
+
+    rule perm_read {
+        allow if {
+            resource == "doc_read" &&
+            "read" in user.permissions
+        }
+    }
+
+    rule perm_write {
+        allow if {
+            resource == "doc_write" &&
+            "write" in user.permissions
+        }
+    }
+
+    rule perm_delete {
+        allow if {
+            resource == "doc_delete" &&
+            "delete" in user.permissions
+        }
+    }
+
+    rule skills_junior {
+        allow if {
+            resource == "junior_position" &&
+            user.skills.count() >= 2
+        }
+    }
+
+    rule skills_mid {
+        allow if {
+            resource == "mid_position" &&
+            user.skills.count() >= 3
+        }
+    }
+
+    rule skills_senior {
+        allow if {
+            resource == "senior_position" &&
+            user.skills.count() >= 5
+        }
+    }
+
+    // ===== JSON FIELD VALIDATION (Rules 91-105) =====
+
+    rule json_number_field {
+        allow if {
+            resource == "age_verification" &&
+            user.age >= 18
+        }
+    }
+
+    rule json_boolean_field {
+        allow if {
+            resource == "verification_check" &&
+            user.verified == true
+        }
+    }
+}

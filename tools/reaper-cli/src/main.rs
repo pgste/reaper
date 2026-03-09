@@ -1,8 +1,45 @@
 use clap::{Parser, Subcommand};
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
+
+// Reap policy imports
+use policy_engine::{
+    DataLoader, DataStore, PolicyAction as EngineAction, PolicyBundle, PolicyEvaluator,
+    PolicyRequest, ReaperPolicy,
+};
+
+// eBPF command handlers (Linux only)
+#[cfg(target_os = "linux")]
+mod ebpf_commands;
+#[cfg(target_os = "linux")]
+use ebpf_commands::{handle_analyze_policy, handle_validate_data};
+
+// Stub implementations for non-Linux platforms
+#[cfg(not(target_os = "linux"))]
+fn handle_validate_data(
+    _file: &str,
+    _check_ebpf: bool,
+    _format: &str,
+    _custom_schemas: Option<&str>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("eBPF commands are only available on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn handle_analyze_policy(
+    _file: &str,
+    _check_ebpf: bool,
+    _show_recommendations: bool,
+    _format: &str,
+) -> anyhow::Result<()> {
+    anyhow::bail!("eBPF commands are only available on Linux")
+}
 
 #[derive(Parser)]
 #[command(name = "reaper")]
@@ -23,7 +60,67 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Policy management commands
+    /// Evaluate a policy file locally (.reap, .yaml, .yml, .json)
+    Eval {
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        #[arg(short, long)]
+        policy: String,
+
+        /// Path to JSON data file
+        #[arg(short, long)]
+        data: String,
+
+        /// Principal (user) ID
+        #[arg(long)]
+        principal: String,
+
+        /// Action to evaluate
+        #[arg(short, long)]
+        action: String,
+
+        /// Resource ID
+        #[arg(short, long)]
+        resource: String,
+
+        /// Show detailed timing information
+        #[arg(long)]
+        timing: bool,
+    },
+
+    /// Compile policy to binary bundle (.rbb)
+    Compile {
+        /// Input policy file(s) (.reap, .yaml, .yml, or .json)
+        #[arg(required = true)]
+        input: Vec<String>,
+
+        /// Output bundle file (.rbb)
+        #[arg(short, long)]
+        output: String,
+
+        /// Enable optimizations
+        #[arg(long)]
+        optimize: bool,
+
+        /// Show bundle metadata
+        #[arg(long)]
+        info: bool,
+    },
+
+    /// Validate policy syntax
+    Validate {
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        policy: String,
+
+        /// Path to JSON data file for validation
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Show detailed parse tree
+        #[arg(long)]
+        verbose: bool,
+    },
+
+    /// Policy management commands (platform/agent)
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
@@ -42,6 +139,163 @@ enum Commands {
         /// Number of requests to send
         #[arg(short, long, default_value = "1000")]
         requests: usize,
+    },
+
+    /// Validate entity data for eBPF loading
+    ValidateData {
+        /// Path to entity JSON file
+        #[arg(short, long)]
+        file: String,
+
+        /// Check eBPF compatibility
+        #[arg(long)]
+        check_ebpf: bool,
+
+        /// Output format (table, json)
+        #[arg(long, default_value = "table")]
+        format: String,
+
+        /// Path to custom schema definitions (JSON)
+        #[arg(long)]
+        custom_schemas: Option<String>,
+    },
+
+    /// Analyze policy for eBPF promotability
+    AnalyzePolicy {
+        /// Path to policy file (.reap, .yaml, .yml, .json)
+        #[arg(short, long)]
+        file: String,
+
+        /// Check eBPF compatibility
+        #[arg(long)]
+        check_ebpf: bool,
+
+        /// Show detailed recommendations
+        #[arg(long)]
+        show_recommendations: bool,
+
+        /// Output format (table, json)
+        #[arg(long, default_value = "table")]
+        format: String,
+    },
+
+    /// Bundle management commands
+    Bundle {
+        #[command(subcommand)]
+        action: BundleAction,
+    },
+
+    /// Management plane commands (for centralized management)
+    Management {
+        #[command(subcommand)]
+        action: ManagementAction,
+
+        /// Management server URL
+        #[arg(long, default_value = "http://localhost:3000")]
+        management_url: String,
+
+        /// API key for authentication
+        #[arg(long, env = "REAPER_MANAGEMENT_API_KEY")]
+        api_key: Option<String>,
+    },
+
+    /// Test a single policy assertion (returns exit code 0 for pass, 1 for fail)
+    Test {
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        #[arg(short, long)]
+        policy: String,
+
+        /// Path to JSON data file
+        #[arg(short, long)]
+        data: String,
+
+        /// Principal (user) ID
+        #[arg(long)]
+        principal: String,
+
+        /// Action to evaluate
+        #[arg(short, long)]
+        action: String,
+
+        /// Resource ID
+        #[arg(short, long)]
+        resource: String,
+
+        /// Expected decision (allow or deny)
+        #[arg(short, long)]
+        expect: String,
+
+        /// Show detailed output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Run a test suite from a YAML file
+    TestSuite {
+        /// Path to test suite YAML file
+        #[arg(short, long)]
+        file: String,
+
+        /// Show detailed output for each test
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Stop on first failure
+        #[arg(long)]
+        fail_fast: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BundleAction {
+    /// Show bundle information
+    Info {
+        /// Path to .rbb bundle file
+        file: String,
+    },
+    /// Deploy bundle to agent
+    Deploy {
+        /// Path to .rbb bundle file
+        file: String,
+
+        /// Optional path to JSON data file to load before deploying
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Force deployment even if version already exists
+        #[arg(long)]
+        force: bool,
+    },
+    /// Rollback policy to previous version
+    Rollback {
+        /// Policy ID to rollback
+        policy_id: String,
+
+        /// Target version to rollback to
+        version: String,
+    },
+    /// List versions of a deployed policy
+    Versions {
+        /// Policy ID to list versions for
+        policy_id: String,
+    },
+    /// Create a policy package (.rpp) from multiple policies
+    Package {
+        /// Input policy files (.reap, .yaml, .yml, or .json)
+        #[arg(required = true)]
+        input: Vec<String>,
+
+        /// Output package file (.rpp)
+        #[arg(short, long)]
+        output: String,
+
+        /// Package name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Package version
+        #[arg(short, long, default_value = "1.0.0")]
+        version: String,
     },
 }
 
@@ -102,19 +356,1019 @@ enum AgentAction {
     Metrics,
 }
 
+#[derive(Subcommand)]
+enum ManagementAction {
+    /// Check management server health
+    Health,
+
+    /// List organizations
+    Orgs,
+
+    /// List policy sources in an organization
+    Sources {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+    },
+
+    /// List bundles
+    Bundles {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+
+        /// Show only promoted bundles
+        #[arg(long)]
+        promoted: bool,
+    },
+
+    /// Show bundle details
+    BundleInfo {
+        /// Bundle ID
+        id: String,
+    },
+
+    /// List agents registered with management
+    Agents {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+    },
+
+    /// Push a policy to the management server
+    Push {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+
+        /// Policy source name
+        #[arg(short, long)]
+        source: String,
+
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        file: String,
+
+        /// Policy name (defaults to filename)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Policy description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+
+    /// Create and promote a bundle
+    Promote {
+        /// Organization ID or name
+        #[arg(short, long)]
+        org: String,
+
+        /// Bundle name
+        #[arg(short, long)]
+        name: String,
+
+        /// Policy IDs to include (comma-separated)
+        #[arg(short, long)]
+        policies: String,
+
+        /// Bundle description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+}
+
+// ============================================================================
+// .reap File Command Handlers
+// ============================================================================
+
+/// Handle: reaper eval
+fn handle_eval(
+    policy_path: &str,
+    data_path: &str,
+    principal: &str,
+    action: &str,
+    resource: &str,
+    show_timing: bool,
+) -> anyhow::Result<()> {
+    println!("🔍 Evaluating Reaper Policy\n");
+
+    // Validate inputs
+    if !Path::new(policy_path).exists() {
+        anyhow::bail!("❌ Error: Policy file not found: {}", policy_path);
+    }
+    if !Path::new(data_path).exists() {
+        anyhow::bail!("❌ Error: Data file not found: {}", data_path);
+    }
+
+    // Load and parse policy (auto-detect format)
+    println!("1️⃣  Loading policy: {}", policy_path);
+    let load_start = Instant::now();
+    let policy = ReaperPolicy::from_file_auto(policy_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your policy syntax (.reap, .yaml, .yml, or .json)", e)
+    })?;
+    let load_time = load_start.elapsed();
+
+    println!("   ✓ Parsed policy: {}", policy.name());
+    if let Some(version) = policy.version() {
+        println!("   ✓ Version: {}", version);
+    }
+    if show_timing {
+        println!("   ⏱  Parse time: {:?}", load_time);
+    }
+    println!();
+
+    // Load data
+    println!("2️⃣  Loading data: {}", data_path);
+    let data_content = fs::read_to_string(data_path)
+        .map_err(|e| anyhow::anyhow!("❌ Failed to read data file: {}", e))?;
+
+    let store = DataStore::new();
+    let loader = DataLoader::new(store.clone());
+
+    let entity_count = loader.load_json(&data_content).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to load data: {:?}\n\nCheck your JSON format", e)
+    })?;
+
+    println!("   ✓ Loaded {} entities", entity_count);
+    println!();
+
+    // Build evaluator
+    println!("3️⃣  Building evaluator...");
+    let build_start = Instant::now();
+    let store = Arc::new(store);
+    let evaluator = policy
+        .build(store.clone())
+        .map_err(|e| anyhow::anyhow!("❌ Failed to build evaluator: {:?}", e))?;
+    let build_time = build_start.elapsed();
+
+    println!("   ✓ Evaluator ready");
+    if show_timing {
+        println!("   ⏱  Build time: {:?}", build_time);
+    }
+    println!();
+
+    // Validate entities exist
+    println!("4️⃣  Validating request...");
+    let interner = store.interner();
+    let principal_id = interner.intern(principal);
+    let resource_id = interner.intern(resource);
+
+    if store.get(principal_id).is_none() {
+        anyhow::bail!(
+            "❌ Error: Principal '{}' not found in data\n   Available entities: Use --verbose to list",
+            principal
+        );
+    }
+
+    if store.get(resource_id).is_none() {
+        anyhow::bail!(
+            "❌ Error: Resource '{}' not found in data\n   Available entities: Use --verbose to list",
+            resource
+        );
+    }
+
+    println!("   ✓ Principal: {}", principal);
+    println!("   ✓ Action: {}", action);
+    println!("   ✓ Resource: {}", resource);
+    println!();
+
+    // Evaluate policy
+    println!("5️⃣  Evaluating policy...");
+    let mut context = HashMap::new();
+    context.insert("principal".to_string(), principal.to_string());
+
+    let request = PolicyRequest {
+        resource: resource.to_string(),
+        action: action.to_string(),
+        context,
+    };
+
+    let eval_start = Instant::now();
+    let decision = evaluator
+        .evaluate(&request)
+        .map_err(|e| anyhow::anyhow!("❌ Evaluation failed: {:?}", e))?;
+    let eval_time = eval_start.elapsed();
+
+    // Display result
+    println!();
+    println!("═══════════════════════════════════════════════════════");
+    println!("                    📊 RESULT                          ");
+    println!("═══════════════════════════════════════════════════════");
+
+    let (symbol, decision_text) = match decision {
+        EngineAction::Allow => ("✅", "ALLOW"),
+        EngineAction::Deny => ("❌", "DENY"),
+        EngineAction::Log => ("📝", "LOG"),
+    };
+
+    println!(" {} Decision: {}", symbol, decision_text);
+    println!();
+
+    if show_timing {
+        println!("⏱  Performance:");
+        println!("   • Parse policy: {:?}", load_time);
+        println!("   • Build evaluator: {:?}", build_time);
+        println!(
+            "   • Evaluate: {:?} ({:.0} ns)",
+            eval_time,
+            eval_time.as_nanos()
+        );
+        println!();
+    } else {
+        println!(
+            "⏱  Evaluation time: {:?} ({:.0} ns)",
+            eval_time,
+            eval_time.as_nanos()
+        );
+        println!();
+    }
+
+    println!("═══════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+/// Handle: reaper compile
+fn handle_compile(
+    input_files: &[String],
+    output_path: &str,
+    _optimize: bool,
+    show_info: bool,
+) -> anyhow::Result<()> {
+    println!("🔨 Compiling Reaper Policy Bundle\n");
+
+    if input_files.is_empty() {
+        anyhow::bail!("❌ Error: No input files specified");
+    }
+
+    // For now, support single file compilation
+    // TODO: Support multiple files and merging
+    if input_files.len() > 1 {
+        println!("⚠️  Warning: Multiple files specified, only first will be compiled");
+        println!("   Multi-file bundling coming soon!");
+        println!();
+    }
+
+    let input_path = &input_files[0];
+
+    // Validate input
+    if !Path::new(input_path).exists() {
+        anyhow::bail!("❌ Error: Input file not found: {}", input_path);
+    }
+
+    // Load and parse policy (auto-detect format)
+    println!("1️⃣  Parsing policy: {}", input_path);
+    let policy = ReaperPolicy::from_file_auto(input_path).map_err(|e| {
+        anyhow::anyhow!("❌ Failed to parse policy: {:?}\n\nCheck your policy syntax (.reap, .yaml, .yml, or .json)", e)
+    })?;
+
+    println!("   ✓ Parsed: {}", policy.name());
+    if let Some(version) = policy.version() {
+        println!("   ✓ Version: {}", version);
+    }
+    println!();
+
+    // Compile to bundle
+    println!("2️⃣  Compiling to binary bundle...");
+    let compile_start = Instant::now();
+    let bundle_bytes = policy
+        .compile_to_bundle()
+        .map_err(|e| anyhow::anyhow!("❌ Compilation failed: {:?}", e))?;
+    let compile_time = compile_start.elapsed();
+
+    println!("   ✓ Compiled successfully");
+    println!("   ⏱  Compilation time: {:?}", compile_time);
+    println!();
+
+    // Write bundle
+    println!("3️⃣  Writing bundle: {}", output_path);
+    fs::write(output_path, &bundle_bytes)
+        .map_err(|e| anyhow::anyhow!("❌ Failed to write bundle: {}", e))?;
+
+    println!("   ✓ Bundle written");
+    println!("   📦 Size: {} bytes", bundle_bytes.len());
+    println!();
+
+    // Show bundle info
+    if show_info {
+        println!("4️⃣  Bundle Information:");
+        match PolicyBundle::from_bytes(&bundle_bytes) {
+            Ok(bundle) => {
+                println!("   • Policy: {}", bundle.metadata.policy_name);
+                if let Some(v) = &bundle.metadata.policy_version {
+                    println!("   • Version: {}", v);
+                }
+                println!("   • Format version: {}", bundle.metadata.version);
+                println!("   • Compiled at: {}", bundle.metadata.compiled_at);
+                println!("   • Checksum: {:x}", bundle.metadata.source_checksum);
+                println!("   • Rules: {}", bundle.policy.rules.len());
+            }
+            Err(e) => {
+                println!("   ⚠️  Could not read bundle metadata: {:?}", e);
+            }
+        }
+        println!();
+    }
+
+    println!("✅ Success! Bundle ready for production deployment");
+    println!();
+    println!("Load with:");
+    println!("   let bundle = fs::read(\"{}\").unwrap();", output_path);
+    println!("   let evaluator = ReaperPolicy::from_bundle(&bundle, store)?;");
+
+    Ok(())
+}
+
+/// Handle: reaper validate
+fn handle_validate(
+    policy_path: &str,
+    data_path: Option<&str>,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    println!("✅ Validating Reaper Policy\n");
+
+    // Validate file exists
+    if !Path::new(policy_path).exists() {
+        anyhow::bail!("❌ Error: Policy file not found: {}", policy_path);
+    }
+
+    // Parse policy (auto-detect format)
+    println!("1️⃣  Parsing policy: {}", policy_path);
+    let parse_start = Instant::now();
+
+    let policy = match ReaperPolicy::from_file_auto(policy_path) {
+        Ok(p) => p,
+        Err(e) => {
+            println!();
+            println!("❌ SYNTAX ERROR");
+            println!("══════════════════════════════════════════════════════");
+            println!("{:?}", e);
+            println!("══════════════════════════════════════════════════════");
+            println!();
+            println!("💡 Common issues:");
+            println!("   • Missing 'default_decision' field (YAML/JSON) or 'default' (Reap)");
+            println!("   • Unmatched curly braces or incorrect YAML/JSON syntax");
+            println!("   • Missing quotes around strings");
+            println!("   • Invalid operators (use equal, not_equal, gt, lt, gte, lte)");
+            println!("   • Unsupported file extension (use .reap, .yaml, .yml, or .json)");
+            println!();
+            anyhow::bail!("Validation failed");
+        }
+    };
+
+    let parse_time = parse_start.elapsed();
+
+    println!("   ✅ Syntax valid");
+    println!("   ⏱  Parse time: {:?}", parse_time);
+    println!();
+
+    // Show policy info
+    println!("2️⃣  Policy Information:");
+    println!("   • Name: {}", policy.name());
+    if let Some(version) = policy.version() {
+        println!("   • Version: {}", version);
+    }
+    println!();
+
+    // Validate with data if provided
+    if let Some(data_path) = data_path {
+        println!("3️⃣  Validating with data: {}", data_path);
+
+        if !Path::new(data_path).exists() {
+            anyhow::bail!("❌ Error: Data file not found: {}", data_path);
+        }
+
+        let data_content = fs::read_to_string(data_path)
+            .map_err(|e| anyhow::anyhow!("❌ Failed to read data file: {}", e))?;
+
+        let store = DataStore::new();
+        let loader = DataLoader::new(store.clone());
+
+        let entity_count = match loader.load_json(&data_content) {
+            Ok(count) => count,
+            Err(e) => {
+                println!();
+                println!("❌ DATA ERROR");
+                println!("══════════════════════════════════════════════════════");
+                println!("{:?}", e);
+                println!("══════════════════════════════════════════════════════");
+                println!();
+                anyhow::bail!("Invalid data format");
+            }
+        };
+
+        println!("   ✅ Data valid");
+        println!("   • Entities loaded: {}", entity_count);
+        println!();
+
+        // Try to build evaluator
+        println!("4️⃣  Building evaluator...");
+        let store = Arc::new(store);
+        if let Err(e) = policy.build(store) {
+            println!();
+            println!("❌ BUILD ERROR");
+            println!("══════════════════════════════════════════════════════");
+            println!("{:?}", e);
+            println!("══════════════════════════════════════════════════════");
+            anyhow::bail!("Failed to build evaluator");
+        }
+
+        println!("   ✅ Evaluator builds successfully");
+        println!();
+    }
+
+    println!("══════════════════════════════════════════════════════");
+    println!("✅ VALIDATION PASSED");
+    println!("══════════════════════════════════════════════════════");
+
+    if verbose {
+        println!();
+        println!("Policy file: {}", policy_path);
+        if let Some(dp) = data_path {
+            println!("Data file: {}", dp);
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Test Command Handlers
+// ============================================================================
+
+/// Test case definition for test suite YAML files
+#[derive(serde::Deserialize, Debug)]
+struct TestCase {
+    name: String,
+    policy: String,
+    data: String,
+    principal: String,
+    action: String,
+    resource: String,
+    expect: String,
+}
+
+/// Test suite definition
+#[derive(serde::Deserialize, Debug)]
+struct TestSuiteDefinition {
+    tests: Vec<TestCase>,
+}
+
+/// Handle: reaper test
+fn handle_test(
+    policy_path: &str,
+    data_path: &str,
+    principal: &str,
+    action: &str,
+    resource: &str,
+    expect: &str,
+    verbose: bool,
+) -> anyhow::Result<bool> {
+    // Validate expected value
+    let expected_decision = match expect.to_lowercase().as_str() {
+        "allow" => EngineAction::Allow,
+        "deny" => EngineAction::Deny,
+        _ => anyhow::bail!(
+            "Invalid expected decision: '{}'. Must be 'allow' or 'deny'",
+            expect
+        ),
+    };
+
+    // Validate inputs
+    if !Path::new(policy_path).exists() {
+        anyhow::bail!("Policy file not found: {}", policy_path);
+    }
+    if !Path::new(data_path).exists() {
+        anyhow::bail!("Data file not found: {}", data_path);
+    }
+
+    // Load and parse policy
+    let policy = ReaperPolicy::from_file_auto(policy_path)
+        .map_err(|e| anyhow::anyhow!("Failed to parse policy: {:?}", e))?;
+
+    // Load data
+    let data_content = fs::read_to_string(data_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read data file: {}", e))?;
+
+    let store = DataStore::new();
+    let loader = DataLoader::new(store.clone());
+    let _entity_count = loader
+        .load_json(&data_content)
+        .map_err(|e| anyhow::anyhow!("Failed to load data: {:?}", e))?;
+
+    // Build evaluator
+    let store = Arc::new(store);
+    let evaluator = policy
+        .build(store.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to build evaluator: {:?}", e))?;
+
+    // Evaluate
+    let mut context = HashMap::new();
+    context.insert("principal".to_string(), principal.to_string());
+
+    let request = PolicyRequest {
+        resource: resource.to_string(),
+        action: action.to_string(),
+        context,
+    };
+
+    let eval_start = Instant::now();
+    let actual_decision = evaluator
+        .evaluate(&request)
+        .map_err(|e| anyhow::anyhow!("Evaluation failed: {:?}", e))?;
+    let eval_time = eval_start.elapsed();
+
+    // Compare result
+    let passed = actual_decision == expected_decision;
+
+    if verbose {
+        println!("Test: {} {} {} -> {}", principal, action, resource, expect);
+        println!("  Policy: {}", policy_path);
+        println!("  Expected: {:?}", expected_decision);
+        println!("  Actual:   {:?}", actual_decision);
+        println!("  Time:     {:?}", eval_time);
+        if passed {
+            println!("  Result:   PASS");
+        } else {
+            println!("  Result:   FAIL");
+        }
+    } else if passed {
+        println!(
+            "PASS: {} {} {} -> {:?}",
+            principal, action, resource, actual_decision
+        );
+    } else {
+        println!(
+            "FAIL: {} {} {} -> {:?} (expected {:?})",
+            principal, action, resource, actual_decision, expected_decision
+        );
+    }
+
+    Ok(passed)
+}
+
+/// Handle: reaper test-suite
+fn handle_test_suite(suite_path: &str, verbose: bool, fail_fast: bool) -> anyhow::Result<bool> {
+    // Load test suite
+    if !Path::new(suite_path).exists() {
+        anyhow::bail!("Test suite file not found: {}", suite_path);
+    }
+
+    let content = fs::read_to_string(suite_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read test suite: {}", e))?;
+
+    let suite: TestSuiteDefinition = serde_yaml::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse test suite YAML: {}", e))?;
+
+    println!(
+        "Running {} test(s) from {}\n",
+        suite.tests.len(),
+        suite_path
+    );
+    println!("═══════════════════════════════════════════════════════════════");
+
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut failures: Vec<String> = Vec::new();
+    let start_time = Instant::now();
+
+    for test in &suite.tests {
+        if verbose {
+            println!("\nTest: {}", test.name);
+        }
+
+        match handle_test(
+            &test.policy,
+            &test.data,
+            &test.principal,
+            &test.action,
+            &test.resource,
+            &test.expect,
+            verbose,
+        ) {
+            Ok(true) => {
+                passed += 1;
+                if !verbose {
+                    println!("  PASS: {}", test.name);
+                }
+            }
+            Ok(false) => {
+                failed += 1;
+                failures.push(test.name.clone());
+                if !verbose {
+                    println!("  FAIL: {}", test.name);
+                }
+                if fail_fast {
+                    println!("\nStopping on first failure (--fail-fast)");
+                    break;
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                failures.push(format!("{}: {}", test.name, e));
+                if !verbose {
+                    println!("  ERROR: {} - {}", test.name, e);
+                } else {
+                    println!("  ERROR: {}", e);
+                }
+                if fail_fast {
+                    println!("\nStopping on first failure (--fail-fast)");
+                    break;
+                }
+            }
+        }
+    }
+
+    let total_time = start_time.elapsed();
+    println!("\n═══════════════════════════════════════════════════════════════");
+    println!(
+        "Results: {} passed, {} failed ({:?})",
+        passed, failed, total_time
+    );
+
+    if !failures.is_empty() {
+        println!("\nFailed tests:");
+        for f in &failures {
+            println!("  - {}", f);
+        }
+    }
+
+    if failed == 0 {
+        println!("\nAll tests passed!");
+    }
+
+    Ok(failed == 0)
+}
+
+// ============================================================================
+// Platform/Agent Command Handlers
+// ============================================================================
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let client = Client::new();
 
     match cli.command {
+        Commands::Eval {
+            ref policy,
+            ref data,
+            ref principal,
+            ref action,
+            ref resource,
+            timing,
+        } => handle_eval(policy, data, principal, action, resource, timing)?,
+
+        Commands::Compile {
+            ref input,
+            ref output,
+            optimize,
+            info,
+        } => handle_compile(input, output, optimize, info)?,
+
+        Commands::Validate {
+            ref policy,
+            ref data,
+            verbose,
+        } => handle_validate(policy, data.as_deref(), verbose)?,
+
         Commands::Policy { ref action } => handle_policy_action(action, &cli, &client).await?,
         Commands::Agent { ref action } => handle_agent_action(action, &cli, &client).await?,
         Commands::Status => handle_status(&cli, &client).await?,
         Commands::Demo => handle_demo(&cli, &client).await?,
         Commands::Benchmark { requests } => handle_benchmark(&cli, &client, requests).await?,
+
+        Commands::ValidateData {
+            ref file,
+            check_ebpf,
+            ref format,
+            ref custom_schemas,
+        } => handle_validate_data(file, check_ebpf, format, custom_schemas.as_deref())?,
+
+        Commands::AnalyzePolicy {
+            ref file,
+            check_ebpf,
+            show_recommendations,
+            ref format,
+        } => handle_analyze_policy(file, check_ebpf, show_recommendations, format)?,
+
+        Commands::Bundle { ref action } => handle_bundle_action(action, &cli, &client).await?,
+
+        Commands::Management {
+            ref action,
+            ref management_url,
+            ref api_key,
+        } => handle_management_action(action, management_url, api_key.as_deref(), &client).await?,
+
+        Commands::Test {
+            ref policy,
+            ref data,
+            ref principal,
+            ref action,
+            ref resource,
+            ref expect,
+            verbose,
+        } => {
+            let passed = handle_test(policy, data, principal, action, resource, expect, verbose)?;
+            if !passed {
+                std::process::exit(1);
+            }
+        }
+
+        Commands::TestSuite {
+            ref file,
+            verbose,
+            fail_fast,
+        } => {
+            let all_passed = handle_test_suite(file, verbose, fail_fast)?;
+            if !all_passed {
+                std::process::exit(1);
+            }
+        }
     }
 
+    Ok(())
+}
+
+/// Handle bundle management commands
+async fn handle_bundle_action(
+    action: &BundleAction,
+    cli: &Cli,
+    client: &Client,
+) -> anyhow::Result<()> {
+    match action {
+        BundleAction::Info { file } => {
+            println!("📦 Bundle Information\n");
+
+            // Read bundle file
+            let bundle_bytes =
+                fs::read(file).map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
+
+            // Parse bundle
+            let bundle = PolicyBundle::from_bytes(&bundle_bytes)
+                .map_err(|e| anyhow::anyhow!("❌ Invalid bundle format: {:?}", e))?;
+
+            println!("═══════════════════════════════════════════════════════");
+            println!("📋 Metadata:");
+            println!("   • Policy Name: {}", bundle.metadata.policy_name);
+            println!(
+                "   • Version: {}",
+                bundle
+                    .metadata
+                    .policy_version
+                    .as_deref()
+                    .unwrap_or("unknown")
+            );
+            println!("   • Format Version: {}", bundle.metadata.version);
+            println!("   • Compiled At: {}", bundle.metadata.compiled_at);
+            println!("   • Checksum: {:x}", bundle.metadata.source_checksum);
+            println!();
+            println!("📊 Policy:");
+            println!("   • Rules: {}", bundle.policy.rules.len());
+            println!(
+                "   • Default Decision: {:?}",
+                bundle.policy.default_decision
+            );
+            println!();
+            println!("📝 Rules:");
+            for (i, rule) in bundle.policy.rules.iter().enumerate() {
+                println!("   {}. {} → {:?}", i + 1, rule.name, rule.decision);
+            }
+            println!("═══════════════════════════════════════════════════════");
+        }
+
+        BundleAction::Deploy { file, data, force } => {
+            println!("🚀 Deploying Bundle to Agent\n");
+
+            // Optionally load data first
+            if let Some(data_path) = data {
+                println!("1️⃣  Loading entity data: {}", data_path);
+                let data_content = fs::read_to_string(data_path)
+                    .map_err(|e| anyhow::anyhow!("❌ Failed to read data file: {}", e))?;
+
+                let response = client
+                    .post(format!("{}/api/v1/data", cli.agent_url))
+                    .json(&serde_json::json!({ "data": data_content }))
+                    .send()
+                    .await?;
+
+                if response.status().is_success() {
+                    let result: Value = response.json().await?;
+                    println!(
+                        "   ✅ Loaded {} entities",
+                        result.get("entities_loaded").unwrap_or(&json!(0))
+                    );
+                } else {
+                    anyhow::bail!("❌ Failed to load data: {}", response.status());
+                }
+                println!();
+            }
+
+            // Read and deploy bundle
+            println!(
+                "{}  Deploying bundle: {}",
+                if data.is_some() { "2️⃣" } else { "1️⃣" },
+                file
+            );
+            let bundle_bytes =
+                fs::read(file).map_err(|e| anyhow::anyhow!("❌ Failed to read bundle: {}", e))?;
+
+            // Parse bundle for info display
+            let bundle = PolicyBundle::from_bytes(&bundle_bytes)
+                .map_err(|e| anyhow::anyhow!("❌ Invalid bundle format: {:?}", e))?;
+
+            println!("   • Policy: {}", bundle.metadata.policy_name);
+            println!(
+                "   • Version: {}",
+                bundle
+                    .metadata
+                    .policy_version
+                    .as_deref()
+                    .unwrap_or("unknown")
+            );
+            println!("   • Rules: {}", bundle.policy.rules.len());
+
+            // Send to agent
+            let response = client
+                .post(format!("{}/api/v1/bundles/deploy", cli.agent_url))
+                .json(&serde_json::json!({
+                    "bundle": bundle_bytes,
+                    "version": bundle.metadata.policy_version.as_deref().unwrap_or("1.0.0"),
+                    "force": force
+                }))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                println!();
+                println!("✅ Bundle deployed successfully!");
+                println!(
+                    "   • Policy ID: {}",
+                    result.get("policy_id").unwrap().as_str().unwrap()
+                );
+                println!(
+                    "   • Version: {}",
+                    result.get("version").unwrap().as_str().unwrap()
+                );
+                println!(
+                    "   • Hash: {}",
+                    result.get("bundle_hash").unwrap().as_str().unwrap()
+                );
+            } else {
+                let error_text = response.text().await?;
+                anyhow::bail!("❌ Deployment failed: {}", error_text);
+            }
+        }
+
+        BundleAction::Rollback { policy_id, version } => {
+            println!(
+                "⏪ Rolling back policy {} to version {}\n",
+                policy_id, version
+            );
+            println!("⚠️  Rollback API not yet implemented on agent");
+            // TODO: Implement rollback endpoint on agent
+        }
+
+        BundleAction::Versions { policy_id } => {
+            println!("📜 Version history for policy {}\n", policy_id);
+
+            let response = client
+                .get(format!(
+                    "{}/api/v1/policies/{}/versions",
+                    cli.agent_url, policy_id
+                ))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                let versions = result.get("versions").and_then(|v| v.as_array());
+
+                if let Some(versions) = versions {
+                    if versions.is_empty() {
+                        println!("No version history found for this policy.");
+                    } else {
+                        println!("┌──────────┬─────────────────────────────┬──────────────────────────────────┐");
+                        println!("│ Version  │ Deployed At                 │ Bundle Hash                      │");
+                        println!("├──────────┼─────────────────────────────┼──────────────────────────────────┤");
+                        for v in versions {
+                            println!(
+                                "│ {:8} │ {:27} │ {:32}…│",
+                                v.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
+                                v.get("deployed_at").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &v.get("bundle_hash")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .chars()
+                                    .take(32)
+                                    .collect::<String>()
+                            );
+                        }
+                        println!("└──────────┴─────────────────────────────┴──────────────────────────────────┘");
+                        println!(
+                            "\nTotal: {} version(s)",
+                            result.get("total").unwrap_or(&json!(0))
+                        );
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to get versions: {}", error_text);
+            }
+        }
+
+        BundleAction::Package {
+            input,
+            output,
+            name,
+            version,
+        } => {
+            use policy_engine::reap::{PolicyPackage, ReaperPolicy};
+
+            println!("📦 Creating Policy Package\n");
+
+            // Parse all input policies
+            let mut policies = Vec::new();
+            for path in input {
+                println!("   • Parsing: {}", path);
+                let policy = ReaperPolicy::from_file_auto(path)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse {}: {:?}", path, e))?;
+                println!("     ✓ {}", policy.name());
+                policies.push(policy);
+            }
+
+            // Create package
+            let package_name = name.clone().unwrap_or_else(|| {
+                std::path::Path::new(output)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "policy-package".to_string())
+            });
+
+            // Convert ReaperPolicy to Policy AST
+            // Note: We need to compile_to_bundle and load to get the AST, but PolicyPackage takes Policy directly
+            // For now, let's parse the files directly to get the AST
+            let mut policy_asts = Vec::new();
+            for path in input {
+                let content = fs::read_to_string(path)?;
+                let ext = std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+
+                let ast = match ext {
+                    "reap" => policy_engine::reap::ReapParser::parse(&content)
+                        .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?,
+                    "yaml" | "yml" => {
+                        let yaml = policy_engine::reap::YamlPolicy::from_yaml(&content)
+                            .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+                        yaml.to_ast()
+                            .map_err(|e| anyhow::anyhow!("Conversion error: {:?}", e))?
+                    }
+                    "json" => {
+                        let yaml = policy_engine::reap::YamlPolicy::from_json(&content)
+                            .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+                        yaml.to_ast()
+                            .map_err(|e| anyhow::anyhow!("Conversion error: {:?}", e))?
+                    }
+                    _ => anyhow::bail!("Unsupported file extension: {}", ext),
+                };
+                policy_asts.push(ast);
+            }
+
+            let package = PolicyPackage::new(package_name.clone(), version.clone(), policy_asts);
+
+            // Write package
+            let bytes = package
+                .to_bytes()
+                .map_err(|e| anyhow::anyhow!("Failed to serialize: {:?}", e))?;
+            fs::write(output, &bytes)?;
+
+            println!();
+            println!("═══════════════════════════════════════════════════════");
+            println!("✅ Package Created Successfully!");
+            println!();
+            println!("📋 Package Metadata:");
+            println!("   • Name: {}", package_name);
+            println!("   • Version: {}", version);
+            println!("   • Policies: {}", package.metadata.policy_count);
+            println!("   • Total Rules: {}", package.hints.total_rules);
+            println!();
+            println!("🔧 Optimization Hints:");
+            println!(
+                "   • Strings to pre-intern: {}",
+                package.hints.strings_to_intern.len()
+            );
+            println!(
+                "   • Regex patterns to cache: {}",
+                package.hints.regex_patterns.len()
+            );
+            println!();
+            println!("📦 Output: {} ({} bytes)", output, bytes.len());
+            println!("═══════════════════════════════════════════════════════");
+        }
+    }
     Ok(())
 }
 
@@ -127,7 +1381,7 @@ async fn handle_policy_action(
         PolicyAction::List => {
             println!("📋 Listing policies from Platform...");
             let response = client
-                .get(&format!("{}/api/v1/policies", cli.platform_url))
+                .get(format!("{}/api/v1/policies", cli.platform_url))
                 .send()
                 .await?;
 
@@ -172,7 +1426,7 @@ async fn handle_policy_action(
 
             let request_body = json!({
                 "name": name,
-                "description": description.clone().unwrap_or_else(|| format!("Policy created via CLI")),
+                "description": description.clone().unwrap_or_else(|| "Policy created via CLI".to_string()),
                 "rules": [{
                     "action": action,
                     "resource": resource,
@@ -181,7 +1435,7 @@ async fn handle_policy_action(
             });
 
             let response = client
-                .post(&format!("{}/api/v1/policies", cli.platform_url))
+                .post(format!("{}/api/v1/policies", cli.platform_url))
                 .json(&request_body)
                 .send()
                 .await?;
@@ -224,7 +1478,7 @@ async fn handle_policy_action(
             }
 
             let response = client
-                .put(&format!("{}/api/v1/policies/{}", cli.platform_url, id))
+                .put(format!("{}/api/v1/policies/{}", cli.platform_url, id))
                 .json(&update_body)
                 .send()
                 .await?;
@@ -245,7 +1499,7 @@ async fn handle_policy_action(
             println!("🗑️  Deleting policy: {}", id);
 
             let response = client
-                .delete(&format!("{}/api/v1/policies/{}", cli.platform_url, id))
+                .delete(format!("{}/api/v1/policies/{}", cli.platform_url, id))
                 .send()
                 .await?;
 
@@ -261,7 +1515,7 @@ async fn handle_policy_action(
 
             // First, get the policy from platform
             let policy_response = client
-                .get(&format!("{}/api/v1/policies/{}", cli.platform_url, id))
+                .get(format!("{}/api/v1/policies/{}", cli.platform_url, id))
                 .send()
                 .await?;
 
@@ -275,7 +1529,7 @@ async fn handle_policy_action(
                 });
 
                 let deploy_response = client
-                    .post(&format!("{}/api/v1/policies/deploy", cli.agent_url))
+                    .post(format!("{}/api/v1/policies/deploy", cli.agent_url))
                     .json(&deploy_request)
                     .send()
                     .await?;
@@ -291,7 +1545,7 @@ async fn handle_policy_action(
 
                         // Check agent has the policy
                         let agent_policies = client
-                            .get(&format!("{}/api/v1/policies", cli.agent_url))
+                            .get(format!("{}/api/v1/policies", cli.agent_url))
                             .send()
                             .await?;
 
@@ -300,7 +1554,7 @@ async fn handle_policy_action(
                             agent_data.get("policies").and_then(|p| p.as_array())
                         {
                             let found = policies.iter().any(|p| {
-                                p.get("id").and_then(|id_val| id_val.as_str()) == Some(&id)
+                                p.get("id").and_then(|id_val| id_val.as_str()) == Some(id)
                             });
 
                             if found {
@@ -339,7 +1593,7 @@ async fn handle_policy_action(
 
             let start_time = Instant::now();
             let response = client
-                .post(&format!("{}/api/v1/messages", cli.agent_url))
+                .post(format!("{}/api/v1/messages", cli.agent_url))
                 .json(&eval_request)
                 .send()
                 .await?;
@@ -384,7 +1638,7 @@ async fn handle_agent_action(
         AgentAction::List => {
             println!("🤖 Listing agents from Platform...");
             let response = client
-                .get(&format!("{}/api/v1/agents", cli.platform_url))
+                .get(format!("{}/api/v1/agents", cli.platform_url))
                 .send()
                 .await?;
 
@@ -401,7 +1655,7 @@ async fn handle_agent_action(
         AgentAction::Health => {
             println!("🏥 Checking agent health...");
             let response = client
-                .get(&format!("{}/health", cli.agent_url))
+                .get(format!("{}/health", cli.agent_url))
                 .send()
                 .await?;
 
@@ -433,7 +1687,7 @@ async fn handle_agent_action(
         AgentAction::Metrics => {
             println!("📊 Fetching agent metrics...");
             let response = client
-                .get(&format!("{}/metrics", cli.agent_url))
+                .get(format!("{}/metrics", cli.agent_url))
                 .send()
                 .await?;
 
@@ -491,7 +1745,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     // Check Platform
     print!("🎯 Platform ({})... ", cli.platform_url);
     match client
-        .get(&format!("{}/health", cli.platform_url))
+        .get(format!("{}/health", cli.platform_url))
         .send()
         .await
     {
@@ -500,7 +1754,7 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
             // Get platform metrics
             if let Ok(metrics_response) = client
-                .get(&format!("{}/metrics", cli.platform_url))
+                .get(format!("{}/metrics", cli.platform_url))
                 .send()
                 .await
             {
@@ -528,17 +1782,13 @@ async fn handle_status(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
     // Check Agent
     print!("🎯 Agent ({})... ", cli.agent_url);
-    match client
-        .get(&format!("{}/health", cli.agent_url))
-        .send()
-        .await
-    {
+    match client.get(format!("{}/health", cli.agent_url)).send().await {
         Ok(response) if response.status().is_success() => {
             println!("✅ Healthy");
 
             // Get agent metrics
             if let Ok(metrics_response) = client
-                .get(&format!("{}/metrics", cli.agent_url))
+                .get(format!("{}/metrics", cli.agent_url))
                 .send()
                 .await
             {
@@ -573,10 +1823,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
 
     // Step 2: Create a demo policy
     println!("2️⃣  Creating demo policy...");
-    let policy_name = format!(
-        "demo-policy-{}",
-        Uuid::new_v4().to_string()[..8].to_string()
-    );
+    let policy_name = format!("demo-policy-{}", &Uuid::new_v4().to_string()[..8]);
 
     let create_request = json!({
         "name": policy_name,
@@ -589,7 +1836,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     });
 
     let create_response = client
-        .post(&format!("{}/api/v1/policies", cli.platform_url))
+        .post(format!("{}/api/v1/policies", cli.platform_url))
         .json(&create_request)
         .send()
         .await?;
@@ -619,7 +1866,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     });
 
     let _deploy_response = client
-        .post(&format!("{}/api/v1/policies/deploy", cli.agent_url))
+        .post(format!("{}/api/v1/policies/deploy", cli.agent_url))
         .json(&deploy_request)
         .send()
         .await?;
@@ -642,7 +1889,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     for i in 1..=iterations {
         let start = Instant::now();
         let eval_response = client
-            .post(&format!("{}/api/v1/messages", cli.agent_url))
+            .post(format!("{}/api/v1/messages", cli.agent_url))
             .json(&eval_request)
             .send()
             .await?;
@@ -684,7 +1931,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     });
 
     let _update_response = client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/policies/{}",
             cli.platform_url, policy_id
         ))
@@ -699,7 +1946,7 @@ async fn handle_demo(cli: &Cli, client: &Client) -> anyhow::Result<()> {
     // Step 6: Clean up
     println!("6️⃣  Cleaning up demo policy...");
     let _delete_response = client
-        .delete(&format!(
+        .delete(format!(
             "{}/api/v1/policies/{}",
             cli.platform_url, policy_id
         ))
@@ -738,7 +1985,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
     });
 
     let policy_response = client
-        .post(&format!("{}/api/v1/policies", cli.platform_url))
+        .post(format!("{}/api/v1/policies", cli.platform_url))
         .json(&policy_request)
         .send()
         .await?;
@@ -753,7 +2000,6 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
         .unwrap();
 
     // Deploy to agent
-    let policy_data = policy_result.get("policy").unwrap();
     let deploy_request = json!({
         "policy_id": policy_id,
         "name": "benchmark-policy",
@@ -766,7 +2012,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
     });
 
     let _deploy_response = client
-        .post(&format!("{}/api/v1/policies/deploy", cli.agent_url))
+        .post(format!("{}/api/v1/policies/deploy", cli.agent_url))
         .json(&deploy_request)
         .send()
         .await?;
@@ -789,7 +2035,7 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
     for i in 0..requests {
         let _eval_start = Instant::now();
         let response = client
-            .post(&format!("{}/api/v1/messages", cli.agent_url))
+            .post(format!("{}/api/v1/messages", cli.agent_url))
             .json(&eval_request)
             .send()
             .await?;
@@ -847,12 +2093,481 @@ async fn handle_benchmark(cli: &Cli, client: &Client, requests: usize) -> anyhow
 
     // Clean up
     let _cleanup = client
-        .delete(&format!(
+        .delete(format!(
             "{}/api/v1/policies/{}",
             cli.platform_url, policy_id
         ))
         .send()
         .await;
+
+    Ok(())
+}
+
+// ============================================================================
+// Management Server Command Handlers
+// ============================================================================
+
+async fn handle_management_action(
+    action: &ManagementAction,
+    management_url: &str,
+    api_key: Option<&str>,
+    client: &Client,
+) -> anyhow::Result<()> {
+    // Build request with optional API key
+    let build_request = |client: &Client, url: &str| {
+        let req = client.get(url);
+        if let Some(key) = api_key {
+            req.header("X-API-Key", key)
+        } else {
+            req
+        }
+    };
+
+    let build_post = |client: &Client, url: &str| {
+        let req = client.post(url);
+        if let Some(key) = api_key {
+            req.header("X-API-Key", key)
+        } else {
+            req
+        }
+    };
+
+    match action {
+        ManagementAction::Health => {
+            println!("🏥 Checking management server health...");
+            let response = client
+                .get(format!("{}/health", management_url))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let health: Value = response.json().await?;
+                println!("✅ Management server is healthy");
+                println!(
+                    "   Service: {}",
+                    health
+                        .get("service")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("reaper-management")
+                );
+                println!(
+                    "   Version: {}",
+                    health
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                );
+                if let Some(status) = health.get("status").and_then(|v| v.as_str()) {
+                    println!("   Status: {}", status);
+                }
+            } else {
+                println!(
+                    "❌ Management server is unhealthy (status: {})",
+                    response.status()
+                );
+            }
+        }
+
+        ManagementAction::Orgs => {
+            println!("🏢 Listing organizations...");
+            let response = build_request(client, &format!("{}/api/v1/orgs", management_url))
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(orgs) = result.get("organizations").and_then(|v| v.as_array()) {
+                    if orgs.is_empty() {
+                        println!("No organizations found.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬─────────┐");
+                        println!("│ ID                                   │ Name               │ Status  │");
+                        println!("├──────────────────────────────────────┼────────────────────┼─────────┤");
+                        for org in orgs {
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<7} │",
+                                org.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &org.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        org.get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
+                                org.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴─────────┘");
+                        println!("\nTotal: {} organization(s)", orgs.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list organizations: {}", error_text);
+            }
+        }
+
+        ManagementAction::Sources { org } => {
+            println!("📁 Listing policy sources for org {}...", org);
+            let response = build_request(
+                client,
+                &format!("{}/api/v1/orgs/{}/sources", management_url, org),
+            )
+            .send()
+            .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(sources) = result.get("sources").and_then(|v| v.as_array()) {
+                    if sources.is_empty() {
+                        println!("No policy sources found.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬──────────┬─────────┐");
+                        println!("│ ID                                   │ Name               │ Type     │ Status  │");
+                        println!("├──────────────────────────────────────┼────────────────────┼──────────┼─────────┤");
+                        for source in sources {
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<8} │ {:<7} │",
+                                source.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &source.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        source
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
+                                source
+                                    .get("source_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("?"),
+                                source.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴──────────┴─────────┘");
+                        println!("\nTotal: {} source(s)", sources.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list sources: {}", error_text);
+            }
+        }
+
+        ManagementAction::Bundles { org, promoted } => {
+            println!("📦 Listing bundles for org {}...", org);
+            let url = if *promoted {
+                format!(
+                    "{}/api/v1/orgs/{}/bundles?status=promoted",
+                    management_url, org
+                )
+            } else {
+                format!("{}/api/v1/orgs/{}/bundles", management_url, org)
+            };
+            let response = build_request(client, &url).send().await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(bundles) = result.get("bundles").and_then(|v| v.as_array()) {
+                    if bundles.is_empty() {
+                        println!("No bundles found.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬──────────┬──────────┐");
+                        println!("│ ID                                   │ Name               │ Status   │ Policies │");
+                        println!("├──────────────────────────────────────┼────────────────────┼──────────┼──────────┤");
+                        for bundle in bundles {
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<8} │ {:<8} │",
+                                bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        bundle
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
+                                bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
+                                bundle
+                                    .get("policy_count")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0)
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴──────────┴──────────┘");
+                        println!("\nTotal: {} bundle(s)", bundles.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list bundles: {}", error_text);
+            }
+        }
+
+        ManagementAction::BundleInfo { id } => {
+            println!("📦 Bundle details for {}...", id);
+            let response =
+                build_request(client, &format!("{}/api/v1/bundles/{}", management_url, id))
+                    .send()
+                    .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(bundle) = result.get("bundle") {
+                    println!("═══════════════════════════════════════════════════════");
+                    println!("📋 Bundle Metadata:");
+                    println!(
+                        "   • ID: {}",
+                        bundle.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Name: {}",
+                        bundle.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Status: {}",
+                        bundle.get("status").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Policies: {}",
+                        bundle
+                            .get("policy_count")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0)
+                    );
+                    if let Some(checksum) = bundle.get("checksum").and_then(|v| v.as_str()) {
+                        println!("   • Checksum: {}", checksum);
+                    }
+                    if let Some(size) = bundle.get("compiled_size_bytes").and_then(|v| v.as_i64()) {
+                        println!("   • Size: {} bytes", size);
+                    }
+                    if let Some(promoted_at) = bundle.get("promoted_at").and_then(|v| v.as_str()) {
+                        println!("   • Promoted At: {}", promoted_at);
+                    }
+                    println!(
+                        "   • Created At: {}",
+                        bundle
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                    );
+                    println!("═══════════════════════════════════════════════════════");
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to get bundle: {}", error_text);
+            }
+        }
+
+        ManagementAction::Agents { org } => {
+            println!("🤖 Listing agents for org {}...", org);
+            let response = build_request(
+                client,
+                &format!("{}/api/v1/orgs/{}/agents", management_url, org),
+            )
+            .send()
+            .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(agents) = result.get("agents").and_then(|v| v.as_array()) {
+                    if agents.is_empty() {
+                        println!("No agents registered.");
+                    } else {
+                        println!("┌──────────────────────────────────────┬────────────────────┬──────────┬─────────────────────┐");
+                        println!("│ ID                                   │ Name               │ Status   │ Last Heartbeat      │");
+                        println!("├──────────────────────────────────────┼────────────────────┼──────────┼─────────────────────┤");
+                        for agent in agents {
+                            let last_hb = agent
+                                .get("last_heartbeat_at")
+                                .and_then(|v| v.as_str())
+                                .map(|s| &s[..std::cmp::min(19, s.len())])
+                                .unwrap_or("never");
+                            println!(
+                                "│ {:<36} │ {:<18} │ {:<8} │ {:<19} │",
+                                agent.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                                &agent.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                                    [..std::cmp::min(
+                                        18,
+                                        agent
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
+                                            .len()
+                                    )],
+                                agent.get("status").and_then(|v| v.as_str()).unwrap_or("?"),
+                                last_hb
+                            );
+                        }
+                        println!("└──────────────────────────────────────┴────────────────────┴──────────┴─────────────────────┘");
+                        println!("\nTotal: {} agent(s)", agents.len());
+                    }
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to list agents: {}", error_text);
+            }
+        }
+
+        ManagementAction::Push {
+            org,
+            source,
+            file,
+            name,
+            description,
+        } => {
+            println!("⬆️  Pushing policy to management server...");
+
+            // Read and parse the policy file
+            if !Path::new(file).exists() {
+                anyhow::bail!("❌ Error: Policy file not found: {}", file);
+            }
+
+            let content = fs::read_to_string(file)
+                .map_err(|e| anyhow::anyhow!("❌ Failed to read policy file: {}", e))?;
+
+            // Detect language from extension
+            let ext = Path::new(file)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let language = match ext {
+                "reap" => "reaper",
+                "yaml" | "yml" => "reaper",
+                "json" => "reaper",
+                "cedar" => "cedar",
+                _ => "reaper",
+            };
+
+            let policy_name = name.clone().unwrap_or_else(|| {
+                Path::new(file)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unnamed-policy".to_string())
+            });
+
+            // First, get the source ID
+            let sources_response = build_request(
+                client,
+                &format!("{}/api/v1/orgs/{}/sources", management_url, org),
+            )
+            .send()
+            .await?;
+
+            let sources_result: Value = sources_response.json().await?;
+            let source_id = sources_result
+                .get("sources")
+                .and_then(|v| v.as_array())
+                .and_then(|sources| {
+                    sources
+                        .iter()
+                        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some(source))
+                })
+                .and_then(|s| s.get("id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("❌ Source '{}' not found in organization", source)
+                })?;
+
+            // Create the policy
+            let create_body = json!({
+                "name": policy_name,
+                "description": description.clone().unwrap_or_else(|| format!("Pushed from CLI: {}", file)),
+                "content": content,
+                "language": language
+            });
+
+            let response = build_post(
+                client,
+                &format!("{}/api/v1/sources/{}/policies", management_url, source_id),
+            )
+            .json(&create_body)
+            .send()
+            .await?;
+
+            if response.status().is_success() {
+                let result: Value = response.json().await?;
+                if let Some(policy) = result.get("policy") {
+                    println!("✅ Policy pushed successfully!");
+                    println!(
+                        "   • ID: {}",
+                        policy.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Name: {}",
+                        policy.get("name").and_then(|v| v.as_str()).unwrap_or("?")
+                    );
+                    println!(
+                        "   • Version: {}",
+                        policy.get("version").and_then(|v| v.as_i64()).unwrap_or(0)
+                    );
+                }
+            } else {
+                let error_text = response.text().await?;
+                println!("❌ Failed to push policy: {}", error_text);
+            }
+        }
+
+        ManagementAction::Promote {
+            org,
+            name,
+            policies,
+            description,
+        } => {
+            println!("🚀 Creating and promoting bundle...");
+
+            // Parse policy IDs
+            let policy_ids: Vec<&str> = policies.split(',').map(|s| s.trim()).collect();
+
+            // Create bundle
+            let create_body = json!({
+                "name": name,
+                "description": description.clone().unwrap_or_else(|| format!("Bundle with {} policies", policy_ids.len())),
+                "policy_ids": policy_ids
+            });
+
+            let response = build_post(
+                client,
+                &format!("{}/api/v1/orgs/{}/bundles", management_url, org),
+            )
+            .json(&create_body)
+            .send()
+            .await?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await?;
+                anyhow::bail!("❌ Failed to create bundle: {}", error_text);
+            }
+
+            let result: Value = response.json().await?;
+            let bundle_id = result
+                .get("bundle")
+                .and_then(|b| b.get("id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("❌ Failed to get bundle ID from response"))?;
+
+            println!("   ✅ Bundle created: {}", bundle_id);
+
+            // Promote the bundle
+            let promote_response = build_post(
+                client,
+                &format!("{}/api/v1/bundles/{}/promote", management_url, bundle_id),
+            )
+            .send()
+            .await?;
+
+            if promote_response.status().is_success() {
+                println!("   ✅ Bundle promoted successfully!");
+                println!("   📦 Agents will automatically pull this bundle");
+            } else {
+                let error_text = promote_response.text().await?;
+                println!("   ⚠️  Bundle created but promotion failed: {}", error_text);
+            }
+        }
+    }
 
     Ok(())
 }

@@ -1,0 +1,266 @@
+{
+  "entities": [
+    {
+      "id": "user_string_field",
+      "type": "User",
+      "attributes": {
+        "data": "hello world",
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_number_field",
+      "type": "User",
+      "attributes": {
+        "data": 12345,
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_numeric_value",
+      "type": "User",
+      "attributes": {
+        "value": 42,
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_text_value",
+      "type": "User",
+      "attributes": {
+        "value": "not a number",
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_array_data",
+      "type": "User",
+      "attributes": {
+        "items": [1, 2, 3, 4, 5],
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_object_data",
+      "type": "User",
+      "attributes": {
+        "items": {"key": "value"},
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_object_value",
+      "type": "User",
+      "attributes": {
+        "config": {
+          "name": "test",
+          "setting": "value"
+        },
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_primitive_value",
+      "type": "User",
+      "attributes": {
+        "config": "just a string",
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_bool_flag",
+      "type": "User",
+      "attributes": {
+        "enabled": true,
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_string_flag",
+      "type": "User",
+      "attributes": {
+        "enabled": "yes",
+        "role": "test_user"
+      }
+    },
+    {
+      "id": "user_valid_schema",
+      "type": "User",
+      "attributes": {
+        "name": "John Doe",
+        "age": 30,
+        "active": true,
+        "role": "validated_user"
+      }
+    },
+    {
+      "id": "user_invalid_schema",
+      "type": "User",
+      "attributes": {
+        "name": "Jane",
+        "age": "thirty",
+        "active": true,
+        "role": "invalid_user"
+      }
+    },
+    {
+      "id": "user_safe_operation",
+      "type": "User",
+      "attributes": {
+        "input": 100,
+        "role": "operator"
+      }
+    },
+    {
+      "id": "user_unsafe_operation",
+      "type": "User",
+      "attributes": {
+        "input": -50,
+        "role": "operator"
+      }
+    },
+    {
+      "id": "user_in_range",
+      "type": "User",
+      "attributes": {
+        "quantity": 50,
+        "role": "requester"
+      }
+    },
+    {
+      "id": "user_out_of_range",
+      "type": "User",
+      "attributes": {
+        "quantity": 150,
+        "role": "requester"
+      }
+    },
+    {
+      "id": "user_valid_format",
+      "type": "User",
+      "attributes": {
+        "email": "user@example.com",
+        "role": "subscriber"
+      }
+    },
+    {
+      "id": "user_invalid_format",
+      "type": "User",
+      "attributes": {
+        "email": "invalid-email-format",
+        "role": "subscriber"
+      }
+    },
+    {
+      "id": "user_non_null",
+      "type": "User",
+      "attributes": {
+        "required_field": "value present",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_null_field",
+      "type": "User",
+      "attributes": {
+        "other_field": "value",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_fully_valid",
+      "type": "User",
+      "attributes": {
+        "score": 85,
+        "name": "Alice",
+        "role": "validated_user"
+      }
+    },
+    {
+      "id": "user_wrong_type",
+      "type": "User",
+      "attributes": {
+        "score": "eighty-five",
+        "name": "Bob",
+        "role": "invalid_user"
+      }
+    },
+    {
+      "id": "string_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "string_check"
+      }
+    },
+    {
+      "id": "number_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "number_check"
+      }
+    },
+    {
+      "id": "array_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "array_check"
+      }
+    },
+    {
+      "id": "object_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "object_check"
+      }
+    },
+    {
+      "id": "bool_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "bool_check"
+      }
+    },
+    {
+      "id": "schema_check",
+      "type": "Validation",
+      "attributes": {
+        "type": "schema_check"
+      }
+    },
+    {
+      "id": "guarded_op",
+      "type": "Operation",
+      "attributes": {
+        "type": "guarded_op"
+      }
+    },
+    {
+      "id": "constrained_value",
+      "type": "Resource",
+      "attributes": {
+        "type": "constrained_value"
+      }
+    },
+    {
+      "id": "formatted_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "formatted_data"
+      }
+    },
+    {
+      "id": "nullable_field",
+      "type": "Resource",
+      "attributes": {
+        "type": "nullable_field"
+      }
+    },
+    {
+      "id": "complex_validation",
+      "type": "Validation",
+      "attributes": {
+        "type": "complex_validation"
+      }
+    }
+  ]
+}

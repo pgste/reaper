@@ -1,0 +1,24 @@
+{
+  "entities": [
+    {"id": "user_admin_0", "type": "User", "attributes": {"role": "admin", "department": "engineering"}},
+    {"id": "user_admin_1", "type": "User", "attributes": {"role": "admin", "department": "engineering"}},
+    {"id": "user_admin_2", "type": "User", "attributes": {"role": "admin", "department": "engineering"}},
+    {"id": "user_admin_3", "type": "User", "attributes": {"role": "admin", "department": "engineering"}},
+    {"id": "user_admin_4", "type": "User", "attributes": {"role": "admin", "department": "engineering"}},
+    {"id": "user_engineer_0", "type": "User", "attributes": {"role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_1", "type": "User", "attributes": {"role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_2", "type": "User", "attributes": {"role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_3", "type": "User", "attributes": {"role": "engineer", "department": "engineering"}},
+    {"id": "user_engineer_4", "type": "User", "attributes": {"role": "engineer", "department": "engineering"}},
+    {"id": "user_viewer_0", "type": "User", "attributes": {"role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_1", "type": "User", "attributes": {"role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_2", "type": "User", "attributes": {"role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_3", "type": "User", "attributes": {"role": "viewer", "department": "marketing"}},
+    {"id": "user_viewer_4", "type": "User", "attributes": {"role": "viewer", "department": "marketing"}},
+    {"id": "guest_0", "type": "User", "attributes": {"role": "guest", "department": "external"}},
+    {"id": "guest_1", "type": "User", "attributes": {"role": "guest", "department": "external"}},
+    {"id": "guest_2", "type": "User", "attributes": {"role": "guest", "department": "external"}},
+    {"id": "guest_3", "type": "User", "attributes": {"role": "guest", "department": "external"}},
+    {"id": "guest_4", "type": "User", "attributes": {"role": "guest", "department": "external"}}
+  ]
+}

@@ -1,6 +1,7 @@
 use cucumber::{given, then, when, World};
 use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRule};
 use serde_json::{json, Value};
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Debug, World)]
@@ -16,6 +17,7 @@ struct PolicyWorld {
     platform_url: String,
     agent_url: String,
     http_client: reqwest::Client,
+    services_running: bool,
 }
 
 impl PolicyWorld {
@@ -31,17 +33,14 @@ impl PolicyWorld {
             platform_url: "http://localhost:8081".to_string(),
             agent_url: "http://localhost:8080".to_string(),
             http_client: reqwest::Client::new(),
+            services_running: false,
         }
     }
 
     async fn wait_for_service(&self, url: &str) -> Result<(), Box<dyn std::error::Error>> {
-        for _ in 0..30 {
-            if let Ok(response) = self
-                .http_client
-                .get(&format!("{}/health", url))
-                .send()
-                .await
-            {
+        // Try only a few times with short delays for integration tests
+        for _ in 0..3 {
+            if let Ok(response) = self.http_client.get(format!("{}/health", url)).send().await {
                 if response.status().is_success() {
                     return Ok(());
                 }
@@ -50,27 +49,62 @@ impl PolicyWorld {
         }
         Err("Service not available".into())
     }
+
+    fn services_available(&self) -> bool {
+        self.services_running
+    }
+
+    async fn check_services(&mut self) {
+        let platform_ok = self.wait_for_service(&self.platform_url).await.is_ok();
+        let agent_ok = self.wait_for_service(&self.agent_url).await.is_ok();
+        self.services_running = platform_ok && agent_ok;
+    }
 }
 
-// Background steps
+// Placeholder steps for when services are not running
+#[given("integration tests require running services")]
+async fn given_integration_tests_require_services(_world: &mut PolicyWorld) {
+    // Placeholder step - always passes
+}
+
+#[when("the services are not available")]
+async fn when_services_not_available(_world: &mut PolicyWorld) {
+    // Placeholder step - always passes
+}
+
+#[then("tests are skipped gracefully")]
+async fn then_tests_skipped_gracefully(_world: &mut PolicyWorld) {
+    // Placeholder step - always passes
+    println!("Integration tests require running services:");
+    println!("  - make platform (port 8081)");
+    println!("  - make agent (port 8080)");
+}
+
+// Background steps for integration scenarios
 #[given("a running Reaper Platform on port 8081")]
 async fn given_running_platform(world: &mut PolicyWorld) {
-    world
-        .wait_for_service(&world.platform_url)
-        .await
-        .expect("Reaper Platform should be running on port 8081");
+    world.check_services().await;
+    if !world.services_available() {
+        // Skip test gracefully - these are integration tests that require running services
+        // To run these tests, start services first:
+        //   make platform (port 8081)
+        //   make agent (port 8080)
+        panic!("Integration test skipped: Services not available. Start services with 'make platform' and 'make agent'");
+    }
 }
 
 #[given("a running Reaper Agent on port 8080")]
 async fn given_running_agent(world: &mut PolicyWorld) {
-    world
-        .wait_for_service(&world.agent_url)
-        .await
-        .expect("Reaper Agent should be running on port 8080");
+    // Services already checked in platform step
+    if !world.services_available() {
+        panic!("Integration test skipped: Services not available");
+    }
 }
 
 // Policy creation steps
-#[when("I create a policy named {string} with action {string} for resource {string}")]
+#[when(
+    regex = r#"^I create a policy named "([^"]*)" with action "([^"]*)" for resource "([^"]*)"$"#
+)]
 async fn when_create_policy(
     world: &mut PolicyWorld,
     name: String,
@@ -111,7 +145,7 @@ async fn when_create_policy(
 
     let response = world
         .http_client
-        .post(&format!("{}/api/v1/policies", world.platform_url))
+        .post(format!("{}/api/v1/policies", world.platform_url))
         .json(&request_body)
         .send()
         .await
@@ -145,7 +179,7 @@ async fn then_policy_stored_in_platform(world: &mut PolicyWorld) {
     // Verify policy exists in platform
     let response = world
         .http_client
-        .get(&format!(
+        .get(format!(
             "{}/api/v1/policies/{}",
             world.platform_url, policy_id
         ))
@@ -168,13 +202,13 @@ async fn then_policy_stored_in_platform(world: &mut PolicyWorld) {
     );
 }
 
-#[then("the policy should have version {int}")]
+#[then(regex = r"^the policy should have version (\d+)$")]
 async fn then_policy_has_version(world: &mut PolicyWorld, expected_version: u64) {
     assert_eq!(world.policy_version.unwrap(), expected_version);
 }
 
 // Policy deployment steps
-#[given("a policy named {string} exists")]
+#[given(regex = r#"^a policy named "([^"]*)" exists$"#)]
 async fn given_policy_exists(world: &mut PolicyWorld, name: String) {
     // Create the policy first
     when_create_policy(world, name, "allow".to_string(), "*".to_string()).await;
@@ -201,7 +235,7 @@ async fn when_deploy_policy_to_agent(world: &mut PolicyWorld) {
 
     let response = world
         .http_client
-        .post(&format!("{}/api/v1/policies/deploy", world.agent_url))
+        .post(format!("{}/api/v1/policies/deploy", world.agent_url))
         .json(&deploy_request)
         .send()
         .await
@@ -228,7 +262,7 @@ async fn then_agent_has_policy_available(world: &mut PolicyWorld) {
     // Verify policy is available on agent
     let response = world
         .http_client
-        .get(&format!("{}/api/v1/policies", world.agent_url))
+        .get(format!("{}/api/v1/policies", world.agent_url))
         .send()
         .await
         .expect("Failed to get agent policies");
@@ -240,7 +274,7 @@ async fn then_agent_has_policy_available(world: &mut PolicyWorld) {
     let policies = policies_json.get("policies").unwrap().as_array().unwrap();
 
     assert!(
-        policies.len() > 0,
+        !policies.is_empty(),
         "Agent should have at least one policy loaded"
     );
 }
@@ -249,14 +283,10 @@ async fn then_agent_has_policy_available(world: &mut PolicyWorld) {
 async fn then_zero_downtime_during_deployment(_world: &mut PolicyWorld) {
     // This is verified by the atomic operations in the policy engine
     // If we got here without errors, zero-downtime deployment worked
-    assert!(
-        true,
-        "Zero-downtime deployment verified through atomic operations"
-    );
 }
 
 // Policy evaluation steps
-#[given("a policy named {string} with action {string} for resource {string}")]
+#[given(regex = r#"^a policy named "([^"]*)" with action "([^"]*)" for resource "([^"]*)"$"#)]
 async fn given_policy_with_action_for_resource(
     world: &mut PolicyWorld,
     name: String,
@@ -271,7 +301,7 @@ async fn given_policy_deployed_to_agent(world: &mut PolicyWorld) {
     when_deploy_policy_to_agent(world).await;
 }
 
-#[when("I evaluate a request for resource {string} with action {string}")]
+#[when(regex = r#"^I evaluate a request for resource "([^"]*)" with action "([^"]*)"$"#)]
 async fn when_evaluate_request(world: &mut PolicyWorld, resource: String, action: String) {
     let evaluation_request = json!({
         "policy_name": world.last_policy_name.as_ref().unwrap(),
@@ -282,7 +312,7 @@ async fn when_evaluate_request(world: &mut PolicyWorld, resource: String, action
 
     let response = world
         .http_client
-        .post(&format!("{}/api/v1/messages", world.agent_url))
+        .post(format!("{}/api/v1/messages", world.agent_url))
         .json(&evaluation_request)
         .send()
         .await
@@ -301,7 +331,7 @@ async fn when_evaluate_request(world: &mut PolicyWorld, resource: String, action
     }
 }
 
-#[then("the decision should be {string}")]
+#[then(regex = r#"^the decision should be "([^"]*)"$"#)]
 async fn then_decision_should_be(world: &mut PolicyWorld, expected_decision: String) {
     let response = world.last_response.as_ref().expect("No response available");
     let actual_decision = response
@@ -312,7 +342,7 @@ async fn then_decision_should_be(world: &mut PolicyWorld, expected_decision: Str
     assert_eq!(actual_decision, expected_decision);
 }
 
-#[then("the evaluation should complete in under {int} nanoseconds")]
+#[then(regex = r"^the evaluation should complete in under (\d+) nanoseconds$")]
 async fn then_evaluation_under_nanoseconds(world: &mut PolicyWorld, max_ns: u64) {
     let evaluation_time = world
         .evaluation_time_ns
@@ -339,7 +369,7 @@ async fn then_response_includes_timing(world: &mut PolicyWorld) {
 }
 
 // Policy versioning steps
-#[given("a policy named {string} exists with version {int}")]
+#[given(regex = r#"^a policy named "([^"]*)" exists with version (\d+)$"#)]
 async fn given_policy_exists_with_version(world: &mut PolicyWorld, name: String, version: u64) {
     when_create_policy(world, name, "allow".to_string(), "*".to_string()).await;
     assert_eq!(world.policy_version.unwrap(), version);
@@ -359,7 +389,7 @@ async fn when_update_policy_rules(world: &mut PolicyWorld) {
 
     let response = world
         .http_client
-        .put(&format!(
+        .put(format!(
             "{}/api/v1/policies/{}",
             world.platform_url, policy_id
         ))
@@ -382,7 +412,7 @@ async fn when_update_policy_rules(world: &mut PolicyWorld) {
     }
 }
 
-#[then("the policy version should increment to {int}")]
+#[then(regex = r"^the policy version should increment to (\d+)$")]
 async fn then_policy_version_increments(world: &mut PolicyWorld, expected_version: u64) {
     assert_eq!(world.policy_version.unwrap(), expected_version);
 }
@@ -403,14 +433,10 @@ async fn then_updated_policy_available_immediately(world: &mut PolicyWorld) {
 async fn then_old_versions_replaced_atomically(_world: &mut PolicyWorld) {
     // This is verified by the atomic operations in the policy engine
     // The Arc<Policy> ensures that old versions are cleaned up when no longer referenced
-    assert!(
-        true,
-        "Atomic replacement verified through Rust's ownership model"
-    );
 }
 
 // Error handling steps
-#[when("I evaluate a request against a non-existent policy {string}")]
+#[when(regex = r#"^I evaluate a request against a non-existent policy "([^"]*)"$"#)]
 async fn when_evaluate_nonexistent_policy(world: &mut PolicyWorld, policy_name: String) {
     let evaluation_request = json!({
         "policy_name": policy_name,
@@ -421,7 +447,7 @@ async fn when_evaluate_nonexistent_policy(world: &mut PolicyWorld, policy_name: 
 
     let response = world
         .http_client
-        .post(&format!("{}/api/v1/messages", world.agent_url))
+        .post(format!("{}/api/v1/messages", world.agent_url))
         .json(&evaluation_request)
         .send()
         .await
@@ -435,7 +461,7 @@ async fn when_evaluate_nonexistent_policy(world: &mut PolicyWorld, policy_name: 
     }
 }
 
-#[then("I should get a {string} error")]
+#[then(regex = r#"^I should get a "([^"]*)" error$"#)]
 async fn then_should_get_error(world: &mut PolicyWorld, error_type: String) {
     let error = world.last_error.as_ref().expect("No error recorded");
     let expected_error = error_type.replace('_', " ");
@@ -463,7 +489,7 @@ async fn then_agent_remains_stable(world: &mut PolicyWorld) {
     // Verify agent is still responding to health checks
     let response = world
         .http_client
-        .get(&format!("{}/health", world.agent_url))
+        .get(format!("{}/health", world.agent_url))
         .send()
         .await
         .expect("Agent should still be responsive");
@@ -501,7 +527,7 @@ async fn when_evaluate_without_policy(world: &mut PolicyWorld) {
 
     let response = world
         .http_client
-        .post(&format!("{}/api/v1/messages", world.agent_url))
+        .post(format!("{}/api/v1/messages", world.agent_url))
         .json(&evaluation_request)
         .send()
         .await
@@ -534,10 +560,7 @@ async fn then_decision_based_on_default_rules(world: &mut PolicyWorld) {
 }
 
 // Policy deletion steps
-#[given("a policy named {string} exists")]
-async fn given_named_policy_exists(world: &mut PolicyWorld, name: String) {
-    when_create_policy(world, name, "allow".to_string(), "*".to_string()).await;
-}
+// Uses the existing given_policy_exists step from line 175
 
 #[when("I delete the policy")]
 async fn when_delete_policy(world: &mut PolicyWorld) {
@@ -545,7 +568,7 @@ async fn when_delete_policy(world: &mut PolicyWorld) {
 
     let response = world
         .http_client
-        .delete(&format!(
+        .delete(format!(
             "{}/api/v1/policies/{}",
             world.platform_url, policy_id
         ))
@@ -573,7 +596,7 @@ async fn then_policy_not_available_for_evaluation(world: &mut PolicyWorld) {
     // Try to get the policy - should fail
     let response = world
         .http_client
-        .get(&format!(
+        .get(format!(
             "{}/api/v1/policies/{}",
             world.platform_url, policy_id
         ))
@@ -601,7 +624,7 @@ async fn then_subsequent_requests_return_not_found(world: &mut PolicyWorld) {
 
     let response = world
         .http_client
-        .post(&format!("{}/api/v1/messages", world.agent_url))
+        .post(format!("{}/api/v1/messages", world.agent_url))
         .json(&evaluation_request)
         .send()
         .await
@@ -625,5 +648,5 @@ async fn then_subsequent_requests_return_not_found(world: &mut PolicyWorld) {
 
 #[tokio::main]
 async fn main() {
-    PolicyWorld::run("tests/features/policy_management.feature").await;
+    PolicyWorld::run("tests/features").await;
 }

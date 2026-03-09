@@ -1,0 +1,131 @@
+// Multilayer Access Control - Combines RBAC, ABAC, and ReBAC
+// Real-world enterprise scenario with multiple authorization dimensions
+
+policy multilayer_benchmark {
+    version: "1.0.0",
+    description: "Multilayer benchmark - RBAC + ABAC + ReBAC combined",
+
+    default: deny,
+
+    // ===== DENY RULES (highest priority) =====
+    
+    // Suspended users blocked (ABAC)
+    rule deny_suspended {
+        deny if user.suspended == true
+    }
+
+    // Interns cannot access classified (RBAC + ABAC)
+    rule deny_intern_classified {
+        deny if {
+            user.role == "intern" &&
+            resource.classification == "secret"
+        }
+    }
+
+    // ===== ADMIN OVERRIDE (RBAC) =====
+    
+    // Admins with high clearance have full access (RBAC + ABAC)
+    rule admin_full_access {
+        allow if {
+            user.role == "admin" &&
+            user.high_clearance == true
+        }
+    }
+
+    // ===== OWNERSHIP + CLEARANCE (ReBAC + ABAC) =====
+    
+    // Owners can access if they have clearance
+    rule owner_with_clearance {
+        allow if {
+            user.id == resource.owner_id &&
+            user.clearance_level >= resource.clearance_level &&
+            user.status == "active"
+        }
+    }
+
+    // ===== TEAM ACCESS + ROLE (ReBAC + RBAC) =====
+    
+    // Team leads can access all team resources
+    rule team_lead_access {
+        allow if {
+            user.team_role == "lead" &&
+            user.team_id == resource.team_id
+        }
+    }
+
+    // Senior team members with clearance
+    rule team_senior_with_clearance {
+        allow if {
+            user.team_id == resource.team_id &&
+            user.role == "senior" &&
+            user.clearance_level >= resource.clearance_level &&
+            resource.team_accessible == true
+        }
+    }
+
+    // ===== DEPARTMENT + CLEARANCE (ABAC) =====
+    
+    // Same department with clearance match
+    rule department_clearance_match {
+        allow if {
+            user.department == resource.department &&
+            user.clearance_level >= resource.clearance_level &&
+            user.status == "active" &&
+            resource.classification != "secret"
+        }
+    }
+
+    // ===== COLLABORATION (ReBAC) =====
+    
+    // Active collaborators (but cannot delete)
+    rule collaborator_access {
+        allow if {
+            user.id == resource.collaborator_id &&
+            resource.collaboration_status == "active" &&
+            action != "delete"
+        }
+    }
+
+    // Shared resources (ReBAC)
+    rule shared_resource_access {
+        allow if {
+            user.id == resource.shared_with &&
+            resource.share_active == true
+        }
+    }
+
+    // ===== EXECUTIVE ACCESS (RBAC + ABAC) =====
+    
+    // Executives with high clearance (excluding secrets)
+    rule executive_access {
+        allow if {
+            user.role == "executive" &&
+            user.high_clearance == true &&
+            resource.classification != "secret" &&
+            user.status == "active"
+        }
+    }
+
+    // ===== HIERARCHICAL ACCESS (ReBAC + RBAC) =====
+    
+    // Senior managers can read dept resources
+    rule manager_hierarchy_access {
+        allow if {
+            user.is_senior_manager == true &&
+            user.department == resource.department &&
+            resource.visible_to_managers == true &&
+            action == "read"
+        }
+    }
+
+    // ===== PUBLIC ACCESS (ABAC) =====
+    
+    // Public resources for active users
+    rule public_resource_access {
+        allow if {
+            resource.classification == "public" &&
+            user.status == "active" &&
+            action == "read"
+        }
+    }
+}

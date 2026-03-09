@@ -1,0 +1,16 @@
+{
+  "entities": [
+    {"id": "exec_alice", "type": "User", "attributes": {"id": "exec_alice", "role": "executive", "department": "engineering", "clearance_match": true, "high_clearance": true, "suspended": false, "status": "active"}},
+    {"id": "manager_bob", "type": "User", "attributes": {"id": "manager_bob", "role": "manager", "department": "engineering", "clearance_match": true, "high_clearance": false, "suspended": false, "status": "active"}},
+    {"id": "analyst_carol", "type": "User", "attributes": {"id": "analyst_carol", "role": "analyst", "department": "finance", "clearance_match": true, "high_clearance": true, "suspended": false, "status": "active"}},
+    {"id": "intern_dave", "type": "User", "attributes": {"id": "intern_dave", "role": "intern", "department": "engineering", "clearance_match": false, "high_clearance": false, "suspended": false, "status": "active"}},
+    {"id": "suspended_eve", "type": "User", "attributes": {"id": "suspended_eve", "role": "manager", "department": "engineering", "clearance_match": true, "high_clearance": true, "suspended": true, "status": "suspended"}},
+    {"id": "engineer_frank", "type": "User", "attributes": {"id": "engineer_frank", "role": "engineer", "department": "engineering", "clearance_match": true, "high_clearance": false, "suspended": false, "status": "active"}},
+    {"id": "low_clear_grace", "type": "User", "attributes": {"id": "low_clear_grace", "role": "analyst", "department": "finance", "clearance_match": false, "high_clearance": false, "suspended": false, "status": "active"}},
+    {"id": "doc_public", "type": "Resource", "attributes": {"id": "doc_public", "type": "document", "department": "engineering", "classification": "public", "archived": false, "owner_id": "manager_bob"}},
+    {"id": "doc_confidential", "type": "Resource", "attributes": {"id": "doc_confidential", "type": "document", "department": "engineering", "classification": "confidential", "archived": false, "owner_id": "manager_bob"}},
+    {"id": "doc_secret", "type": "Resource", "attributes": {"id": "doc_secret", "type": "document", "department": "engineering", "classification": "secret", "archived": false, "owner_id": "exec_alice"}},
+    {"id": "doc_archived", "type": "Resource", "attributes": {"id": "doc_archived", "type": "document", "department": "engineering", "classification": "public", "archived": true, "owner_id": "manager_bob"}},
+    {"id": "finance_report", "type": "Resource", "attributes": {"id": "finance_report", "type": "document", "department": "finance", "classification": "confidential", "archived": false, "owner_id": "analyst_carol"}}
+  ]
+}

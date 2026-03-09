@@ -1,0 +1,15 @@
+{
+  "entities": [
+    {"id": "comp_user1", "type": "User", "attributes": {"id": "comp_user1", "numbers": [2, 6, 8, 10, 3, 1], "strings": ["apple", "banana", "cherry", "date"], "items": [{"priority": "high", "name": "a"}, {"priority": "high", "name": "b"}, {"priority": "low", "name": "c"}], "records": [{"id": "r1", "value": "x", "active": true}, {"id": "r2", "value": "y", "active": true}, {"id": "r3", "value": "z", "active": false}], "data": [{"score": 90, "verified": true}, {"score": 85, "verified": true}, {"score": 70, "verified": false}], "nested": [{"name": "g1", "items": ["a", "b"]}, {"name": "g2", "items": ["c"]}, {"name": "g3", "items": null}]}},
+    {"id": "comp_user2", "type": "User", "attributes": {"id": "comp_user2", "numbers": [1, 2, 3], "strings": ["xyz", "qrs"], "items": [{"priority": "low", "name": "d"}], "records": [{"id": "r4", "value": "w", "active": false}], "data": [{"score": 50, "verified": false}], "nested": [{"name": "g4", "items": null}]}},
+    {"id": "comp_user3", "type": "User", "attributes": {"id": "comp_user3", "numbers": [7, 8, 9, 10, 11], "strings": ["alpha", "bravo", "gamma"], "items": [{"priority": "high", "name": "e"}, {"priority": "high", "name": "f"}, {"priority": "high", "name": "g"}], "records": [{"id": "r5", "value": "a", "active": true}, {"id": "r6", "value": "b", "active": true}, {"id": "r7", "value": "c", "active": true}], "data": [{"score": 95, "verified": true}, {"score": 88, "verified": true}, {"score": 92, "verified": true}], "nested": [{"name": "g5", "items": ["x"]}, {"name": "g6", "items": ["y"]}, {"name": "g7", "items": ["z"]}]}},
+    {"id": "comp_empty", "type": "User", "attributes": {"id": "comp_empty"}},
+    {"id": "comp_res_set", "type": "Resource", "attributes": {"id": "comp_res_set", "type": "set_result"}},
+    {"id": "comp_res_arr", "type": "Resource", "attributes": {"id": "comp_res_arr", "type": "array_result"}},
+    {"id": "comp_res_obj", "type": "Resource", "attributes": {"id": "comp_res_obj", "type": "object_result"}},
+    {"id": "comp_res_complex", "type": "Resource", "attributes": {"id": "comp_res_complex", "type": "complex_filter"}},
+    {"id": "comp_res_nested", "type": "Resource", "attributes": {"id": "comp_res_nested", "type": "nested_result"}},
+    {"id": "comp_res_transform", "type": "Resource", "attributes": {"id": "comp_res_transform", "type": "transformed_data"}},
+    {"id": "comp_res_none", "type": "Resource", "attributes": {"id": "comp_res_none", "type": "unknown"}}
+  ]
+}

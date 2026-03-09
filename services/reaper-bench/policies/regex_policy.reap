@@ -1,0 +1,86 @@
+// Regex Pattern Validation Policies
+// Tests regex matching with caching for performance
+
+policy regex_validation {
+    version: "1.0",
+    description: "Regex pattern validation for integration testing",
+    default: deny,
+
+    // Email Validation
+    rule valid_email {
+        allow if {
+            user.email != null &&
+            resource.type == "email_validation" &&
+            regex::matches(user.email, "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$")
+        }
+    }
+
+    // Phone Number Validation (US format)
+    rule valid_phone {
+        allow if {
+            user.phone != null &&
+            resource.type == "phone_validation" &&
+            regex::matches(user.phone, "^\\+?1?\\s?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}$")
+        }
+    }
+
+    // URL Validation
+    rule valid_url {
+        allow if {
+            user.url != null &&
+            resource.type == "url_validation" &&
+            regex::matches(user.url, "^https?://[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$")
+        }
+    }
+
+    // IP Address Validation (IPv4)
+    rule valid_ip {
+        allow if {
+            user.ip_address != null &&
+            resource.type == "ip_validation" &&
+            regex::matches(user.ip_address, "^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?){4}$")
+        }
+    }
+
+    // UUID Validation
+    rule valid_uuid {
+        allow if {
+            user.uuid != null &&
+            resource.type == "uuid_validation" &&
+            regex::matches(user.uuid, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        }
+    }
+
+    // Credit Card Number Validation (basic format check)
+    rule valid_credit_card {
+        allow if {
+            user.credit_card != null &&
+            resource.type == "payment_validation" &&
+            regex::matches(user.credit_card, "^\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}$")
+        }
+    }
+
+    // Redacted Data Rule (SSN redaction check)
+    rule redacted_data {
+        allow if {
+            user.has_redacted_ssn == true &&
+            resource.type == "redacted_data"
+        }
+    }
+
+    // CSV Parsing Rule
+    rule csv_parsing {
+        allow if {
+            user.has_valid_csv == true &&
+            resource.type == "csv_data"
+        }
+    }
+
+    // Log Entry Analysis Rule
+    rule log_analysis {
+        allow if {
+            user.has_valid_log == true &&
+            resource.type == "log_entry"
+        }
+    }
+}

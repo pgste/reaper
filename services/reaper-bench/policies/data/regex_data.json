@@ -1,0 +1,15 @@
+{
+  "entities": [
+    {"id": "regex_user1", "type": "User", "attributes": {"id": "regex_user1", "email": "test@example.com"}},
+    {"id": "regex_user2", "type": "User", "attributes": {"id": "regex_user2", "email": "not-an-email"}},
+    {"id": "regex_user3", "type": "User", "attributes": {"id": "regex_user3", "phone": "+1 (555) 123-4567"}},
+    {"id": "regex_user4", "type": "User", "attributes": {"id": "regex_user4", "url": "https://example.com/path"}},
+    {"id": "regex_user5", "type": "User", "attributes": {"id": "regex_user5", "uuid": "550e8400-e29b-41d4-a716-446655440000"}},
+    {"id": "regex_user6", "type": "User", "attributes": {"id": "regex_user6", "credit_card": "1234-5678-9012-3456"}},
+    {"id": "regex_val1", "type": "Resource", "attributes": {"id": "regex_val1", "type": "email_validation"}},
+    {"id": "regex_val2", "type": "Resource", "attributes": {"id": "regex_val2", "type": "phone_validation"}},
+    {"id": "regex_val3", "type": "Resource", "attributes": {"id": "regex_val3", "type": "url_validation"}},
+    {"id": "regex_val4", "type": "Resource", "attributes": {"id": "regex_val4", "type": "uuid_validation"}},
+    {"id": "regex_val5", "type": "Resource", "attributes": {"id": "regex_val5", "type": "payment_validation"}}
+  ]
+}

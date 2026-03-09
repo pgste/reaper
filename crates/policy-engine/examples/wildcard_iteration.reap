@@ -1,0 +1,65 @@
+// Example Policy: Wildcard Iteration
+// Demonstrates Rego-style [_] syntax for existential quantification
+
+policy wildcard_iteration_policy {
+    version: "1.0.0",
+    description: "Examples of wildcard iteration over collections",
+    default: deny,
+
+    // Rule 1: Check if user has admin role (existential: ANY role equals "admin")
+    // This is O(n) for lists, O(1) for sets
+    rule user_has_admin {
+        allow if user.roles[_] == "admin"
+    }
+
+    // Rule 2: Check if resource allows the requested action
+    // Using wildcard to iterate over allowed_actions
+    rule resource_allows_action {
+        allow if context.action in resource.allowed_actions[_]
+    }
+
+    // Rule 3: Multi-tier role check
+    // Check if user has ANY role that's in resource's allowed_roles
+    rule role_match {
+        allow if {
+            user.roles[_] == "developer" &&
+            "developer" in resource.allowed_roles
+        }
+    }
+
+    // Rule 4: Check user in allowed users list
+    // Wildcard iteration over resource.allowed_user_ids
+    rule user_in_allowed_list {
+        allow if resource.allowed_user_ids[_] == user.id
+    }
+
+    // Rule 5: Group-based access with wildcard
+    // Check if ANY of user's groups is in resource's allowed groups
+    rule group_based_access {
+        allow if {
+            user_group := user.groups[_] &&
+            user_group in resource.allowed_groups
+        }
+    }
+
+    // Rule 6: Permission check using set (O(1) lookup!)
+    // Check if "write" permission exists in user's permissions set
+    rule has_write_permission {
+        allow if user.permissions[_] == "write"
+    }
+
+    // Rule 7: Department-based access
+    // Check if resource department matches ANY of user's departments
+    rule department_access {
+        allow if {
+            dept := user.departments[_] &&
+            dept == resource.department
+        }
+    }
+
+    // Rule 8: Tag-based access control
+    // Check if user has ANY required tag
+    rule tag_based_access {
+        allow if user.tags[_] in resource.required_tags
+    }
+}

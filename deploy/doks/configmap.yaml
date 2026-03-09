@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reaper-agent-config
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/part-of: reaper-platform
+data:
+  RUST_LOG: "info,reaper_agent=info"
+  REAPER_BIND_ADDR: "0.0.0.0:8080"
+  REAPER_UDS_ENABLED: "true"
+  REAPER_UDS_PATH: "/var/run/reaper/agent.sock"

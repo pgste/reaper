@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: reaper-agent
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/part-of: reaper-platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: reaper-agent-bench
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reaper-bench
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-bench
+    app.kubernetes.io/component: benchmark
+    app.kubernetes.io/part-of: reaper-platform
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-size-slug: "lb-small"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: reaper-agent-bench
+  ports:
+    - name: http
+      port: 80
+      targetPort: dashboard
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reaper-eopa
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-eopa
+    app.kubernetes.io/component: comparison
+    app.kubernetes.io/part-of: reaper-platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: reaper-agent-bench
+  ports:
+    - name: http
+      port: 8181
+      targetPort: opa
+      protocol: TCP

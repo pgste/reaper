@@ -1,0 +1,332 @@
+{
+  "entities": [
+    {
+      "id": "user_matrix_data",
+      "type": "User",
+      "attributes": {
+        "matrix": [
+          [1, 2, 3],
+          [4, 5, 6],
+          [7, 8, 9]
+        ],
+        "role": "data_processor"
+      }
+    },
+    {
+      "id": "user_sparse_matrix",
+      "type": "User",
+      "attributes": {
+        "matrix": [
+          [1, 2],
+          [3]
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_grouped_data",
+      "type": "User",
+      "attributes": {
+        "groups": [
+          {"name": "A", "items": ["a1", "a2", "a3"]},
+          {"name": "B", "items": ["b1", "b2"]},
+          {"name": "C", "items": ["c1", "c2", "c3", "c4"]}
+        ],
+        "role": "data_processor"
+      }
+    },
+    {
+      "id": "user_empty_groups",
+      "type": "User",
+      "attributes": {
+        "groups": [
+          {"name": "A", "items": []},
+          {"name": "B", "items": ["b1"]}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_hierarchical",
+      "type": "User",
+      "attributes": {
+        "categories": [
+          {"name": "cat1", "items": ["item1", "item2", "item3"]},
+          {"name": "cat2", "items": ["item4", "item5"]},
+          {"name": "cat3", "items": ["item6"]}
+        ],
+        "role": "organizer"
+      }
+    },
+    {
+      "id": "user_flat_data",
+      "type": "User",
+      "attributes": {
+        "categories": [
+          {"name": "cat1"}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_complex_filter",
+      "type": "User",
+      "attributes": {
+        "products": [
+          {"name": "prod1", "price": 100, "stock": 5, "active": true},
+          {"name": "prod2", "price": 75, "stock": 10, "active": true},
+          {"name": "prod3", "price": 60, "stock": 3, "active": true},
+          {"name": "prod4", "price": 200, "stock": 0, "active": true},
+          {"name": "prod5", "price": 80, "stock": 2, "active": false}
+        ],
+        "role": "merchant"
+      }
+    },
+    {
+      "id": "user_no_match",
+      "type": "User",
+      "attributes": {
+        "products": [
+          {"name": "prod1", "price": 30, "stock": 5, "active": true},
+          {"name": "prod2", "price": 40, "stock": 0, "active": true}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_text_data",
+      "type": "User",
+      "attributes": {
+        "texts": ["  hello  ", "world", "  test ", "data", "  process  "],
+        "role": "text_processor"
+      }
+    },
+    {
+      "id": "user_invalid_text",
+      "type": "User",
+      "attributes": {
+        "texts": ["", "  ", ""],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_deep_structure",
+      "type": "User",
+      "attributes": {
+        "departments": [
+          {
+            "name": "IT",
+            "projects": [
+              {"name": "proj1", "tasks": [{"id": "t1"}, {"id": "t2"}]},
+              {"name": "proj2", "tasks": [{"id": "t3"}]}
+            ]
+          },
+          {
+            "name": "Sales",
+            "projects": [
+              {"name": "proj3", "tasks": [{"id": "t4"}, {"id": "t5"}, {"id": "t6"}]}
+            ]
+          }
+        ],
+        "role": "manager"
+      }
+    },
+    {
+      "id": "user_shallow_structure",
+      "type": "User",
+      "attributes": {
+        "departments": [
+          {
+            "name": "IT",
+            "projects": []
+          }
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_conditional_data",
+      "type": "User",
+      "attributes": {
+        "records": [
+          {"id": "r1", "status": "active", "value": 150},
+          {"id": "r2", "status": "active", "value": 200},
+          {"id": "r3", "status": "inactive", "value": 300},
+          {"id": "r4", "status": "active", "value": 50}
+        ],
+        "role": "analyst"
+      }
+    },
+    {
+      "id": "user_wrong_condition",
+      "type": "User",
+      "attributes": {
+        "records": [
+          {"id": "r1", "status": "active", "value": 50},
+          {"id": "r2", "status": "inactive", "value": 200}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_aggregate_data",
+      "type": "User",
+      "attributes": {
+        "sales": [
+          {
+            "date": "2024-01-01",
+            "transactions": [
+              {"amount": 100}, {"amount": 200}, {"amount": 150}
+            ]
+          },
+          {
+            "date": "2024-01-02",
+            "transactions": [
+              {"amount": 300}, {"amount": 250}, {"amount": 180}
+            ]
+          },
+          {
+            "date": "2024-01-03",
+            "transactions": [
+              {"amount": 120}, {"amount": 90}, {"amount": 110}, {"amount": 200}
+            ]
+          }
+        ],
+        "role": "sales_manager"
+      }
+    },
+    {
+      "id": "user_limited_data",
+      "type": "User",
+      "attributes": {
+        "sales": [
+          {
+            "date": "2024-01-01",
+            "transactions": [
+              {"amount": 100}
+            ]
+          }
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_transformable_objects",
+      "type": "User",
+      "attributes": {
+        "entities": [
+          {"id": "e1", "name": "Entity One", "active": true},
+          {"id": "e2", "name": "Entity Two", "active": true},
+          {"id": "e3", "name": "Entity Three", "active": true},
+          {"id": "e4", "name": "Entity Four", "active": false}
+        ],
+        "role": "transformer"
+      }
+    },
+    {
+      "id": "user_malformed_objects",
+      "type": "User",
+      "attributes": {
+        "entities": [
+          {"id": "e1", "active": true},
+          {"name": "Entity Two", "active": true}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_mixed_collection",
+      "type": "User",
+      "attributes": {
+        "collection": [
+          {"type": "number", "value": 100},
+          {"type": "number", "value": 75},
+          {"type": "string", "value": "hello"},
+          {"type": "number", "value": 60}
+        ],
+        "role": "processor"
+      }
+    },
+    {
+      "id": "user_incompatible_types",
+      "type": "User",
+      "attributes": {
+        "collection": [
+          {"type": "string", "value": "hello"},
+          {"type": "string", "value": "world"}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "matrix_result",
+      "type": "Result",
+      "attributes": {
+        "type": "matrix_result"
+      }
+    },
+    {
+      "id": "unique_values",
+      "type": "Result",
+      "attributes": {
+        "type": "unique_values"
+      }
+    },
+    {
+      "id": "hierarchy_map",
+      "type": "Result",
+      "attributes": {
+        "type": "hierarchy_map"
+      }
+    },
+    {
+      "id": "filtered_results",
+      "type": "Query",
+      "attributes": {
+        "type": "filtered_results"
+      }
+    },
+    {
+      "id": "processed_text",
+      "type": "Result",
+      "attributes": {
+        "type": "processed_text"
+      }
+    },
+    {
+      "id": "deep_result",
+      "type": "Result",
+      "attributes": {
+        "type": "deep_result"
+      }
+    },
+    {
+      "id": "conditional_result",
+      "type": "Result",
+      "attributes": {
+        "type": "conditional_result"
+      }
+    },
+    {
+      "id": "summary",
+      "type": "Report",
+      "attributes": {
+        "type": "summary"
+      }
+    },
+    {
+      "id": "transformed",
+      "type": "Result",
+      "attributes": {
+        "type": "transformed"
+      }
+    },
+    {
+      "id": "type_filtered",
+      "type": "Result",
+      "attributes": {
+        "type": "type_filtered"
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+tests:
+  - name: "Admin can read any resource"
+    policy: "crates/policy-engine/examples/policies/rbac.reap"
+    data: "test-data/rbac-test-data.json"
+    principal: "user_0"
+    action: "read"
+    resource: "resource_100"
+    expect: allow
+
+  - name: "Admin can write any resource"
+    policy: "crates/policy-engine/examples/policies/rbac.reap"
+    data: "test-data/rbac-test-data.json"
+    principal: "user_0"
+    action: "write"
+    resource: "resource_200"
+    expect: allow
+
+  - name: "Manager cannot access non-report resource"
+    policy: "crates/policy-engine/examples/policies/rbac.reap"
+    data: "test-data/rbac-test-data.json"
+    principal: "user_1"
+    action: "read"
+    resource: "resource_50"
+    expect: deny
+
+  - name: "User can access their own resources"
+    policy: "crates/policy-engine/examples/policies/rbac.reap"
+    data: "test-data/rbac-test-data.json"
+    principal: "user_50"
+    action: "read"
+    resource: "resource_50"
+    expect: allow

@@ -1,0 +1,172 @@
+{
+  "entities": [
+    {
+      "id": "user_filtered_set",
+      "type": "User",
+      "attributes": {
+        "numbers": [3, 6, 9, 12, 15, 18],
+        "role": "data_processor"
+      }
+    },
+    {
+      "id": "user_no_matches",
+      "type": "User",
+      "attributes": {
+        "numbers": [1, 2, 3, 4, 5],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_ordered_data",
+      "type": "User",
+      "attributes": {
+        "items": [
+          {"name": "task1", "priority": "high"},
+          {"name": "task2", "priority": "low"},
+          {"name": "task3", "priority": "high"},
+          {"name": "task4", "priority": "medium"}
+        ],
+        "role": "project_manager"
+      }
+    },
+    {
+      "id": "user_sparse_data",
+      "type": "User",
+      "attributes": {
+        "items": [
+          {"name": "task1", "priority": "high"},
+          {"name": "task2", "priority": "low"},
+          {"name": "task3", "priority": "medium"}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_map_data",
+      "type": "User",
+      "attributes": {
+        "records": [
+          {"id": "rec1", "value": 100, "active": true},
+          {"id": "rec2", "value": 200, "active": false},
+          {"id": "rec3", "value": 300, "active": true}
+        ],
+        "role": "data_mapper"
+      }
+    },
+    {
+      "id": "user_no_mapping",
+      "type": "User",
+      "attributes": {
+        "records": [
+          {"id": "rec1", "value": 100, "active": false},
+          {"id": "rec2", "value": 200, "active": false}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_multi_filter",
+      "type": "User",
+      "attributes": {
+        "data": [
+          {"name": "item1", "score": 85, "verified": true},
+          {"name": "item2", "score": 90, "verified": true},
+          {"name": "item3", "score": 75, "verified": true},
+          {"name": "item4", "score": 95, "verified": false}
+        ],
+        "role": "analyst"
+      }
+    },
+    {
+      "id": "user_excluded_all",
+      "type": "User",
+      "attributes": {
+        "data": [
+          {"name": "item1", "score": 70, "verified": true},
+          {"name": "item2", "score": 85, "verified": false},
+          {"name": "item3", "score": 75, "verified": false}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_nested_data",
+      "type": "User",
+      "attributes": {
+        "nested": [
+          {"group": "A", "items": ["a1", "a2", "a3"]},
+          {"group": "B", "items": ["b1", "b2"]},
+          {"group": "C", "items": ["c1", "c2", "c3"]}
+        ],
+        "role": "data_processor"
+      }
+    },
+    {
+      "id": "user_shallow_data",
+      "type": "User",
+      "attributes": {
+        "nested": [
+          {"group": "A", "items": ["a1"]},
+          {"group": "B"}
+        ],
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_transformable",
+      "type": "User",
+      "attributes": {
+        "strings": ["apple", "banana", "cherry", "date", "elderberry"],
+        "role": "text_processor"
+      }
+    },
+    {
+      "id": "set_result",
+      "type": "Result",
+      "attributes": {
+        "type": "set_result",
+        "format": "set"
+      }
+    },
+    {
+      "id": "array_result",
+      "type": "Result",
+      "attributes": {
+        "type": "array_result",
+        "format": "array"
+      }
+    },
+    {
+      "id": "object_result",
+      "type": "Result",
+      "attributes": {
+        "type": "object_result",
+        "format": "object"
+      }
+    },
+    {
+      "id": "complex_filter",
+      "type": "Query",
+      "attributes": {
+        "type": "complex_filter",
+        "filters": 2
+      }
+    },
+    {
+      "id": "nested_result",
+      "type": "Result",
+      "attributes": {
+        "type": "nested_result",
+        "depth": 2
+      }
+    },
+    {
+      "id": "transformed_data",
+      "type": "Result",
+      "attributes": {
+        "type": "transformed_data",
+        "transformation": "upper"
+      }
+    }
+  ]
+}

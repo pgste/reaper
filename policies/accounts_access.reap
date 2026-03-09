@@ -1,0 +1,22 @@
+// Account Access Policy - Package: accounts
+policy account_access {
+    version: "1.0.0",
+    package: "accounts",
+    description: "Account access control policy",
+    default: deny,
+
+    rule admin_access {
+        allow if user.role == "admin"
+    }
+
+    rule manager_view {
+        allow if {
+            user.role == "manager" &&
+            action == "read"
+        }
+    }
+
+    rule owner_access {
+        allow if user.id == resource.owner_id
+    }
+}

@@ -1,0 +1,202 @@
+//! Reaper Management Server
+//!
+//! Multi-tenant policy management server providing:
+//! - Organization-scoped policy management
+//! - Multiple policy sources (Git repositories, External APIs)
+//! - Bundle compilation and promotion workflow
+//! - Agent registration and SSE notifications
+//!
+//! # Production Features
+//!
+//! - Graceful shutdown with in-flight request draining
+//! - Security headers (XSS, clickjacking protection)
+//! - Request correlation IDs for distributed tracing
+//! - Configuration validation on startup
+//! - Comprehensive health checks (/health, /ready, /live)
+//!
+//! # Usage
+//!
+//! ```bash
+//! # With default config
+//! reaper-management
+//!
+//! # With config file
+//! reaper-management --config /etc/reaper/management.yaml
+//!
+//! # With environment overrides
+//! REAPER_PORT=8081 REAPER_DATABASE_URL=sqlite:///var/lib/reaper/mgmt.db reaper-management
+//! ```
+
+use axum::{middleware, Router};
+use clap::Parser;
+use reaper_management::{
+    api, config::Config, db, graceful, metrics, middleware as app_middleware, rate_limit, storage,
+    AppState,
+};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use tower_http::trace::TraceLayer;
+use tracing::{error, info, warn};
+
+/// Reaper Management Server CLI
+#[derive(Parser, Debug)]
+#[command(name = "reaper-management")]
+#[command(about = "Multi-tenant policy management server")]
+#[command(version)]
+struct Cli {
+    /// Path to configuration file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+
+    /// Override bind address
+    #[arg(long)]
+    bind: Option<String>,
+
+    /// Override port
+    #[arg(short, long)]
+    port: Option<u16>,
+
+    /// Skip configuration validation (not recommended for production)
+    #[arg(long, default_value = "false")]
+    skip_validation: bool,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "reaper_management=info,tower_http=info".into()),
+        )
+        .json()
+        .init();
+
+    // Initialize Prometheus metrics
+    metrics::init_metrics();
+
+    let cli = Cli::parse();
+
+    // Load configuration
+    let mut config = if let Some(config_path) = &cli.config {
+        info!("Loading configuration from {:?}", config_path);
+        Config::from_file(config_path)?
+    } else {
+        info!("Using default configuration with environment overrides");
+        Config::from_env()?
+    };
+
+    // Apply CLI overrides
+    if let Some(bind) = cli.bind {
+        config.server.bind_address = bind;
+    }
+    if let Some(port) = cli.port {
+        config.server.port = port;
+    }
+
+    // Validate configuration
+    if !cli.skip_validation {
+        info!("Validating configuration...");
+        if let Err(e) = config.validate() {
+            error!("Configuration validation failed: {}", e);
+            return Err(e.into());
+        }
+        info!("Configuration validated successfully");
+    } else {
+        warn!("Skipping configuration validation (not recommended for production)");
+    }
+
+    info!("Configuration: {}", config.summary());
+
+    // Prepare directories
+    if let Err(e) = config.prepare_directories() {
+        warn!("Failed to prepare directories: {}", e);
+        // Continue anyway, individual operations will fail if needed
+    }
+
+    // Initialize database
+    info!("Initializing database...");
+    let db = db::init_database(&config.database).await?;
+
+    // Initialize storage
+    info!("Initializing storage backend...");
+    let storage = storage::create_storage(&config.storage).await?;
+    info!("Using storage backend: {}", storage.backend_name());
+
+    // Create application state
+    let state = Arc::new(AppState::new(db, config.clone(), storage));
+
+    // Create rate limiter
+    let rate_limiter = rate_limit::create_rate_limiter(&config.rate_limit);
+
+    // Build router
+    let app = build_router(state.clone(), rate_limiter);
+
+    // Start server
+    let addr = SocketAddr::new(config.server.bind_address.parse()?, config.server.port);
+
+    info!("Starting Reaper Management Server on {}", addr);
+    info!("Health check: http://{}/health", addr);
+    info!("Metrics: http://{}/metrics/prometheus", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Run server with graceful shutdown
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(state.clone()))
+        .await?;
+
+    info!("Server shutdown complete");
+    Ok(())
+}
+
+/// Build the Axum router with all routes and middleware
+fn build_router(
+    state: Arc<AppState>,
+    rate_limiter: Option<Arc<rate_limit::ApiRateLimiter>>,
+) -> Router {
+    let api_router = api::build_api_router();
+
+    // Build the router with middleware
+    // Middleware is applied in reverse order (last added runs first)
+    let router = api_router
+        .with_state(state.clone())
+        // Apply security headers to all responses
+        .layer(middleware::from_fn(app_middleware::security_headers))
+        // Apply correlation ID middleware
+        .layer(middleware::from_fn(app_middleware::correlation_id))
+        // Apply request metrics middleware
+        .layer(middleware::from_fn(app_middleware::request_metrics))
+        // Apply body size limit
+        .layer(middleware::from_fn(app_middleware::body_size_limit))
+        // Apply access logging
+        .layer(middleware::from_fn(app_middleware::access_log))
+        // Apply tracing
+        .layer(TraceLayer::new_for_http());
+
+    // Apply rate limiting if enabled
+    if let Some(limiter) = rate_limiter {
+        router.layer(middleware::from_fn_with_state(
+            limiter,
+            rate_limit::rate_limit_middleware,
+        ))
+    } else {
+        router
+    }
+}
+
+/// Wait for shutdown signal and coordinate graceful shutdown
+async fn shutdown_signal(state: Arc<AppState>) {
+    // Wait for OS shutdown signal
+    graceful::wait_for_shutdown_signal().await;
+
+    // Initiate shutdown
+    state.initiate_shutdown();
+
+    // Wait for in-flight requests with timeout
+    let shutdown_config = graceful::ShutdownConfig {
+        timeout: Duration::from_secs(30),
+        force_after_timeout: true,
+    };
+
+    graceful::graceful_shutdown(state.shutdown_signal(), &shutdown_config).await;
+}

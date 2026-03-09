@@ -10,12 +10,29 @@ license = "MIT OR Apache-2.0"
 reaper-core = { path = "../reaper-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
 thiserror = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
+rustc-hash = { workspace = true }
 tracing = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+cedar-policy = "4.2"
+pest = "2.7"
+pest_derive = "2.7"
+postcard = { workspace = true }
+regex = "1.10"
+sha2 = { workspace = true }
+hex = "0.4"  # Hex encoding for checksums
+memchr = "2.7"  # SIMD-accelerated string search
+lazy_static = "1.4"  # Thread-local regex cache global state
+bumpalo = { version = "3.16", features = ["collections"] }  # Arena allocator for zero-alloc evaluation
+rayon = "1.10"  # Parallel batch evaluation
+
+# JSON parsing: sonic-rs (SIMD) for native, serde_json for WASM
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sonic-rs = "0.3"
 
 [dev-dependencies]
 tokio-test = { workspace = true }
@@ -23,11 +40,47 @@ criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["cors"] }
+reqwest = { workspace = true, features = ["json"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+anyhow = { workspace = true }
+tempfile = "3.8"
 
 [[bench]]
 name = "policy_evaluation_bench"
 harness = false
 
+[[bench]]
+name = "builtins_bench"
+harness = false
+
+[[bench]]
+name = "caching_bench"
+harness = false
+
+[[bench]]
+name = "simd_bench"
+harness = false
+
+[[bench]]
+name = "e2e_bench"
+harness = false
+
+[[bench]]
+name = "optimization_phases_bench"
+harness = false
+
+[[bench]]
+name = "complex_policy_bench"
+harness = false
+
+[[bench]]
+name = "data_scaling_bench"
+harness = false
+
 [[test]]
-name = "policy_bdd_tests"
+name = "gherkin_tests"
 harness = false

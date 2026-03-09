@@ -1,0 +1,48 @@
+// Regex Pattern Validation Policies
+// Tests actual regex::matches() function calls in compiled mode
+
+policy regex_validation {
+    version: "1.0",
+    description: "Regex pattern validation for integration testing",
+    default: deny,
+
+    // Email Validation Rule - matches valid email format
+    rule valid_email_access {
+        allow if {
+            resource.type == "email_validation" &&
+            regex::matches(user.email, "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$")
+        }
+    }
+
+    // Phone Validation Rule - matches US phone format (555) 123-4567
+    rule valid_phone_access {
+        allow if {
+            resource.type == "phone_validation" &&
+            regex::matches(user.phone, "^\\(\\d{3}\\) \\d{3}-\\d{4}$")
+        }
+    }
+
+    // UUID Validation Rule - matches UUID format
+    rule valid_uuid_access {
+        allow if {
+            resource.type == "uuid_validation" &&
+            regex::matches(user.uuid, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        }
+    }
+
+    // Credit Card Validation Rule - matches credit card format XXXX-XXXX-XXXX-XXXX
+    rule valid_credit_card_access {
+        allow if {
+            resource.type == "payment_validation" &&
+            regex::matches(user.credit_card, "^\\d{4}-\\d{4}-\\d{4}-\\d{4}$")
+        }
+    }
+
+    // URL Validation Rule - matches URL format
+    rule valid_url_access {
+        allow if {
+            resource.type == "url_validation" &&
+            regex::matches(user.url, "^https?://[a-zA-Z0-9.-]+")
+        }
+    }
+}

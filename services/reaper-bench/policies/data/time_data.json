@@ -1,0 +1,14 @@
+{
+  "entities": [
+    {"id": "time_user1", "type": "User", "attributes": {"id": "time_user1", "token_expires_at": 1800000000000000000}},
+    {"id": "time_user2", "type": "User", "attributes": {"id": "time_user2", "token_expires_at": 1700000000000000000}},
+    {"id": "time_user3", "type": "User", "attributes": {"id": "time_user3", "lease_end_time": 1800000000000000000}},
+    {"id": "time_user4", "type": "User", "attributes": {"id": "time_user4", "lease_end_time": 1700000000000000000}},
+    {"id": "time_user5", "type": "User", "attributes": {"id": "time_user5", "role": "event_planner", "event_scheduled_time": 1800000000000000000}},
+    {"id": "time_user6", "type": "User", "attributes": {"id": "time_user6", "role": "contractor", "access_grant_start": 1700000000000000000, "access_grant_end": 1800000000000000000}},
+    {"id": "time_api1", "type": "Resource", "attributes": {"id": "time_api1", "type": "api_endpoint"}},
+    {"id": "time_apt1", "type": "Resource", "attributes": {"id": "time_apt1", "type": "apartment"}},
+    {"id": "time_room1", "type": "Resource", "attributes": {"id": "time_room1", "type": "conference_room"}},
+    {"id": "time_files1", "type": "Resource", "attributes": {"id": "time_files1", "type": "project_files"}}
+  ]
+}

@@ -1,0 +1,58 @@
+// RBAC Policy for Reaper
+// Role-based access control with hierarchical roles
+
+policy rbac_benchmark {
+    version: "1.0.0",
+    description: "Role-based access control benchmark policy",
+    default: deny,
+
+    // Admin has full access
+    rule admin_full_access {
+        allow if {
+            user.role == "admin"
+        }
+    }
+
+    // Manager can read
+    rule manager_read {
+        allow if {
+            user.role == "manager" &&
+            action == "read"
+        }
+    }
+
+    // Manager can write
+    rule manager_write {
+        allow if {
+            user.role == "manager" &&
+            action == "write"
+        }
+    }
+
+    // Engineer can read
+    rule engineer_read {
+        allow if {
+            user.role == "engineer" &&
+            action == "read"
+        }
+    }
+
+    // Engineer can write
+    rule engineer_write {
+        allow if {
+            user.role == "engineer" &&
+            action == "write"
+        }
+    }
+
+    // Viewer can only read
+    rule viewer_read_only {
+        allow if {
+            user.role == "viewer" &&
+            action == "read"
+        }
+    }
+
+    // Guest cannot do anything (implicitly denied by default: deny)
+    // All other roles not listed above will be denied by default
+}

@@ -1,0 +1,201 @@
+{
+  "entities": [
+    {
+      "id": "user_valid_email",
+      "type": "User",
+      "attributes": {
+        "email": "test.user@example.com",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_invalid_email",
+      "type": "User",
+      "attributes": {
+        "email": "not-an-email",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_phone",
+      "type": "User",
+      "attributes": {
+        "phone": "+1 (555) 123-4567",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_invalid_phone",
+      "type": "User",
+      "attributes": {
+        "phone": "123",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_url",
+      "type": "User",
+      "attributes": {
+        "url": "https://example.com/path",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_invalid_url",
+      "type": "User",
+      "attributes": {
+        "url": "not a url",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_ip",
+      "type": "User",
+      "attributes": {
+        "ip_address": "192.168.1.1",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_invalid_ip",
+      "type": "User",
+      "attributes": {
+        "ip_address": "999.999.999.999",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_uuid",
+      "type": "User",
+      "attributes": {
+        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_invalid_uuid",
+      "type": "User",
+      "attributes": {
+        "uuid": "not-a-uuid",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_valid_cc",
+      "type": "User",
+      "attributes": {
+        "credit_card": "4532-1234-5678-9010",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_invalid_cc",
+      "type": "User",
+      "attributes": {
+        "credit_card": "1234",
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_with_ssn",
+      "type": "User",
+      "attributes": {
+        "has_redacted_ssn": true,
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_with_csv",
+      "type": "User",
+      "attributes": {
+        "has_valid_csv": true,
+        "role": "user"
+      }
+    },
+    {
+      "id": "user_with_log",
+      "type": "User",
+      "attributes": {
+        "has_valid_log": true,
+        "role": "user"
+      }
+    },
+    {
+      "id": "email_validation",
+      "type": "Resource",
+      "attributes": {
+        "type": "email_validation"
+      }
+    },
+    {
+      "id": "phone_validation",
+      "type": "Resource",
+      "attributes": {
+        "type": "phone_validation"
+      }
+    },
+    {
+      "id": "url_validation",
+      "type": "Resource",
+      "attributes": {
+        "type": "url_validation"
+      }
+    },
+    {
+      "id": "ip_validation",
+      "type": "Resource",
+      "attributes": {
+        "type": "ip_validation"
+      }
+    },
+    {
+      "id": "uuid_validation",
+      "type": "Resource",
+      "attributes": {
+        "type": "uuid_validation"
+      }
+    },
+    {
+      "id": "payment_validation",
+      "type": "Resource",
+      "attributes": {
+        "type": "payment_validation"
+      }
+    },
+    {
+      "id": "redacted_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "redacted_data"
+      }
+    },
+    {
+      "id": "csv_data",
+      "type": "Resource",
+      "attributes": {
+        "type": "csv_data"
+      }
+    },
+    {
+      "id": "log_entry",
+      "type": "Resource",
+      "attributes": {
+        "type": "log_entry"
+      }
+    },
+    {
+      "id": "resource_0",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    },
+    {
+      "id": "resource_1",
+      "type": "Resource",
+      "attributes": {
+        "type": "generic"
+      }
+    }
+  ]
+}

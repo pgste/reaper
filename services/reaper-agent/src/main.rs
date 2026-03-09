@@ -1,65 +1,126 @@
+mod bootstrap;
+mod cache;
+mod handlers;
+mod management;
+mod observability;
+mod state;
+mod tls;
+mod types;
+mod uds;
+
 use axum::{
-    extract::State,
+    body::Bytes,
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::Json,
-    routing::{get, post},
+    response::{Json, Response},
+    routing::{delete, get, post},
     Router,
 };
-use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRequest, PolicyRule};
-use reaper_core::{endpoints, ReaperError, BUILD_INFO, VERSION};
+use cache::PolicyCache;
+use clap::Parser;
+use policy_engine::{
+    cache_config::CacheConfig, create_shared_buffer, DecisionFilter, DecisionLogConfig,
+    DecisionLogEntry, EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine, PolicyRequest,
+    PolicyRule,
+};
+use prometheus::{Encoder, TextEncoder};
+use reaper_core::{config::ReaperAgentConfig, endpoints, BUILD_INFO, VERSION};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info, instrument, warn};
+use tokio::sync::watch;
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-#[derive(Clone)]
-struct AgentState {
-    policy_engine: PolicyEngine,
-    stats: Arc<AgentStats>,
+// Import from extracted modules
+use handlers::{
+    // Evaluation handlers
+    batch_evaluate_policy,
+    // Entity handlers
+    batch_upsert_handler,
+    debug_datastore,
+    delete_entity_handler,
+    // Policy management handlers
+    deploy_bundle,
+    deploy_compiled_policy,
+    deploy_policy,
+    evaluate_policy,
+    // Decision handlers
+    export_decisions,
+    fast_evaluate_policy,
+    get_decision_stats,
+    get_decisions,
+    get_entity_handler,
+    get_policy_current_version,
+    get_policy_versions,
+    // Health handlers
+    health_check,
+    list_entities_handler,
+    list_policies,
+    liveness_check,
+    // Data handlers
+    load_data_handler,
+    load_data_stream_handler,
+    metrics,
+    readiness_check,
+    sync_data,
+    upsert_entity_handler,
+};
+use observability::{
+    init_observability, record_decision, record_denial, set_active_policies, ACTIVE_POLICIES,
+    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISIONS_TOTAL, DECISION_DURATION,
+    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DENIALS_TOTAL,
+    ERRORS_TOTAL,
+};
+use opentelemetry::{global, trace::TraceContextExt, KeyValue};
+use state::{AgentState, AgentStats};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use types::{
+    BatchEvaluateRequest, BatchRequestItem, BatchResponseItem, DecisionQuery, DeployBundleRequest,
+    DeployBundleResponse, DeployCompiledRequest, DeployPolicyRequest, EvaluateRequest,
+    EvaluateResponse, ExportDecisionsRequest, PackageEvaluateRequest,
+};
+
+// ============================================================================
+// CLI Arguments
+// ============================================================================
+
+#[derive(Parser, Debug)]
+#[command(name = "reaper-agent")]
+#[command(author, version, about = "Reaper Agent - High-performance policy enforcement", long_about = None)]
+struct Args {
+    /// Path to configuration file (YAML or JSON)
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+
+    /// Port to listen on (overrides config file)
+    #[arg(short, long)]
+    port: Option<u16>,
+
+    /// Address to bind to (overrides config file)
+    #[arg(short, long)]
+    bind: Option<String>,
+
+    /// Directory containing bootstrap policies
+    #[arg(long)]
+    bootstrap_policies: Option<PathBuf>,
+
+    /// File containing bootstrap entity data
+    #[arg(long)]
+    bootstrap_data: Option<PathBuf>,
 }
 
-// Add Debug manually since PolicyEngine has its own Debug implementation now
-impl std::fmt::Debug for AgentState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentState")
-            .field("policy_engine", &self.policy_engine)
-            .field("stats", &"AgentStats")
-            .finish()
-    }
-}
+// Types moved to their respective modules:
+// - Prometheus metrics: observability.rs
+// - AgentState, AgentStats: state.rs
+// - Request/Response types: types.rs
 
-#[derive(Debug, Default)]
-struct AgentStats {
-    requests_processed: AtomicU64,
-    total_evaluation_time_ns: AtomicU64,
-    policy_cache_hits: AtomicU64,
-    policy_cache_misses: AtomicU64,
-}
-
-/// Policy evaluation request from external services
-#[derive(Debug, Deserialize)]
-struct EvaluateRequest {
-    pub policy_id: Option<String>,
-    pub policy_name: Option<String>,
-    pub resource: String,
-    pub action: String,
-    pub context: Option<HashMap<String, String>>,
-}
-
-/// Policy deployment request from platform
-#[derive(Debug, Deserialize)]
-struct DeployPolicyRequest {
-    pub policy_id: String,
-    pub name: String,
-    pub description: String,
-    pub rules: Vec<DeployPolicyRule>,
-}
-
+// Keep DeployPolicyRule here as it's used internally by deploy_policy handler
 #[derive(Debug, Deserialize)]
 struct DeployPolicyRule {
     pub action: String,
@@ -67,333 +128,449 @@ struct DeployPolicyRule {
     pub conditions: Option<Vec<String>>,
 }
 
-impl AgentStats {
-    fn record_evaluation(&self, evaluation_time_ns: u64) {
-        self.requests_processed.fetch_add(1, Ordering::Relaxed);
-        self.total_evaluation_time_ns
-            .fetch_add(evaluation_time_ns, Ordering::Relaxed);
-    }
-
-    fn record_cache_hit(&self) {
-        self.policy_cache_hits.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn record_cache_miss(&self) {
-        self.policy_cache_misses.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn get_average_evaluation_time_ns(&self) -> f64 {
-        let total_requests = self.requests_processed.load(Ordering::Relaxed);
-        let total_time = self.total_evaluation_time_ns.load(Ordering::Relaxed);
-
-        if total_requests > 0 {
-            total_time as f64 / total_requests as f64
-        } else {
-            0.0
-        }
-    }
-}
+// AgentStats methods are now in state.rs
+// init_observability is now in observability.rs
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Parse command line arguments
+    let args = Args::parse();
+
+    // Initialize observability (logs, traces, metrics)
+    init_observability()?;
 
     info!(
-        "Starting Reaper Agent {} - High-Performance Policy Enforcement",
-        BUILD_INFO
+        service = "reaper-agent",
+        version = VERSION,
+        build_info = BUILD_INFO,
+        "Starting Reaper Agent - High-Performance Policy Enforcement"
     );
 
+    // Load configuration
+    let mut config = if let Some(ref config_path) = args.config {
+        info!("Loading configuration from {:?}", config_path);
+        match ReaperAgentConfig::from_file_with_env(config_path) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                warn!("Failed to load config file: {}. Using defaults.", e);
+                ReaperAgentConfig::from_env()
+            }
+        }
+    } else {
+        info!("No config file specified, using defaults with env overrides");
+        ReaperAgentConfig::from_env()
+    };
+
+    // Apply CLI argument overrides
+    if let Some(port) = args.port {
+        config.agent.port = port;
+    }
+    if let Some(ref bind) = args.bind {
+        config.agent.bind_address = bind.clone();
+    }
+    if let Some(ref bootstrap_policies) = args.bootstrap_policies {
+        config.policies.bootstrap_dir = Some(bootstrap_policies.clone());
+    }
+    if let Some(ref bootstrap_data) = args.bootstrap_data {
+        config.data.bootstrap_file = Some(bootstrap_data.clone());
+    }
+
+    info!("Configuration: {}", config.summary());
+
+    // Initialize PolicyEngine and DataStore
     let policy_engine = PolicyEngine::new();
+    let data_store = Arc::new(policy_engine::DataStore::new());
 
-    // Create a demo policy for immediate testing
-    let demo_policy = EnhancedPolicy::new(
-        "demo-allow-all".to_string(),
-        "Demo policy that allows all requests for testing".to_string(),
-        vec![PolicyRule {
-            action: PolicyAction::Allow,
-            resource: "*".to_string(),
-            conditions: vec![],
-        }],
-    );
+    // Initialize decision cache from config
+    let cache_config = CacheConfig::builder()
+        .enabled(config.cache.enabled)
+        .capacity(config.cache.capacity)
+        .ttl_secs(config.cache.ttl_seconds)
+        .build();
+    let decision_cache = cache_config.build_cache_arc();
 
-    info!("Deploying demo allow-all policy for testing");
-    policy_engine.deploy_policy(demo_policy)?;
+    info!("Decision cache: {}", cache_config.summary());
+
+    // Load bootstrap data first (needed for policy compilation)
+    if config.data.bootstrap_file.is_some() || config.data.bootstrap_dir.is_some() {
+        match bootstrap::load_bootstrap_data(
+            data_store.clone(),
+            config.data.bootstrap_file.clone(),
+            config.data.bootstrap_dir.clone(),
+        )
+        .await
+        {
+            Ok(result) => {
+                if result.entities_loaded > 0 {
+                    info!(
+                        "Bootstrap data loaded: {} entities from {} files",
+                        result.entities_loaded, result.data_files_loaded
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load bootstrap data: {}", e);
+            }
+        }
+    }
+
+    // Load bootstrap policies
+    if config.policies.bootstrap_dir.is_some() {
+        match bootstrap::load_bootstrap_policies(
+            &policy_engine,
+            data_store.clone(),
+            config.policies.bootstrap_dir.clone(),
+        )
+        .await
+        {
+            Ok(result) => {
+                if result.policies_loaded > 0 || result.policies_failed > 0 {
+                    info!(
+                        "Bootstrap policies: {} loaded, {} failed",
+                        result.policies_loaded, result.policies_failed
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load bootstrap policies: {}", e);
+            }
+        }
+    }
+
+    // Initialize policy cache if cache directory is configured
+    let policy_cache = if let Some(ref cache_dir) = config.policies.cache_dir {
+        match PolicyCache::new(cache_dir.clone()) {
+            Ok(cache) => {
+                info!("Policy cache enabled: {:?}", cache_dir);
+                // Load cached policies on startup
+                match cache.load_policies().await {
+                    Ok(policies) => {
+                        for mut policy in policies {
+                            // Build evaluator for cached policy (evaluator is not serialized)
+                            if let Err(e) = policy.build_evaluator() {
+                                warn!(
+                                    "Failed to build evaluator for cached policy {}: {}",
+                                    policy.name, e
+                                );
+                                continue;
+                            }
+                            if let Err(e) = policy_engine.deploy_policy(policy.clone()) {
+                                warn!("Failed to deploy cached policy {}: {}", policy.name, e);
+                            } else {
+                                info!("Restored cached policy: {} ({})", policy.name, policy.id);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load cached policies: {}", e);
+                    }
+                }
+                Some(Arc::new(cache))
+            }
+            Err(e) => {
+                warn!("Failed to create policy cache: {}", e);
+                None
+            }
+        }
+    } else {
+        info!("Policy cache disabled (no cache_dir configured)");
+        None
+    };
+
+    // Create shared stats for both management sync and request handling
+    // Enhanced metrics (histogram, CPU, memory) are controlled by config
+    let stats = Arc::new(AgentStats::new(
+        config.observability.enable_enhanced_metrics,
+    ));
+    let started_at = std::time::Instant::now();
+
+    if config.observability.enable_enhanced_metrics {
+        info!("Enhanced metrics enabled (REAPER_ENHANCED_METRICS=true)");
+    } else {
+        debug!("Enhanced metrics disabled (set REAPER_ENHANCED_METRICS=true to enable)");
+    }
+
+    // Initialize management client if enabled
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut management_handle = None;
+
+    if config.management.enabled {
+        info!(
+            "Management plane enabled - connecting to {}",
+            config.management.url.as_deref().unwrap_or("?")
+        );
+
+        match management::ManagementClient::new(
+            &config.management,
+            config.agent.name.clone(),
+            VERSION.to_string(),
+        ) {
+            Ok(client) => {
+                let client = Arc::new(client);
+                let policy_engine_for_sync = policy_engine.clone();
+
+                // Create sync service with stats and start time for metrics
+                let (sync_service, mut update_rx) = management::SyncService::new(
+                    client.clone(),
+                    config.management.clone(),
+                    Arc::new(policy_engine_for_sync),
+                    data_store.clone(),
+                    stats.clone(),
+                    started_at,
+                    shutdown_rx.clone(),
+                );
+
+                // Spawn sync service
+                let sync_handle = tokio::spawn(async move {
+                    sync_service.run().await;
+                });
+                management_handle = Some(sync_handle);
+
+                // Spawn bundle update handler
+                let policy_engine_for_updates = policy_engine.clone();
+                let _data_store_for_updates = data_store.clone();
+                tokio::spawn(async move {
+                    while update_rx.changed().await.is_ok() {
+                        if let Some(update) = update_rx.borrow().clone() {
+                            info!(
+                                bundle_id = %update.bundle_id,
+                                checksum = %update.checksum,
+                                size = update.data.len(),
+                                "Received bundle update, deploying..."
+                            );
+
+                            // Parse the management bundle (JSON format)
+                            match serde_json::from_slice::<management::ManagementBundle>(
+                                &update.data,
+                            ) {
+                                Ok(bundle) => {
+                                    let mut deployed = 0;
+                                    let mut failed = 0;
+
+                                    for policy_entry in bundle.policies {
+                                        // Create EnhancedPolicy from bundle entry
+                                        let policy_id = Uuid::parse_str(&policy_entry.id)
+                                            .unwrap_or_else(|_| Uuid::new_v4());
+
+                                        let mut policy = EnhancedPolicy::new(
+                                            policy_entry.id.clone(),
+                                            "Policy from bundle".to_string(),
+                                            vec![], // Rules will be set by content
+                                        );
+                                        policy.id = policy_id;
+                                        policy.version = policy_entry.version as u64;
+                                        policy.content = policy_entry.content.clone();
+
+                                        // Set the language based on what management server provides
+                                        policy.language = match policy_entry.language.as_str() {
+                                            "cedar" => policy_engine::PolicyLanguage::Cedar,
+                                            "simple" => policy_engine::PolicyLanguage::Simple,
+                                            _ => policy_engine::PolicyLanguage::Custom,
+                                        };
+
+                                        if let Err(e) =
+                                            policy_engine_for_updates.deploy_policy(policy)
+                                        {
+                                            warn!(
+                                                policy = %policy_entry.id,
+                                                error = %e,
+                                                "Failed to deploy policy from bundle"
+                                            );
+                                            failed += 1;
+                                        } else {
+                                            deployed += 1;
+                                        }
+                                    }
+
+                                    info!(
+                                        bundle_id = %update.bundle_id,
+                                        deployed = deployed,
+                                        failed = failed,
+                                        "Bundle deployment complete"
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "Failed to parse management bundle");
+                                }
+                            }
+                        }
+                    }
+                });
+
+                info!("Management sync service started");
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to create management client, running in standalone mode");
+            }
+        }
+    } else {
+        info!("Running in standalone mode (management plane disabled)");
+    }
+
+    info!("Reaper Agent initialized - ready to receive policies and data via API");
+    info!("  POST /api/v1/data           - Load entity data (JSON)");
+    info!("  POST /api/v1/policies/compile - Deploy compiled .reap policy");
+
+    // Initialize decision logging buffer from environment config
+    let decision_log_config = DecisionLogConfig::from_env();
+    let decision_buffer = if decision_log_config.enabled {
+        match create_shared_buffer(decision_log_config) {
+            Ok(buffer) => {
+                info!("Decision logging enabled");
+                Some(buffer)
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to create decision buffer, decision logging disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Generate or use configured agent ID
+    let agent_id = std::env::var("REAPER_AGENT_ID").unwrap_or_else(|_| {
+        format!(
+            "agent-{}",
+            Uuid::new_v4().to_string().split('-').next().unwrap()
+        )
+    });
 
     let state = Arc::new(AgentState {
         policy_engine,
-        stats: Arc::new(AgentStats::default()),
+        data_store,
+        stats, // Use shared stats for consistency with management sync
+        decision_cache,
+        cache_config,
+        agent_config: config.clone(),
+        policy_cache,
+        decision_buffer,
+        agent_id,
     });
 
     let app = Router::new()
         // Health and metrics
         .route(endpoints::HEALTH, get(health_check))
+        .route("/ready", get(readiness_check))
+        .route("/live", get(liveness_check))
         .route(endpoints::METRICS, get(metrics))
         // Policy evaluation - the core agent functionality
         .route(endpoints::API_V1_MESSAGES, post(evaluate_policy))
+        // Fast path with SIMD JSON parsing (3-5x faster parsing)
+        .route("/api/v1/fast-messages", post(fast_evaluate_policy))
+        // Batch evaluation endpoint (parallel processing)
+        .route("/api/v1/batch-messages", post(batch_evaluate_policy))
+        // Data management - load entities
+        .route("/api/v1/data", post(load_data_handler))
+        .route("/api/v1/data/stream", post(load_data_stream_handler))
+        .route("/api/v1/data/sync", post(sync_data))
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
+        .route("/api/v1/policies/compile", post(deploy_compiled_policy))
         .route("/api/v1/policies", get(list_policies))
+        .route("/api/v1/policies/{id}/versions", get(get_policy_versions))
+        .route(
+            "/api/v1/policies/{id}/version",
+            get(get_policy_current_version),
+        )
+        // Bundle deployment (hot-reload with versioning)
+        .route("/api/v1/bundles/deploy", post(deploy_bundle))
+        // Entity CRUD operations (requires eBPF integration)
+        .route("/api/v1/entities", post(upsert_entity_handler))
+        .route("/api/v1/entities/{type}/{id}", get(get_entity_handler))
+        .route(
+            "/api/v1/entities/{type}/{id}",
+            axum::routing::delete(delete_entity_handler),
+        )
+        .route("/api/v1/entities/{type}", get(list_entities_handler))
+        .route("/api/v1/entities/batch", post(batch_upsert_handler))
+        // Debug endpoints
+        .route("/debug/datastore", get(debug_datastore))
+        // Decision log endpoints (OPA-style audit logging)
+        .route("/api/v1/decisions", get(get_decisions))
+        .route("/api/v1/decisions/stats", get(get_decision_stats))
+        .route("/api/v1/decisions/export", post(export_decisions))
+        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
         .with_state(state);
 
-    let listener = TcpListener::bind("0.0.0.0:8080").await?;
-    info!("🎯 Reaper Agent listening on {}", listener.local_addr()?);
+    // Clone router for UDS listener before the TCP server consumes it
+    let uds_app = if config.uds.enabled {
+        Some(app.clone())
+    } else {
+        None
+    };
+
+    let bind_addr = format!("{}:{}", config.agent.bind_address, config.agent.port);
+
+    info!(bind_addr = %bind_addr, "Reaper Agent listening");
     info!("");
     info!("⚡ Policy Evaluation API:");
     info!("  POST /api/v1/messages        - Evaluate policy decision");
     info!("  POST /api/v1/policies/deploy - Deploy policy from platform");
     info!("  GET  /api/v1/policies        - List active policies");
+    info!("  GET  /metrics                 - Prometheus metrics");
+    info!("  GET  /health                  - Health check");
     info!("");
-    info!("🚀 Ready for sub-microsecond policy enforcement!");
+    info!("📊 Observability:");
+    info!("  Logs: Structured JSON (Loki-compatible)");
+    info!("  Traces: OpenTelemetry → Tempo");
+    info!("  Metrics: Prometheus format");
+    info!("");
 
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-#[instrument]
-async fn health_check() -> Result<Json<Value>, StatusCode> {
-    Ok(Json(json!({
-        "status": "healthy",
-        "service": "reaper-agent",
-        "version": VERSION,
-        "capabilities": [
-            "policy-evaluation",
-            "hot-swapping",
-            "sub-microsecond-latency"
-        ]
-    })))
-}
-
-#[instrument]
-async fn metrics(State(state): State<Arc<AgentState>>) -> Result<Json<Value>, StatusCode> {
-    let engine_stats = state.policy_engine.get_stats();
-    let agent_stats = &state.stats;
-
-    let requests_processed = agent_stats.requests_processed.load(Ordering::Relaxed);
-    let cache_hits = agent_stats.policy_cache_hits.load(Ordering::Relaxed);
-    let cache_misses = agent_stats.policy_cache_misses.load(Ordering::Relaxed);
-    let avg_evaluation_time_ns = agent_stats.get_average_evaluation_time_ns();
-
-    Ok(Json(json!({
-        "service": "reaper-agent",
-        "performance": {
-            "requests_processed": requests_processed,
-            "average_evaluation_time_nanoseconds": avg_evaluation_time_ns,
-            "average_evaluation_time_microseconds": avg_evaluation_time_ns / 1000.0,
-            "target_evaluation_time_microseconds": 1.0
-        },
-        "policies": {
-            "total_loaded": engine_stats.total_policies,
-            "has_default": engine_stats.has_default_policy
-        },
-        "cache": {
-            "hits": cache_hits,
-            "misses": cache_misses,
-            "hit_rate": if (cache_hits + cache_misses) > 0 {
-                (cache_hits as f64 / (cache_hits + cache_misses) as f64) * 100.0
-            } else {
-                0.0
+    // Spawn UDS listener if enabled
+    if let Some(uds_app) = uds_app {
+        let socket_path = config.uds.socket_path.clone();
+        let socket_permissions = config.uds.socket_permissions;
+        info!(
+            path = %socket_path.display(),
+            "Starting UDS listener"
+        );
+        tokio::spawn(async move {
+            if let Err(e) = uds::serve_uds(socket_path, socket_permissions, uds_app).await {
+                error!("UDS server error: {}", e);
             }
+        });
+    }
+
+    // Run server with TLS if configured
+    let result = if config.tls.enabled {
+        info!("🔒 TLS enabled - secure mode");
+        if config.tls.require_client_cert {
+            info!("   mTLS: Client certificates REQUIRED");
         }
-    })))
-}
 
-#[instrument(skip(state, payload), fields(resource = %payload.resource, action = %payload.action))]
-async fn evaluate_policy(
-    State(state): State<Arc<AgentState>>,
-    Json(payload): Json<EvaluateRequest>,
-) -> Result<Json<Value>, StatusCode> {
-    let start_time = std::time::Instant::now();
+        // Validate TLS settings
+        tls::validate_tls_settings(&config.tls)?;
 
-    // Determine which policy to use
-    let policy_id = if let Some(id_str) = payload.policy_id {
-        match Uuid::from_str(&id_str) {
-            Ok(id) => Some(id),
-            Err(_) => {
-                return Ok(Json(json!({
-                    "error": "Invalid policy ID format",
-                    "policy_id": id_str
-                })))
-            }
-        }
-    } else if let Some(name) = payload.policy_name {
-        // Look up policy by name
-        match state.policy_engine.get_policy_by_name(&name) {
-            Some(policy) => {
-                state.stats.record_cache_hit();
-                Some(policy.id)
-            }
-            None => {
-                state.stats.record_cache_miss();
-                return Ok(Json(json!({
-                    "error": "Policy not found",
-                    "policy_name": name
-                })));
-            }
-        }
+        // Create TLS config
+        let tls_config = tls::create_tls_config(&config.tls).await?;
+
+        let addr: std::net::SocketAddr = bind_addr.parse()?;
+        info!("🚀 Ready for sub-microsecond policy enforcement (HTTPS)!");
+
+        axum_server::bind_rustls(addr, tls_config)
+            .serve(app.into_make_service())
+            .await
+            .map_err(|e| anyhow::anyhow!("TLS server error: {}", e))
     } else {
-        // Use any available policy (demo mode)
-        let policies = state.policy_engine.list_policies();
-        if let Some(policy) = policies.first() {
-            Some(policy.id)
-        } else {
-            return Ok(Json(json!({
-                "error": "No policies available for evaluation"
-            })));
-        }
+        info!("🚀 Ready for sub-microsecond policy enforcement!");
+        let listener = TcpListener::bind(&bind_addr).await?;
+        axum::serve(listener, app)
+            .await
+            .map_err(|e| anyhow::anyhow!("Server error: {}", e))
     };
 
-    let policy_id = match policy_id {
-        Some(id) => id,
-        None => {
-            return Ok(Json(json!({
-                "error": "No policy specified and no default policy available"
-            })))
-        }
-    };
-
-    // Create policy request
-    let request = PolicyRequest {
-        resource: payload.resource,
-        action: payload.action,
-        context: payload.context.unwrap_or_default(),
-    };
-
-    // Evaluate policy
-    match state.policy_engine.evaluate(&policy_id, &request) {
-        Ok(decision) => {
-            let total_time = start_time.elapsed();
-            state.stats.record_evaluation(decision.evaluation_time_ns);
-
-            let decision_str = match decision.decision {
-                PolicyAction::Allow => "allow",
-                PolicyAction::Deny => "deny",
-                PolicyAction::Log => "log",
-            };
-
-            info!(
-                "Policy evaluation: {} -> {} ({}ns)",
-                request.resource, decision_str, decision.evaluation_time_ns
-            );
-
-            Ok(Json(json!({
-                "decision": decision_str,
-                "policy_id": decision.policy_id.to_string(),
-                "policy_version": decision.policy_version,
-                "evaluation_time_microseconds": decision.evaluation_time_ns as f64 / 1000.0,
-                "total_time_microseconds": total_time.as_nanos() as f64 / 1000.0,
-                "matched_rule": decision.matched_rule,
-                "agent_id": "reaper-agent-001"
-            })))
-        }
-        Err(ReaperError::PolicyNotFound { policy_id }) => {
-            state.stats.record_cache_miss();
-            warn!("Policy not found: {}", policy_id);
-            Ok(Json(json!({
-                "error": "Policy not found",
-                "policy_id": policy_id
-            })))
-        }
-        Err(e) => {
-            error!("Policy evaluation failed: {}", e);
-            Ok(Json(json!({
-                "error": format!("Policy evaluation failed: {}", e)
-            })))
-        }
+    // Signal shutdown to sync service
+    let _ = shutdown_tx.send(true);
+    if let Some(handle) = management_handle {
+        info!("Waiting for management sync service to shutdown...");
+        let _ = handle.await;
     }
-}
 
-#[instrument(skip(state, payload))]
-async fn deploy_policy(
-    State(state): State<Arc<AgentState>>,
-    Json(payload): Json<DeployPolicyRequest>,
-) -> Result<Json<Value>, StatusCode> {
-    let policy_id = match Uuid::from_str(&payload.policy_id) {
-        Ok(id) => id,
-        Err(_) => {
-            return Ok(Json(json!({
-                "error": "Invalid policy ID format"
-            })))
-        }
-    };
+    // Shutdown telemetry gracefully
+    info!("Shutting down telemetry...");
+    global::shutdown_tracer_provider();
 
-    // Convert rules
-    let rules: Result<Vec<PolicyRule>, String> = payload
-        .rules
-        .into_iter()
-        .map(|rule| {
-            let action = match rule.action.as_str() {
-                "allow" => Ok(PolicyAction::Allow),
-                "deny" => Ok(PolicyAction::Deny),
-                "log" => Ok(PolicyAction::Log),
-                _ => Err(format!("Invalid action: {}", rule.action)),
-            }?;
-
-            Ok(PolicyRule {
-                action,
-                resource: rule.resource,
-                conditions: rule.conditions.unwrap_or_default(),
-            })
-        })
-        .collect();
-
-    let rules = match rules {
-        Ok(rules) => rules,
-        Err(e) => {
-            return Ok(Json(json!({
-                "error": e
-            })))
-        }
-    };
-
-    // Create policy with the specified ID
-    let mut policy = EnhancedPolicy::new(payload.name, payload.description, rules);
-
-    // Override the generated ID with the one from the request
-    policy.id = policy_id;
-
-    // Hot-swap deploy the policy
-    match state.policy_engine.deploy_policy(policy.clone()) {
-        Ok(()) => {
-            info!("Policy {} hot-swapped successfully", policy_id);
-            Ok(Json(json!({
-                "status": "deployed",
-                "policy_id": policy.id.to_string(),
-                "policy_name": policy.name,
-                "version": policy.version,
-                "deployment_time": chrono::Utc::now(),
-                "message": "Policy hot-swapped successfully with zero downtime"
-            })))
-        }
-        Err(e) => {
-            error!("Failed to deploy policy: {}", e);
-            Ok(Json(json!({
-                "error": format!("Failed to deploy policy: {}", e)
-            })))
-        }
-    }
-}
-
-#[instrument(skip(state))]
-async fn list_policies(State(state): State<Arc<AgentState>>) -> Result<Json<Value>, StatusCode> {
-    let policies = state.policy_engine.list_policies();
-
-    let policy_list: Vec<Value> = policies
-        .into_iter()
-        .map(|policy| {
-            json!({
-                "id": policy.id.to_string(),
-                "name": policy.name,
-                "version": policy.version,
-                "rules_count": policy.rules.len(),
-                "created_at": policy.created_at,
-                "updated_at": policy.updated_at
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({
-        "policies": policy_list,
-        "total": policy_list.len()
-    })))
+    result?;
+    Ok(())
 }

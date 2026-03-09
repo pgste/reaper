@@ -1,0 +1,48 @@
+// Attribute-Based Access Control (ABAC) Policy
+// Demonstrates attribute matching and department-based access
+
+policy abac_clearance {
+    version: "2.0.0",
+    description: "Attribute-based document access with ABAC",
+
+    default: deny,
+
+    // Deny suspended users immediately (evaluated first)
+    rule deny_suspended_users {
+        deny if user.suspended == true
+    }
+
+    // Allow same department with matching clearance level
+    rule clearance_and_department {
+        allow if {
+            user.clearance_match == true &&
+            user.department == resource.department &&
+            resource.archived != true
+        }
+    }
+
+    // High clearance users can access confidential docs in their dept
+    rule high_clearance_access {
+        allow if {
+            user.high_clearance == true &&
+            user.department == resource.department &&
+            resource.classification != "secret"
+        }
+    }
+
+    // Document owners can always access (unless suspended)
+    rule owner_access {
+        allow if {
+            user.id == resource.owner_id &&
+            user.status == "active"
+        }
+    }
+
+    // Executive full access (except archived)
+    rule executive_access {
+        allow if {
+            user.role == "executive" &&
+            resource.archived != true
+        }
+    }
+}

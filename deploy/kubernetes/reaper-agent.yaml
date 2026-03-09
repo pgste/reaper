@@ -1,0 +1,388 @@
+# =============================================================================
+# Reaper Agent - Kubernetes Deployment
+# =============================================================================
+# Deploy with: kubectl apply -f reaper-agent.yaml
+# =============================================================================
+
+---
+# ConfigMap for Agent configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reaper-agent-config
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/component: agent
+data:
+  RUST_LOG: "info,reaper_agent=info"
+  REAPER_BIND_ADDR: "0.0.0.0:8080"
+  # OpenTelemetry configuration
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "reaper-agent"
+
+---
+# ConfigMap for managed mode configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reaper-agent-managed-config
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: managed
+data:
+  RUST_LOG: "info,reaper_agent=info"
+  REAPER_BIND_ADDR: "0.0.0.0:8080"
+  REAPER_MANAGEMENT_ENABLED: "true"
+  REAPER_MANAGEMENT_URL: "http://reaper-management:3000"
+  REAPER_MANAGEMENT_ORG: "default"
+  # OpenTelemetry configuration
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "reaper-agent-managed"
+
+---
+# Secret for managed mode API key
+apiVersion: v1
+kind: Secret
+metadata:
+  name: reaper-agent-secrets
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+type: Opaque
+stringData:
+  # Change in production!
+  REAPER_MANAGEMENT_API_KEY: "change-this-api-key-in-production"
+
+---
+# PersistentVolumeClaim for agent data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reaper-agent-data
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+
+---
+# Deployment - Standalone Mode (connects to Platform)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reaper-agent
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: standalone
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reaper-agent
+      app.kubernetes.io/mode: standalone
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reaper-agent
+        app.kubernetes.io/component: agent
+        app.kubernetes.io/mode: standalone
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: reaper-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: agent
+          image: reaper-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: reaper-agent-config
+          env:
+            - name: PLATFORM_URL
+              value: "http://reaper-platform:8081"
+            - name: OTEL_ENDPOINT
+              value: "http://tempo:4317"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: reaper-agent-data
+        - name: policies
+          configMap:
+            name: reaper-policies
+            optional: true
+
+---
+# Deployment - Managed Mode (connects to Management Server)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reaper-agent-managed
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/mode: managed
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reaper-agent
+      app.kubernetes.io/mode: managed
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reaper-agent
+        app.kubernetes.io/component: agent
+        app.kubernetes.io/mode: managed
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: reaper-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: agent
+          image: reaper-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: reaper-agent-managed-config
+            - secretRef:
+                name: reaper-agent-secrets
+          env:
+            - name: OTEL_ENDPOINT
+              value: "http://tempo:4317"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: data
+          emptyDir: {}
+
+---
+# Service for standalone agents
+apiVersion: v1
+kind: Service
+metadata:
+  name: reaper-agent
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/mode: standalone
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/mode: standalone
+
+---
+# Service for managed agents
+apiVersion: v1
+kind: Service
+metadata:
+  name: reaper-agent-managed
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/mode: managed
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: reaper-agent
+    app.kubernetes.io/mode: managed
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reaper-agent
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-agent
+
+---
+# HorizontalPodAutoscaler for standalone agents
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reaper-agent
+  namespace: reaper
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reaper-agent
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+---
+# HorizontalPodAutoscaler for managed agents
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reaper-agent-managed
+  namespace: reaper
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reaper-agent-managed
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+---
+# PodDisruptionBudget for standalone agents
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reaper-agent
+  namespace: reaper
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reaper-agent
+      app.kubernetes.io/mode: standalone
+
+---
+# PodDisruptionBudget for managed agents
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reaper-agent-managed
+  namespace: reaper
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reaper-agent
+      app.kubernetes.io/mode: managed

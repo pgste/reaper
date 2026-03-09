@@ -1,0 +1,117 @@
+// Advanced Collection Operations Policy
+// Tests first, last, slice, reverse, sort, unique, union, difference, min, max
+
+policy advanced_collections {
+    version: "1.0",
+    description: "Advanced collection operations for integration testing",
+    default: deny,
+
+    // First element check
+    rule first_task_priority {
+        allow if {
+            user.tasks != null &&
+            resource.type == "task_queue" &&
+            first_task := user.tasks.first() &&
+            first_task == "urgent"
+        }
+    }
+
+    // Last element check
+    rule last_login_recent {
+        allow if {
+            user.login_timestamps != null &&
+            resource.type == "session" &&
+            last_login := user.login_timestamps.last() &&
+            last_login >= 1700000000
+        }
+    }
+
+    // Slice check - top 3 scores
+    rule top_scores_threshold {
+        allow if {
+            user.scores != null &&
+            resource.type == "leaderboard" &&
+            top_three := user.scores.slice(0, 3) &&
+            avg_top := top_three.sum() &&
+            avg_top >= 270
+        }
+    }
+
+    // Reverse check
+    rule reverse_order_validation {
+        allow if {
+            user.sequence != null &&
+            resource.type == "items" &&
+            reversed := user.sequence.reverse() &&
+            first_reversed := reversed.first() &&
+            first_reversed == "last"
+        }
+    }
+
+    // Sort check
+    rule sortable_data {
+        allow if {
+            user.values != null &&
+            resource.type == "records" &&
+            sorted := user.values.sort() &&
+            first_sorted := sorted.first() &&
+            first_sorted <= 10
+        }
+    }
+
+    // Unique check
+    rule unique_skills_count {
+        allow if {
+            user.skills != null &&
+            resource.type == "specialized_role" &&
+            unique_skills := user.skills.unique() &&
+            unique_count := unique_skills.count() &&
+            unique_count >= 5
+        }
+    }
+
+    // Union check
+    rule combined_permissions {
+        allow if {
+            user.primary_perms != null &&
+            user.secondary_perms != null &&
+            resource.type == "multi_function" &&
+            all_perms := user.primary_perms.union(user.secondary_perms) &&
+            "execute" in all_perms &&
+            "admin" in all_perms
+        }
+    }
+
+    // Difference check
+    rule filtered_content_access {
+        allow if {
+            user.available_content != null &&
+            user.forbidden_content != null &&
+            resource.type == "filtered_content" &&
+            allowed := user.available_content.difference(user.forbidden_content) &&
+            allowed_count := allowed.count() &&
+            allowed_count > 0 &&
+            !("banned_item" in allowed)
+        }
+    }
+
+    // Max check
+    rule max_score_qualification {
+        allow if {
+            user.scores != null &&
+            resource.type == "competition" &&
+            max_score := user.scores.max() &&
+            max_score >= 95
+        }
+    }
+
+    // Min check
+    rule min_performance_threshold {
+        allow if {
+            user.performance_scores != null &&
+            resource.type == "quality_check" &&
+            min_score := user.performance_scores.min() &&
+            min_score >= 70
+        }
+    }
+}

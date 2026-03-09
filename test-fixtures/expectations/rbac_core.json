@@ -1,0 +1,34 @@
+{
+  "suite": "rbac_core",
+  "expected_results": {
+    "admin_full_access": {
+      "decision": "allow",
+      "reason": "admin role grants full access"
+    },
+    "admin_write": {
+      "decision": "allow",
+      "reason": "admin role grants full access"
+    },
+    "admin_delete": {
+      "decision": "allow",
+      "reason": "admin role grants full access"
+    },
+    "manager_restricted": {
+      "decision": "deny",
+      "reason": "manager role limited to reports"
+    },
+    "user_own_resource": {
+      "decision": "allow",
+      "reason": "ownership match"
+    },
+    "viewer_read": {
+      "decision": "allow",
+      "reason": "viewer role allows read"
+    }
+  },
+  "performance_baseline": {
+    "p50_us": 2.5,
+    "p99_us": 15.0,
+    "recorded_at": "2026-02-02"
+  }
+}

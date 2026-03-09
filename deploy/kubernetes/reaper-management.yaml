@@ -1,0 +1,204 @@
+# =============================================================================
+# Reaper Management Server - Kubernetes Deployment
+# =============================================================================
+# Deploy with: kubectl apply -f reaper-management.yaml
+# =============================================================================
+
+---
+# ConfigMap for Management Server configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reaper-management-config
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-management
+    app.kubernetes.io/component: management
+data:
+  RUST_LOG: "info,reaper_management=info"
+  REAPER_PORT: "3000"
+  REAPER_BIND_ADDRESS: "0.0.0.0"
+  REAPER_STORAGE_TYPE: "filesystem"
+  REAPER_STORAGE_PATH: "/var/lib/reaper/storage"
+
+---
+# Secret for sensitive configuration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: reaper-management-secrets
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-management
+type: Opaque
+stringData:
+  # Change these in production!
+  REAPER_JWT_SECRET: "change-this-jwt-secret-in-production"
+  REAPER_DATABASE_URL: "postgres://reaper:reaper@reaper-postgres:5432/reaper_management"
+
+---
+# PersistentVolumeClaim for storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reaper-management-storage
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-management
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard  # Adjust based on your cluster
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reaper-management
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-management
+    app.kubernetes.io/component: management
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reaper-management
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reaper-management
+        app.kubernetes.io/component: management
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics/prometheus"
+    spec:
+      serviceAccountName: reaper-management
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: management
+          image: reaper-management:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: reaper-management-config
+            - secretRef:
+                name: reaper-management-secrets
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/reaper/storage
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: reaper-management-storage
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: reaper-management
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-management
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: reaper-management
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reaper-management
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-management
+
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reaper-management
+  namespace: reaper
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reaper-management
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reaper-management
+  namespace: reaper
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reaper-management

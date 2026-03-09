@@ -1,0 +1,88 @@
+// String Operations Policy
+// Tests string manipulation methods
+
+policy string_operations {
+    version: "1.0",
+    description: "String operations for integration testing",
+    default: deny,
+
+    // Lowercase comparison
+    rule case_insensitive_match {
+        allow if {
+            user.name != null &&
+            resource.type == "case_insensitive" &&
+            lower_name := user.name.lower() &&
+            lower_name == "john doe"
+        }
+    }
+
+    // Uppercase code validation
+    rule uppercase_code_check {
+        allow if {
+            user.access_code != null &&
+            resource.type == "code_entry" &&
+            upper_code := user.access_code.upper() &&
+            upper_code == "ADMIN123"
+        }
+    }
+
+    // Trimmed string comparison
+    rule trimmed_role_check {
+        allow if {
+            user.role != null &&
+            resource.type == "trimmed_check" &&
+            trimmed_role := user.role.trim() &&
+            trimmed_role == "manager"
+        }
+    }
+
+    // String contains check
+    rule email_contains_domain {
+        allow if {
+            user.email != null &&
+            resource.type == "internal_docs" &&
+            user.email.contains("@company.com")
+        }
+    }
+
+    // String starts with check
+    rule username_prefix {
+        allow if {
+            user.username != null &&
+            resource.type == "system_settings" &&
+            user.username.startswith("admin_")
+        }
+    }
+
+    // String ends with check
+    rule email_suffix {
+        allow if {
+            user.email != null &&
+            resource.type == "classified_docs" &&
+            user.email.endswith(".gov")
+        }
+    }
+
+    // String split check
+    rule full_name_validation {
+        allow if {
+            user.name != null &&
+            resource.type == "profile" &&
+            name_parts := user.name.split(" ") &&
+            part_count := name_parts.count() &&
+            part_count >= 2
+        }
+    }
+
+    // Complex string operations
+    rule complex_email_validation {
+        allow if {
+            user.email != null &&
+            resource.type == "email_check" &&
+            lower_email := user.email.lower() &&
+            trimmed_email := lower_email.trim() &&
+            trimmed_email.contains("@") &&
+            trimmed_email.endswith(".com")
+        }
+    }
+}

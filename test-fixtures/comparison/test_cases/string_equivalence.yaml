@@ -1,0 +1,123 @@
+# String Operations Semantic Equivalence Test Cases
+# Tests string method operations in Reaper DSL
+
+name: "String Operations Equivalence"
+description: "Verify Reaper string operations produce correct decisions"
+
+# Use existing test data and policies
+reaper_policy: "crates/policy-engine/examples/policies/string_policy.reap"
+opa_policy: "n/a"  # OPA comparison disabled
+data_file: "test-data/string-test-data.json"
+
+test_cases:
+  # Case insensitive match - lower()
+  - id: "case_insensitive_allow"
+    description: "Mixed case user can access case_insensitive resource (name.lower() == 'john doe')"
+    input:
+      principal: "user_mixed_case"
+      action: "read"
+      resource: "case_insensitive"
+    expected: allow
+
+  # Uppercase code check - upper()
+  - id: "uppercase_code_allow"
+    description: "User with admin123 code can access code_entry (code.upper() == 'ADMIN123')"
+    input:
+      principal: "user_uppercase_code"
+      action: "read"
+      resource: "code_entry"
+    expected: allow
+
+  # Trimmed role check - trim()
+  - id: "trimmed_role_allow"
+    description: "User with whitespace role can access trimmed_check (role.trim() == 'manager')"
+    input:
+      principal: "user_whitespace_role"
+      action: "read"
+      resource: "trimmed_check"
+    expected: allow
+
+  - id: "trimmed_role_deny"
+    description: "User with wrong trimmed role is denied"
+    input:
+      principal: "user_wrong_role"
+      action: "read"
+      resource: "trimmed_check"
+    expected: deny
+
+  # Email contains check - contains()
+  - id: "email_contains_allow"
+    description: "Company email can access internal_docs (email.contains('@company.com'))"
+    input:
+      principal: "user_email_contains_company"
+      action: "view"
+      resource: "internal_docs"
+    expected: allow
+
+  - id: "email_contains_deny"
+    description: "External email cannot access internal_docs"
+    input:
+      principal: "user_external_email"
+      action: "view"
+      resource: "internal_docs"
+    expected: deny
+
+  # Username prefix check - startswith()
+  - id: "username_prefix_allow"
+    description: "Admin-prefixed username can access system_settings"
+    input:
+      principal: "user_admin_username"
+      action: "configure"
+      resource: "system_settings"
+    expected: allow
+
+  - id: "username_prefix_deny"
+    description: "Regular username cannot access system_settings"
+    input:
+      principal: "user_regular_username"
+      action: "configure"
+      resource: "system_settings"
+    expected: deny
+
+  # Email suffix check - endswith()
+  - id: "email_suffix_allow"
+    description: "Gov email can access classified_docs (email.endswith('.gov'))"
+    input:
+      principal: "user_gov_email"
+      action: "access"
+      resource: "classified_docs"
+    expected: allow
+
+  - id: "email_suffix_deny"
+    description: "Commercial email cannot access classified_docs"
+    input:
+      principal: "user_commercial_email"
+      action: "access"
+      resource: "classified_docs"
+    expected: deny
+
+  # Name split check - split()
+  - id: "name_split_allow"
+    description: "User with full name can access profile (name.split(' ').count() >= 2)"
+    input:
+      principal: "user_full_name"
+      action: "read"
+      resource: "profile"
+    expected: allow
+
+  - id: "name_split_deny"
+    description: "User with single name cannot access profile"
+    input:
+      principal: "user_single_name"
+      action: "read"
+      resource: "profile"
+    expected: deny
+
+  # Complex string operations - chained methods
+  - id: "complex_email_allow"
+    description: "Complex email validation (lower().trim().contains('@') && endswith('.com'))"
+    input:
+      principal: "user_complex_email"
+      action: "validate"
+      resource: "email_check"
+    expected: allow

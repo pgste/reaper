@@ -4,21 +4,55 @@ version = "0.1.0"
 edition = "2021"
 description = "Reaper Agent - High-performance policy enforcement"
 
+[lib]
+name = "reaper_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reaper-agent"
+path = "src/main.rs"
+
 [dependencies]
 reaper-core = { path = "../../crates/reaper-core" }
 policy-engine = { path = "../../crates/policy-engine" }
-message-queue = { path = "../../crates/message-queue" }
-metrics = { path = "../../crates/metrics" }
 axum = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+clap = { version = "4.0", features = ["derive"] }
+sonic-rs = "0.3"  # SIMD-accelerated JSON parsing
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+tracing-appender = "0.2"
 tower = { workspace = true }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+scopeguard = "1.2"
+opentelemetry = { version = "0.21", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.14", features = ["trace", "metrics"] }
+opentelemetry-semantic-conventions = "0.13"
+tracing-opentelemetry = "0.22"
+tempfile = "3.8"
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+reqwest-eventsource = "0.6"
+eventsource-stream = "0.2"
+futures = { workspace = true }
+sha2 = { workspace = true }
+hostname = "0.4"
+parking_lot = { workspace = true }
+hdrhistogram = "7.5"
+sysinfo = "0.32"
+
+# TLS/mTLS support
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = "0.23"
+rustls-pemfile = "2.1"
+tokio-rustls = "0.26"
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -28,8 +62,4 @@ hyper = { workspace = true }
 
 [[bench]]
 name = "agent_bench"
-harness = false
-
-[[test]]
-name = "agent_bdd_tests"
 harness = false
