@@ -147,7 +147,12 @@ async fn main() -> anyhow::Result<()> {
     DataLoader::new((*data_store).clone()).load_json(DATA)?;
 
     let engine = PolicyEngine::new();
-    deploy(&engine, &data_store, COMPILED_POLICY_NAME, EvaluatorKind::Compiled)?;
+    deploy(
+        &engine,
+        &data_store,
+        COMPILED_POLICY_NAME,
+        EvaluatorKind::Compiled,
+    )?;
     deploy(&engine, &data_store, AST_POLICY_NAME, EvaluatorKind::Ast)?;
 
     let state = Arc::new(AgentState {
@@ -204,12 +209,42 @@ async fn main() -> anyhow::Result<()> {
     let uds_t = Transport::Uds(uds_path.clone());
 
     let configs = [
-        Config { label: "TCP  fast  compiled", transport: tcp_t.clone(), path: "/api/v1/fast-messages", policy_name: COMPILED_POLICY_NAME },
-        Config { label: "UDS  fast  compiled", transport: uds_t.clone(), path: "/api/v1/fast-messages", policy_name: COMPILED_POLICY_NAME },
-        Config { label: "TCP  fast  ast",      transport: tcp_t.clone(), path: "/api/v1/fast-messages", policy_name: AST_POLICY_NAME },
-        Config { label: "UDS  fast  ast",      transport: uds_t.clone(), path: "/api/v1/fast-messages", policy_name: AST_POLICY_NAME },
-        Config { label: "TCP  std   compiled", transport: tcp_t.clone(), path: "/api/v1/messages",      policy_name: COMPILED_POLICY_NAME },
-        Config { label: "UDS  std   compiled", transport: uds_t.clone(), path: "/api/v1/messages",      policy_name: COMPILED_POLICY_NAME },
+        Config {
+            label: "TCP  fast  compiled",
+            transport: tcp_t.clone(),
+            path: "/api/v1/fast-messages",
+            policy_name: COMPILED_POLICY_NAME,
+        },
+        Config {
+            label: "UDS  fast  compiled",
+            transport: uds_t.clone(),
+            path: "/api/v1/fast-messages",
+            policy_name: COMPILED_POLICY_NAME,
+        },
+        Config {
+            label: "TCP  fast  ast",
+            transport: tcp_t.clone(),
+            path: "/api/v1/fast-messages",
+            policy_name: AST_POLICY_NAME,
+        },
+        Config {
+            label: "UDS  fast  ast",
+            transport: uds_t.clone(),
+            path: "/api/v1/fast-messages",
+            policy_name: AST_POLICY_NAME,
+        },
+        Config {
+            label: "TCP  std   compiled",
+            transport: tcp_t.clone(),
+            path: "/api/v1/messages",
+            policy_name: COMPILED_POLICY_NAME,
+        },
+        Config {
+            label: "UDS  std   compiled",
+            transport: uds_t.clone(),
+            path: "/api/v1/messages",
+            policy_name: COMPILED_POLICY_NAME,
+        },
     ];
 
     println!(
@@ -225,8 +260,22 @@ async fn main() -> anyhow::Result<()> {
             cfg.policy_name
         ));
         // Warmup (discarded), then measure.
-        run(&cfg.transport, cfg.path, &body, args.connections, Duration::from_secs(args.warmup_secs)).await?;
-        let stats = run(&cfg.transport, cfg.path, &body, args.connections, Duration::from_secs(args.duration_secs)).await?;
+        run(
+            &cfg.transport,
+            cfg.path,
+            &body,
+            args.connections,
+            Duration::from_secs(args.warmup_secs),
+        )
+        .await?;
+        let stats = run(
+            &cfg.transport,
+            cfg.path,
+            &body,
+            args.connections,
+            Duration::from_secs(args.duration_secs),
+        )
+        .await?;
 
         println!(
             "{:<22} {:>12.0} {:>10.2} {:>10.2} {:>10.2} {:>10.2}",
@@ -247,7 +296,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn print_comparisons(results: &[(&str, Stats)]) {
-    let rps = |label: &str| results.iter().find(|(l, _)| *l == label).map(|(_, s)| s.rps());
+    let rps = |label: &str| {
+        results
+            .iter()
+            .find(|(l, _)| *l == label)
+            .map(|(_, s)| s.rps())
+    };
     println!("\nComparisons (throughput ratio):");
     if let (Some(u), Some(t)) = (rps("UDS  fast  compiled"), rps("TCP  fast  compiled")) {
         println!("  UDS vs TCP  (fast, compiled):  {:.2}x", u / t);

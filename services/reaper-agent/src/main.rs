@@ -52,7 +52,7 @@ use handlers::{
     debug_datastore,
     delete_entity_handler,
     // Policy management handlers
-    deploy_bundle, load_bundles_atomic,
+    deploy_bundle,
     deploy_compiled_policy,
     deploy_policy,
     evaluate_policy,
@@ -69,6 +69,7 @@ use handlers::{
     list_entities_handler,
     list_policies,
     liveness_check,
+    load_bundles_atomic,
     // Data handlers
     load_data_handler,
     load_data_stream_handler,

@@ -639,7 +639,12 @@ pub async fn fast_evaluate_policy(
         .with_label_values(&[&policy_name_resolved])
         .observe(total_time.as_secs_f64());
 
-    let policy_id_str = matched_policy_id.to_string();
+    // Encode the policy UUID into a stack buffer — no heap allocation, same
+    // trick as decision_id.
+    let mut policy_id_buf = [0u8; Hyphenated::LENGTH];
+    let policy_id_str: &str = matched_policy_id
+        .as_hyphenated()
+        .encode_lower(&mut policy_id_buf);
     let matched_rule_str = matched_rule
         .map(|r| format!("rule_{}", r))
         .unwrap_or_default();
