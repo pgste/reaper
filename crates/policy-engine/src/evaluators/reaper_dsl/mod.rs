@@ -95,6 +95,9 @@ pub struct ReaperDSLEvaluator {
     compiled_allow_rules: Vec<CompiledRule>,
     /// Default decision if no rules match
     default_decision: PolicyAction,
+    /// Interned "resource" type id, precomputed so the synthetic-resource path
+    /// doesn't re-intern the constant on every request.
+    resource_type_id: crate::data::InternedString,
     /// Pre-compiled regex patterns for O(1) lookup during evaluation
     #[allow(dead_code)]
     regex_cache: Arc<FxHashMap<String, regex::Regex>>,
@@ -141,11 +144,14 @@ impl ReaperDSLEvaluator {
             }
         }
 
+        let resource_type_id = interner.intern("resource");
+
         Self {
             store,
             compiled_deny_rules,
             compiled_allow_rules,
             default_decision,
+            resource_type_id,
             regex_cache: Arc::new(regex_cache),
             membership_cache: Arc::new(membership_cache),
         }
@@ -1261,9 +1267,11 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         let resource: &Entity = match &resource_found {
             Some(entity) => entity,
             None => {
-                let resource_type = interner.intern("resource");
-                temp_resource =
-                    Entity::new(resource_id, resource_type, std::collections::HashMap::new());
+                temp_resource = Entity::new(
+                    resource_id,
+                    self.resource_type_id,
+                    std::collections::HashMap::new(),
+                );
                 &temp_resource
             }
         };

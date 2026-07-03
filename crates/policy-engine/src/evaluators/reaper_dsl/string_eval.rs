@@ -44,11 +44,10 @@ pub fn eval_string_operation(
         }
     };
 
-    let attr_name = interner
-        .resolve(op.attribute)
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "?".to_string());
-
+    // NOTE: do not resolve the attribute name here — it was previously computed
+    // (a DashMap lookup + String allocation) on every string op purely for the
+    // debug logs below, which are compiled out at runtime unless debug logging
+    // is enabled. The interned id (`?op.attribute`) is logged instead at zero cost.
     match entity.get_attribute(op.attribute) {
         Some(AttributeValue::String(s)) => {
             if let Some(resolved) = interner.resolve(*s) {
@@ -63,7 +62,7 @@ pub fn eval_string_operation(
                 };
                 tracing::debug!(
                     entity_type = ?op.entity_type,
-                    attribute = %attr_name,
+                    attribute = ?op.attribute,
                     attr_value = %resolved,
                     op = ?op.op,
                     op_value = %op.value,
@@ -72,23 +71,10 @@ pub fn eval_string_operation(
                 );
                 result
             } else {
-                tracing::debug!(
-                    entity_type = ?op.entity_type,
-                    attribute = %attr_name,
-                    "StringOp: could not resolve interned string"
-                );
                 false
             }
         }
-        other => {
-            tracing::debug!(
-                entity_type = ?op.entity_type,
-                attribute = %attr_name,
-                attr_value = ?other,
-                "StringOp: attribute not a string or missing"
-            );
-            false
-        }
+        _ => false,
     }
 }
 
