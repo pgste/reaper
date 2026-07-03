@@ -226,6 +226,9 @@ impl ReaperAgentConfig {
         if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY") {
             self.management.bundle_public_key = Some(val);
         }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_SIGNATURE_ALGORITHM") {
+            self.management.bundle_signature_algorithm = Some(val);
+        }
         if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_KEY_ID") {
             self.management.bundle_key_id = Some(val);
         }

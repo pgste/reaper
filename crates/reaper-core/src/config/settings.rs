@@ -300,12 +300,18 @@ pub struct ManagementSettings {
     // ========================================================================
     // Bundle Signature Verification
     // ========================================================================
-    /// Pinned Ed25519 public key (lowercase hex, 64 chars) used to verify every
-    /// bundle the control plane serves. When set, downloaded bundles must carry
-    /// a valid signature over their bytes or they are rejected (fail closed) —
-    /// this makes policy distribution trustworthy independent of the transport.
+    /// Pinned public key (lowercase hex) used to verify every bundle the control
+    /// plane serves. When set, downloaded bundles must carry a valid signature
+    /// over their bytes or they are rejected (fail closed) — this makes policy
+    /// distribution trustworthy independent of the transport.
     #[serde(default)]
     pub bundle_public_key: Option<String>,
+
+    /// Signature algorithm for `bundle_public_key`: `ed25519-sha256` (default)
+    /// or `ecdsa-p256-sha256` (FIPS 186 P-256). Must match how the control plane
+    /// signs.
+    #[serde(default)]
+    pub bundle_signature_algorithm: Option<String>,
 
     /// Optional key id to pin (rotation). When set, a bundle signature whose
     /// `key_id` differs is rejected even if the signature itself is valid.
@@ -339,6 +345,7 @@ impl Default for ManagementSettings {
             // Secure by default: require signed bundles. With no key configured
             // this makes managed mode fail closed until signing is set up.
             bundle_public_key: None,
+            bundle_signature_algorithm: None,
             bundle_key_id: None,
             require_signed_bundles: true,
         }

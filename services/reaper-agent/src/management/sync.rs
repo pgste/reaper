@@ -47,7 +47,7 @@ pub struct SyncService {
     /// Whether SSE is currently connected
     sse_connected: bool,
     /// Pinned public key for bundle signature verification (parsed from config).
-    verifying_key: Option<ed25519_dalek::VerifyingKey>,
+    verifying_key: Option<reaper_core::bundle_signing::VerifyingKey>,
 }
 
 impl SyncService {
@@ -63,20 +63,29 @@ impl SyncService {
     ) -> (Self, watch::Receiver<Option<BundleUpdate>>) {
         let (update_tx, update_rx) = watch::channel(None);
 
-        // Parse the pinned public key once. A bad key is a hard configuration
-        // error surfaced loudly; verification then fails closed for every bundle.
+        // Parse the pinned public key once. A bad key/algorithm is a hard
+        // configuration error surfaced loudly; verification then fails closed for
+        // every bundle.
         let verifying_key = match &config.bundle_public_key {
-            Some(hex) => match reaper_core::bundle_signing::verifying_key_from_hex(hex) {
-                Ok(k) => {
-                    info!("Bundle signature verification enabled (pinned Ed25519 key)");
-                    Some(k)
+            Some(hex) => {
+                let alg_str = config
+                    .bundle_signature_algorithm
+                    .as_deref()
+                    .unwrap_or(reaper_core::bundle_signing::ALGORITHM);
+                match reaper_core::bundle_signing::SigAlgorithm::parse(alg_str)
+                    .and_then(|alg| reaper_core::bundle_signing::VerifyingKey::from_hex(alg, hex))
+                {
+                    Ok(k) => {
+                        info!(algorithm = %alg_str, "Bundle signature verification enabled");
+                        Some(k)
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Invalid management.bundle_public_key/algorithm; \
+                            bundle verification will FAIL CLOSED until fixed");
+                        None
+                    }
                 }
-                Err(e) => {
-                    error!(error = %e, "Invalid management.bundle_public_key; \
-                        bundle verification will FAIL CLOSED until fixed");
-                    None
-                }
-            },
+            }
             None => {
                 if config.require_signed_bundles {
                     warn!(
@@ -529,7 +538,7 @@ impl SyncService {
 /// - key absent                 -> reject if `require`, else warn+allow.
 fn verify_bundle_download(
     require: bool,
-    key: Option<&ed25519_dalek::VerifyingKey>,
+    key: Option<&reaper_core::bundle_signing::VerifyingKey>,
     key_id_pin: Option<&str>,
     download: &BundleDownload,
 ) -> Result<(), ManagementError> {
@@ -572,7 +581,15 @@ fn verify_bundle_download(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reaper_core::bundle_signing::sign_bundle;
+    use reaper_core::bundle_signing::{sign_bundle, SigningKey, VerifyingKey};
+
+    fn test_key() -> SigningKey {
+        SigningKey::Ed25519(Box::new(ed25519_dalek::SigningKey::from_bytes(&[3u8; 32])))
+    }
+
+    fn vk(key: &SigningKey) -> VerifyingKey {
+        VerifyingKey::from_hex(key.algorithm(), &key.public_key_hex()).unwrap()
+    }
 
     fn dl(
         data: &[u8],
@@ -588,27 +605,27 @@ mod tests {
 
     #[test]
     fn signed_bundle_with_pinned_key_is_accepted() {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let key = test_key();
         let data = b"bundle-bytes";
         let sig = sign_bundle(data, &key, "k1");
         let d = dl(data, Some(sig));
-        verify_bundle_download(true, Some(&key.verifying_key()), None, &d).unwrap();
+        verify_bundle_download(true, Some(&vk(&key)), None, &d).unwrap();
     }
 
     #[test]
     fn tampered_signed_bundle_is_rejected() {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let key = test_key();
         let sig = sign_bundle(b"original", &key, "k1");
         let d = dl(b"tampered", Some(sig)); // bytes differ from what was signed
-        let err = verify_bundle_download(true, Some(&key.verifying_key()), None, &d).unwrap_err();
+        let err = verify_bundle_download(true, Some(&vk(&key)), None, &d).unwrap_err();
         assert!(matches!(err, ManagementError::SignatureVerification(_)));
     }
 
     #[test]
     fn required_but_unsigned_is_rejected() {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let key = test_key();
         let d = dl(b"bundle", None);
-        let err = verify_bundle_download(true, Some(&key.verifying_key()), None, &d).unwrap_err();
+        let err = verify_bundle_download(true, Some(&vk(&key)), None, &d).unwrap_err();
         assert!(matches!(err, ManagementError::SignatureVerification(_)));
     }
 
@@ -627,11 +644,10 @@ mod tests {
 
     #[test]
     fn wrong_key_id_pin_is_rejected() {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let key = test_key();
         let sig = sign_bundle(b"bundle", &key, "k1");
         let d = dl(b"bundle", Some(sig));
-        let err =
-            verify_bundle_download(true, Some(&key.verifying_key()), Some("k2"), &d).unwrap_err();
+        let err = verify_bundle_download(true, Some(&vk(&key)), Some("k2"), &d).unwrap_err();
         assert!(matches!(err, ManagementError::SignatureVerification(_)));
     }
 
