@@ -235,6 +235,15 @@ impl ReaperAgentConfig {
                 self.uds.socket_permissions = perms;
             }
         }
+        // Number of thread-per-core shards (0/1 = shared single socket).
+        if let Ok(val) = std::env::var("REAPER_UDS_SHARDS") {
+            if let Ok(shards) = val.parse::<usize>() {
+                self.uds.shards = shards;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_UDS_PIN_CORES") {
+            self.uds.pin_cores = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // TLS settings
         if let Ok(val) = std::env::var("REAPER_TLS_ENABLED") {

@@ -533,19 +533,10 @@ async fn main() -> anyhow::Result<()> {
     info!("  Metrics: Prometheus format");
     info!("");
 
-    // Spawn UDS listener if enabled
+    // Spawn UDS listener(s) if enabled — shared (one socket) or sharded
+    // (thread-per-core, N sockets) per config.uds.shards.
     if let Some(uds_app) = uds_app {
-        let socket_path = config.uds.socket_path.clone();
-        let socket_permissions = config.uds.socket_permissions;
-        info!(
-            path = %socket_path.display(),
-            "Starting UDS listener"
-        );
-        tokio::spawn(async move {
-            if let Err(e) = uds::serve_uds(socket_path, socket_permissions, uds_app).await {
-                error!("UDS server error: {}", e);
-            }
-        });
+        uds::spawn_uds_listeners(&config.uds, uds_app);
     }
 
     // Run server with TLS if configured

@@ -49,6 +49,7 @@ parking_lot = { workspace = true }
 dashmap = { workspace = true }
 hdrhistogram = "7.5"
 sysinfo = "0.32"
+core_affinity = "0.8"  # pin thread-per-core UDS shards to cores
 
 # TLS/mTLS support
 axum-server = { version = "0.7", features = ["tls-rustls"] }
@@ -64,7 +65,6 @@ hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
 bytes = "1"
-core_affinity = "0.8"
 
 [[example]]
 name = "throughput"
