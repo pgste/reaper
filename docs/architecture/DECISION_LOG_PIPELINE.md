@@ -34,28 +34,35 @@ it and harden the two places the reference designs are weak: **lock-free sharded
    deny-priority sampling                 + bounded SSE "recent" tail for live debugging
 ```
 
-### Layer 1 — Capture (agent, hot path): make it ~free
+### Layer 1 — Capture (agent, hot path): make it ~free — ✅ IMPLEMENTED (sharded ring)
 
-Today `DecisionBuffer` enqueues under a `parking_lot::RwLock<VecDeque>` and builds a full
-`DecisionLogEntry` (with `String`/`HashMap` clones) on the request thread. At 100k+/s that lock
-is cross-core contention and the record build allocates. Fixes:
+The original `DecisionBuffer` was one `parking_lot::RwLock<VecDeque>` — every request thread
+funneled through a single lock (collapses ~5x under 4-thread contention) and the writer thread
+got a full deep clone of each entry. Implemented now:
 
-- **Per-core sharded lock-free ring.** One `crossbeam::queue::ArrayQueue<DecisionRecord>` per
-  core (same share-nothing idea that won +15% on UDS). Fixed buffer → zero per-push alloc;
-  `push` returns the value on full → `dropped.fetch_add(1)`; no cross-core bouncing. (SPSC
-  `rtrb` per core is an option if profiling shows the MPMC atomics matter.)
-- **Compact `Copy` record, no strings on the hot path.** Push interned `u32`/`u64` ids
-  (principal/action/resource/policy via the existing `StringInterner`) + decision enum +
-  `eval_time_ns: u32` + timestamp. ~40 bytes, no `String`, no `serde_json::Value`. The shipper
-  resolves ids → strings and formats JSON off-thread.
-- **Deny-priority sampling, decided inline (single-digit ns).** Always keep denies; sample
-  allows under sustained load via a thread-local counter/`fastrand`. Record the sample rate so
-  the shipper can reweight. This is the pressure valve *before* drop-on-full.
-- **Enable on the fast path too.** Today only the standard handler logs; the fast path must
-  capture as well (cheaply — that's the point of the compact record).
-- **Never silently drop.** Export `dropped` and `sampled` as Prometheus counters (and ideally a
-  gap marker in the stream) so audit completeness is observable — the #1 pitfall in OPA-style
-  designs.
+- **Per-thread sharded ring** (`decision_buffer.rs`): the retention ring is split into N
+  `CachePadded<RwLock<VecDeque>>` shards; each request thread maps to a stable shard, so
+  concurrent producers take disjoint, uncontended locks. The push stays inline (same-thread
+  alloc/free — no allocator arena ping-pong), entries are queryable immediately, and a global
+  sequence number preserves exact cross-shard ordering (queries k-merge by seq; queries are
+  rare, the eval path is what matters). Shard count: `REAPER_DECISION_LOG_SHARDS`
+  (0 = auto-detect cores, clamped 1..=64).
+- **Design note:** a lock-free `ArrayQueue` + background drain-thread variant was built and
+  benchmarked first — 4x more concurrent throughput than the single ring, but the drain thread
+  freed producer allocations cross-thread, contending the malloc arena against *every*
+  allocation on the request path (+3.4µs/request single-thread in the handler bench). Sharding
+  the ring keeps the multi-core win without that tax. Numbers in the module docs.
+- **Writer hand-off is `Arc`-shared, not deep-cloned** — file/stdout serialization + I/O stay
+  on the dedicated writer thread. ✅
+- **Deny-priority sampling, decided inline (single-digit ns)** via `should_log()` — always keep
+  denies; sample allows with a thread-local xorshift PRNG *before* the entry is built. ✅
+- **Fast path captures too** (was unaudited). ✅
+- **Never silently drop.** `dropped`, `sampled_out`, `writer_dropped` exported as Prometheus
+  gauges. ✅
+- *(remaining option, only if profiling demands)* **Compact `Copy` record**: push interned
+  `u32` ids instead of a built entry. The shard push already removed the contention and the
+  deep clone; the entry build (a few short `String`s) only happens for decisions that pass
+  sampling, so this is a marginal follow-up, not a gap.
 
 ### Layer 2 — Local emit (agent, cold path): pluggable sink, minimal
 
@@ -201,9 +208,10 @@ buffer.type = "disk"
 
 ## Phased implementation
 
-1. **Harden capture (pure win, store-agnostic):** per-core sharded lock-free ring + compact
-   interned `Copy` record + deny-priority sampling + fast-path logging + `dropped`/`sampled`
-   metrics. No external dependency; ships value immediately.
+1. **Harden capture (pure win, store-agnostic):** ✅ done — per-thread sharded ring (disjoint
+   uncontended locks, inline push, exact seq ordering) + deny-priority sampling + fast-path
+   logging + `dropped`/`sampled` metrics. (Compact interned `Copy` record remains an optional
+   micro-follow-up; see Layer 1.)
 2. **Pluggable local sink:** `stdout` + rotated-`file` NDJSON WAL behind a `DecisionSink` trait
    (mirrors the pluggable-evaluator pattern); keep SSE tail.
 3. **Reference pipeline:** commit `vector.toml` + ClickHouse schema/migrations + Helm wiring

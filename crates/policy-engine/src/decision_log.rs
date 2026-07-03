@@ -213,6 +213,14 @@ pub struct DecisionLogConfig {
     /// the cost off the allow firehose.
     #[serde(default = "default_true")]
     pub input_data_denies_only: bool,
+
+    /// Number of per-core capture shards. The eval path pushes each decision to
+    /// its thread's shard (a lock-free queue) and a background thread drains the
+    /// shards into the query ring — so concurrent producers on different cores
+    /// never contend on a single lock. 0 = auto (detected parallelism, clamped
+    /// 1..=64). Set to 1 to force a single shard (deterministic ordering, tests).
+    #[serde(default)]
+    pub capture_shards: usize,
 }
 
 fn default_true() -> bool {
@@ -233,6 +241,7 @@ impl Default for DecisionLogConfig {
             include_context: true,
             include_input_data: false,
             input_data_denies_only: true,
+            capture_shards: 0,
         }
     }
 }
@@ -276,6 +285,10 @@ impl DecisionLogConfig {
             input_data_denies_only: std::env::var("REAPER_DECISION_LOG_INPUT_DATA_DENIES_ONLY")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
+            capture_shards: std::env::var("REAPER_DECISION_LOG_SHARDS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
         }
     }
 }

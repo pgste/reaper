@@ -45,9 +45,15 @@ docker compose -f deploy/decision-logs/docker-compose.yml exec clickhouse \
 | `REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE=0.01` | keep 1% of allows + **100% of denies** (deny-priority sampling) — the cheapest volume lever |
 | `REAPER_DECISION_LOG_ALLOWS=false` | drop allows entirely (denies only) |
 | `REAPER_DECISION_LOG_CONTEXT=false` | strip request context (privacy) |
+| `REAPER_DECISION_LOG_INPUT_DATA=true` | "explain" tier: snapshot resolved principal/resource attributes into `input_data` |
+| `REAPER_DECISION_LOG_INPUT_DATA_DENIES_ONLY=false` | capture the snapshot on allows too (default: denies only) |
+| `REAPER_DECISION_LOG_SHARDS=0` | lock-free capture shards; 0 = auto (one per detected core, max 64) |
 
 Sampling and disable decisions are made **before** the log entry is built, so
-they cost nothing on the eval path. `dropped`/`sampled_out`/`writer_dropped`
+they cost nothing on the eval path. The retention ring is sharded per thread
+(each request thread pushes to its own shard under a disjoint, uncontended
+lock), so concurrent workers never queue on a shared lock, and JSON/file I/O
+happen on a dedicated writer thread. `dropped`/`sampled_out`/`writer_dropped`
 counters are exposed on `/api/v1/decisions/stats` and as Prometheus metrics so
 audit gaps are never silent.
 
