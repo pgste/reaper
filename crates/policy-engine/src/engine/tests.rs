@@ -682,3 +682,76 @@ async fn test_staging_id_mismatch_rejected() {
     let versions = engine.commit_staged_package(&staged).unwrap();
     assert_eq!(versions.len(), 1);
 }
+
+#[test]
+fn test_reaper_dsl_policy_rebuilds_evaluator_from_content() {
+    // Regression for restart durability: a Reaper-DSL policy persisted with only
+    // its `content` (the evaluator is never serialized) must rebuild a working
+    // evaluator via build_evaluator_with_data — previously this hard-errored for
+    // the old `Custom` language and the policy was silently dropped on restart.
+    let content = r#"
+policy restart_test {
+    default: deny,
+    rule allow_read {
+        allow if {
+            action == "read"
+        }
+    }
+}
+"#;
+
+    let mut policy = EnhancedPolicy {
+        id: uuid::Uuid::new_v4(),
+        version: 1,
+        name: "restart_test".to_string(),
+        description: String::new(),
+        language: crate::PolicyLanguage::ReaperDsl,
+        content: content.to_string(),
+        rules: vec![],
+        metadata: std::collections::HashMap::new(),
+        priority: 100,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        evaluator: None,
+        source_metadata: None,
+    };
+
+    // Rebuild as the agent does on restart, passing the populated DataStore so
+    // entity resolution works (the principal must exist as an entity).
+    let store = std::sync::Arc::new(crate::data::DataStore::new());
+    let loader = crate::data::DataLoader::new((*store).clone());
+    loader
+        .load_json(r#"{"entities":[{"id":"alice","type":"User","attributes":{"role":"admin"}}]}"#)
+        .expect("load entity");
+
+    policy
+        .build_evaluator_with_data(Some(store))
+        .expect("ReaperDsl policy should rebuild its evaluator, not error");
+    assert!(policy.evaluator.is_some());
+
+    let engine = PolicyEngine::new();
+    let id = policy.id;
+    engine.deploy_policy(policy).unwrap();
+
+    let mut ctx = std::collections::HashMap::new();
+    ctx.insert("principal".to_string(), "alice".to_string());
+    let allow_req = crate::PolicyRequest {
+        resource: "/doc".to_string(),
+        action: "read".to_string(),
+        context: ctx.clone(),
+    };
+    let deny_req = crate::PolicyRequest {
+        resource: "/doc".to_string(),
+        action: "write".to_string(),
+        context: ctx,
+    };
+
+    assert_eq!(
+        engine.evaluate(&id, &allow_req).unwrap().decision,
+        PolicyAction::Allow
+    );
+    assert_eq!(
+        engine.evaluate(&id, &deny_req).unwrap().decision,
+        PolicyAction::Deny
+    );
+}

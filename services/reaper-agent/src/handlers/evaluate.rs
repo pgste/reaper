@@ -45,6 +45,84 @@ struct EvalResponse<'a> {
     cache_hit: bool,
 }
 
+/// Outcome of evaluating a request against a set of policies.
+struct EvalOutcome {
+    decision: PolicyAction,
+    policy_id: Uuid,
+    policy_name: String,
+    policy_version: u64,
+    matched_rule: Option<usize>,
+    total_eval_time_ns: u64,
+    /// Set when an evaluator errored; the request is denied (fail closed).
+    error: Option<String>,
+}
+
+/// Evaluate `request` against every policy in `policy_ids` and combine the
+/// results with a single, fail-closed rule shared by every endpoint:
+///
+/// - **Default deny.** A request is allowed only if at least one policy
+///   explicitly allows it *and* no policy denies it.
+/// - **Deny overrides.** The first policy that denies wins and short-circuits.
+/// - **Errors deny.** Any evaluation error denies (fail closed).
+///
+/// Both `evaluate_policy` and `fast_evaluate_policy` route through this so their
+/// decisions can never diverge for the same input.
+fn evaluate_policy_set(
+    engine: &policy_engine::PolicyEngine,
+    policy_ids: &[Uuid],
+    request: &PolicyRequest,
+) -> EvalOutcome {
+    let mut outcome = EvalOutcome {
+        decision: PolicyAction::Deny,
+        policy_id: Uuid::nil(),
+        policy_name: String::new(),
+        policy_version: 0,
+        matched_rule: None,
+        total_eval_time_ns: 0,
+        error: None,
+    };
+    let mut any_allow = false;
+
+    for policy_id in policy_ids {
+        match engine.evaluate(policy_id, request) {
+            Ok(d) => {
+                outcome.total_eval_time_ns += d.evaluation_time_ns;
+                match d.decision {
+                    PolicyAction::Deny => {
+                        // Deny overrides everything — fail closed and stop.
+                        outcome.decision = PolicyAction::Deny;
+                        outcome.policy_id = d.policy_id;
+                        outcome.policy_name = d.policy_name;
+                        outcome.policy_version = d.policy_version;
+                        outcome.matched_rule = d.matched_rule;
+                        return outcome;
+                    }
+                    PolicyAction::Allow => {
+                        // First allow sets the decision; a later deny can still
+                        // override it above.
+                        if !any_allow {
+                            any_allow = true;
+                            outcome.decision = PolicyAction::Allow;
+                            outcome.policy_id = d.policy_id;
+                            outcome.policy_name = d.policy_name;
+                            outcome.policy_version = d.policy_version;
+                            outcome.matched_rule = d.matched_rule;
+                        }
+                    }
+                    PolicyAction::Log => {}
+                }
+            }
+            Err(e) => {
+                outcome.decision = PolicyAction::Deny;
+                outcome.error = Some(e.to_string());
+                return outcome;
+            }
+        }
+    }
+
+    outcome
+}
+
 /// Standard policy evaluation with full OpenTelemetry tracing.
 ///
 /// Supports:
@@ -227,57 +305,25 @@ pub async fn evaluate_policy(
         CACHE_MISSES.with_label_values(&["decision"]).inc();
     }
 
-    // Evaluate all policies in policy_ids (may be 1 or many)
-    // If ANY policy denies, return deny (security first)
-    let mut final_decision = PolicyAction::Allow;
-    let mut total_eval_time_ns = 0u64;
-    let mut matched_policy_id = Uuid::nil();
-    let mut matched_policy_name = String::new();
-    let mut matched_policy_version = 0u64;
-    let mut matched_rule = String::from("default_allow");
+    // Evaluate all policies with the shared fail-closed core (default deny,
+    // deny-overrides). This is identical to the fast endpoint's semantics.
+    let outcome = evaluate_policy_set(&state.policy_engine, &policy_ids, &request);
 
-    for policy_id in &policy_ids {
-        match state.policy_engine.evaluate(policy_id, &request) {
-            Ok(decision) => {
-                total_eval_time_ns += decision.evaluation_time_ns;
-
-                // Use policy_name from PolicyDecision (no re-lookup needed)
-                if matched_policy_name.is_empty() {
-                    matched_policy_name.clone_from(&decision.policy_name);
-                }
-
-                // If this policy denies, override the final decision
-                if matches!(decision.decision, PolicyAction::Deny) {
-                    final_decision = PolicyAction::Deny;
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_name.clone_from(&decision.policy_name);
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision
-                        .matched_rule
-                        .map(|idx| format!("rule_{}", idx))
-                        .unwrap_or_else(|| "no_rule".to_string());
-
-                    // Break early on deny (security first)
-                    break;
-                } else if matches!(final_decision, PolicyAction::Allow) {
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision
-                        .matched_rule
-                        .map(|idx| format!("rule_{}", idx))
-                        .unwrap_or_else(|| "no_rule".to_string());
-                }
-            }
-            Err(e) => {
-                // On error, deny for security (fail closed)
-                error!("Policy evaluation error for {}: {}", policy_id, e);
-                ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
-                final_decision = PolicyAction::Deny;
-                matched_rule = format!("evaluation_error: {}", e);
-                break;
-            }
-        }
-    }
+    let final_decision = outcome.decision.clone();
+    let total_eval_time_ns = outcome.total_eval_time_ns;
+    let matched_policy_id = outcome.policy_id;
+    let matched_policy_name = outcome.policy_name;
+    let matched_policy_version = outcome.policy_version;
+    let matched_rule = if let Some(ref e) = outcome.error {
+        error!("Policy evaluation error: {}", e);
+        ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
+        format!("evaluation_error: {}", e)
+    } else {
+        outcome
+            .matched_rule
+            .map(|idx| format!("rule_{}", idx))
+            .unwrap_or_else(|| "default_deny".to_string())
+    };
 
     let total_time = start_time.elapsed();
     state.stats.record_evaluation(total_eval_time_ns);
@@ -555,43 +601,21 @@ pub async fn fast_evaluate_policy(
         context,
     };
 
-    // Evaluate policies
-    let mut final_decision = PolicyAction::Deny;
-    let mut matched_policy_id = Uuid::nil();
-    let mut matched_policy_version = 0u64;
-    let mut matched_rule: Option<usize> = None;
-    let mut total_eval_time_ns = 0u64;
+    // Evaluate policies with the shared fail-closed core (default deny,
+    // deny-overrides) — identical semantics to the standard endpoint.
+    let outcome = evaluate_policy_set(&state.policy_engine, &policy_ids, &request);
+    if let Some(ref e) = outcome.error {
+        error!("Policy evaluation error: {}", e);
+        ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
+    }
 
-    for policy_id in &policy_ids {
-        let eval_start = std::time::Instant::now();
-
-        match state.policy_engine.evaluate(policy_id, &request) {
-            Ok(decision) => {
-                let eval_time_ns = eval_start.elapsed().as_nanos() as u64;
-                total_eval_time_ns += eval_time_ns;
-
-                // Use policy_name from PolicyDecision (no re-lookup needed)
-                if policy_name_resolved.is_empty() {
-                    policy_name_resolved.clone_from(&decision.policy_name);
-                }
-
-                if decision.decision == PolicyAction::Allow {
-                    final_decision = PolicyAction::Allow;
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision.matched_rule;
-                    break;
-                } else if decision.decision == PolicyAction::Deny {
-                    final_decision = PolicyAction::Deny;
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision.matched_rule;
-                }
-            }
-            Err(_) => {
-                ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
-            }
-        }
+    let final_decision = outcome.decision.clone();
+    let matched_policy_id = outcome.policy_id;
+    let matched_policy_version = outcome.policy_version;
+    let matched_rule: Option<usize> = outcome.matched_rule;
+    let total_eval_time_ns = outcome.total_eval_time_ns;
+    if policy_name_resolved.is_empty() && !outcome.policy_name.is_empty() {
+        policy_name_resolved = outcome.policy_name;
     }
 
     let total_time = start_time.elapsed();

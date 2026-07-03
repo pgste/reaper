@@ -246,8 +246,14 @@ async fn main() -> anyhow::Result<()> {
                 match cache.load_policies().await {
                     Ok(policies) => {
                         for mut policy in policies {
-                            // Build evaluator for cached policy (evaluator is not serialized)
-                            if let Err(e) = policy.build_evaluator() {
+                            // Rebuild the evaluator for the cached policy (the
+                            // evaluator itself is not serialized). Pass the
+                            // populated DataStore so Reaper-DSL policies that
+                            // read entity attributes are restored correctly and
+                            // survive the restart.
+                            if let Err(e) =
+                                policy.build_evaluator_with_data(Some(data_store.clone()))
+                            {
                                 warn!(
                                     "Failed to build evaluator for cached policy {}: {}",
                                     policy.name, e
@@ -365,7 +371,7 @@ async fn main() -> anyhow::Result<()> {
                                         policy.language = match policy_entry.language.as_str() {
                                             "cedar" => policy_engine::PolicyLanguage::Cedar,
                                             "simple" => policy_engine::PolicyLanguage::Simple,
-                                            _ => policy_engine::PolicyLanguage::Custom,
+                                            _ => policy_engine::PolicyLanguage::ReaperDsl,
                                         };
 
                                         if let Err(e) =

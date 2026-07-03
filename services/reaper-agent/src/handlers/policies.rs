@@ -221,44 +221,38 @@ pub async fn deploy_compiled_policy(
         payload.policy_name
     );
 
-    use policy_engine::ReaperPolicy;
-
-    // Parse the .reap policy content
-    let policy = ReaperPolicy::from_str(&payload.policy_content).map_err(|e| {
-        error!("Failed to parse .reap policy: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Failed to parse .reap policy: {}", e),
-        )
-    })?;
-
-    // Compile with the agent's DataStore
-    let evaluator = policy.build(state.data_store.clone()).map_err(|e| {
-        error!("Failed to compile policy: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Failed to compile policy: {}", e),
-        )
-    })?;
-
-    info!("✓ Policy compiled successfully");
-
-    // Create EnhancedPolicy with the compiled evaluator
+    // Build the Reaper-DSL policy as a first-class EnhancedPolicy. Parsing
+    // errors are a client error (400). Compilation of a valid-but-unsupported
+    // construct is NOT an error — build_evaluator_with_data falls back to the
+    // AST interpreter, matching bootstrap loading and restart restore so the
+    // same policy behaves identically however it is deployed.
     let mut enhanced_policy = EnhancedPolicy {
         id: uuid::Uuid::new_v4(),
         version: 1,
         name: payload.policy_name.clone(),
         description: "Compiled .reap policy".to_string(),
-        language: policy_engine::PolicyLanguage::Custom,
+        language: policy_engine::PolicyLanguage::ReaperDsl,
         content: payload.policy_content.clone(),
         rules: vec![],
         metadata: std::collections::HashMap::new(),
         priority: 100,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
-        evaluator: Some(Arc::new(evaluator)),
+        evaluator: None,
         source_metadata: None,
     };
+
+    enhanced_policy
+        .build_evaluator_with_data(Some(state.data_store.clone()))
+        .map_err(|e| {
+            error!("Failed to parse .reap policy: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Failed to parse .reap policy: {}", e),
+            )
+        })?;
+
+    info!("✓ Policy compiled successfully");
 
     // Set API source metadata
     enhanced_policy.set_api_source(None, Some("platform".to_string()));

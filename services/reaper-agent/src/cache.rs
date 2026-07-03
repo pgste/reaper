@@ -54,7 +54,7 @@ impl From<&EnhancedPolicy> for CachedPolicy {
         let language = match &policy.language {
             policy_engine::PolicyLanguage::Simple => "simple",
             policy_engine::PolicyLanguage::Cedar => "cedar",
-            policy_engine::PolicyLanguage::Custom => "custom",
+            policy_engine::PolicyLanguage::ReaperDsl => "reaper",
         };
 
         let source_metadata = policy.source_metadata.as_ref().map(|sm| {
@@ -114,7 +114,9 @@ impl CachedPolicy {
         let language = match self.language.as_str() {
             "simple" => policy_engine::PolicyLanguage::Simple,
             "cedar" => policy_engine::PolicyLanguage::Cedar,
-            "custom" => policy_engine::PolicyLanguage::Custom,
+            // "custom" is the legacy tag for Reaper-DSL policies cached by
+            // earlier builds; accept it so they still restore.
+            "reaper" | "reaper_dsl" | "custom" => policy_engine::PolicyLanguage::ReaperDsl,
             _ => policy_engine::PolicyLanguage::Simple,
         };
 

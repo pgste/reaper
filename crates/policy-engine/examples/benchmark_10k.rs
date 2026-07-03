@@ -165,12 +165,16 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
     println!("\n  --- With Decision Cache (10K capacity) ---");
     let cache = Arc::new(DecisionCache::new(10000));
 
+    // Single-policy benchmark: one cache scope, generation captured up front.
+    let scope = 0u64;
+    let generation = cache.generation();
+
     // First pass - cache misses
     let start = Instant::now();
     for request in &requests {
-        if cache.get(request).is_none() {
+        if cache.get(request, scope).is_none() {
             let decision = evaluator.evaluate(request).unwrap_or(PolicyAction::Deny);
-            cache.insert(request, decision);
+            cache.insert(request, scope, decision, generation);
         }
     }
     let first_pass = start.elapsed();
@@ -178,7 +182,7 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
     // Second pass - cache hits
     let start = Instant::now();
     for request in &requests {
-        let _ = cache.get(request);
+        let _ = cache.get(request, scope);
     }
     let second_pass = start.elapsed();
 

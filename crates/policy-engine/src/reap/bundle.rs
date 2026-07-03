@@ -199,7 +199,7 @@ impl PolicyBundle {
                 "Deployed from bundle version {}",
                 self.metadata.policy_version.as_deref().unwrap_or("unknown")
             ),
-            language: PolicyLanguage::Custom,
+            language: PolicyLanguage::ReaperDsl,
             content,
             rules: vec![], // Rules are in the compiled evaluator
             metadata: {
