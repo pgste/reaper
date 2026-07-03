@@ -60,6 +60,7 @@ use handlers::{
     // Decision handlers
     export_decisions,
     fast_evaluate_policy,
+    get_decision_by_id,
     get_decision_stats,
     get_decisions,
     get_entity_handler,
@@ -542,6 +543,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/decisions", get(get_decisions))
         .route("/api/v1/decisions/stats", get(get_decision_stats))
         .route("/api/v1/decisions/export", post(export_decisions))
+        .route("/api/v1/decisions/{decision_id}", get(get_decision_by_id))
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
         .with_state(state);
 

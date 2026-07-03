@@ -134,6 +134,40 @@ impl AttributeValue {
         Self::String(interner.intern(s))
     }
 
+    /// Convert to a `serde_json::Value`, resolving interned strings. Used by the
+    /// decision-log "explain" snapshot (off the eval hot path). Unresolvable
+    /// interned strings become JSON null; non-finite floats become null.
+    pub fn to_json(&self, interner: &StringInterner) -> serde_json::Value {
+        use serde_json::Value;
+        match self {
+            AttributeValue::String(id) => interner
+                .resolve(*id)
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null),
+            AttributeValue::Int(i) => Value::from(*i),
+            AttributeValue::Float(f) => serde_json::Number::from_f64(*f)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+            AttributeValue::Bool(b) => Value::Bool(*b),
+            AttributeValue::List(items) => {
+                Value::Array(items.iter().map(|v| v.to_json(interner)).collect())
+            }
+            AttributeValue::Object(map) => {
+                let mut obj = serde_json::Map::new();
+                for (k, v) in map {
+                    if let Some(key) = interner.resolve(*k) {
+                        obj.insert(key.to_string(), v.to_json(interner));
+                    }
+                }
+                Value::Object(obj)
+            }
+            AttributeValue::Set(items) => {
+                Value::Array(items.iter().map(|v| v.to_json(interner)).collect())
+            }
+            AttributeValue::Null => Value::Null,
+        }
+    }
+
     /// Get the value as a string (if it's a string)
     pub fn as_string(&self, interner: &StringInterner) -> Option<Arc<str>> {
         match self {

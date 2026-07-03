@@ -86,6 +86,15 @@ impl StringInterner {
         id
     }
 
+    /// Look up an already-interned string's ID **without inserting** it.
+    ///
+    /// Unlike [`Self::intern`], this never allocates or mutates the interner, so
+    /// it's safe for read-only paths (e.g. the decision-log "explain" snapshot)
+    /// that must not pollute the interner with transient request strings.
+    pub fn lookup(&self, s: &str) -> Option<InternedString> {
+        self.string_to_id.get(s).map(|entry| *entry.value())
+    }
+
     /// Get the string for an interned ID
     ///
     /// # Performance

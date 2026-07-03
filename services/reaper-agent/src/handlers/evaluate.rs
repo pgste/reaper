@@ -44,6 +44,25 @@ struct EvalResponse<'a> {
     cache_hit: bool,
 }
 
+/// Build the "explain" input-data snapshot: the resolved principal/resource
+/// entity attributes the decision branched on, as
+/// `{"principal": {...}, "resource": {...}}`. Read-only DataStore lookups on the
+/// LOG path (never the eval loop); returns `None` if neither is a known entity.
+fn capture_input_data(
+    data_store: &policy_engine::DataStore,
+    principal: &str,
+    resource: &str,
+) -> Option<Value> {
+    let mut input = serde_json::Map::new();
+    if let Some(p) = data_store.entity_attributes_json(principal) {
+        input.insert("principal".to_string(), p);
+    }
+    if let Some(r) = data_store.entity_attributes_json(resource) {
+        input.insert("resource".to_string(), r);
+    }
+    (!input.is_empty()).then_some(Value::Object(input))
+}
+
 /// Outcome of evaluating a request against a set of policies.
 struct EvalOutcome {
     decision: PolicyAction,
@@ -425,6 +444,14 @@ pub async fn evaluate_policy(
             .with_policy_version(matched_policy_version.to_string())
             .with_matched_rule(matched_rule.clone());
 
+            // "Explain" tier (opt-in, typically denies-only): snapshot the
+            // resolved principal/resource attributes the decision branched on.
+            // Gated + off the eval path.
+            if buffer.should_capture_input(decision_str == "allow") {
+                entry.input_data =
+                    capture_input_data(&state.data_store, &payload.principal, &payload.resource);
+            }
+
             // Use the same decision_id across response, logs, and audit trail
             entry.decision_id = decision_id.to_string();
 
@@ -665,6 +692,17 @@ pub async fn fast_evaluate_policy(
                     .map(|r| format!("rule_{}", r))
                     .unwrap_or_default(),
             );
+            if buffer.should_capture_input(decision_str == "allow") {
+                entry.input_data = capture_input_data(
+                    &state.data_store,
+                    &request
+                        .context
+                        .get("principal")
+                        .cloned()
+                        .unwrap_or_default(),
+                    &request.resource,
+                );
+            }
             entry.decision_id = decision_id.to_string();
             buffer.log(entry);
         }

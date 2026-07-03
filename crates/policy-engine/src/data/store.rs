@@ -229,6 +229,26 @@ impl DataStore {
         self.entities.get(&id).map(|entry| entry.value().clone())
     }
 
+    /// Snapshot an entity's attributes as a JSON object, resolving interned
+    /// strings. Read-only: uses a lookup that does NOT intern `id`, so it never
+    /// pollutes the interner with transient request strings.
+    ///
+    /// This backs the decision-log "explain" tier — capturing the resolved
+    /// entity attributes a decision branched on, so a denial is reproducible. It
+    /// runs on the LOG path (after evaluation), never inside the sub-µs eval loop.
+    /// Returns `None` if `id` is not a known entity.
+    pub fn entity_attributes_json(&self, id: &str) -> Option<serde_json::Value> {
+        let interned = self.interner().lookup(id)?;
+        let entity = self.get(interned)?;
+        let mut map = serde_json::Map::with_capacity(entity.attributes.len());
+        for (k, v) in entity.attributes.iter() {
+            if let Some(key) = self.interner().resolve(*k) {
+                map.insert(key.to_string(), v.to_json(self.interner()));
+            }
+        }
+        Some(serde_json::Value::Object(map))
+    }
+
     /// Get all entities of a specific type
     ///
     /// # Performance
@@ -683,6 +703,37 @@ mod tests {
 
         let retrieved = store.get(user_id).unwrap();
         assert_eq!(retrieved.id, user_id);
+    }
+
+    #[test]
+    fn test_entity_attributes_json_snapshot() {
+        let store = DataStore::new();
+        let interner = store.interner();
+
+        let alice = interner.intern("alice");
+        let user_type = interner.intern("User");
+        let role_key = interner.intern("role");
+        let clearance_key = interner.intern("clearance_level");
+        store.insert(
+            EntityBuilder::new(alice, user_type)
+                .with_attribute(role_key, AttributeValue::from_string("admin", interner))
+                .with_attribute(clearance_key, AttributeValue::Int(5))
+                .build(),
+        );
+
+        // Known entity -> resolved attributes as JSON.
+        let json = store
+            .entity_attributes_json("alice")
+            .expect("entity exists");
+        assert_eq!(json["role"], serde_json::json!("admin"));
+        assert_eq!(json["clearance_level"], serde_json::json!(5));
+
+        // Unknown id -> None, and (crucially) the lookup did NOT intern it.
+        assert!(store.entity_attributes_json("ghost").is_none());
+        assert!(
+            interner.lookup("ghost").is_none(),
+            "explain snapshot must not pollute the interner"
+        );
     }
 
     #[test]

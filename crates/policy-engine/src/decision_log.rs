@@ -58,6 +58,13 @@ pub struct DecisionLogEntry {
     /// Matched rule name (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_rule: Option<String>,
+
+    /// "Explain" snapshot: the resolved principal/resource entity attributes the
+    /// decision branched on (e.g. `{"principal": {...}, "resource": {...}}`).
+    /// Present only when the explain tier is enabled (heavier; opt-in, typically
+    /// denies-only). Makes a decision reproducible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_data: Option<serde_json::Value>,
 }
 
 impl DecisionLogEntry {
@@ -86,7 +93,14 @@ impl DecisionLogEntry {
             cache_hit: false,
             agent_id: None,
             matched_rule: None,
+            input_data: None,
         }
+    }
+
+    /// Attach the "explain" input-data snapshot.
+    pub fn with_input_data(mut self, input: serde_json::Value) -> Self {
+        self.input_data = Some(input);
+        self
     }
 
     /// Set the trace ID for OpenTelemetry correlation
@@ -131,9 +145,22 @@ impl DecisionLogEntry {
         self
     }
 
-    /// Convert to NDJSON line (for file export)
-    pub fn to_ndjson(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
+    /// Convert to an NDJSON line.
+    ///
+    /// This runs on the background writer thread (never the eval hot path), but
+    /// serialization speed still sets how fast the shipper drains the queue at
+    /// high volume — so use SIMD `sonic-rs` on native targets (same serde struct,
+    /// same output), falling back to `serde_json` on wasm where sonic-rs isn't
+    /// available.
+    pub fn to_ndjson(&self) -> Result<String, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            sonic_rs::to_string(self).map_err(|e| e.to_string())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            serde_json::to_string(self).map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -172,6 +199,24 @@ pub struct DecisionLogConfig {
 
     /// Whether to include context in logs (can be disabled for privacy)
     pub include_context: bool,
+
+    /// "Explain" tier: snapshot the resolved principal/resource entity attributes
+    /// the decision branched on into `input_data`, so a decision is reproducible.
+    /// Off by default — it's heavier (DataStore lookups + JSON on the log path,
+    /// never on the eval path). Combine with `input_data_denies_only` to pay it
+    /// only where it matters most.
+    #[serde(default)]
+    pub include_input_data: bool,
+
+    /// When `include_input_data` is on, capture the snapshot for denies only
+    /// (default true) — denials are what you most need to explain, and this keeps
+    /// the cost off the allow firehose.
+    #[serde(default = "default_true")]
+    pub input_data_denies_only: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DecisionLogConfig {
@@ -186,6 +231,8 @@ impl Default for DecisionLogConfig {
             log_denies: true,
             sample_allow_rate: 1.0,
             include_context: true,
+            include_input_data: false,
+            input_data_denies_only: true,
         }
     }
 }
@@ -221,6 +268,12 @@ impl DecisionLogConfig {
                 .map(|r| r.clamp(0.0, 1.0))
                 .unwrap_or(1.0),
             include_context: std::env::var("REAPER_DECISION_LOG_CONTEXT")
+                .map(|v| v.to_lowercase() != "false")
+                .unwrap_or(true),
+            include_input_data: std::env::var("REAPER_DECISION_LOG_INPUT_DATA")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            input_data_denies_only: std::env::var("REAPER_DECISION_LOG_INPUT_DATA_DENIES_ONLY")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
         }

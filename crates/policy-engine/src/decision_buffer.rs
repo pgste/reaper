@@ -206,6 +206,15 @@ impl DecisionBuffer {
         true
     }
 
+    /// Whether the "explain" input-data snapshot should be captured for this
+    /// decision. Cheap boolean check; the (heavier) snapshot itself is only done
+    /// by the caller when this returns true. When the explain tier is off
+    /// (default) this is always false → zero extra work.
+    #[inline]
+    pub fn should_capture_input(&self, is_allow: bool) -> bool {
+        self.config.include_input_data && (!self.config.input_data_denies_only || !is_allow)
+    }
+
     /// Serialize a message once and fan it out to all configured sinks, on the
     /// background writer thread.
     fn handle_writer_msg(sinks: &mut WriterSinks, msg: WriterMsg) {
@@ -287,6 +296,17 @@ impl DecisionBuffer {
     pub fn get_recent(&self, limit: usize) -> Vec<DecisionLogEntry> {
         let entries = self.entries.read();
         entries.iter().rev().take(limit).cloned().collect()
+    }
+
+    /// Find a single decision by its `decision_id` (most recent match). Scans
+    /// the in-memory ring — for older decisions, query the central store.
+    pub fn find_by_decision_id(&self, decision_id: &str) -> Option<DecisionLogEntry> {
+        let entries = self.entries.read();
+        entries
+            .iter()
+            .rev()
+            .find(|e| e.decision_id == decision_id)
+            .cloned()
     }
 
     /// Get decisions with pagination

@@ -111,6 +111,27 @@ pub async fn get_decisions(
     })))
 }
 
+/// Explain a single decision by `decision_id` — returns the full record
+/// including the `input_data` snapshot (the resolved principal/resource
+/// attributes the decision branched on) when the explain tier was enabled.
+#[instrument(skip(state))]
+pub async fn get_decision_by_id(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path(decision_id): axum::extract::Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let Some(buffer) = &state.decision_buffer else {
+        return Ok(Json(json!({
+            "enabled": false,
+            "message": "Decision logging is not enabled. Set REAPER_DECISION_LOG_ENABLED=true"
+        })));
+    };
+
+    match buffer.find_by_decision_id(&decision_id) {
+        Some(entry) => Ok(Json(json!({ "enabled": true, "decision": entry }))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
 /// Get decision buffer statistics.
 #[instrument(skip(state))]
 pub async fn get_decision_stats(

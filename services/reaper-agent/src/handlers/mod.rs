@@ -41,4 +41,6 @@ pub use entities::{
 };
 
 // Re-export decision handlers
-pub use decisions::{export_decisions, get_decision_stats, get_decisions, DecisionQueryParams};
+pub use decisions::{
+    export_decisions, get_decision_by_id, get_decision_stats, get_decisions, DecisionQueryParams,
+};
