@@ -17,6 +17,8 @@ uuid = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

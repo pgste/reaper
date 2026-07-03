@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod bundle_signing;
 pub mod config;
 pub mod error;
 pub mod platform;
