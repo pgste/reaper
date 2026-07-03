@@ -1,7 +1,7 @@
 //! Internal helper methods for DeploymentService
 
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::db::repositories::{BundleRepository, DeploymentRepository};
@@ -218,7 +218,36 @@ impl DeploymentService {
             });
         }
 
-        // Mark wave as completed (in a real system, this would wait for agent confirmations)
+        // Record a pending deployment per target agent so the plane can track
+        // (and, when confirmation is required, gate on) each agent's actual
+        // apply status reported back via /deployments/report.
+        let dep_repo = crate::db::repositories::AgentDeploymentRepository::new(&self.db);
+        for agent_id in &wave.target_agents {
+            let deployment = crate::domain::agent_deployment::AgentDeployment::new(
+                *agent_id,
+                rollout.bundle_id,
+                Some(rollout.id),
+            );
+            if let Err(e) = dep_repo.create(&deployment).await {
+                warn!(agent_id = %agent_id, error = %e,
+                    "Failed to record pending agent deployment");
+            }
+        }
+
+        // When agent confirmation is required, DO NOT optimistically complete —
+        // the wave stays `Deploying` until agents report their applied status
+        // (see DeploymentService::record_agent_report). This is the default.
+        if self.require_agent_confirmation {
+            debug!(
+                rollout_id = %rollout.id,
+                wave_number = wave.wave_number,
+                "Wave deploying; awaiting agent confirmations"
+            );
+            return Ok(());
+        }
+
+        // Optimistic path (require_agent_confirmation=false): mark completed
+        // immediately without waiting for confirmations.
         repo.update_wave_status(wave.id, WaveStatus::Completed)
             .await?;
 

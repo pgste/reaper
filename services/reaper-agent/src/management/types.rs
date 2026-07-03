@@ -119,6 +119,17 @@ pub struct BundleDownload {
     pub signature: Option<reaper_core::bundle_signing::BundleSignature>,
 }
 
+/// Report of the bundle version this agent applied (or failed to apply), sent
+/// back to the management plane so rollouts confirm the actually-applied version.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeploymentReportRequest {
+    pub bundle_id: Uuid,
+    pub checksum: Option<String>,
+    /// "deployed" or "failed".
+    pub status: String,
+    pub error: Option<String>,
+}
+
 /// Data bundle download result
 #[derive(Debug)]
 pub struct DataBundleDownload {

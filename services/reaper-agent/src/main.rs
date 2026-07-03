@@ -343,9 +343,13 @@ async fn main() -> anyhow::Result<()> {
                 // Spawn bundle update handler
                 let policy_engine_for_updates = policy_engine.clone();
                 let _data_store_for_updates = data_store.clone();
+                let client_for_updates = client.clone();
                 tokio::spawn(async move {
                     while update_rx.changed().await.is_ok() {
-                        if let Some(update) = update_rx.borrow().clone() {
+                        // Clone out of the watch guard immediately so it is not
+                        // held across the awaits below (deploy report).
+                        let maybe_update = update_rx.borrow().clone();
+                        if let Some(update) = maybe_update {
                             info!(
                                 bundle_id = %update.bundle_id,
                                 checksum = %update.checksum,
@@ -402,9 +406,41 @@ async fn main() -> anyhow::Result<()> {
                                         failed = failed,
                                         "Bundle deployment complete"
                                     );
+
+                                    // Confirm the applied version to the control
+                                    // plane so rollouts converge on real state.
+                                    let success = failed == 0;
+                                    let err = (!success)
+                                        .then(|| format!("{failed} policy(ies) failed to deploy"));
+                                    if let Err(e) = client_for_updates
+                                        .report_deployment(
+                                            update.bundle_id,
+                                            &update.checksum,
+                                            success,
+                                            err.as_deref(),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %e,
+                                            "Failed to report deployment status to management");
+                                    }
                                 }
                                 Err(e) => {
                                     error!(error = %e, "Failed to parse management bundle");
+                                    // Report the failure so the rollout doesn't
+                                    // wait on this agent indefinitely.
+                                    if let Err(re) = client_for_updates
+                                        .report_deployment(
+                                            update.bundle_id,
+                                            &update.checksum,
+                                            false,
+                                            Some("failed to parse management bundle"),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %re,
+                                            "Failed to report deployment failure to management");
+                                    }
                                 }
                             }
                         }

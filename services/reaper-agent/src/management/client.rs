@@ -220,6 +220,61 @@ impl ManagementClient {
         Ok(result)
     }
 
+    /// Report the bundle version this agent just applied (or failed to apply)
+    /// so the control plane can confirm the actually-applied version.
+    pub async fn report_deployment(
+        &self,
+        bundle_id: Uuid,
+        checksum: &str,
+        success: bool,
+        error: Option<&str>,
+    ) -> ManagementResult<()> {
+        let state = self.state.read().await;
+        let agent_id = state.agent_id.ok_or(ManagementError::NotRegistered)?;
+        let token = state
+            .token
+            .as_ref()
+            .ok_or(ManagementError::NotRegistered)?
+            .clone();
+        drop(state);
+
+        let url = format!(
+            "{}/orgs/{}/agents/{}/deployments/report",
+            self.base_url, self.org, agent_id
+        );
+
+        let request = DeploymentReportRequest {
+            bundle_id,
+            checksum: Some(checksum.to_string()),
+            status: if success { "deployed" } else { "failed" }.to_string(),
+            error: error.map(|s| s.to_string()),
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ManagementError::AuthFailed("Token expired".to_string()));
+        }
+        if !status.is_success() {
+            let message = response.text().await.unwrap_or_default();
+            return Err(ManagementError::ServerError {
+                status: status.as_u16(),
+                message,
+            });
+        }
+
+        debug!(bundle_id = %bundle_id, success, "Reported deployment status");
+        Ok(())
+    }
+
     /// Get the currently promoted bundle info
     pub async fn get_promoted_bundle(&self) -> ManagementResult<Option<BundleInfo>> {
         let state = self.state.read().await;

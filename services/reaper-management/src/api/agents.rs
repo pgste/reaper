@@ -35,6 +35,28 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         // Heartbeat endpoint
         .route("/orgs/{org}/agents/{agent_id}/heartbeat", post(heartbeat))
+        // Deploy-status report: agent confirms the bundle version it applied
+        .route(
+            "/orgs/{org}/agents/{agent_id}/deployments/report",
+            post(report_deployment),
+        )
+}
+
+/// Agent's report of the bundle version it just applied (or failed to apply).
+#[derive(Debug, Deserialize)]
+pub struct DeploymentReportRequest {
+    pub bundle_id: Uuid,
+    #[serde(default)]
+    pub checksum: Option<String>,
+    /// "deployed" or "failed".
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeploymentReportResponse {
+    pub acknowledged: bool,
 }
 
 /// Request to register an agent
@@ -358,4 +380,55 @@ async fn heartbeat(
         acknowledged: true,
         server_time: chrono::Utc::now(),
     }))
+}
+
+/// Agent reports the bundle version it applied. Records the actual per-agent
+/// deployment state and, when confirmation gating is on, advances the owning
+/// rollout based on real confirmations instead of optimistic completion.
+async fn report_deployment(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, agent_id)): Path<(String, Uuid)>,
+    Json(request): Json<DeploymentReportRequest>,
+) -> ApiResult<Json<DeploymentReportResponse>> {
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, &org).await?;
+
+    // The agent's JWT must belong to this org.
+    if user.org_id != organization.id && !user.has_permission(Scope::Admin) {
+        return Err(ApiError::Forbidden(
+            "Cannot report deployment for other organizations".to_string(),
+        ));
+    }
+
+    // Verify the agent exists and belongs to this org.
+    let agent_repo = AgentRepository::new(&state.db);
+    let agent = agent_repo
+        .get_by_id(agent_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Agent not found".to_string()))?;
+    if agent.org_id != organization.id {
+        return Err(ApiError::NotFound("Agent not found".to_string()));
+    }
+
+    let status: crate::domain::agent_deployment::AgentDeploymentStatus =
+        request.status.parse().map_err(|_| {
+            ApiError::Validation(format!(
+                "invalid status '{}' (expected deployed|failed)",
+                request.status
+            ))
+        })?;
+
+    crate::deployment::DeploymentService::new(state.db.clone())
+        .record_agent_report(
+            agent_id,
+            request.bundle_id,
+            status,
+            request.error.clone(),
+            &state,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("record deployment report: {e}")))?;
+
+    Ok(Json(DeploymentReportResponse { acknowledged: true }))
 }

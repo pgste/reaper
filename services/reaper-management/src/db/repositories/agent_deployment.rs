@@ -122,6 +122,33 @@ impl<'a> AgentDeploymentRepository<'a> {
         row.map(|r| self.row_to_deployment(r)).transpose()
     }
 
+    /// Get the most recent deployment record for a specific agent + bundle.
+    pub async fn get_latest_for_agent_bundle(
+        &self,
+        agent_id: Uuid,
+        bundle_id: Uuid,
+    ) -> Result<Option<AgentDeployment>, DatabaseError> {
+        let pool = self
+            .db
+            .sqlite_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
+
+        let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
+            sqlx::query_as(
+                r#"
+                SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
+                FROM agent_deployments WHERE agent_id = ? AND bundle_id = ?
+                ORDER BY created_at DESC LIMIT 1
+                "#,
+            )
+            .bind(agent_id.to_string())
+            .bind(bundle_id.to_string())
+            .fetch_optional(pool)
+            .await?;
+
+        row.map(|r| self.row_to_deployment(r)).transpose()
+    }
+
     /// Update deployment status
     pub async fn update_status(
         &self,
