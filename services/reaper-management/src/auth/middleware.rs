@@ -42,6 +42,7 @@ pub struct AuthenticatedUser {
 pub enum AuthMethod {
     ApiKey { key_id: Uuid },
     Jwt { token_id: String },
+    Mtls { cert_id: Uuid },
 }
 
 impl AuthenticatedUser {
@@ -52,6 +53,27 @@ impl AuthenticatedUser {
             org_id: api_key.org_id,
             permissions: Permission::from_strings(&api_key.scopes),
             auth_method: AuthMethod::ApiKey { key_id: api_key.id },
+        }
+    }
+
+    /// Create from a validated client certificate (mTLS).
+    ///
+    /// The certificate has already passed [`crate::auth::mtls::validate_certificate`]
+    /// (registered, not revoked, within validity, agent binding checked), so it
+    /// is granted the standard agent scopes for its organization.
+    pub fn from_certificate(cert: &crate::auth::mtls::ClientCertificate) -> Self {
+        let scopes: Vec<String> = super::scopes::Scope::agent_defaults()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        Self {
+            id: cert
+                .agent_id
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| cert.id.to_string()),
+            org_id: cert.org_id,
+            permissions: Permission::from_strings(&scopes),
+            auth_method: AuthMethod::Mtls { cert_id: cert.id },
         }
     }
 
@@ -129,6 +151,17 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
         let config = state.config.clone();
         let jwks_validator = state.jwks_validator.clone();
 
+        // mTLS client-cert fingerprint, only when a trusted-proxy header name is
+        // configured (mTLS auth is disabled by default).
+        let mtls_fingerprint = config
+            .auth
+            .mtls_fingerprint_header
+            .as_ref()
+            .and_then(|name| parts.headers.get(name.as_str()))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         async move {
             // Try API key first
             if let Some(api_key_value) = api_key_header {
@@ -150,6 +183,25 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
                     .into_response()
                 })? {
                     return Ok(RequireAuth(AuthenticatedUser::from_api_key(&api_key)));
+                }
+            }
+
+            // Try mTLS client certificate (only when configured). The certificate
+            // is checked against the DB for registration, revocation, validity
+            // window, and agent binding — so revoking a cert immediately denies it.
+            if let Some(fingerprint) = mtls_fingerprint {
+                match crate::auth::mtls::validate_certificate(&db, &fingerprint, None).await {
+                    Ok(cert) => {
+                        return Ok(RequireAuth(AuthenticatedUser::from_certificate(&cert)));
+                    }
+                    Err(e) => {
+                        tracing::warn!("mTLS certificate rejected: {}", e);
+                        return Err(AuthError {
+                            error: "invalid_certificate".to_string(),
+                            message: "Client certificate is not valid".to_string(),
+                        }
+                        .into_response());
+                    }
                 }
             }
 

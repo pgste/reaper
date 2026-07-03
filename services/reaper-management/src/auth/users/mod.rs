@@ -12,7 +12,7 @@ use crate::db::Database;
 
 pub use password::{
     generate_reset_token, generate_session_token, generate_verification_token, hash_password,
-    hash_token, verify_password,
+    hash_token, verify_dummy_password, verify_password,
 };
 pub use types::{
     EmailVerificationToken, OrgRole, PasswordResetToken, Session, User, UserError, UserOrg,

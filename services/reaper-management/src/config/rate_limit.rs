@@ -25,6 +25,15 @@ pub struct RateLimitConfig {
     /// API requests per org per minute
     #[serde(default = "default_api_per_org_per_minute")]
     pub api_per_org_per_minute: u32,
+    /// Whether to trust client-supplied forwarding headers (X-Forwarded-For,
+    /// X-Real-IP, Forwarded) for the client IP used in per-IP rate limits.
+    ///
+    /// Default false: those headers are trivially spoofable, so trusting them
+    /// lets an attacker bypass per-IP login/signup limits by rotating the
+    /// header value. Only enable this when the server sits behind a trusted
+    /// reverse proxy that sets these headers.
+    #[serde(default = "default_trust_proxy_headers")]
+    pub trust_proxy_headers: bool,
 }
 
 impl Default for RateLimitConfig {
@@ -36,6 +45,7 @@ impl Default for RateLimitConfig {
             signup_per_hour: default_signup_per_hour(),
             login_per_minute: default_login_per_minute(),
             api_per_org_per_minute: default_api_per_org_per_minute(),
+            trust_proxy_headers: default_trust_proxy_headers(),
         }
     }
 }
@@ -92,4 +102,8 @@ fn default_login_per_minute() -> u32 {
 
 fn default_api_per_org_per_minute() -> u32 {
     1000
+}
+
+fn default_trust_proxy_headers() -> bool {
+    false
 }

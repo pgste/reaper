@@ -167,24 +167,37 @@ pub async fn login(
 
     // Find user by email
     let user_repo = UserRepository::new(&state.db);
-    let user = user_repo
-        .find_by_email(&request.email)
-        .await?
-        .ok_or_else(|| ApiError::Unauthorized("Invalid email or password".to_string()))?;
+    let user_opt = user_repo.find_by_email(&request.email).await?;
 
-    // Check account status
+    // Verify the password with uniform work whether or not the account exists.
+    // For a missing account we still run an Argon2 verify against a dummy hash,
+    // so response time does not reveal which emails are registered.
+    let password_ok = match &user_opt {
+        Some(user) => user.verify_password(&request.password),
+        None => {
+            crate::auth::users::verify_dummy_password(&request.password);
+            false
+        }
+    };
+
+    // Invalid email OR password -> one generic error, regardless of which.
+    let user = match user_opt {
+        Some(user) if password_ok => user,
+        _ => {
+            return Err(ApiError::Unauthorized(
+                "Invalid email or password".to_string(),
+            ))
+        }
+    };
+
+    // Only after the credentials are confirmed do we surface account-status
+    // problems. Returning these before verifying the password would let anyone
+    // with a valid email learn the account exists (and its status).
     user.can_login().map_err(|e| match e {
         UserError::AccountSuspended => ApiError::Forbidden("Account suspended".to_string()),
         UserError::EmailNotVerified => ApiError::Forbidden("Email not verified".to_string()),
         _ => ApiError::Unauthorized("Invalid email or password".to_string()),
     })?;
-
-    // Verify password
-    if !user.verify_password(&request.password) {
-        return Err(ApiError::Unauthorized(
-            "Invalid email or password".to_string(),
-        ));
-    }
 
     // Update last login
     user_repo.update_last_login(user.id).await?;

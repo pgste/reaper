@@ -28,6 +28,20 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
+/// Run a password verification against a fixed dummy hash and return `false`.
+///
+/// Call this on a login attempt for a non-existent account so the Argon2 cost
+/// is paid regardless of whether the account exists. Without it, "user not
+/// found" returns immediately while "wrong password" pays for an Argon2 verify,
+/// letting an attacker enumerate valid accounts by response time.
+pub fn verify_dummy_password(password: &str) -> bool {
+    use std::sync::OnceLock;
+    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+    let hash = DUMMY_HASH
+        .get_or_init(|| hash_password("reaper::constant-time::dummy-password").unwrap_or_default());
+    verify_password(password, hash)
+}
+
 /// Generate a session token (rst_ prefix for "reaper session token")
 pub fn generate_session_token() -> String {
     let mut rng = rand::thread_rng();

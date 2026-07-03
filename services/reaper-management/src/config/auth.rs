@@ -18,6 +18,15 @@ pub struct AuthConfig {
     pub jwt_secret_file: Option<PathBuf>,
     #[serde(default = "default_jwt_expiry_hours")]
     pub jwt_expiry_hours: u64,
+    /// Header carrying the verified client-certificate fingerprint, set by a
+    /// trusted reverse proxy that terminates mTLS (e.g. "x-client-cert-fingerprint").
+    ///
+    /// `None` (default) disables mTLS client authentication entirely. Only set
+    /// this when a trusted proxy performs the TLS client-cert verification AND
+    /// strips any client-supplied copy of this header — otherwise a caller could
+    /// forge the header and authenticate as any registered agent.
+    #[serde(default)]
+    pub mtls_fingerprint_header: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -29,6 +38,7 @@ impl Default for AuthConfig {
             jwt_secret: None,
             jwt_secret_file: None,
             jwt_expiry_hours: default_jwt_expiry_hours(),
+            mtls_fingerprint_header: None,
         }
     }
 }
@@ -36,17 +46,26 @@ impl Default for AuthConfig {
 impl AuthConfig {
     /// Validate auth configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Validate JWT secret if provided
-        if let Some(secret) = &self.jwt_secret {
-            if secret.len() < 32 {
-                return Err(ConfigError::JwtSecretTooShort);
-            }
-        }
-
-        // Validate JWT secret file if provided
+        // Validate JWT secret file path if provided
         if let Some(path) = &self.jwt_secret_file {
             if !path.exists() {
                 return Err(ConfigError::PathNotFound(path.display().to_string()));
+            }
+        }
+
+        // A JWT secret is mandatory: it signs session/agent JWTs, keys the OAuth
+        // token AEAD, and HMACs the OAuth state. Running without one (previously
+        // allowed via `jwt_secret: None`) silently degraded all three to an
+        // empty/known key. Require a resolvable secret of at least 32 bytes.
+        match self.get_jwt_secret() {
+            Some(secret) if secret.len() >= 32 => {}
+            Some(_) => return Err(ConfigError::JwtSecretTooShort),
+            None => {
+                return Err(ConfigError::MissingRequired(
+                    "auth.jwt_secret (or auth.jwt_secret_file) must be set to a value of at \
+                     least 32 characters"
+                        .to_string(),
+                ))
             }
         }
 
