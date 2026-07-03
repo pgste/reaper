@@ -120,6 +120,17 @@ enum Commands {
         verbose: bool,
     },
 
+    /// Generate a bundle signing keypair (Ed25519 or ECDSA P-256)
+    Keygen {
+        /// Signature algorithm: ed25519-sha256 or ecdsa-p256-sha256
+        #[arg(long, default_value = "ed25519-sha256")]
+        algorithm: String,
+
+        /// Key id advertised in signatures (for rotation)
+        #[arg(long, default_value = "default")]
+        key_id: String,
+    },
+
     /// Policy management commands (platform/agent)
     Policy {
         #[command(subcommand)]
@@ -680,6 +691,29 @@ fn handle_compile(
 }
 
 /// Handle: reaper validate
+fn handle_keygen(algorithm: &str, key_id: &str) -> anyhow::Result<()> {
+    use reaper_core::bundle_signing::{SigAlgorithm, SigningKey};
+
+    let alg = SigAlgorithm::parse(algorithm)
+        .map_err(|e| anyhow::anyhow!("{e} (use ed25519-sha256 or ecdsa-p256-sha256)"))?;
+    let key = SigningKey::generate(alg);
+
+    println!("🔑 Reaper bundle signing keypair ({algorithm}), key_id={key_id}\n");
+    println!("── Control plane (reaper-management) — KEEP THE PRIVATE KEY SECRET ──");
+    println!("REAPER_BUNDLE_SIGNING_KEY={}", key.private_key_hex());
+    println!("REAPER_BUNDLE_SIGNING_KEY_ID={key_id}");
+    println!("REAPER_BUNDLE_SIGNING_ALGORITHM={algorithm}");
+    println!("\n── Agents (reaper-agent) — distribute the PUBLIC key ──");
+    println!(
+        "REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY={}",
+        key.public_key_hex()
+    );
+    println!("REAPER_MANAGEMENT_BUNDLE_SIGNATURE_ALGORITHM={algorithm}");
+    println!("REAPER_MANAGEMENT_BUNDLE_KEY_ID={key_id}");
+    println!("REAPER_MANAGEMENT_REQUIRE_SIGNED_BUNDLES=true");
+    Ok(())
+}
+
 fn handle_validate(
     policy_path: &str,
     data_path: Option<&str>,
@@ -1031,6 +1065,11 @@ async fn main() -> anyhow::Result<()> {
             ref data,
             verbose,
         } => handle_validate(policy, data.as_deref(), verbose)?,
+
+        Commands::Keygen {
+            ref algorithm,
+            ref key_id,
+        } => handle_keygen(algorithm, key_id)?,
 
         Commands::Policy { ref action } => handle_policy_action(action, &cli, &client).await?,
         Commands::Agent { ref action } => handle_agent_action(action, &cli, &client).await?,

@@ -146,6 +146,29 @@ impl SigningKey {
         }
     }
 
+    /// Generate a fresh random signing key for `alg` from the OS RNG.
+    pub fn generate(alg: SigAlgorithm) -> Self {
+        loop {
+            let mut seed = [0u8; 32];
+            getrandom::getrandom(&mut seed).expect("OS RNG unavailable");
+            // For Ed25519 any 32 bytes is a valid seed; for P-256 a random
+            // 32-byte scalar is valid with overwhelming probability (retry the
+            // astronomically rare invalid case).
+            if let Ok(key) = SigningKey::from_hex(alg, &to_hex(&seed)) {
+                return key;
+            }
+        }
+    }
+
+    /// Hex-encode the private key (Ed25519 seed / P-256 scalar) for storage in
+    /// the control-plane config. Keep this secret.
+    pub fn private_key_hex(&self) -> String {
+        match self {
+            SigningKey::Ed25519(k) => to_hex(k.as_bytes()),
+            SigningKey::EcdsaP256(k) => to_hex(&k.to_bytes()),
+        }
+    }
+
     /// Hex-encode the matching public key (for config/distribution).
     /// Ed25519: 32-byte key. P-256: compressed SEC1 point (33 bytes).
     pub fn public_key_hex(&self) -> String {
@@ -462,5 +485,19 @@ mod tests {
         let json = serde_json::to_string(&sig).unwrap();
         let back: BundleSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(sig, back);
+    }
+
+    #[test]
+    fn generate_produces_working_keypair_both_algs() {
+        for alg in [SigAlgorithm::Ed25519Sha256, SigAlgorithm::EcdsaP256Sha256] {
+            let key = SigningKey::generate(alg);
+            // Private key hex reloads to the same public key.
+            let reloaded = SigningKey::from_hex(alg, &key.private_key_hex()).unwrap();
+            assert_eq!(reloaded.public_key_hex(), key.public_key_hex());
+            // The generated key signs and its public key verifies.
+            let sig = sign_bundle(b"data", &key, "k");
+            let vk = VerifyingKey::from_hex(alg, &key.public_key_hex()).unwrap();
+            verify_bundle(b"data", &sig, &vk, Some("k")).unwrap();
+        }
     }
 }
