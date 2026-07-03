@@ -24,7 +24,7 @@ pub use evaluate::{batch_evaluate_policy, evaluate_policy, fast_evaluate_policy}
 // Re-export policy management handlers
 pub use policies::{
     deploy_bundle, deploy_compiled_policy, deploy_policy, get_policy_current_version,
-    get_policy_versions, list_policies, DeployCompiledPolicyRequest,
+    get_policy_versions, list_policies, load_bundles_atomic, DeployCompiledPolicyRequest,
 };
 
 // Re-export data handlers

@@ -30,6 +30,7 @@ pub use types::{
     PolicySourceMetadata, PolicyVersion, SimpleAction, SimpleRule, StagedPackage,
 };
 
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use reaper_core::{PolicyId, ReaperError, Result};
@@ -38,6 +39,28 @@ use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::reap::PolicyBundle;
+
+/// The active policy set: the id->policy map and the name->id index, held
+/// together in one snapshot so they can be swapped **atomically**.
+///
+/// Single-policy hot-swaps mutate the current snapshot in place (DashMap gives
+/// lock-free per-entry updates). A full bundle load builds a brand-new
+/// `ActiveSet` and swaps the `ArcSwap` pointer, so readers observe either the
+/// entire old set or the entire new set — never a mix — and any policies not in
+/// the new bundle are dropped in the same atomic step.
+pub(crate) struct ActiveSet {
+    pub(crate) policies: DashMap<PolicyId, Arc<EnhancedPolicy>>,
+    pub(crate) names: DashMap<String, PolicyId>,
+}
+
+impl ActiveSet {
+    fn new() -> Self {
+        Self {
+            policies: DashMap::new(),
+            names: DashMap::new(),
+        }
+    }
+}
 
 /// High-performance policy engine with atomic hot-swapping
 ///
@@ -49,10 +72,9 @@ use crate::reap::PolicyBundle;
 /// - Package indexing for grouping related policies
 #[derive(Clone)]
 pub struct PolicyEngine {
-    /// Active policies - lock-free for sub-microsecond lookups
-    pub(crate) active_policies: Arc<DashMap<PolicyId, Arc<EnhancedPolicy>>>,
-    /// Policy lookup by name for convenience
-    pub(crate) policy_names: Arc<DashMap<String, PolicyId>>,
+    /// Active policy set (id->policy + name->id), swappable as one atomic unit
+    /// for pure bundle loads. Reads are lock-free (ArcSwap load + DashMap get).
+    pub(crate) active: Arc<ArcSwap<ActiveSet>>,
     /// Package-to-policies index for package-based evaluation
     pub(crate) package_index: Arc<DashMap<String, Vec<PolicyId>>>,
     /// Default policy for unknown policies
@@ -72,8 +94,8 @@ pub struct PolicyEngine {
 impl std::fmt::Debug for PolicyEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PolicyEngine")
-            .field("active_policies_count", &self.active_policies.len())
-            .field("policy_names_count", &self.policy_names.len())
+            .field("active_policies_count", &self.active.load().policies.len())
+            .field("policy_names_count", &self.active.load().names.len())
             .field("package_count", &self.package_index.len())
             .field("has_default_policy", &self.default_policy.read().is_some())
             .finish()
@@ -84,8 +106,7 @@ impl PolicyEngine {
     pub fn new() -> Self {
         info!("Initializing Reaper Policy Engine with lock-free storage");
         Self {
-            active_policies: Arc::new(DashMap::new()),
-            policy_names: Arc::new(DashMap::new()),
+            active: Arc::new(ArcSwap::from_pointee(ActiveSet::new())),
             package_index: Arc::new(DashMap::new()),
             default_policy: Arc::new(RwLock::new(None)),
             versions: Arc::new(DashMap::new()),
@@ -110,15 +131,18 @@ impl PolicyEngine {
             policy_name, policy_arc.version, package_name
         );
 
+        // Mutate the current active snapshot in place (lock-free per-entry).
+        let active = self.active.load();
+
         // Check if this policy already exists (for package index update)
-        let old_package = self
-            .active_policies
+        let old_package = active
+            .policies
             .get(&policy_id)
             .map(|p| p.package().to_string());
 
         // Atomic insertion - old policy is automatically dropped
-        self.active_policies.insert(policy_id, policy_arc.clone());
-        self.policy_names.insert(policy_name.clone(), policy_id);
+        active.policies.insert(policy_id, policy_arc.clone());
+        active.names.insert(policy_name.clone(), policy_id);
 
         // Update package index
         // If the policy was in a different package, remove from old package
@@ -149,8 +173,9 @@ impl PolicyEngine {
     /// Remove a policy atomically
     #[instrument(skip(self), fields(policy_id = %policy_id))]
     pub fn remove_policy(&self, policy_id: &PolicyId) -> Result<EnhancedPolicy> {
-        let removed_policy = self
-            .active_policies
+        let active = self.active.load();
+        let removed_policy = active
+            .policies
             .remove(policy_id)
             .map(|(_, policy)| policy)
             .ok_or_else(|| ReaperError::PolicyNotFound {
@@ -158,7 +183,7 @@ impl PolicyEngine {
             })?;
 
         // Remove from name lookup
-        self.policy_names.retain(|_, &mut v| v != *policy_id);
+        active.names.retain(|_, &mut v| v != *policy_id);
 
         // Remove from package index
         let package_name = removed_policy.package().to_string();
@@ -175,24 +200,68 @@ impl PolicyEngine {
 
     /// Get policy by ID - lock-free for maximum performance
     pub fn get_policy(&self, policy_id: &PolicyId) -> Option<Arc<EnhancedPolicy>> {
-        self.active_policies
+        self.active
+            .load()
+            .policies
             .get(policy_id)
             .map(|entry| entry.value().clone())
     }
 
     /// Get policy by name
     pub fn get_policy_by_name(&self, name: &str) -> Option<Arc<EnhancedPolicy>> {
-        self.policy_names
+        // Resolve name->id and id->policy against the SAME snapshot so a
+        // concurrent full-set swap can't leave the two indexes inconsistent.
+        let active = self.active.load();
+        active
+            .names
             .get(name)
-            .and_then(|entry| self.get_policy(entry.value()))
+            .and_then(|id| active.policies.get(id.value()).map(|p| p.value().clone()))
     }
 
     /// List all active policies
     pub fn list_policies(&self) -> Vec<Arc<EnhancedPolicy>> {
-        self.active_policies
+        self.active
+            .load()
+            .policies
             .iter()
             .map(|entry| entry.value().clone())
             .collect()
+    }
+
+    /// Atomically replace the **entire** active policy set with `policies`.
+    ///
+    /// This is the "pure bundle load": a brand-new [`ActiveSet`] is built and
+    /// swapped in a single atomic step, so any policy that was active but is not
+    /// in `policies` is removed as part of the same swap (no floating leftovers),
+    /// and no reader ever observes a partial set. The package index is rebuilt to
+    /// match. Each policy must already have its evaluator built.
+    pub fn replace_all_policies(&self, policies: Vec<EnhancedPolicy>) -> Result<()> {
+        let new_set = ActiveSet::new();
+        let new_packages: DashMap<String, Vec<PolicyId>> = DashMap::new();
+
+        for policy in policies {
+            let id = policy.id;
+            let name = policy.name.clone();
+            let package = policy.package().to_string();
+            new_set.policies.insert(id, Arc::new(policy));
+            new_set.names.insert(name, id);
+            new_packages.entry(package).or_default().push(id);
+        }
+
+        let count = new_set.policies.len();
+
+        // Atomic swap of the whole set — floating policies drop here.
+        self.active.store(Arc::new(new_set));
+
+        // Rebuild the package index to match the new set.
+        self.package_index.clear();
+        for entry in new_packages.iter() {
+            self.package_index
+                .insert(entry.key().clone(), entry.value().clone());
+        }
+
+        info!("Atomically replaced active policy set: {} policies", count);
+        Ok(())
     }
 
     /// Set default policy for unknown policy requests
@@ -267,7 +336,7 @@ impl PolicyEngine {
     /// Get engine statistics for monitoring
     pub fn get_stats(&self) -> PolicyEngineStats {
         PolicyEngineStats {
-            total_policies: self.active_policies.len(),
+            total_policies: self.active.load().policies.len(),
             has_default_policy: self.default_policy.read().is_some(),
         }
     }

@@ -227,7 +227,8 @@ pub async fn deploy_compiled_policy(
     // AST interpreter, matching bootstrap loading and restart restore so the
     // same policy behaves identically however it is deployed.
     let mut enhanced_policy = EnhancedPolicy {
-        id: uuid::Uuid::new_v4(),
+        // Stable id from the name so redeploying this policy overwrites in place.
+        id: policy_engine::stable_policy_id(&payload.policy_name),
         version: 1,
         name: payload.policy_name.clone(),
         description: "Compiled .reap policy".to_string(),
@@ -379,6 +380,76 @@ pub async fn deploy_bundle(
     };
 
     Ok(Json(response))
+}
+
+/// Atomically load a set of bundles as the ENTIRE active policy set.
+///
+/// Unlike `deploy_bundle` (which upserts a single policy and leaves the rest
+/// untouched), this replaces the whole set in one atomic swap: the supplied
+/// bundles become the complete active state and any policy not present is
+/// dropped. This is the "pure bundle load" — build the bundles that represent
+/// your desired state, POST them here, and the agent's policy set matches
+/// exactly, with no floating leftovers and no window where a reader sees a
+/// partial set.
+#[instrument(skip(state, payload))]
+pub async fn load_bundles_atomic(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<crate::types::LoadBundlesRequest>,
+) -> Result<Json<crate::types::LoadBundlesResponse>, (StatusCode, String)> {
+    info!(
+        "Atomic bundle load: {} bundle(s) -> full replace",
+        payload.bundles.len()
+    );
+
+    // Parse + compile every bundle BEFORE swapping anything, so a bad bundle
+    // fails the whole load and leaves the current set untouched.
+    let mut policies = Vec::with_capacity(payload.bundles.len());
+    for (i, bytes) in payload.bundles.iter().enumerate() {
+        let bundle = PolicyBundle::from_bytes(bytes).map_err(|e| {
+            ERRORS_TOTAL.with_label_values(&["invalid_bundle"]).inc();
+            (StatusCode::BAD_REQUEST, format!("Bundle {i} invalid: {e}"))
+        })?;
+        let policy = bundle
+            .to_enhanced_policy_with_store(state.data_store.clone())
+            .map_err(|e| {
+                ERRORS_TOTAL
+                    .with_label_values(&["bundle_compile_failed"])
+                    .inc();
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Bundle {i} failed to compile: {e}"),
+                )
+            })?;
+        policies.push(policy);
+    }
+
+    let count = policies.len();
+
+    // Single atomic swap of the whole set.
+    state
+        .policy_engine
+        .replace_all_policies(policies)
+        .map_err(|e| {
+            ERRORS_TOTAL
+                .with_label_values(&["bundle_deployment_failed"])
+                .inc();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Atomic load failed: {e}"),
+            )
+        })?;
+
+    // The whole set changed — drop any cached decisions.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
+    ACTIVE_POLICIES.set(state.policy_engine.get_stats().total_policies as f64);
+
+    Ok(Json(crate::types::LoadBundlesResponse {
+        status: "loaded".to_string(),
+        active_policies: count,
+        deployed_at: chrono::Utc::now().to_rfc3339(),
+    }))
 }
 
 #[cfg(test)]

@@ -31,13 +31,14 @@ impl PolicyEngine {
     /// Returns a vector of policies belonging to the specified package.
     /// Returns an empty vector if the package doesn't exist.
     pub fn get_policies_by_package(&self, package: &str) -> Vec<Arc<EnhancedPolicy>> {
+        let active = self.active.load();
         self.package_index
             .get(package)
             .map(|entry| {
                 entry
                     .value()
                     .iter()
-                    .filter_map(|id| self.active_policies.get(id).map(|p| p.value().clone()))
+                    .filter_map(|id| active.policies.get(id).map(|p| p.value().clone()))
                     .collect()
             })
             .unwrap_or_default()
@@ -47,11 +48,12 @@ impl PolicyEngine {
     ///
     /// Returns package metadata including policy count and names.
     pub fn get_package_info(&self, package: &str) -> Option<PackageInfo> {
+        let active = self.active.load();
         self.package_index.get(package).map(|entry| {
             let policy_ids = entry.value();
             let policy_names: Vec<String> = policy_ids
                 .iter()
-                .filter_map(|id| self.active_policies.get(id).map(|p| p.name.clone()))
+                .filter_map(|id| active.policies.get(id).map(|p| p.name.clone()))
                 .collect();
             PackageInfo {
                 name: package.to_string(),
@@ -155,7 +157,8 @@ impl PolicyEngine {
         let mut policies_evaluated = 0;
         let packages: Vec<String> = self.list_packages();
 
-        for policy_entry in self.active_policies.iter() {
+        let active = self.active.load();
+        for policy_entry in active.policies.iter() {
             let policy = policy_entry.value();
             policies_evaluated += 1;
 

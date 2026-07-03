@@ -127,6 +127,26 @@ pub struct DeployBundleRequest {
     pub force: bool,
 }
 
+/// Atomic full-replace bundle-load request.
+///
+/// The supplied bundles become the *entire* active policy set — any policy not
+/// in this request is removed as part of the same atomic swap. Send one or more
+/// `.rbb` bundles that together represent the complete desired state.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoadBundlesRequest {
+    /// Raw `.rbb` bundle bytes; one entry per policy.
+    pub bundles: Vec<Vec<u8>>,
+}
+
+/// Response for an atomic full-replace bundle load.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadBundlesResponse {
+    pub status: String,
+    /// Number of policies now active (equals the number of bundles loaded).
+    pub active_policies: usize,
+    pub deployed_at: String,
+}
+
 /// Bundle deployment response.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeployBundleResponse {

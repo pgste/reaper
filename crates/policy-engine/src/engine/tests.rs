@@ -755,3 +755,56 @@ policy restart_test {
         PolicyAction::Deny
     );
 }
+
+#[test]
+fn test_replace_all_policies_is_atomic_full_replace() {
+    let engine = PolicyEngine::new();
+
+    // Deploy two policies the normal (additive) way.
+    for name in ["policy_a", "policy_b"] {
+        let mut p = EnhancedPolicy::new(
+            name.to_string(),
+            String::new(),
+            vec![PolicyRule {
+                action: PolicyAction::Allow,
+                resource: "*".to_string(),
+                conditions: vec![],
+            }],
+        );
+        p.build_evaluator().unwrap();
+        engine.deploy_policy(p).unwrap();
+    }
+    assert_eq!(engine.list_policies().len(), 2);
+    assert!(engine.get_policy_by_name("policy_a").is_some());
+
+    // Full-replace with a bundle that contains only policy_c.
+    let mut c = EnhancedPolicy::new(
+        "policy_c".to_string(),
+        String::new(),
+        vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "*".to_string(),
+            conditions: vec![],
+        }],
+    );
+    c.build_evaluator().unwrap();
+    engine.replace_all_policies(vec![c]).unwrap();
+
+    // Only policy_c remains — the floating a/b were dropped in the swap.
+    assert_eq!(engine.list_policies().len(), 1);
+    assert!(engine.get_policy_by_name("policy_c").is_some());
+    assert!(engine.get_policy_by_name("policy_a").is_none());
+    assert!(engine.get_policy_by_name("policy_b").is_none());
+}
+
+#[test]
+fn test_stable_policy_id_is_deterministic() {
+    let a = crate::stable_policy_id("my-policy");
+    let b = crate::stable_policy_id("my-policy");
+    let c = crate::stable_policy_id("other-policy");
+    assert_eq!(
+        a, b,
+        "same name must map to the same id (idempotent redeploy)"
+    );
+    assert_ne!(a, c);
+}

@@ -14,6 +14,7 @@ serde_yaml = "0.9"
 thiserror = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
+arc-swap = { workspace = true }
 parking_lot = { workspace = true }
 rustc-hash = { workspace = true }
 tracing = { workspace = true }

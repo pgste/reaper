@@ -52,7 +52,7 @@ use handlers::{
     debug_datastore,
     delete_entity_handler,
     // Policy management handlers
-    deploy_bundle,
+    deploy_bundle, load_bundles_atomic,
     deploy_compiled_policy,
     deploy_policy,
     evaluate_policy,
@@ -487,6 +487,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // Bundle deployment (hot-reload with versioning)
         .route("/api/v1/bundles/deploy", post(deploy_bundle))
+        .route("/api/v1/bundles/load", post(load_bundles_atomic))
         // Entity CRUD operations (requires eBPF integration)
         .route("/api/v1/entities", post(upsert_entity_handler))
         .route("/api/v1/entities/{type}/{id}", get(get_entity_handler))

@@ -34,7 +34,9 @@ pub use evaluators::{
 pub use evaluators::reaper_dsl;
 
 // Re-export reap parser and bundle format
-pub use reap::{BundleFormat, PolicyBundle, PolicyPackage, PrecompilationHints, ReaperPolicy};
+pub use reap::{
+    stable_policy_id, BundleFormat, PolicyBundle, PolicyPackage, PrecompilationHints, ReaperPolicy,
+};
 
 // Re-export optimizer types (Phase 5A: Decision Trees)
 pub use optimizer::{DecisionTree, DecisionTreeBuilder, TreeStats};

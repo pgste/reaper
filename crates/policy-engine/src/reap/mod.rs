@@ -15,7 +15,8 @@ pub use ast::{
 };
 pub use ast_evaluator::ReapAstEvaluator;
 pub use bundle::{
-    BundleFormat, PackageMetadata, PolicyBundle, PolicyEntry, PolicyPackage, PrecompilationHints,
+    stable_policy_id, BundleFormat, PackageMetadata, PolicyBundle, PolicyEntry, PolicyPackage,
+    PrecompilationHints,
 };
 pub use compiler::compile_policy;
 pub use parser::ReapParser;
