@@ -100,6 +100,11 @@ pub async fn load_data_handler(
 
     info!("✓ Loaded {} entities into DataStore", entity_count);
 
+    // Entity attributes changed — cached decisions may now be wrong.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
+
     Ok(Json(json!({
         "status": "success",
         "entities_loaded": entity_count,
@@ -165,6 +170,11 @@ pub async fn load_data_stream_handler(
         stats.chunks_processed,
         stats.duration.as_secs_f64()
     );
+
+    // Entity attributes changed — cached decisions may now be wrong.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
 
     Ok(Json(json!({
         "status": "success",
@@ -239,6 +249,13 @@ pub async fn sync_data(
         "✓ Sync complete: inserted={}, failed={}, total_entities={}",
         inserted, failed, total
     );
+
+    // Entity data changed — cached decisions may now be wrong.
+    if inserted > 0 || payload.replace_all {
+        if let Some(ref cache) = state.decision_cache {
+            cache.invalidate();
+        }
+    }
 
     Ok(Json(SyncDataResponse {
         status: if failed == 0 {

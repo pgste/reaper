@@ -91,6 +91,12 @@ pub async fn deploy_policy(
             let engine_stats = state.policy_engine.get_stats();
             ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
 
+            // Invalidate cached decisions — the policy just changed, so any
+            // decision computed under the old policy is now stale.
+            if let Some(ref cache) = state.decision_cache {
+                cache.invalidate();
+            }
+
             // Save to policy cache if enabled
             if let Some(ref cache) = state.policy_cache {
                 if let Err(e) = cache.save_policy(&policy).await {
@@ -275,6 +281,11 @@ pub async fn deploy_compiled_policy(
     let engine_stats = state.policy_engine.get_stats();
     ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
 
+    // Invalidate cached decisions — a new compiled policy is now active.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
+
     // Save to policy cache if enabled
     if let Some(ref cache) = state.policy_cache {
         if let Err(e) = cache.save_policy(&enhanced_policy).await {
@@ -347,6 +358,11 @@ pub async fn deploy_bundle(
     // 3. Update metrics
     let engine_stats = state.policy_engine.get_stats();
     ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
+
+    // Invalidate cached decisions — a new bundle is now active.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
 
     info!(
         "Bundle deployed successfully: policy_id={}, version={}",

@@ -81,7 +81,7 @@ pub use arena::{
 };
 
 // Re-export decision cache for caching policy decisions
-pub use decision_cache::{CachedEvaluator, DecisionCache, DecisionCacheStats};
+pub use decision_cache::{scope_hash, DecisionCache, DecisionCacheStats};
 
 // Re-export batch evaluation for parallel request processing
 pub use batch::{BatchEvaluator, BatchResult, BatchStats};

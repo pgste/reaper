@@ -175,9 +175,22 @@ pub async fn evaluate_policy(
         context,
     };
 
+    // Scope the cache to the exact policy set being evaluated so decisions for
+    // different policies never collide on the same (principal, action, resource).
+    let cache_scope = policy_engine::scope_hash(policy_ids.iter().copied());
+
+    // Capture the cache generation BEFORE evaluating. If a deploy/data-change
+    // races with this evaluation, the generation will have advanced by the time
+    // we insert, and the stale decision is dropped rather than cached.
+    let cache_generation = state
+        .decision_cache
+        .as_ref()
+        .map(|c| c.generation())
+        .unwrap_or(0);
+
     // Check decision cache first (if enabled)
     if let Some(ref cache) = state.decision_cache {
-        if let Some(cached_decision) = cache.get(&request) {
+        if let Some(cached_decision) = cache.get(&request, cache_scope) {
             // Cache hit - return cached decision immediately
             state.stats.record_decision_cache_hit();
             CACHE_HITS.with_label_values(&["decision"]).inc();
@@ -382,7 +395,7 @@ pub async fn evaluate_policy(
 
     // Cache the decision for future requests (if caching enabled)
     if let Some(ref cache) = state.decision_cache {
-        cache.insert(&request, final_decision.clone());
+        cache.insert(&request, cache_scope, final_decision.clone(), cache_generation);
     }
 
     // Pre-format the policy_id string to avoid allocation in the response struct
@@ -683,6 +696,14 @@ pub async fn batch_evaluate_policy(
 
     let request_count = requests.len();
 
+    // Scope the cache to this policy and capture the generation before evaluating.
+    let cache_scope = policy_engine::scope_hash(std::iter::once(policy_id));
+    let cache_generation = state
+        .decision_cache
+        .as_ref()
+        .map(|c| c.generation())
+        .unwrap_or(0);
+
     // Evaluate requests with decision cache support
     let results: Vec<Value> = requests
         .iter()
@@ -692,7 +713,7 @@ pub async fn batch_evaluate_policy(
 
             // Check decision cache first
             let (decision, cache_hit) = if let Some(ref cache) = state.decision_cache {
-                if let Some(cached) = cache.get(req) {
+                if let Some(cached) = cache.get(req, cache_scope) {
                     state.stats.record_decision_cache_hit();
                     CACHE_HITS.with_label_values(&["decision"]).inc();
                     (cached, true)
@@ -706,7 +727,7 @@ pub async fn batch_evaluate_policy(
                         Ok(d) => d.decision,
                         Err(_) => PolicyAction::Deny,
                     };
-                    cache.insert(req, decision.clone());
+                    cache.insert(req, cache_scope, decision.clone(), cache_generation);
                     (decision, false)
                 }
             } else {
