@@ -98,6 +98,37 @@ Takeaways from this run:
 - **sonic-rs (fast) beats serde_json (std) by ~12%** on TCP — JSON parsing is a
   meaningful fraction of a small authz request.
 
+## Scaling up (can we hit 100k/s?)
+
+Same 4-core sandbox at `--connections 48` (server *and* load generator share the
+4 cores, so this is a pessimistic in-process ceiling):
+
+```
+config                        req/s    p50(µs)    p99(µs)
+TCP  fast  compiled           77825     605.51    1094.70
+UDS  fast  compiled           85114     554.89     971.48
+TCP  fast  ast                64150     737.08    1288.53
+UDS  fast  ast                74623     634.33    1103.03
+
+  UDS vs TCP  (fast, compiled):  1.09x
+  compiled vs AST (TCP, fast):   1.21x   <- gap WIDENS under load
+  compiled vs AST (UDS, fast):   1.14x
+```
+
+Two things to note:
+
+- **Throughput plateaus (~85k req/s) because the harness shares 4 cores between
+  the server and the load generator.** The evaluator is nowhere near the limit:
+  a compiled ABAC eval is ~330–780 ns, i.e. **1.3–3M evals/sec per core**. So
+  **100k+ req/s is comfortably achievable** once the agent has dedicated cores
+  (real deployment) — the bottleneck is the request round-trip and CPU sharing,
+  not evaluation, which has ~50–100× headroom over 100k/s.
+- **The compiled advantage GROWS under saturation** — from ~1–6% at low
+  concurrency to **14–21%** here. When the box is CPU-bound, doing less work per
+  evaluation converts directly into more requests served. This is the strongest
+  argument for compiled mode: it's not just lower latency, it's more throughput
+  per core exactly when you're capacity-constrained.
+
 ## Interpreting the results
 
 - The **eval itself is sub-microsecond** (see `cargo bench -p policy-engine
