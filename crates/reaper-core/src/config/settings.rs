@@ -296,6 +296,28 @@ pub struct ManagementSettings {
     /// This is a fallback to catch any events missed during SSE reconnection
     #[serde(default = "default_poll_interval_with_sse")]
     pub poll_interval_with_sse_secs: u64,
+
+    // ========================================================================
+    // Bundle Signature Verification
+    // ========================================================================
+    /// Pinned Ed25519 public key (lowercase hex, 64 chars) used to verify every
+    /// bundle the control plane serves. When set, downloaded bundles must carry
+    /// a valid signature over their bytes or they are rejected (fail closed) —
+    /// this makes policy distribution trustworthy independent of the transport.
+    #[serde(default)]
+    pub bundle_public_key: Option<String>,
+
+    /// Optional key id to pin (rotation). When set, a bundle signature whose
+    /// `key_id` differs is rejected even if the signature itself is valid.
+    #[serde(default)]
+    pub bundle_key_id: Option<String>,
+
+    /// Require every applied bundle to be signed and verified. Defaults to true:
+    /// if `bundle_public_key` is set, unsigned/invalid bundles are rejected; if
+    /// no key is set, the agent refuses to apply *any* management bundle (safe
+    /// default). Set to false only for trusted dev/test setups.
+    #[serde(default = "default_true")]
+    pub require_signed_bundles: bool,
 }
 
 impl Default for ManagementSettings {
@@ -314,6 +336,11 @@ impl Default for ManagementSettings {
             sse_reconnect_initial_secs: default_sse_reconnect_initial(),
             sse_reconnect_max_secs: default_sse_reconnect_max(),
             poll_interval_with_sse_secs: default_poll_interval_with_sse(),
+            // Secure by default: require signed bundles. With no key configured
+            // this makes managed mode fail closed until signing is set up.
+            bundle_public_key: None,
+            bundle_key_id: None,
+            require_signed_bundles: true,
         }
     }
 }

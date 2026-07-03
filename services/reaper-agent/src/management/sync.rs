@@ -18,7 +18,7 @@ use reaper_core::config::ManagementSettings;
 
 use super::client::ManagementClient;
 use super::sse::{ManagementEvent, SseClient, SseConfig};
-use super::types::{AgentMetrics, ManagementError};
+use super::types::{AgentMetrics, BundleDownload, ManagementError};
 use crate::AgentStats;
 
 /// Bundle update notification
@@ -46,6 +46,8 @@ pub struct SyncService {
     shutdown_rx: watch::Receiver<bool>,
     /// Whether SSE is currently connected
     sse_connected: bool,
+    /// Pinned public key for bundle signature verification (parsed from config).
+    verifying_key: Option<ed25519_dalek::VerifyingKey>,
 }
 
 impl SyncService {
@@ -61,6 +63,31 @@ impl SyncService {
     ) -> (Self, watch::Receiver<Option<BundleUpdate>>) {
         let (update_tx, update_rx) = watch::channel(None);
 
+        // Parse the pinned public key once. A bad key is a hard configuration
+        // error surfaced loudly; verification then fails closed for every bundle.
+        let verifying_key = match &config.bundle_public_key {
+            Some(hex) => match reaper_core::bundle_signing::verifying_key_from_hex(hex) {
+                Ok(k) => {
+                    info!("Bundle signature verification enabled (pinned Ed25519 key)");
+                    Some(k)
+                }
+                Err(e) => {
+                    error!(error = %e, "Invalid management.bundle_public_key; \
+                        bundle verification will FAIL CLOSED until fixed");
+                    None
+                }
+            },
+            None => {
+                if config.require_signed_bundles {
+                    warn!(
+                        "require_signed_bundles is true but no bundle_public_key is set — \
+                         managed bundles will be REJECTED until a key is configured"
+                    );
+                }
+                None
+            }
+        };
+
         let service = Self {
             client,
             config,
@@ -71,9 +98,27 @@ impl SyncService {
             update_tx,
             shutdown_rx,
             sse_connected: false,
+            verifying_key,
         };
 
         (service, update_rx)
+    }
+
+    /// Verify a downloaded bundle's authenticity + integrity before it is
+    /// applied. Fail closed: any problem returns an error and the bundle is not
+    /// deployed.
+    ///
+    /// Policy matrix (`require` = `config.require_signed_bundles`):
+    /// - key set, signature present  -> verify; reject on failure.
+    /// - key set, signature absent   -> reject if `require`, else warn+allow.
+    /// - key absent                  -> reject if `require`, else warn+allow.
+    fn verify_download(&self, download: &BundleDownload) -> Result<(), ManagementError> {
+        verify_bundle_download(
+            self.config.require_signed_bundles,
+            self.verifying_key.as_ref(),
+            self.config.bundle_key_id.as_deref(),
+            download,
+        )
     }
 
     /// Run the sync service
@@ -259,6 +304,9 @@ impl SyncService {
 
         // Download the bundle
         let download = self.client.download_bundle(bundle_id).await?;
+
+        // Verify authenticity + integrity BEFORE applying (fail closed).
+        self.verify_download(&download)?;
 
         // Update tracking
         self.client
@@ -448,6 +496,9 @@ impl SyncService {
             }
         }
 
+        // Verify authenticity + integrity BEFORE applying (fail closed).
+        self.verify_download(&download)?;
+
         // Update tracking
         self.client
             .set_current_bundle(download.bundle_id, download.checksum.clone())
@@ -468,9 +519,121 @@ impl SyncService {
     }
 }
 
+/// Decide whether a downloaded bundle may be applied, and verify it if a key is
+/// present. Fail closed. Extracted as a free function so the policy matrix is
+/// unit-testable without a full `SyncService`.
+///
+/// `require` = `require_signed_bundles`:
+/// - key set, signature present -> verify (integrity + authenticity); reject on failure.
+/// - key set, signature absent  -> reject if `require`, else warn+allow.
+/// - key absent                 -> reject if `require`, else warn+allow.
+fn verify_bundle_download(
+    require: bool,
+    key: Option<&ed25519_dalek::VerifyingKey>,
+    key_id_pin: Option<&str>,
+    download: &BundleDownload,
+) -> Result<(), ManagementError> {
+    match (key, &download.signature) {
+        (Some(key), Some(sig)) => {
+            reaper_core::bundle_signing::verify_bundle(&download.data, sig, key, key_id_pin)
+                .map_err(|e| ManagementError::SignatureVerification(e.to_string()))?;
+            info!(bundle_id = %download.bundle_id, key_id = %sig.key_id,
+                "Bundle signature verified");
+            Ok(())
+        }
+        (Some(_), None) => {
+            if require {
+                Err(ManagementError::SignatureVerification(
+                    "bundle is unsigned but a verification key is configured and \
+                     require_signed_bundles is true"
+                        .to_string(),
+                ))
+            } else {
+                warn!(bundle_id = %download.bundle_id,
+                    "Applying UNSIGNED bundle (require_signed_bundles=false)");
+                Ok(())
+            }
+        }
+        (None, _) => {
+            if require {
+                Err(ManagementError::SignatureVerification(
+                    "require_signed_bundles is true but no bundle_public_key is configured"
+                        .to_string(),
+                ))
+            } else {
+                warn!(bundle_id = %download.bundle_id,
+                    "Bundle signature verification DISABLED (no key, require_signed_bundles=false)");
+                Ok(())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reaper_core::bundle_signing::sign_bundle;
+
+    fn dl(
+        data: &[u8],
+        signature: Option<reaper_core::bundle_signing::BundleSignature>,
+    ) -> BundleDownload {
+        BundleDownload {
+            data: data.to_vec(),
+            bundle_id: uuid::Uuid::new_v4(),
+            checksum: "x".to_string(),
+            signature,
+        }
+    }
+
+    #[test]
+    fn signed_bundle_with_pinned_key_is_accepted() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let data = b"bundle-bytes";
+        let sig = sign_bundle(data, &key, "k1");
+        let d = dl(data, Some(sig));
+        verify_bundle_download(true, Some(&key.verifying_key()), None, &d).unwrap();
+    }
+
+    #[test]
+    fn tampered_signed_bundle_is_rejected() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let sig = sign_bundle(b"original", &key, "k1");
+        let d = dl(b"tampered", Some(sig)); // bytes differ from what was signed
+        let err = verify_bundle_download(true, Some(&key.verifying_key()), None, &d).unwrap_err();
+        assert!(matches!(err, ManagementError::SignatureVerification(_)));
+    }
+
+    #[test]
+    fn required_but_unsigned_is_rejected() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let d = dl(b"bundle", None);
+        let err = verify_bundle_download(true, Some(&key.verifying_key()), None, &d).unwrap_err();
+        assert!(matches!(err, ManagementError::SignatureVerification(_)));
+    }
+
+    #[test]
+    fn required_but_no_key_is_rejected() {
+        let d = dl(b"bundle", None);
+        let err = verify_bundle_download(true, None, None, &d).unwrap_err();
+        assert!(matches!(err, ManagementError::SignatureVerification(_)));
+    }
+
+    #[test]
+    fn not_required_and_no_key_allows() {
+        let d = dl(b"bundle", None);
+        verify_bundle_download(false, None, None, &d).unwrap();
+    }
+
+    #[test]
+    fn wrong_key_id_pin_is_rejected() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let sig = sign_bundle(b"bundle", &key, "k1");
+        let d = dl(b"bundle", Some(sig));
+        let err =
+            verify_bundle_download(true, Some(&key.verifying_key()), Some("k2"), &d).unwrap_err();
+        assert!(matches!(err, ManagementError::SignatureVerification(_)));
+    }
 
     #[test]
     fn test_bundle_update_clone() {

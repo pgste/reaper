@@ -24,6 +24,10 @@ use sha2::{Digest, Sha256};
 /// a new scheme later while rejecting anything we do not understand.
 pub const ALGORITHM: &str = "ed25519-sha256";
 
+/// HTTP header the control plane uses to ship the [`BundleSignature`] (as JSON)
+/// alongside a bundle download. Agents parse and verify it before hot-swap.
+pub const SIGNATURE_HEADER: &str = "x-reaper-bundle-signature";
+
 /// A detached signature over a bundle's bytes plus its SHA-256 digest.
 ///
 /// Shipped alongside (not inside) the bundle so the bundle format is unchanged.

@@ -222,6 +222,17 @@ impl ReaperAgentConfig {
                 self.management.poll_interval_with_sse_secs = secs;
             }
         }
+        // Bundle signature verification
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY") {
+            self.management.bundle_public_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_KEY_ID") {
+            self.management.bundle_key_id = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_REQUIRE_SIGNED_BUNDLES") {
+            self.management.require_signed_bundles =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // UDS settings
         if let Ok(val) = std::env::var("REAPER_UDS_ENABLED") {

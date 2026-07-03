@@ -6,9 +6,10 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use reaper_core::bundle_signing::{BundleSignature, SIGNATURE_HEADER as BUNDLE_SIGNATURE_HEADER};
 use reaper_core::config::ManagementSettings;
 
 use super::types::*;
@@ -308,6 +309,20 @@ impl ManagementClient {
             });
         }
 
+        // Parse the detached signature envelope from the response header BEFORE
+        // consuming the body, so we can verify authenticity before applying.
+        let signature = response
+            .headers()
+            .get(BUNDLE_SIGNATURE_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| match serde_json::from_str::<BundleSignature>(s) {
+                Ok(sig) => Some(sig),
+                Err(e) => {
+                    warn!(error = %e, "Ignoring malformed {} header", BUNDLE_SIGNATURE_HEADER);
+                    None
+                }
+            });
+
         let data = response.bytes().await?.to_vec();
 
         // Calculate checksum
@@ -319,6 +334,7 @@ impl ManagementClient {
             bundle_id = %bundle_id,
             size_bytes = data.len(),
             checksum = %checksum,
+            signed = signature.is_some(),
             "Bundle downloaded successfully"
         );
 
@@ -326,6 +342,7 @@ impl ManagementClient {
             data,
             bundle_id,
             checksum,
+            signature,
         })
     }
 

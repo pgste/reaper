@@ -47,6 +47,7 @@ sha2 = { workspace = true }
 hostname = "0.4"
 parking_lot = { workspace = true }
 dashmap = { workspace = true }
+ed25519-dalek = { workspace = true }
 hdrhistogram = "7.5"
 sysinfo = "0.32"
 core_affinity = "0.8"  # pin thread-per-core UDS shards to cores

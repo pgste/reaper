@@ -114,6 +114,9 @@ pub struct BundleDownload {
     pub bundle_id: Uuid,
     /// SHA-256 checksum
     pub checksum: String,
+    /// Detached signature envelope from the `X-Reaper-Bundle-Signature` response
+    /// header, if the control plane signed the bundle. Verified before apply.
+    pub signature: Option<reaper_core::bundle_signing::BundleSignature>,
 }
 
 /// Data bundle download result
@@ -190,6 +193,9 @@ pub enum ManagementError {
 
     #[error("Data load error: {0}")]
     DataLoadError(String),
+
+    #[error("Bundle signature verification failed: {0}")]
+    SignatureVerification(String),
 }
 
 /// Result type for management operations
