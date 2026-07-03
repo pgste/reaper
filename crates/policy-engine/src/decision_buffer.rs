@@ -50,10 +50,29 @@ fn sample_unit() -> f64 {
 /// buffer still retains them for the query API.
 const WRITER_QUEUE_CAPACITY: usize = 65_536;
 
-/// Message to the background decision-log file writer.
+/// Message to the background decision-log writer.
 enum WriterMsg {
     Entry(Box<DecisionLogEntry>),
     Flush,
+}
+
+/// Output sinks owned by the background writer thread. NDJSON is serialized once
+/// and fanned out to whichever sinks are configured (file and/or stdout). All
+/// serialization + I/O happens here, never on the request path.
+struct WriterSinks {
+    file: Option<BufWriter<std::fs::File>>,
+    stdout: Option<BufWriter<std::io::Stdout>>,
+}
+
+impl WriterSinks {
+    fn flush_all(&mut self) {
+        if let Some(w) = self.file.as_mut() {
+            let _ = w.flush();
+        }
+        if let Some(w) = self.stdout.as_mut() {
+            let _ = w.flush();
+        }
+    }
 }
 
 /// Statistics for the decision buffer
@@ -102,33 +121,43 @@ pub struct DecisionBuffer {
 impl DecisionBuffer {
     /// Create a new decision buffer with the given configuration
     pub fn new(config: DecisionLogConfig) -> std::io::Result<Self> {
-        let writer_tx = if let Some(ref path) = config.file_path {
-            // Ensure parent directory exists
-            if let Some(parent) = Path::new(path).parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let file = OpenOptions::new().create(true).append(true).open(path)?;
-            let mut writer = BufWriter::new(file);
+        let writer_tx = if config.file_path.is_some() || config.emit_stdout {
+            let file = if let Some(ref path) = config.file_path {
+                // Ensure parent directory exists
+                if let Some(parent) = Path::new(path).parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                Some(BufWriter::new(
+                    OpenOptions::new().create(true).append(true).open(path)?,
+                ))
+            } else {
+                None
+            };
+            let stdout = if config.emit_stdout {
+                Some(BufWriter::new(std::io::stdout()))
+            } else {
+                None
+            };
+            let mut sinks = WriterSinks { file, stdout };
 
             let (tx, rx) = sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
 
-            // Dedicated writer thread: it owns the file and does all
+            // Dedicated writer thread: it owns the sinks and does all
             // serialization + I/O. It drains the queue in batches and flushes
             // once per batch, so bursts amortize into few syscalls.
             std::thread::Builder::new()
                 .name("decision-log-writer".to_string())
                 .spawn(move || {
                     while let Ok(msg) = rx.recv() {
-                        Self::handle_writer_msg(&mut writer, msg);
+                        Self::handle_writer_msg(&mut sinks, msg);
                         // Drain anything already queued, then flush once.
                         while let Ok(msg) = rx.try_recv() {
-                            Self::handle_writer_msg(&mut writer, msg);
+                            Self::handle_writer_msg(&mut sinks, msg);
                         }
-                        let _ = writer.flush();
+                        sinks.flush_all();
                     }
                     // Channel closed (buffer dropped): final flush.
-                    let _ = writer.flush();
+                    sinks.flush_all();
                 })?;
 
             Some(tx)
@@ -177,17 +206,21 @@ impl DecisionBuffer {
         true
     }
 
-    /// Serialize and write a single message on the background writer thread.
-    fn handle_writer_msg(writer: &mut BufWriter<std::fs::File>, msg: WriterMsg) {
+    /// Serialize a message once and fan it out to all configured sinks, on the
+    /// background writer thread.
+    fn handle_writer_msg(sinks: &mut WriterSinks, msg: WriterMsg) {
         match msg {
             WriterMsg::Entry(entry) => {
                 if let Ok(json) = entry.to_ndjson() {
-                    let _ = writeln!(writer, "{}", json);
+                    if let Some(w) = sinks.file.as_mut() {
+                        let _ = writeln!(w, "{}", json);
+                    }
+                    if let Some(w) = sinks.stdout.as_mut() {
+                        let _ = writeln!(w, "{}", json);
+                    }
                 }
             }
-            WriterMsg::Flush => {
-                let _ = writer.flush();
-            }
+            WriterMsg::Flush => sinks.flush_all(),
         }
     }
 

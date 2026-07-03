@@ -1,0 +1,59 @@
+# Vector pipeline: Reaper agent decision logs -> ClickHouse (+ optional S3 WORM).
+#
+# The agent emits NDJSON (REAPER_DECISION_LOG_STDOUT=true, or a file). Vector
+# owns durability: an on-disk buffer that survives restarts + end-to-end acks so
+# a ClickHouse outage never blocks the agent, and client-side batching sized for
+# ClickHouse (few large inserts). See docs/architecture/DECISION_LOG_PIPELINE.md.
+
+# --- source: pick ONE ------------------------------------------------------
+# (a) container-native: the agent logs decisions to stdout, collected by the
+#     runtime. In K8s use the `kubernetes_logs` source instead.
+[sources.decisions]
+type = "stdin"                       # or: type = "file", include = ["/var/log/reaper/decisions.ndjson"]
+
+[transforms.parse]
+type = "remap"
+inputs = ["decisions"]
+source = '''
+. = parse_json!(.message)
+.timestamp = to_timestamp!(.timestamp)     # RFC3339 -> DateTime64
+.decision_id = string!(.decision_id)        # required for ReplacingMergeTree dedup
+# tenant_id is injected here from your agent->org mapping; empty = single-tenant.
+.tenant_id = .tenant_id || ""
+# context/input_data may be objects; store them as JSON strings for the String columns.
+if is_object(.context)    { .context = encode_json(.context) }
+if is_object(.input_data) { .input_data = encode_json(.input_data) }
+'''
+
+# --- hot store: ClickHouse (queryable, 90d) --------------------------------
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["parse"]
+endpoint = "http://clickhouse:8123"
+database = "reaper_audit"
+table = "decisions"
+skip_unknown_fields = true
+batch.max_bytes = 10000000           # ~10 MB -> few large inserts (CH prefers this)
+batch.timeout_secs = 1
+
+[sinks.clickhouse.buffer]
+type = "disk"                        # WAL: a CH outage never blocks the agent
+max_size = 5000000000                # 5 GB ride-through
+when_full = "block"                  # at-least-once; "drop_newest" for best-effort
+
+[sinks.clickhouse.acknowledgements]
+enabled = true                       # release only after CH confirms
+
+# --- compliance archive: S3/MinIO WORM (complete, immutable, unsampled) -----
+# Enable for the at-least-once/compliance tier. Bucket should have Object Lock
+# (COMPLIANCE mode) with retention = strictest applicable (e.g. HIPAA 6y).
+# [sinks.s3_worm]
+# type = "aws_s3"
+# inputs = ["parse"]
+# bucket = "reaper-audit-worm"
+# key_prefix = "decisions/date=%Y-%m-%d/"
+# compression = "zstd"
+# encoding.codec = "ndjson"
+# [sinks.s3_worm.buffer]
+# type = "disk"
+# max_size = 2000000000

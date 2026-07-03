@@ -149,6 +149,12 @@ pub struct DecisionLogConfig {
     /// Path to NDJSON file for persistent logging (optional)
     pub file_path: Option<String>,
 
+    /// Emit each decision as an NDJSON line to stdout (container-native
+    /// collection: a log agent — Vector/Fluent Bit/OTel Collector — scrapes
+    /// stdout and ships to the central store). Can be combined with `file_path`.
+    #[serde(default)]
+    pub emit_stdout: bool,
+
     /// Flush interval in milliseconds (for file logging)
     pub flush_interval_ms: u64,
 
@@ -174,6 +180,7 @@ impl Default for DecisionLogConfig {
             enabled: false,
             buffer_capacity: 10_000,
             file_path: None,
+            emit_stdout: false,
             flush_interval_ms: 5_000,
             log_allows: true,
             log_denies: true,
@@ -195,6 +202,9 @@ impl DecisionLogConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10_000),
             file_path: std::env::var("REAPER_DECISION_LOG_FILE").ok(),
+            emit_stdout: std::env::var("REAPER_DECISION_LOG_STDOUT")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
             flush_interval_ms: std::env::var("REAPER_DECISION_LOG_FLUSH_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())

@@ -1,0 +1,53 @@
+# Runnable reference: Reaper decision logs -> Vector -> ClickHouse.
+#
+#   docker compose -f deploy/decision-logs/docker-compose.yml up -d
+#   # then run the agent with:
+#   #   REAPER_DECISION_LOG_ENABLED=true REAPER_DECISION_LOG_STDOUT=true \
+#   #   REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE=0.1 ./reaper-agent | \
+#   #   docker compose -f deploy/decision-logs/docker-compose.yml exec -T vector vector --config /etc/vector/vector.toml
+#   # (or point Vector's `file` source at the agent's REAPER_DECISION_LOG_FILE)
+#
+# Query:  docker compose exec clickhouse clickhouse-client -q \
+#           "SELECT decision, count() FROM reaper_audit.decisions GROUP BY decision"
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    ports:
+      - "8123:8123"     # HTTP (Vector inserts here)
+      - "9000:9000"     # native
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - ./clickhouse-schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ch-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  vector:
+    image: timberio/vector:0.41.1-debian
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./vector.toml:/etc/vector/vector.toml:ro
+      - vector-buffer:/var/lib/vector   # disk WAL survives restarts
+    # For a file source, also mount the agent's log dir here and set the
+    # `file` source in vector.toml.
+
+  # Optional S3-compatible WORM archive for the compliance tier.
+  # minio:
+  #   image: minio/minio
+  #   command: server /data --console-address ":9001"
+  #   ports: ["9001:9001"]
+  #   environment:
+  #     MINIO_ROOT_USER: reaper
+  #     MINIO_ROOT_PASSWORD: change-me-please
+  #   volumes: [minio-data:/data]
+
+volumes:
+  ch-data:
+  vector-buffer:
+  # minio-data:

@@ -422,6 +422,7 @@ pub async fn evaluate_policy(
             .with_evaluation_time_ns(total_eval_time_ns)
             .with_cache_hit(false)
             .with_agent_id(state.agent_id.clone())
+            .with_policy_version(matched_policy_version.to_string())
             .with_matched_rule(matched_rule.clone());
 
             // Use the same decision_id across response, logs, and audit trail
@@ -658,6 +659,7 @@ pub async fn fast_evaluate_policy(
             .with_evaluation_time_ns(total_eval_time_ns)
             .with_cache_hit(false)
             .with_agent_id(state.agent_id.clone())
+            .with_policy_version(matched_policy_version.to_string())
             .with_matched_rule(
                 matched_rule
                     .map(|r| format!("rule_{}", r))
