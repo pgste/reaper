@@ -141,13 +141,20 @@ pub fn get_nested_attr<'a>(
 ) -> Option<AttributeValue> {
     let entity = get_entity_for_type(entity_type, user, resource)?;
 
-    // Resolve the attribute name
-    let attr_name = interner.resolve(attribute)?;
+    // Fast path: a simple (non-nested) attribute is stored directly under its
+    // interned id. Try that first so the common case pays ZERO interner
+    // `resolve()` DashMap lookups on the hot path — only a genuine miss falls
+    // through to the resolve + dotted-path handling below.
+    if let Some(value) = entity.get_attribute(attribute) {
+        return Some(value.clone());
+    }
 
-    // Check if it's a simple or dotted attribute
+    // Miss: the attribute might be a dotted path ("form_data.name"). Resolve the
+    // name now and, if it is nested, navigate through the nested objects.
+    let attr_name = interner.resolve(attribute)?;
     if !attr_name.contains('.') {
-        // Simple attribute - just return a clone
-        return entity.get_attribute(attribute).cloned();
+        // Genuinely-absent simple attribute.
+        return None;
     }
 
     // Split by '.' and navigate through nested objects

@@ -1250,18 +1250,23 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             );
         }
 
-        // Resource lookup - if entity doesn't exist, create a temporary entity
-        // This allows simple `resource == "value"` checks to work even without resource entities
+        // Resource lookup. If the resource isn't a registered entity we still
+        // want simple `resource == "value"` checks to work, so we synthesize a
+        // minimal entity holding just the id. Crucially this is a STACK local
+        // (borrowed below), not an `Arc::new(Entity)` — the previous code
+        // heap-allocated an Arc + Entity on every request for any policy whose
+        // resource is a bare id (e.g. RBAC over URL paths).
         let resource_found = self.store.get(resource_id);
-        let resource = resource_found.clone().unwrap_or_else(|| {
-            // Create a minimal entity with just the resource ID for simple resource matching
-            let resource_type = interner.intern("resource");
-            Arc::new(Entity::new(
-                resource_id,
-                resource_type,
-                std::collections::HashMap::new(),
-            ))
-        });
+        let temp_resource;
+        let resource: &Entity = match &resource_found {
+            Some(entity) => entity,
+            None => {
+                let resource_type = interner.intern("resource");
+                temp_resource =
+                    Entity::new(resource_id, resource_type, std::collections::HashMap::new());
+                &temp_resource
+            }
+        };
 
         // Log resource entity info at trace level
         #[cfg(debug_assertions)]
@@ -1295,7 +1300,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             if self.evaluate_compiled_condition(
                 &rule.condition,
                 &user,
-                &resource,
+                resource,
                 &eval_context,
                 &mut variables,
             ) {
@@ -1311,7 +1316,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             let matches = self.evaluate_compiled_condition(
                 &rule.condition,
                 &user,
-                &resource,
+                resource,
                 &eval_context,
                 &mut variables,
             );
