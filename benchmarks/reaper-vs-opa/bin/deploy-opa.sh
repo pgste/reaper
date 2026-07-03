@@ -17,10 +17,15 @@ POLICY_FILE="policies/opa/${SCENARIO}.rego"
 
 echo -e "${YELLOW}Deploying to OPA: ${SCENARIO} @ ${SCALE}${NC}"
 
-# Transform entities array to map for O(1) lookups (fair comparison with Reaper)
+# Transform entities array to a map for O(1) lookups (fair comparison with Reaper).
+# The map VALUE is the entity's attributes object only — this mirrors Reaper's
+# evaluation model exactly: Reaper resolves `user.<field>` / `resource.<field>`
+# from the entity's attributes map (see Entity::get_attribute) and does NOT
+# expose the top-level id/type as readable fields. The rego reads these values
+# directly as `data.entities[<id>].<field>` (no `.attributes` indirection).
 # From: {"entities": [{"id": "user1", "type": "user", "attributes": {...}}, ...]}
-# To:   {"user1": {type: "user", ...attributes...}, ...}  (flatten attributes into entity)
-ENTITY_MAP=$(jq '.entities | map({(.id): (.attributes + {id: .id, type: .type})}) | add' "$DATA_FILE")
+# To:   {"user1": {...attributes...}, ...}
+ENTITY_MAP=$(jq '.entities | map({(.id): .attributes}) | add' "$DATA_FILE")
 
 # Load entities as map directly into /v1/data/entities namespace
 echo "$ENTITY_MAP" | curl -s -X PUT "${OPA_URL}/v1/data/entities" \

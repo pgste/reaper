@@ -10,10 +10,10 @@ import rego.v1
 
 default allow := false
 
-# Entity lookups — .attributes shorthand
-user := data.entities[input.principal.id].attributes
+# Entity lookups — the map value IS the attributes object (see deploy-opa.sh)
+user := data.entities[input.principal]
 
-resource := data.entities[input.resource].attributes
+resource := data.entities[input.resource]
 
 # Email Validation
 allow if {

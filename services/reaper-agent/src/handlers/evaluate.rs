@@ -395,7 +395,12 @@ pub async fn evaluate_policy(
 
     // Cache the decision for future requests (if caching enabled)
     if let Some(ref cache) = state.decision_cache {
-        cache.insert(&request, cache_scope, final_decision.clone(), cache_generation);
+        cache.insert(
+            &request,
+            cache_scope,
+            final_decision.clone(),
+            cache_generation,
+        );
     }
 
     // Pre-format the policy_id string to avoid allocation in the response struct

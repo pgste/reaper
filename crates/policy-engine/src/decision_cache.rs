@@ -382,11 +382,21 @@ mod tests {
         let cache = DecisionCache::new(3);
         let gen = cache.generation();
         for i in 0..3 {
-            cache.insert(&make_request(&format!("u{i}"), "read", "d"), 0, PolicyAction::Allow, gen);
+            cache.insert(
+                &make_request(&format!("u{i}"), "read", "d"),
+                0,
+                PolicyAction::Allow,
+                gen,
+            );
         }
         assert_eq!(cache.len(), 3);
 
-        cache.insert(&make_request("u3", "read", "d"), 0, PolicyAction::Allow, gen);
+        cache.insert(
+            &make_request("u3", "read", "d"),
+            0,
+            PolicyAction::Allow,
+            gen,
+        );
         assert_eq!(cache.len(), 3);
         assert!(cache.stats().evictions >= 1);
     }

@@ -2,53 +2,72 @@ package reaper.abac
 
 import rego.v1
 
-# ABAC Policy — mirrors abac_clearance.reap exactly
-# Rules:
-#   1. deny_suspended_users: deny if user.suspended == true
-#   2. clearance_and_department: user.clearance_match && same dept && !archived
-#   3. high_clearance_access: user.high_clearance && same dept && !secret && !archived
-#   4. owner_access: user.id == resource.owner_id && user.status == "active"
-#   5. executive_access: user.role == "executive" && !archived
+# ABAC Policy — mirrors policies/reaper/abac.reap (policy abac_benchmark) exactly.
+#
+# Reaper rules (default: deny; an explicit deny wins over any allow):
+#   deny_suspended:       deny  if user.suspended == true
+#   admin_high_clearance: allow if user.role == "admin" && user.high_clearance == true
+#   department_clearance: allow if user.department == resource.department
+#                                  && user.clearance_level >= resource.clearance_level
+#                                  && user.status == "active"
+#   high_clearance_dept:  allow if user.high_clearance == true
+#                                  && user.department == resource.department
+#                                  && resource.classification != "secret"
+#                                  && action == "read"
+#   owner_access:         allow if user.id == resource.owner_id && user.status == "active"
+#   public_access:        allow if resource.classification == "public"
+#                                  && user.status == "active" && action == "read"
+#
+# Input shape (uniform across scenarios): {principal: <id>, action, resource, context}.
+# The entity map value IS the attributes object (see deploy-opa.sh). `not deny`
+# on every allow rule encodes Reaper's deny-precedence.
 
 default allow := false
 
-# Entity lookups — .attributes shorthand so user.role works directly
-user := data.entities[input.principal.id].attributes
+user := data.entities[input.principal]
 
-resource := data.entities[input.resource].attributes
+resource := data.entities[input.resource]
 
-# Deny suspended users immediately (highest priority)
+# deny_suspended (highest priority)
 deny if {
-    user.suspended == true
+	user.suspended == true
 }
 
-# Allow same department with matching clearance level
+# admin_high_clearance
 allow if {
-    not deny
-    user.clearance_match == true
-    user.department == resource.department
-    resource.archived != true
+	not deny
+	user.role == "admin"
+	user.high_clearance == true
 }
 
-# High clearance users can access confidential docs in their dept (not archived)
+# department_clearance
 allow if {
-    not deny
-    user.high_clearance == true
-    user.department == resource.department
-    resource.classification != "secret"
-    resource.archived != true
+	not deny
+	user.department == resource.department
+	user.clearance_level >= resource.clearance_level
+	user.status == "active"
 }
 
-# Document owners can always access (unless suspended)
+# high_clearance_dept
 allow if {
-    not deny
-    user.id == resource.owner_id
-    user.status == "active"
+	not deny
+	user.high_clearance == true
+	user.department == resource.department
+	resource.classification != "secret"
+	input.action == "read"
 }
 
-# Executive full access (except archived)
+# owner_access
 allow if {
-    not deny
-    user.role == "executive"
-    resource.archived != true
+	not deny
+	user.id == resource.owner_id
+	user.status == "active"
+}
+
+# public_access
+allow if {
+	not deny
+	resource.classification == "public"
+	user.status == "active"
+	input.action == "read"
 }
