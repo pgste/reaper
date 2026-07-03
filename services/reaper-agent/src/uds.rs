@@ -6,7 +6,7 @@
 use axum::Router;
 use std::path::{Path, PathBuf};
 use tokio::net::UnixListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Serve the given axum router over a Unix Domain Socket.
 ///
@@ -23,6 +23,19 @@ pub async fn serve_uds(
     permissions: u32,
     app: Router<()>,
 ) -> anyhow::Result<()> {
+    // The socket has NO application-layer auth — filesystem permissions ARE the
+    // access-control boundary. So we (1) make the parent directory owner-only,
+    // which means no other user can even reach the socket during the brief
+    // bind→chmod window (or ever), and (2) warn if the configured socket mode
+    // would grant access to other users.
+    if permissions & 0o007 != 0 {
+        warn!(
+            permissions = format!("{:o}", permissions),
+            "UDS socket_permissions grant access to 'other' users; \
+             anyone on the host could call the agent. Use 0o660/0o600."
+        );
+    }
+
     // Remove stale socket file if it exists from a previous run
     if socket_path.exists() {
         info!(
@@ -32,14 +45,13 @@ pub async fn serve_uds(
         std::fs::remove_file(&socket_path)?;
     }
 
-    // Create parent directory if needed
+    // Create parent directory owner-only (0700) so the socket is unreachable by
+    // other users regardless of the socket file's own mode — this also closes
+    // the window between bind() and setting the socket permissions.
     if let Some(parent) = socket_path.parent() {
         if !parent.exists() {
-            info!(
-                dir = %parent.display(),
-                "Creating UDS socket directory"
-            );
-            std::fs::create_dir_all(parent)?;
+            info!(dir = %parent.display(), "Creating UDS socket directory (0700)");
+            create_dir_private(parent)?;
         }
     }
 
@@ -76,6 +88,23 @@ fn set_socket_permissions(path: &Path, mode: u32) -> anyhow::Result<()> {
 #[cfg(not(unix))]
 fn set_socket_permissions(_path: &Path, _mode: u32) -> anyhow::Result<()> {
     // No-op on non-Unix platforms
+    Ok(())
+}
+
+/// Create a directory (and parents) with owner-only (0700) permissions on Unix.
+#[cfg(unix)]
+fn create_dir_private(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_dir_private(path: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(path)?;
     Ok(())
 }
 
