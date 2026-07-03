@@ -50,8 +50,10 @@ pub fn eval_string_operation(
     // is enabled. The interned id (`?op.attribute`) is logged instead at zero cost.
     match entity.get_attribute(op.attribute) {
         Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                let result = match op.op {
+            // Borrow the resolved attribute value (no Arc clone) for the
+            // comparison — the string is only needed for the duration of the op.
+            interner
+                .with_resolved(*s, |resolved| match op.op {
                     StringOp::Contains => {
                         memmem::find(resolved.as_bytes(), op.value.as_bytes()).is_some()
                     }
@@ -59,20 +61,8 @@ pub fn eval_string_operation(
                     StringOp::EndsWith => resolved.ends_with(&op.value),
                     StringOp::LowerEquals => resolved.to_lowercase() == op.value,
                     StringOp::UpperEquals => resolved.to_uppercase() == op.value,
-                };
-                tracing::debug!(
-                    entity_type = ?op.entity_type,
-                    attribute = ?op.attribute,
-                    attr_value = %resolved,
-                    op = ?op.op,
-                    op_value = %op.value,
-                    result = result,
-                    "StringOp evaluation"
-                );
-                result
-            } else {
-                false
-            }
+                })
+                .unwrap_or(false)
         }
         _ => false,
     }
@@ -117,13 +107,11 @@ pub fn eval_regex_match(
     };
 
     match entity.get_attribute(m.attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                crate::regex_cache::matches(&m.pattern, &resolved)
-            } else {
-                false
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| {
+                crate::regex_cache::matches(&m.pattern, resolved)
+            })
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -148,13 +136,11 @@ pub fn eval_string_contains(
     };
 
     match entity.get_attribute(attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| {
                 memmem::find(resolved.as_bytes(), substring.as_bytes()).is_some()
-            } else {
-                false
-            }
-        }
+            })
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -175,13 +161,9 @@ pub fn eval_string_starts_with(
     };
 
     match entity.get_attribute(attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                resolved.starts_with(prefix)
-            } else {
-                false
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| resolved.starts_with(prefix))
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -202,13 +184,9 @@ pub fn eval_string_ends_with(
     };
 
     match entity.get_attribute(attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                resolved.ends_with(suffix)
-            } else {
-                false
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| resolved.ends_with(suffix))
+            .unwrap_or(false),
         _ => false,
     }
 }

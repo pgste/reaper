@@ -96,6 +96,18 @@ impl StringInterner {
             .map(|entry| entry.value().clone())
     }
 
+    /// Resolve an interned ID and run `f` on the borrowed `&str`, without
+    /// cloning the `Arc<str>`.
+    ///
+    /// Use this on the hot path when the resolved string is only needed
+    /// transiently (e.g. a substring/prefix comparison): it avoids the atomic
+    /// refcount inc/dec of `resolve()`. The DashMap shard read-lock is held for
+    /// the (short) duration of `f`, so keep `f` cheap and non-blocking.
+    #[inline]
+    pub fn with_resolved<R>(&self, id: InternedString, f: impl FnOnce(&str) -> R) -> Option<R> {
+        self.id_to_string.get(&id).map(|entry| f(entry.value()))
+    }
+
     /// Get the string for an interned ID as &str
     ///
     /// This is less efficient than resolve() as it requires cloning the Arc,
