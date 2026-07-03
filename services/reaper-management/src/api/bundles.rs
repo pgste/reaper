@@ -224,20 +224,33 @@ async fn download_bundle(
     let _org_id = parse_org_id(&org, &state).await?;
 
     let bundle = state.bundle_service.get(bundle_id).await?;
-    let data = state.bundle_service.download(bundle_id).await?;
+    let download = state.bundle_service.download(bundle_id).await?;
 
     let filename = format!("{}-{}.rbb", bundle.name, bundle_id);
 
-    Ok(Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{}\"", filename),
         )
-        .header(header::CONTENT_LENGTH, data.len())
-        .body(Body::from(data))
-        .unwrap())
+        .header(header::CONTENT_LENGTH, download.data.len());
+
+    // Ship the detached signature so the agent can verify before hot-swap.
+    if let Some(sig) = &download.signature {
+        match serde_json::to_string(sig) {
+            Ok(json) => {
+                builder = builder.header(reaper_core::bundle_signing::SIGNATURE_HEADER, json);
+            }
+            Err(e) => {
+                tracing::warn!(bundle_id = %bundle_id, error = %e,
+                    "Failed to serialize bundle signature header");
+            }
+        }
+    }
+
+    Ok(builder.body(Body::from(download.data)).unwrap())
 }
 
 /// Get the currently promoted bundle
@@ -284,6 +297,7 @@ impl From<crate::bundle::BundleError> for ApiError {
             BundleError::Database(e) => ApiError::from(e),
             BundleError::NoPolicies => ApiError::BadRequest("Bundle has no policies".to_string()),
             BundleError::Validation(msg) => ApiError::Validation(msg),
+            BundleError::Signing(msg) => ApiError::Internal(format!("Signing error: {}", msg)),
         }
     }
 }

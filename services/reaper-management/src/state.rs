@@ -3,7 +3,7 @@
 //! Holds shared state accessible to all request handlers.
 
 use crate::auth::JwksValidator;
-use crate::bundle::BundleService;
+use crate::bundle::{BundleService, BundleSigner};
 use crate::config::Config;
 use crate::db::Database;
 use crate::graceful::ShutdownSignal;
@@ -208,7 +208,33 @@ impl AppState {
     /// Create new application state
     pub fn new(db: Arc<Database>, config: Config, storage: Arc<dyn BundleStorage>) -> Self {
         let (event_tx, _) = broadcast::channel(1024);
-        let bundle_service = Arc::new(BundleService::new(db.clone(), storage.clone()));
+        // Build the bundle signer from config; an invalid key is logged and
+        // signing stays off (compiled bundles will be unsigned, which agents
+        // that require signatures will reject).
+        let signer = match BundleSigner::from_config(&config.bundles) {
+            Ok(Some(s)) => {
+                tracing::info!(
+                    key_id = %config.bundles.signing_key_id,
+                    algorithm = %config.bundles.signing_algorithm,
+                    "Bundle signing enabled"
+                );
+                Some(s)
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "No bundle signing key configured (REAPER_BUNDLE_SIGNING_KEY); \
+                     compiled bundles will be UNSIGNED"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Invalid bundle signing key/algorithm; \
+                    compiled bundles will be UNSIGNED");
+                None
+            }
+        };
+        let bundle_service =
+            Arc::new(BundleService::new(db.clone(), storage.clone()).with_signer(signer));
         let jwks_validator = Arc::new(JwksValidator::new());
 
         Self {

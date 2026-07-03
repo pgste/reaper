@@ -101,6 +101,17 @@ impl Config {
             config.auth.jwt_secret = Some(secret);
         }
 
+        // Bundle signing overrides
+        if let Ok(key) = std::env::var("REAPER_BUNDLE_SIGNING_KEY") {
+            config.bundles.signing_key = Some(key);
+        }
+        if let Ok(id) = std::env::var("REAPER_BUNDLE_SIGNING_KEY_ID") {
+            config.bundles.signing_key_id = id;
+        }
+        if let Ok(alg) = std::env::var("REAPER_BUNDLE_SIGNING_ALGORITHM") {
+            config.bundles.signing_algorithm = alg;
+        }
+
         Ok(config)
     }
 

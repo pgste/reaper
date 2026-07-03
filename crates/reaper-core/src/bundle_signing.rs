@@ -26,7 +26,8 @@
 //! - P-256: 32-byte scalar (signing) / SEC1 point, compressed 33-byte or
 //!   uncompressed 65-byte (verifying).
 
-use ed25519_dalek::{Signer as _, Verifier as _};
+// `Signer`/`Verifier` come from the `signature` crate (re-exported here via
+// p256); the same trait covers both Ed25519 and P-256 keys.
 use p256::ecdsa::signature::{Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
