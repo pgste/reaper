@@ -123,23 +123,18 @@ fn evaluate_policy_set(
     outcome
 }
 
-/// Standard policy evaluation with full OpenTelemetry tracing.
+/// Standard policy evaluation.
 ///
 /// Supports:
 /// - Policy lookup by UUID, name, or evaluate all policies
 /// - Decision caching
-/// - Full tracing with span attributes
+/// - OpenTelemetry attributes when the trace is sampled
 /// - Decision logging (OPA-style audit)
-#[instrument(
-    skip(state, payload),
-    fields(
-        resource = %payload.resource,
-        action = %payload.action,
-        policy_name = tracing::field::Empty,
-        decision = tracing::field::Empty,
-        latency_ns = tracing::field::Empty,
-    )
-)]
+///
+/// Note: no `#[instrument]` — building a span with `%`-formatted fields on every
+/// request costs ~200-800ns, which is a large fraction of the sub-µs budget (the
+/// engine dropped it for the same reason). Tracing attributes are attached to
+/// the ambient span only when the trace is actually sampled.
 pub async fn evaluate_policy(
     State(state): State<Arc<AgentState>>,
     Json(mut payload): Json<EvaluateRequest>,
@@ -352,13 +347,10 @@ pub async fn evaluate_policy(
         .with_label_values(&[&matched_policy_name])
         .observe(latency_seconds);
 
-    // Record span attributes for distributed tracing
+    // Attach OpenTelemetry attributes only when the trace is sampled. The
+    // context/span-context lookup and all the KeyValue allocations are skipped
+    // entirely on the common unsampled request.
     let span = tracing::Span::current();
-    span.record("policy_name", matched_policy_name.as_str());
-    span.record("decision", decision_str);
-    span.record("latency_ns", total_eval_time_ns);
-
-    // Add OpenTelemetry span attributes only when sampled
     let cx = span.context();
     let otel_span = cx.span();
     let span_context = otel_span.span_context();
@@ -378,8 +370,9 @@ pub async fn evaluate_policy(
 
     // Log decisions — allow at debug, deny at warn
     if decision_str == "deny" {
+        // resource is intentionally not a label (unbounded cardinality).
         DENIALS_TOTAL
-            .with_label_values(&[&matched_policy_name, &payload.resource, &payload.action])
+            .with_label_values(&[&matched_policy_name, &payload.action])
             .inc();
 
         warn!(
@@ -476,7 +469,9 @@ pub async fn evaluate_policy(
 /// Performance characteristics:
 /// - JSON parsing: ~2-3µs (vs ~8-10µs with serde_json)
 /// - Total request overhead: ~5-10µs less than standard endpoint
-#[instrument(skip(state, body))]
+///
+/// No `#[instrument]`: this is the latency-critical path, so we do not pay for
+/// per-request span construction (see `evaluate_policy`).
 pub async fn fast_evaluate_policy(
     State(state): State<Arc<AgentState>>,
     body: Bytes,

@@ -45,10 +45,16 @@ lazy_static! {
     .expect("Failed to register DECISION_DURATION metric");
 
     /// Total denials (security events).
+    ///
+    /// Labeled by `policy_name` and `action` only. `resource` is deliberately
+    /// NOT a label: resources are effectively unbounded (URLs, object IDs), so
+    /// including them creates an unbounded number of Prometheus time series —
+    /// a memory leak in the agent and the scrape backend. Per-resource denial
+    /// detail belongs in the decision log, not in metric cardinality.
     pub static ref DENIALS_TOTAL: CounterVec = register_counter_vec!(
         "reaper_denials_total",
         "Total policy denials",
-        &["policy_name", "resource", "action"]
+        &["policy_name", "action"]
     )
     .expect("Failed to register DENIALS_TOTAL metric");
 
@@ -122,10 +128,12 @@ pub fn record_decision(decision: &str, policy_name: &str, _policy_id: &str, dura
         .observe(duration_secs);
 }
 
-/// Record a denial with resource and action context.
-pub fn record_denial(policy_name: &str, resource: &str, action: &str) {
+/// Record a denial. `resource` is accepted for call-site compatibility but is
+/// intentionally not used as a metric label (unbounded cardinality — see
+/// `DENIALS_TOTAL`); it remains available in the decision log.
+pub fn record_denial(policy_name: &str, _resource: &str, action: &str) {
     DENIALS_TOTAL
-        .with_label_values(&[policy_name, resource, action])
+        .with_label_values(&[policy_name, action])
         .inc();
 }
 

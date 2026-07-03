@@ -6,11 +6,23 @@
 use crate::decision_log::{DecisionLogConfig, DecisionLogEntry};
 use parking_lot::RwLock;
 use std::collections::VecDeque;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
+
+/// Bound on the background file-writer queue. When full, entries are dropped
+/// (and counted) rather than blocking the request thread — the in-memory ring
+/// buffer still retains them for the query API.
+const WRITER_QUEUE_CAPACITY: usize = 65_536;
+
+/// Message to the background decision-log file writer.
+enum WriterMsg {
+    Entry(Box<DecisionLogEntry>),
+    Flush,
+}
 
 /// Statistics for the decision buffer
 #[derive(Debug, Clone, Default)]
@@ -22,6 +34,8 @@ pub struct DecisionBufferStats {
     pub flush_count: u64,
     pub allow_count: u64,
     pub deny_count: u64,
+    /// Entries dropped because the background file-writer queue was full.
+    pub writer_dropped: u64,
 }
 
 /// A thread-safe ring buffer for decision log entries
@@ -39,22 +53,48 @@ pub struct DecisionBuffer {
     allow_count: AtomicU64,
     deny_count: AtomicU64,
 
-    /// File writer for persistent logging (optional)
-    file_writer: Option<RwLock<BufWriter<File>>>,
+    /// Entries dropped because the background writer queue was full.
+    writer_dropped: AtomicU64,
+
+    /// Sender to the background file-writer thread (None if no file configured).
+    /// File serialization and the write syscall happen on that thread, never on
+    /// the request path.
+    writer_tx: Option<SyncSender<WriterMsg>>,
 }
 
 impl DecisionBuffer {
     /// Create a new decision buffer with the given configuration
     pub fn new(config: DecisionLogConfig) -> std::io::Result<Self> {
-        let file_writer = if let Some(ref path) = config.file_path {
+        let writer_tx = if let Some(ref path) = config.file_path {
             // Ensure parent directory exists
             if let Some(parent) = Path::new(path).parent() {
                 std::fs::create_dir_all(parent)?;
             }
 
             let file = OpenOptions::new().create(true).append(true).open(path)?;
+            let mut writer = BufWriter::new(file);
 
-            Some(RwLock::new(BufWriter::new(file)))
+            let (tx, rx) = sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
+
+            // Dedicated writer thread: it owns the file and does all
+            // serialization + I/O. It drains the queue in batches and flushes
+            // once per batch, so bursts amortize into few syscalls.
+            std::thread::Builder::new()
+                .name("decision-log-writer".to_string())
+                .spawn(move || {
+                    while let Ok(msg) = rx.recv() {
+                        Self::handle_writer_msg(&mut writer, msg);
+                        // Drain anything already queued, then flush once.
+                        while let Ok(msg) = rx.try_recv() {
+                            Self::handle_writer_msg(&mut writer, msg);
+                        }
+                        let _ = writer.flush();
+                    }
+                    // Channel closed (buffer dropped): final flush.
+                    let _ = writer.flush();
+                })?;
+
+            Some(tx)
         } else {
             None
         };
@@ -67,8 +107,23 @@ impl DecisionBuffer {
             flush_count: AtomicU64::new(0),
             allow_count: AtomicU64::new(0),
             deny_count: AtomicU64::new(0),
-            file_writer,
+            writer_dropped: AtomicU64::new(0),
+            writer_tx,
         })
+    }
+
+    /// Serialize and write a single message on the background writer thread.
+    fn handle_writer_msg(writer: &mut BufWriter<std::fs::File>, msg: WriterMsg) {
+        match msg {
+            WriterMsg::Entry(entry) => {
+                if let Ok(json) = entry.to_ndjson() {
+                    let _ = writeln!(writer, "{}", json);
+                }
+            }
+            WriterMsg::Flush => {
+                let _ = writer.flush();
+            }
+        }
     }
 
     /// Create a new buffer with default configuration
@@ -107,11 +162,17 @@ impl DecisionBuffer {
             self.deny_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Write to file if configured
-        if let Some(ref writer) = self.file_writer {
-            if let Ok(json) = entry.to_ndjson() {
-                let mut w = writer.write();
-                let _ = writeln!(w, "{}", json);
+        // Hand file persistence to the background writer thread — no JSON
+        // serialization and no write syscall on the request path. A clone is
+        // sent to the writer while the original stays in the in-memory ring for
+        // the query API. If the writer queue is saturated the entry is dropped
+        // (and counted) rather than blocking the request.
+        if let Some(ref tx) = self.writer_tx {
+            if tx
+                .try_send(WriterMsg::Entry(Box::new(entry.clone())))
+                .is_err()
+            {
+                self.writer_dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -159,14 +220,17 @@ impl DecisionBuffer {
             flush_count: self.flush_count.load(Ordering::Relaxed),
             allow_count: self.allow_count.load(Ordering::Relaxed),
             deny_count: self.deny_count.load(Ordering::Relaxed),
+            writer_dropped: self.writer_dropped.load(Ordering::Relaxed),
         }
     }
 
-    /// Flush file buffer to disk
+    /// Request a flush of the file buffer to disk.
+    ///
+    /// The write is performed on the background writer thread, so this signals a
+    /// flush rather than performing it synchronously (best-effort).
     pub fn flush(&self) -> std::io::Result<()> {
-        if let Some(ref writer) = self.file_writer {
-            let mut w = writer.write();
-            w.flush()?;
+        if let Some(ref tx) = self.writer_tx {
+            let _ = tx.try_send(WriterMsg::Flush);
             self.flush_count.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
@@ -413,6 +477,45 @@ mod tests {
         let results = buffer.query(filter, 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].principal, "bob");
+    }
+
+    #[test]
+    fn test_file_writer_persists_entries_async() {
+        // Entries are serialized and written on the background writer thread;
+        // verify they actually reach the file (polling, since it is async).
+        let path =
+            std::env::temp_dir().join(format!("reaper_declog_test_{}.ndjson", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let config = DecisionLogConfig {
+            enabled: true,
+            buffer_capacity: 100,
+            file_path: Some(path.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+
+        let buffer = DecisionBuffer::new(config).unwrap();
+        buffer.log(test_entry("allow"));
+        buffer.log(test_entry("deny"));
+        buffer.flush().unwrap();
+
+        let mut contents = String::new();
+        for _ in 0..200 {
+            contents = std::fs::read_to_string(&path).unwrap_or_default();
+            if contents.lines().count() >= 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            contents.lines().count(),
+            2,
+            "both entries should be persisted to file by the writer thread"
+        );
+        assert!(contents.contains("\"decision\":\"allow\""));
+        assert!(contents.contains("\"decision\":\"deny\""));
     }
 
     #[test]

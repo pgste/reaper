@@ -8,6 +8,12 @@ mod tls;
 mod types;
 mod uds;
 
+// Fast allocator: policy evaluation is allocation-heavy on the request path
+// (request maps, response buffers). mimalloc is faster and has less
+// fragmentation than the system allocator under this concurrent load.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},

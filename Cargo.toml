@@ -70,3 +70,20 @@ shared-version = true
 tag-message = "Reaper {{version}}"
 pre-release-commit-message = "chore: Release Reaper {{version}}"
 post-release-commit-message = "chore: Bump to next dev version"
+
+# Release profile tuned for the sub-microsecond hot path. Fat LTO and a single
+# codegen unit let the optimizer inline across crate boundaries (engine ->
+# evaluators -> data store); `panic = "abort"` removes landing pads from the hot
+# path and shrinks the binary. These matter most for an allocation- and
+# call-heavy workload like policy evaluation.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Benchmarks need unwinding (criterion) and must not abort on panic; otherwise
+# inherit the release optimizations.
+[profile.bench]
+lto = "fat"
+codegen-units = 1
