@@ -1,0 +1,56 @@
+# =============================================================================
+# Profile: ENGINE + SHARDED UDS  (give to consumers; highest throughput)
+# =============================================================================
+# A single high-throughput agent per node/pod exposing a thread-per-core UDS
+# (one pinned single-thread runtime + socket per core). Best when a busy service
+# wants the lowest-overhead local authz. Pair with a co-located client sidecar
+# that round-robins connections across agent-0.sock .. agent-{N-1}.sock.
+#
+#   helm install reaper ./deploy/helm/reaper -f profiles/engine-uds-sharded.yaml
+#
+# NOTE ON CORE PINNING: `pinCores` only has real effect if the pod gets
+# exclusive cores — Guaranteed QoS (requests == limits, integer CPU) AND the
+# kubelet static CPU manager policy enabled. Otherwise set pinCores: false and
+# treat `shards` as "how many single-thread listeners" (still share-nothing, but
+# not core-exclusive).
+
+management:
+  enabled: false
+platform:
+  enabled: false
+postgresql:
+  enabled: false
+
+agent:
+  standalone:
+    enabled: true
+    replicaCount: 1
+  managed:
+    enabled: false
+
+  # Fixed size: thread-per-core wants stable, exclusive cores — not HPA churn.
+  autoscaling:
+    enabled: false
+
+  uds:
+    enabled: true
+    shards: 4          # match to the exclusive core count below
+    pinCores: true
+    socketDir: /run/reaper
+    socketName: agent.sock
+    permissions: "0660"  # owner+group; client sidecar shares fsGroup
+
+  # Guaranteed QoS + integer CPU so the static CPU manager can pin cores.
+  resources:
+    requests:
+      cpu: "4"
+      memory: 256Mi
+    limits:
+      cpu: "4"
+      memory: 256Mi
+
+  # The client sidecar must share this group to open the sockets.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000

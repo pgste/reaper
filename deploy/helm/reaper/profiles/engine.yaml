@@ -1,0 +1,30 @@
+# =============================================================================
+# Profile: ENGINE  (give to consumers)
+# =============================================================================
+# Standalone Reaper Agent only — a self-contained policy decision endpoint over
+# HTTP. No control plane, no database. Consumers deploy this next to their app
+# and push policies/data to it via the agent API (or bake a bundle in).
+#
+#   helm install reaper ./deploy/helm/reaper -f profiles/engine.yaml
+#
+# For lower-latency local calls, add a UDS (see profiles/engine-uds-sharded.yaml).
+
+management:
+  enabled: false
+
+platform:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+agent:
+  standalone:
+    enabled: true
+    replicaCount: 3
+  managed:
+    enabled: false
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20

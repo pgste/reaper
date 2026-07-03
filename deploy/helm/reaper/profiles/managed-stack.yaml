@@ -1,0 +1,59 @@
+# =============================================================================
+# Profile: MANAGED STACK  (the multi-tenant control plane YOU operate)
+# =============================================================================
+# Management server + PostgreSQL + managed agents that register to it. This is
+# the "cloud-hosted" offering: you run this stack, tenants get org-scoped policy
+# management, and agents (in this cluster or a consumer's) point their
+# REAPER_MANAGEMENT_URL at your management endpoint.
+#
+#   helm install reaper ./deploy/helm/reaper -f profiles/managed-stack.yaml \
+#       --set management.secrets.jwtSecret=$(openssl rand -hex 32) \
+#       --set postgresql.auth.password=$(openssl rand -hex 24)
+#
+# REQUIRED before production:
+#   - management.secrets.jwtSecret  (or management.secrets.existingSecret)
+#   - postgresql.auth.password      (or postgresql.auth.existingSecret)
+#   - expose management via ingress/TLS for external agents/tenants.
+
+# The legacy single-tenant platform is superseded by management here.
+platform:
+  enabled: false
+
+management:
+  enabled: true
+  replicaCount: 2
+  ingress:
+    enabled: false   # set true + host/TLS to admit external tenants & agents
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+  persistence:
+    enabled: true
+    size: 10Gi
+
+postgresql:
+  enabled: true
+  auth:
+    username: reaper
+    database: reaper_management
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+agent:
+  # In the managed stack, agents run in "managed" mode and register to the
+  # management server. Set standalone.enabled=true too if you also want
+  # in-cluster enforcement agents.
+  standalone:
+    enabled: false
+  managed:
+    enabled: true
+    replicaCount: 3
+    organization: default
+    # managementUrl defaults to the in-cluster management service.
+
+metrics:
+  serviceMonitor:
+    enabled: true

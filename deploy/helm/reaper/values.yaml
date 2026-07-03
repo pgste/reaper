@@ -215,6 +215,26 @@ agent:
   config:
     logLevel: info
 
+  # ---------------------------------------------------------------------------
+  # Unix Domain Socket transport (lower-latency same-host IPC).
+  #
+  # Two first-class deployment models (see docs/deployment/UDS_DEPLOYMENT.md):
+  #   shards: 0 or 1  -> SHARED: one socket, multi-threaded runtime (best p99).
+  #   shards: N (>1)  -> SHARDED: N sockets, one pinned single-thread runtime
+  #                      each (~12-17% more throughput; clients round-robin).
+  #
+  # When enabled, the socket directory is mounted as a pod-local emptyDir so a
+  # co-located sidecar (see the sidecar example) can reach it. The agent creates
+  # the dir 0700 and chmods each socket to `permissions` — filesystem perms are
+  # the ONLY access boundary (UDS has no application-layer auth).
+  uds:
+    enabled: false
+    shards: 0            # 0/1 = shared; N>1 = sharded thread-per-core
+    pinCores: true       # pin each shard runtime to a core (sharded only)
+    socketDir: /run/reaper
+    socketName: agent.sock
+    permissions: "0660"  # 0660 = owner+group; use 0600 for owner-only
+
   openTelemetry:
     enabled: false
     endpoint: ""

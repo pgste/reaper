@@ -1,0 +1,107 @@
+# =============================================================================
+# Reaper Agent as a UDS sidecar  (give to consumers)
+# =============================================================================
+# Drop the Reaper Agent into your own pod as a sidecar and talk to it over a
+# Unix domain socket on a pod-local emptyDir. No network hop, no TCP — the agent
+# enforces policy for your app with sub-microsecond evaluation.
+#
+# Security model (see docs/deployment/UDS_DEPLOYMENT.md):
+#   - The socket dir is a pod-local emptyDir: nothing outside the pod can reach
+#     it (the pod boundary is the isolation).
+#   - The agent chmods each socket to 0660 (owner+group). Both containers run
+#     under the same `fsGroup`, so the app can open the socket; no other
+#     workload can.
+#   - UDS has no application-layer auth — filesystem perms are the boundary.
+#
+# Your app connects to:  /run/reaper/agent.sock   (shared model)
+# For the sharded model, set REAPER_UDS_SHARDS=N and round-robin across
+#   /run/reaper/agent-0.sock .. /run/reaper/agent-{N-1}.sock
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app-with-reaper
+  labels:
+    app: my-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      # Both containers share this group so the app can open the agent's socket.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+        # ------------------------------------------------------------------
+        # Your application — the UDS client.
+        # ------------------------------------------------------------------
+        - name: app
+          image: ghcr.io/your-org/your-app:latest
+          env:
+            # Point your Reaper client at the shared socket.
+            - name: REAPER_UDS_PATH
+              value: /run/reaper/agent.sock
+          volumeMounts:
+            - name: reaper-uds
+              mountPath: /run/reaper
+
+        # ------------------------------------------------------------------
+        # Reaper Agent sidecar — the UDS server.
+        # ------------------------------------------------------------------
+        - name: reaper-agent
+          image: ghcr.io/pgste/reaper/reaper-agent:latest
+          env:
+            - name: RUST_LOG
+              value: "info,reaper_agent=info"
+            - name: REAPER_UDS_ENABLED
+              value: "true"
+            - name: REAPER_UDS_PATH
+              value: /run/reaper/agent.sock
+            # Shared model (one socket). For thread-per-core, set this to the
+            # number of cores you give the sidecar and round-robin on the client.
+            - name: REAPER_UDS_SHARDS
+              value: "0"
+            - name: REAPER_UDS_PERMISSIONS
+              value: "0660"
+            # Optional: also serve TCP for health probes / management sync.
+            - name: REAPER_BIND_ADDR
+              value: "0.0.0.0:8080"
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: reaper-uds
+              mountPath: /run/reaper
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+      volumes:
+        # Pod-local socket directory shared by app + agent. Never leaves the pod.
+        - name: reaper-uds
+          emptyDir: {}

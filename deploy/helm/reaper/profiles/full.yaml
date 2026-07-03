@@ -1,0 +1,36 @@
+# =============================================================================
+# Profile: FULL  (demo / staging — everything on)
+# =============================================================================
+# Management + Platform + PostgreSQL + both agent modes + ServiceMonitor.
+# Useful for demos and staging where you want every surface running. Not the
+# recommended production shape — for that pick managed-stack.yaml (control
+# plane) and/or engine*.yaml (enforcement).
+#
+#   helm install reaper ./deploy/helm/reaper -f profiles/full.yaml \
+#       --set management.secrets.jwtSecret=$(openssl rand -hex 32)
+
+management:
+  enabled: true
+
+platform:
+  enabled: true
+
+postgresql:
+  enabled: true
+
+agent:
+  standalone:
+    enabled: true
+    replicaCount: 2
+  managed:
+    enabled: true
+    replicaCount: 2
+    organization: default
+  openTelemetry:
+    enabled: false   # set true + endpoint to ship traces to Tempo/OTLP
+
+metrics:
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
