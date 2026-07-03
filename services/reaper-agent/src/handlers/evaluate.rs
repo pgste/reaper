@@ -24,8 +24,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::{fmt::Hyphenated, Uuid};
 
 use crate::observability::{
-    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISIONS_TOTAL, DECISION_DURATION,
-    DENIALS_TOTAL, ERRORS_TOTAL,
+    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DENIALS_TOTAL, ERRORS_TOTAL,
 };
 use crate::state::AgentState;
 use crate::types::EvaluateRequest;
@@ -336,16 +335,12 @@ pub async fn evaluate_policy(
         PolicyAction::Log => "log",
     };
 
-    // Record Prometheus metrics — no UUID in labels (high-cardinality anti-pattern)
-    DECISIONS_TOTAL
-        .with_label_values(&[decision_str, &matched_policy_name])
-        .inc();
-
-    // Record latency (convert ns to seconds for Prometheus)
+    // Record Prometheus metrics via cached per-policy handles — no UUID in
+    // labels (high-cardinality anti-pattern), and no per-request label hashing.
     let latency_seconds = total_eval_time_ns as f64 / 1_000_000_000.0;
-    DECISION_DURATION
-        .with_label_values(&[&matched_policy_name])
-        .observe(latency_seconds);
+    let metrics = state.decision_metrics.for_policy(&matched_policy_name);
+    metrics.counter(&final_decision).inc();
+    metrics.duration.observe(latency_seconds);
 
     // Attach OpenTelemetry attributes only when the trace is sampled. The
     // context/span-context lookup and all the KeyValue allocations are skipped
@@ -631,13 +626,11 @@ pub async fn fast_evaluate_policy(
         PolicyAction::Log => "log",
     };
 
-    // Record metrics — no UUID in labels
-    DECISIONS_TOTAL
-        .with_label_values(&[decision_str, &policy_name_resolved])
-        .inc();
-    DECISION_DURATION
-        .with_label_values(&[&policy_name_resolved])
-        .observe(total_time.as_secs_f64());
+    // Record metrics via cached per-policy handles — avoids re-hashing the
+    // label values and re-locking the metric vecs on every request.
+    let metrics = state.decision_metrics.for_policy(&policy_name_resolved);
+    metrics.counter(&final_decision).inc();
+    metrics.duration.observe(total_time.as_secs_f64());
 
     // Encode the policy UUID into a stack buffer — no heap allocation, same
     // trick as decision_id.
@@ -725,6 +718,9 @@ pub async fn batch_evaluate_policy(
 
     let request_count = requests.len();
 
+    // Resolve the per-policy metric handles once for the whole batch.
+    let metrics = state.decision_metrics.for_policy(&policy_name);
+
     // Scope the cache to this policy and capture the generation before evaluating.
     let cache_scope = policy_engine::scope_hash(std::iter::once(policy_id));
     let cache_generation = state
@@ -776,10 +772,8 @@ pub async fn batch_evaluate_policy(
                 PolicyAction::Log => "log",
             };
 
-            // Record metrics — no UUID in labels
-            DECISIONS_TOTAL
-                .with_label_values(&[decision_str, &policy_name])
-                .inc();
+            // Record metrics via the cached per-policy handle.
+            metrics.counter(&decision).inc();
 
             json!({
                 "index": i,

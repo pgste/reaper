@@ -70,6 +70,7 @@ fn build_state() -> Arc<AgentState> {
         policy_cache: None,
         decision_buffer: None,
         agent_id: "bench".to_string(),
+        decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
     })
 }
 

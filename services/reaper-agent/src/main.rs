@@ -2,6 +2,7 @@ mod bootstrap;
 mod cache;
 mod handlers;
 mod management;
+mod metrics_cache;
 mod observability;
 mod state;
 mod tls;
@@ -459,6 +460,7 @@ async fn main() -> anyhow::Result<()> {
         policy_cache,
         decision_buffer,
         agent_id,
+        decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
     });
 
     let app = Router::new()

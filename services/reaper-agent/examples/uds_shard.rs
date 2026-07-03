@@ -152,6 +152,7 @@ fn build_state() -> anyhow::Result<Arc<AgentState>> {
         policy_cache: None,
         decision_buffer: None,
         agent_id: "shard-bench".to_string(),
+        decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
     }))
 }
 

@@ -18,6 +18,7 @@ pub mod bootstrap;
 pub mod cache;
 pub mod handlers;
 pub mod management;
+pub mod metrics_cache;
 pub mod observability;
 pub mod state;
 pub mod tls;

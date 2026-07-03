@@ -46,6 +46,7 @@ futures = { workspace = true }
 sha2 = { workspace = true }
 hostname = "0.4"
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
 hdrhistogram = "7.5"
 sysinfo = "0.32"
 

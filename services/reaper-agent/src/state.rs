@@ -36,6 +36,9 @@ pub struct AgentState {
     pub decision_buffer: Option<SharedDecisionBuffer>,
     /// Agent identifier for decision logs
     pub agent_id: String,
+    /// Cache of per-policy Prometheus metric handles (avoids re-hashing label
+    /// values and re-locking the metric vecs on every request).
+    pub decision_metrics: Arc<crate::metrics_cache::DecisionMetrics>,
 }
 
 impl std::fmt::Debug for AgentState {

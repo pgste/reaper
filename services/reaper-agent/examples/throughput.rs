@@ -166,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
         policy_cache: None,
         decision_buffer: None,
         agent_id: "throughput-bench".to_string(),
+        decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
     });
 
     let app = Router::new()

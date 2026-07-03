@@ -125,6 +125,7 @@ mod tests {
             policy_cache: None,
             decision_buffer: None,
             agent_id: "test-agent".to_string(),
+            decision_metrics: Arc::new(crate::metrics_cache::DecisionMetrics::new()),
         })
     }
 
