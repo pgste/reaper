@@ -59,7 +59,14 @@ tokio-rustls = "0.26"
 criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
-hyper = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = "1"
+
+[[example]]
+name = "throughput"
+path = "examples/throughput.rs"
 
 [[bench]]
 name = "agent_bench"
