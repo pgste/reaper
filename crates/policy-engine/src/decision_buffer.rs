@@ -5,6 +5,7 @@
 
 use crate::decision_log::{DecisionLogConfig, DecisionLogEntry};
 use parking_lot::RwLock;
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
@@ -12,6 +13,37 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
+
+/// Global seed source so each thread's sampling PRNG starts distinct without an
+/// RNG syscall or a time source on the hot path.
+static SAMPLE_SEED: AtomicU64 = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+
+thread_local! {
+    static SAMPLE_RNG: Cell<u64> = Cell::new(seed_thread());
+}
+
+/// Distinct non-zero per-thread seed via a SplitMix64 step off the global counter.
+fn seed_thread() -> u64 {
+    let mut z = SAMPLE_SEED.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (z ^ (z >> 31)) | 1
+}
+
+/// A uniform sample in `[0.0, 1.0)` from a thread-local xorshift64 (a few ns, no
+/// shared state, no syscall) — used for deny-priority allow sampling.
+#[inline]
+fn sample_unit() -> f64 {
+    SAMPLE_RNG.with(|c| {
+        let mut x = c.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        c.set(x);
+        // Top 53 bits → f64 in [0, 1).
+        (x >> 11) as f64 / (1u64 << 53) as f64
+    })
+}
 
 /// Bound on the background file-writer queue. When full, entries are dropped
 /// (and counted) rather than blocking the request thread — the in-memory ring
@@ -36,6 +68,8 @@ pub struct DecisionBufferStats {
     pub deny_count: u64,
     /// Entries dropped because the background file-writer queue was full.
     pub writer_dropped: u64,
+    /// Allow decisions dropped by sampling (`sample_allow_rate < 1.0`).
+    pub sampled_out: u64,
 }
 
 /// A thread-safe ring buffer for decision log entries
@@ -55,6 +89,9 @@ pub struct DecisionBuffer {
 
     /// Entries dropped because the background writer queue was full.
     writer_dropped: AtomicU64,
+
+    /// Allow decisions dropped by sampling (`sample_allow_rate < 1.0`).
+    sampled_out: AtomicU64,
 
     /// Sender to the background file-writer thread (None if no file configured).
     /// File serialization and the write syscall happen on that thread, never on
@@ -108,8 +145,36 @@ impl DecisionBuffer {
             allow_count: AtomicU64::new(0),
             deny_count: AtomicU64::new(0),
             writer_dropped: AtomicU64::new(0),
+            sampled_out: AtomicU64::new(0),
             writer_tx,
         })
+    }
+
+    /// Cheap pre-check the request path calls BEFORE building a `DecisionLogEntry`,
+    /// so sampled-out or disabled decisions cost nothing (no allocation, no
+    /// formatting). Returns true if this decision should be captured.
+    ///
+    /// Deny-priority sampling: denies are always kept (security-relevant);
+    /// allows are kept with probability `sample_allow_rate` using a thread-local
+    /// PRNG (a few ns, no shared state, no syscall).
+    #[inline]
+    pub fn should_log(&self, is_allow: bool) -> bool {
+        if !self.config.enabled {
+            return false;
+        }
+        if is_allow {
+            if !self.config.log_allows {
+                return false;
+            }
+            let rate = self.config.sample_allow_rate;
+            if rate < 1.0 && (rate <= 0.0 || sample_unit() >= rate) {
+                self.sampled_out.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
+        } else if !self.config.log_denies {
+            return false;
+        }
+        true
     }
 
     /// Serialize and write a single message on the background writer thread.
@@ -221,6 +286,7 @@ impl DecisionBuffer {
             allow_count: self.allow_count.load(Ordering::Relaxed),
             deny_count: self.deny_count.load(Ordering::Relaxed),
             writer_dropped: self.writer_dropped.load(Ordering::Relaxed),
+            sampled_out: self.sampled_out.load(Ordering::Relaxed),
         }
     }
 
@@ -360,6 +426,62 @@ mod tests {
             "policy".to_string(),
             "test-policy".to_string(),
         )
+    }
+
+    #[test]
+    fn test_should_log_disabled() {
+        let buffer = DecisionBuffer::new(DecisionLogConfig::default()).unwrap(); // disabled
+        assert!(!buffer.should_log(true));
+        assert!(!buffer.should_log(false));
+    }
+
+    #[test]
+    fn test_should_log_deny_priority_sampling() {
+        // Keep 0% of allows, but denies must always pass.
+        let config = DecisionLogConfig {
+            enabled: true,
+            sample_allow_rate: 0.0,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        for _ in 0..1000 {
+            assert!(buffer.should_log(false), "denies must never be sampled out");
+            assert!(!buffer.should_log(true), "allows sampled out at rate 0.0");
+        }
+        assert_eq!(buffer.stats().sampled_out, 1000);
+    }
+
+    #[test]
+    fn test_should_log_full_rate_keeps_all() {
+        let config = DecisionLogConfig {
+            enabled: true,
+            sample_allow_rate: 1.0,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        for _ in 0..1000 {
+            assert!(buffer.should_log(true));
+        }
+        assert_eq!(buffer.stats().sampled_out, 0);
+    }
+
+    #[test]
+    fn test_should_log_partial_sampling_is_approximate() {
+        let config = DecisionLogConfig {
+            enabled: true,
+            sample_allow_rate: 0.25,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        let n = 20_000;
+        let kept = (0..n).filter(|_| buffer.should_log(true)).count();
+        // ~25% kept; generous bounds to avoid flakiness.
+        assert!(
+            (3_000..7_000).contains(&kept),
+            "expected ~5000 kept, got {kept}"
+        );
+        assert_eq!(buffer.stats().sampled_out as usize, n - kept);
     }
 
     #[test]

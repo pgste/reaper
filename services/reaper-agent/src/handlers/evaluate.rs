@@ -393,38 +393,42 @@ pub async fn evaluate_policy(
 
     // Log to decision buffer only when enabled (gate all work inside the check)
     if let Some(ref buffer) = state.decision_buffer {
-        let trace_id = if span_context.is_valid() {
-            format!("{:032x}", span_context.trace_id())
-        } else {
-            String::new()
-        };
+        // Deny-priority sampling gate BEFORE building the entry, so sampled-out
+        // or disabled decisions cost nothing (no alloc, no formatting).
+        if buffer.should_log(decision_str == "allow") {
+            let trace_id = if span_context.is_valid() {
+                format!("{:032x}", span_context.trace_id())
+            } else {
+                String::new()
+            };
 
-        let mut context_values: HashMap<String, serde_json::Value> = HashMap::new();
-        if let Some(ref ctx) = payload.context {
-            for (k, v) in ctx {
-                context_values.insert(k.clone(), serde_json::Value::String(v.clone()));
+            let mut context_values: HashMap<String, serde_json::Value> = HashMap::new();
+            if let Some(ref ctx) = payload.context {
+                for (k, v) in ctx {
+                    context_values.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
             }
+
+            let mut entry = DecisionLogEntry::new(
+                payload.principal.clone(),
+                payload.action.clone(),
+                payload.resource.clone(),
+                decision_str.to_string(),
+                matched_policy_id.to_string(),
+                matched_policy_name.clone(),
+            )
+            .with_trace_id(trace_id)
+            .with_context(context_values)
+            .with_evaluation_time_ns(total_eval_time_ns)
+            .with_cache_hit(false)
+            .with_agent_id(state.agent_id.clone())
+            .with_matched_rule(matched_rule.clone());
+
+            // Use the same decision_id across response, logs, and audit trail
+            entry.decision_id = decision_id.to_string();
+
+            buffer.log(entry);
         }
-
-        let mut entry = DecisionLogEntry::new(
-            payload.principal.clone(),
-            payload.action.clone(),
-            payload.resource.clone(),
-            decision_str.to_string(),
-            matched_policy_id.to_string(),
-            matched_policy_name.clone(),
-        )
-        .with_trace_id(trace_id)
-        .with_context(context_values)
-        .with_evaluation_time_ns(total_eval_time_ns)
-        .with_cache_hit(false)
-        .with_agent_id(state.agent_id.clone())
-        .with_matched_rule(matched_rule.clone());
-
-        // Use the same decision_id across response, logs, and audit trail
-        entry.decision_id = decision_id.to_string();
-
-        buffer.log(entry);
     }
 
     // Cache the decision for future requests (if caching enabled)
@@ -631,6 +635,38 @@ pub async fn fast_evaluate_policy(
     let metrics = state.decision_metrics.for_policy(&policy_name_resolved);
     metrics.counter(&final_decision).inc();
     metrics.duration.observe(total_time.as_secs_f64());
+
+    // Audit: capture the decision (deny-priority sampled). The fast path was
+    // previously not logged at all, so fast-endpoint decisions went unaudited —
+    // a real gap for an audit system. Gated by should_log so sampled-out/disabled
+    // decisions cost nothing.
+    if let Some(ref buffer) = state.decision_buffer {
+        if buffer.should_log(decision_str == "allow") {
+            let principal = request
+                .context
+                .get("principal")
+                .cloned()
+                .unwrap_or_default();
+            let mut entry = DecisionLogEntry::new(
+                principal,
+                request.action.clone(),
+                request.resource.clone(),
+                decision_str.to_string(),
+                matched_policy_id.to_string(),
+                policy_name_resolved.clone(),
+            )
+            .with_evaluation_time_ns(total_eval_time_ns)
+            .with_cache_hit(false)
+            .with_agent_id(state.agent_id.clone())
+            .with_matched_rule(
+                matched_rule
+                    .map(|r| format!("rule_{}", r))
+                    .unwrap_or_default(),
+            );
+            entry.decision_id = decision_id.to_string();
+            buffer.log(entry);
+        }
+    }
 
     // Encode the policy UUID into a stack buffer — no heap allocation, same
     // trick as decision_id.

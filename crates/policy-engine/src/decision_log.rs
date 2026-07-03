@@ -158,6 +158,12 @@ pub struct DecisionLogConfig {
     /// Whether to log deny decisions
     pub log_denies: bool,
 
+    /// Fraction of *allow* decisions to keep, in [0.0, 1.0] (default 1.0 = all).
+    /// Denies are never sampled — they're the security-relevant events. This is
+    /// the cheapest volume-control knob: sampled-out allows are dropped before
+    /// the log entry is even built. e.g. 0.01 keeps 1% of allows + 100% of denies.
+    pub sample_allow_rate: f64,
+
     /// Whether to include context in logs (can be disabled for privacy)
     pub include_context: bool,
 }
@@ -171,6 +177,7 @@ impl Default for DecisionLogConfig {
             flush_interval_ms: 5_000,
             log_allows: true,
             log_denies: true,
+            sample_allow_rate: 1.0,
             include_context: true,
         }
     }
@@ -198,6 +205,11 @@ impl DecisionLogConfig {
             log_denies: std::env::var("REAPER_DECISION_LOG_DENIES")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
+            sample_allow_rate: std::env::var("REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|r| r.clamp(0.0, 1.0))
+                .unwrap_or(1.0),
             include_context: std::env::var("REAPER_DECISION_LOG_CONTEXT")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),

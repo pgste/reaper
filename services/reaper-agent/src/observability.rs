@@ -116,6 +116,20 @@ lazy_static! {
         "Total decision log file flushes"
     )
     .expect("Failed to register DECISION_LOG_FLUSHES metric");
+
+    /// Allow decisions dropped by sampling (deny-priority `sample_allow_rate`).
+    pub static ref DECISION_LOG_SAMPLED_OUT: Gauge = register_gauge!(
+        "reaper_decision_log_sampled_out_total",
+        "Allow decisions dropped by sampling before logging"
+    )
+    .expect("Failed to register DECISION_LOG_SAMPLED_OUT metric");
+
+    /// Entries dropped because the background file-writer queue was full.
+    pub static ref DECISION_LOG_WRITER_DROPPED: Gauge = register_gauge!(
+        "reaper_decision_log_writer_dropped_total",
+        "Decision log entries dropped because the writer queue was full"
+    )
+    .expect("Failed to register DECISION_LOG_WRITER_DROPPED metric");
 }
 
 /// Record a policy decision in Prometheus metrics.
