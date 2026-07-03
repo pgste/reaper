@@ -413,8 +413,27 @@ impl RequireScope {
 fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
     use super::users::OrgRole;
     match role {
+        // An org Owner has FULL control of their OWN organization, but is NOT a
+        // platform super-admin. The global "admin" scope is deliberately not
+        // granted here: cross-organization guards use `!has(Scope::Admin)` as
+        // their escape hatch, so granting "admin" to every Owner (and every
+        // org is created with an Owner) made every tenant able to act on every
+        // other tenant's resources. "admin" is reserved for genuine
+        // platform operators and is never conferred by an org role.
         OrgRole::Owner => vec![
-            "admin".to_string(), // Full access
+            "org:admin".to_string(),
+            "org:read".to_string(),
+            "org:write".to_string(),
+            "agent:register".to_string(),
+            "agent:read".to_string(),
+            "agent:write".to_string(),
+            "policy:read".to_string(),
+            "policy:write".to_string(),
+            "bundle:read".to_string(),
+            "bundle:write".to_string(),
+            "bundle:promote".to_string(),
+            "apikey:read".to_string(),
+            "apikey:write".to_string(),
         ],
         OrgRole::Admin => vec![
             "org:admin".to_string(),
@@ -446,6 +465,28 @@ fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_owner_is_not_platform_admin() {
+        // Regression for the tenant-isolation break: an org Owner must have full
+        // control of their OWN org but must NOT hold the global platform-admin
+        // scope, which cross-org guards use as their escape hatch.
+        let scopes = role_to_scopes(super::super::users::OrgRole::Owner);
+        assert!(
+            !scopes.contains(&"admin".to_string()),
+            "Owner must not be granted the global platform-admin scope"
+        );
+
+        let perm = Permission::from_strings(&scopes);
+        assert!(
+            !perm.has(Scope::Admin),
+            "Owner is not a platform super-admin"
+        );
+        assert!(perm.has(Scope::OrgAdmin), "Owner is a full org admin");
+        assert!(perm.has(Scope::PolicyWrite));
+        assert!(perm.has(Scope::ApiKeyWrite));
+        assert!(perm.has(Scope::BundlePromote));
+    }
 
     #[test]
     fn test_authenticated_user_from_api_key() {

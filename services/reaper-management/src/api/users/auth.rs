@@ -399,15 +399,17 @@ pub async fn request_password_reset(
     reset_repo.invalidate_for_user(user.id).await?;
 
     // Create new reset token (expires in 1 hour)
-    let (reset_token, raw_token) = PasswordResetToken::new(user.id, 1);
+    let (reset_token, _raw_token) = PasswordResetToken::new(user.id, 1);
     reset_repo.create(&reset_token).await?;
 
-    // TODO: Send email with reset link
-    // For now, just log the token (in production, this would be sent via email)
+    // Never log the raw reset token: logs are not a secure delivery channel, and
+    // anyone with log access could take over the account. The token must be
+    // delivered out-of-band (email). Until email delivery is wired up, the token
+    // is intentionally not exposed anywhere.
+    // TODO: send `_raw_token` to the user via email with the reset link.
     tracing::info!(
         user_id = %user.id,
-        email = %user.email,
-        "Password reset requested. Token: {}", raw_token
+        "Password reset requested"
     );
 
     // Audit log

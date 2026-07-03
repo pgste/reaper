@@ -59,9 +59,11 @@ pub(super) async fn github_authorize(
         ));
     }
 
-    // Generate state token for CSRF protection
+    // Generate HMAC-signed state token for CSRF protection, bound to the server
+    // secret so the callback cannot be tricked with a forged user_id/org_slug.
+    let state_secret = state.config.auth.jwt_secret.clone().unwrap_or_default();
     let oauth_state = OAuthState::new(&params.org, &user_id.to_string());
-    let state_token = oauth_state.encode();
+    let state_token = oauth_state.encode(state_secret.as_bytes());
 
     // Build GitHub authorization URL
     let auth_url = format!(
@@ -82,8 +84,10 @@ pub(super) async fn github_callback(
 ) -> ApiResult<Redirect> {
     let client_info = ClientInfo::from_headers(&headers);
 
-    // Decode and validate state token
-    let oauth_state = OAuthState::decode(&params.state)
+    // Decode and verify the HMAC-signed state token. A forged or tampered state
+    // (e.g. one naming another org/user) fails signature verification here.
+    let state_secret = state.config.auth.jwt_secret.clone().unwrap_or_default();
+    let oauth_state = OAuthState::decode(&params.state, state_secret.as_bytes())
         .ok_or_else(|| ApiError::BadRequest("Invalid state token".to_string()))?;
 
     if !oauth_state.is_valid() {
@@ -138,17 +142,14 @@ pub(super) async fn github_callback(
     let user_id = Uuid::parse_str(&oauth_state.user_id)
         .map_err(|_| ApiError::Internal("Invalid user ID in state".to_string()))?;
 
-    // Encrypt token before storage
-    let encrypted_token = encrypt_token(
-        &token_response.access_token,
-        &state.config.auth.jwt_secret.clone().unwrap_or_default(),
-    );
-    let encrypted_refresh = token_response.refresh_token.map(|t| {
-        encrypt_token(
-            &t,
-            &state.config.auth.jwt_secret.clone().unwrap_or_default(),
-        )
-    });
+    // Encrypt token before storage (authenticated encryption; fails loudly if
+    // no encryption key is configured rather than storing weakly-protected data)
+    let master_secret = state.config.auth.jwt_secret.clone().unwrap_or_default();
+    let encrypted_token = encrypt_token(&token_response.access_token, &master_secret)?;
+    let encrypted_refresh = token_response
+        .refresh_token
+        .map(|t| encrypt_token(&t, &master_secret))
+        .transpose()?;
 
     // Calculate token expiry
     let token_expires_at = token_response

@@ -51,6 +51,8 @@ glob = "0.3"
 # Auth
 jsonwebtoken = "9.3"
 rand = { workspace = true }
+chacha20poly1305 = { workspace = true }  # AEAD for OAuth token storage
+hkdf = { workspace = true }              # key derivation for token encryption
 hex = "0.4"
 hmac = "0.12"
 md-5 = "0.10"

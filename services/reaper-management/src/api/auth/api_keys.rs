@@ -117,17 +117,25 @@ pub async fn create_api_key(
         ));
     }
 
-    // Validate scopes
+    // Validate scopes. A key must never grant more than its creator holds —
+    // otherwise an org admin could mint an `admin` (platform super-admin) key
+    // and escalate to cross-tenant access. `has_permission` treats a genuine
+    // platform admin as holding everything, so only real platform operators can
+    // create admin-scoped keys.
     let scopes = if request.scopes.is_empty() {
         Scope::agent_defaults()
             .iter()
             .map(|s| s.to_string())
             .collect()
     } else {
-        // Validate that all requested scopes are valid
-        for scope in &request.scopes {
-            if Scope::parse(scope).is_none() {
-                return Err(ApiError::BadRequest(format!("Invalid scope: {}", scope)));
+        for scope_str in &request.scopes {
+            let scope = Scope::parse(scope_str)
+                .ok_or_else(|| ApiError::BadRequest(format!("Invalid scope: {}", scope_str)))?;
+            if !user.has_permission(scope) {
+                return Err(ApiError::Forbidden(format!(
+                    "Cannot grant scope '{}': it exceeds your own permissions",
+                    scope_str
+                )));
             }
         }
         request.scopes
