@@ -145,6 +145,46 @@ Two things to note:
   deserializes into owned structures, which on small authz payloads can cost
   more than the evaluation.
 
+## Per-core sharding: shared runtime vs thread-per-core UDS
+
+[`services/reaper-agent/examples/uds_shard.rs`](../../services/reaper-agent/examples/uds_shard.rs)
+compares two server models with the load generator in a **separate process** (so
+it never steals the server's cores):
+
+- **shared** — one multi-threaded tokio runtime on a single UDS socket.
+- **sharded** — N single-thread runtimes, each pinned to a core and owning its
+  own UDS socket (`agent-0.sock … agent-{N-1}.sock`); the client round-robins
+  connections across them. Since UDS has no `SO_REUSEPORT`, multiple socket files
+  is how you shard a thread-per-core UDS server.
+
+```bash
+# server (terminal 1)
+cargo run --release --example uds_shard -p reaper-agent -- server --mode sharded --shards 4 --dir /tmp/reaper-shard
+# load (terminal 2)
+cargo run --release --example uds_shard -p reaper-agent -- load --dir /tmp/reaper-shard --shards 4 --connections 64 --duration-secs 4
+```
+
+Results (4-core sandbox, generic build, compiled policy, UDS):
+
+```
+model                                    32 conn                64 conn
+shared  (1 socket, multi-thread)     99,708 req/s p50 289µs   107,965 req/s p50 539µs
+sharded (4 sockets, pinned)         111,599 req/s p50 207µs   125,836 req/s p50 383µs
+```
+
+- **Sharded is +12–17% throughput and ~30% lower p50** — share-nothing (no
+  work-stealing, no cross-core cache bouncing, pinned cores) is a real win, and
+  it comfortably clears **100k+ req/s on 4 cores** (generic build; `target-cpu`
+  would push it higher).
+- **Tradeoff: worse p99** (e.g. 1428µs vs 806µs at 32 conn). With fixed shards
+  and round-robin connection assignment, an unlucky connection can't be
+  rebalanced across cores. That is the classic thread-per-core tail-latency cost.
+
+Security: the harness creates the socket directory owner-only (`0700`) and
+chmods every socket `0600` — the same model as the agent's `serve_uds`, applied
+to each of the N mounts (more mounts = more filesystem boundaries to secure, and
+UDS has no application-layer auth).
+
 ## Notes / caveats
 
 - Closed-loop (each worker waits for its response before sending the next), so

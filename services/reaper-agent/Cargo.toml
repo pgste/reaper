@@ -63,10 +63,15 @@ hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
 bytes = "1"
+core_affinity = "0.8"
 
 [[example]]
 name = "throughput"
 path = "examples/throughput.rs"
+
+[[example]]
+name = "uds_shard"
+path = "examples/uds_shard.rs"
 
 [[bench]]
 name = "agent_bench"
