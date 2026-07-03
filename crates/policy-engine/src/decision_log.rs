@@ -214,13 +214,50 @@ pub struct DecisionLogConfig {
     #[serde(default = "default_true")]
     pub input_data_denies_only: bool,
 
-    /// Number of per-core capture shards. The eval path pushes each decision to
-    /// its thread's shard (a lock-free queue) and a background thread drains the
-    /// shards into the query ring — so concurrent producers on different cores
-    /// never contend on a single lock. 0 = auto (detected parallelism, clamped
-    /// 1..=64). Set to 1 to force a single shard (deterministic ordering, tests).
+    /// Number of ring shards. Each request thread maps to a stable shard, so
+    /// concurrent producers take disjoint, uncontended locks. 0 = auto (detected
+    /// parallelism, clamped 1..=64). Set to 1 to force a single shard
+    /// (deterministic ordering, tests).
     #[serde(default)]
     pub capture_shards: usize,
+
+    // ---- Data protection (masking / pseudonymization / encryption) ----
+    // Applied once at capture, so the query API, file/stdout sinks, and exports
+    // all see only protected data.
+    /// Pseudonymize `principal` with HMAC-SHA-256 (requires `hash_salt`): the
+    /// logged value becomes `sha256:<hex>` — stable across entries (joinable
+    /// for investigations) but not reversible and not dictionary-attackable
+    /// without the salt.
+    #[serde(default)]
+    pub hash_principal: bool,
+
+    /// Secret HMAC key for `hash_principal`. Never serialized (won't appear in
+    /// the `/decisions/stats` config echo or any export).
+    #[serde(skip_serializing, default)]
+    pub hash_salt: Option<String>,
+
+    /// If set, only these request-context keys are kept; all others are dropped
+    /// at capture. `None` keeps everything (subject to `mask_keys`).
+    #[serde(default)]
+    pub context_allowlist: Option<Vec<String>>,
+
+    /// Keys to mask (value replaced with `"***"`) in the request context AND in
+    /// the explain-tier `input_data` attribute maps. Case-insensitive.
+    #[serde(default)]
+    pub mask_keys: Vec<String>,
+
+    /// Encrypt the explain-tier `input_data` snapshot at rest with AES-256-GCM
+    /// (requires `encryption_key`). The logged value becomes an envelope
+    /// `{"enc":"aes256gcm","nonce":...,"ciphertext":...}` that only the key
+    /// holder (e.g. the control plane, per tenant) can open. Fail-closed:
+    /// enabling this without a valid key makes buffer creation error —
+    /// plaintext is never logged by mistake.
+    #[serde(default)]
+    pub encrypt_input_data: bool,
+
+    /// 32-byte hex AES-256-GCM key for `encrypt_input_data`. Never serialized.
+    #[serde(skip_serializing, default)]
+    pub encryption_key: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -242,6 +279,12 @@ impl Default for DecisionLogConfig {
             include_input_data: false,
             input_data_denies_only: true,
             capture_shards: 0,
+            hash_principal: false,
+            hash_salt: None,
+            context_allowlist: None,
+            mask_keys: Vec::new(),
+            encrypt_input_data: false,
+            encryption_key: None,
         }
     }
 }
@@ -289,8 +332,31 @@ impl DecisionLogConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
+            hash_principal: std::env::var("REAPER_DECISION_LOG_HASH_PRINCIPAL")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            hash_salt: std::env::var("REAPER_DECISION_LOG_HASH_SALT").ok(),
+            context_allowlist: std::env::var("REAPER_DECISION_LOG_CONTEXT_ALLOWLIST")
+                .ok()
+                .map(|v| csv_list(&v)),
+            mask_keys: std::env::var("REAPER_DECISION_LOG_MASK_KEYS")
+                .ok()
+                .map(|v| csv_list(&v))
+                .unwrap_or_default(),
+            encrypt_input_data: std::env::var("REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            encryption_key: std::env::var("REAPER_DECISION_LOG_ENCRYPTION_KEY").ok(),
         }
     }
+}
+
+/// Split a comma-separated env value into trimmed, non-empty items.
+fn csv_list(v: &str) -> Vec<String> {
+    v.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]

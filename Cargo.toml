@@ -63,6 +63,9 @@ http-body-util = "0.1"
 # Cryptography for SDK and bundle verification
 sha2 = "0.10"
 ed25519-dalek = "2"
+hmac = "0.12"      # Keyed principal pseudonymization in decision logs
+aes-gcm = "0.10"   # AEAD encryption of decision-log input_data at rest
+base64 = "0.22"
 p256 = { version = "0.13", features = ["ecdsa"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"

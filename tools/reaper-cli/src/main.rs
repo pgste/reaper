@@ -131,6 +131,12 @@ enum Commands {
         key_id: String,
     },
 
+    /// Decision-log data protection utilities (keys, decryption)
+    Decisions {
+        #[command(subcommand)]
+        action: DecisionsAction,
+    },
+
     /// Policy management commands (platform/agent)
     Policy {
         #[command(subcommand)]
@@ -307,6 +313,22 @@ enum BundleAction {
         /// Package version
         #[arg(short, long, default_value = "1.0.0")]
         version: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DecisionsAction {
+    /// Generate secrets for decision-log data protection (HMAC salt + AES key)
+    Keygen,
+    /// Decrypt an encrypted input_data envelope from a decision log entry
+    Decrypt {
+        /// 64-hex-char AES-256-GCM key (REAPER_DECISION_LOG_ENCRYPTION_KEY)
+        #[arg(long)]
+        key: String,
+        /// The envelope JSON ({"enc":"aes256gcm",...}) or a full decision
+        /// entry / NDJSON line containing an "input_data" field. Use '-' to
+        /// read from stdin (e.g. pipe a line from decisions.ndjson).
+        input: String,
     },
 }
 
@@ -714,6 +736,55 @@ fn handle_keygen(algorithm: &str, key_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handle: reaper decisions keygen
+fn handle_decisions_keygen() -> anyhow::Result<()> {
+    // A random 32-byte salt is plenty for HMAC-SHA-256 pseudonymization; reuse
+    // the AES key generator since it produces exactly that.
+    let salt = policy_engine::generate_encryption_key_hex();
+    let key = policy_engine::generate_encryption_key_hex();
+
+    println!("🔑 Decision-log data protection secrets — KEEP THESE SECRET\n");
+    println!("── Agent (reaper-agent) ──");
+    println!("REAPER_DECISION_LOG_HASH_PRINCIPAL=true");
+    println!("REAPER_DECISION_LOG_HASH_SALT={salt}");
+    println!("REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA=true");
+    println!("REAPER_DECISION_LOG_ENCRYPTION_KEY={key}");
+    println!("\n── Optional masking (comma-separated, case-insensitive) ──");
+    println!("# REAPER_DECISION_LOG_MASK_KEYS=ssn,password,token");
+    println!("# REAPER_DECISION_LOG_CONTEXT_ALLOWLIST=request_id,ip");
+    println!("\nStore the encryption key with whoever must read explain data");
+    println!("(e.g. the control plane, per tenant). Decrypt with:");
+    println!("  reaper-cli decisions decrypt --key <hex> '<input_data JSON>'");
+    Ok(())
+}
+
+/// Handle: reaper decisions decrypt
+fn handle_decisions_decrypt(key: &str, input: &str) -> anyhow::Result<()> {
+    let raw = if input == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        buf
+    } else {
+        input.to_string()
+    };
+
+    let value: serde_json::Value = serde_json::from_str(raw.trim())
+        .map_err(|e| anyhow::anyhow!("input is not valid JSON: {e}"))?;
+    // Accept either the bare envelope or a full entry containing input_data.
+    let envelope = if value.get("ciphertext").is_some() {
+        &value
+    } else {
+        value
+            .get("input_data")
+            .ok_or_else(|| anyhow::anyhow!("no input_data field in the given entry"))?
+    };
+
+    let opened = policy_engine::decrypt_input_data(envelope, key)
+        .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
+    println!("{}", serde_json::to_string_pretty(&opened)?);
+    Ok(())
+}
+
 fn handle_validate(
     policy_path: &str,
     data_path: Option<&str>,
@@ -1070,6 +1141,11 @@ async fn main() -> anyhow::Result<()> {
             ref algorithm,
             ref key_id,
         } => handle_keygen(algorithm, key_id)?,
+
+        Commands::Decisions { ref action } => match action {
+            DecisionsAction::Keygen => handle_decisions_keygen()?,
+            DecisionsAction::Decrypt { key, input } => handle_decisions_decrypt(key, input)?,
+        },
 
         Commands::Policy { ref action } => handle_policy_action(action, &cli, &client).await?,
         Commands::Agent { ref action } => handle_agent_action(action, &cli, &client).await?,

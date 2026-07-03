@@ -63,6 +63,12 @@ got a full deep clone of each entry. Implemented now:
   `u32` ids instead of a built entry. The shard push already removed the contention and the
   deep clone; the entry build (a few short `String`s) only happens for decisions that pass
   sampling, so this is a marginal follow-up, not a gap.
+- **Data protection at capture** (`decision_privacy.rs`): HMAC-SHA-256 principal
+  pseudonymization, context allowlist + key masking (context and explain `input_data`), and
+  AES-256-GCM encryption of the explain snapshot — applied once in `log()` so every
+  downstream view (ring, sinks, exports, central store) sees only protected data. Fail-closed
+  on missing secrets; secrets are excluded from config serialization; `reaper-cli decisions
+  keygen|decrypt` for operators. ✅
 
 ### Layer 2 — Local emit (agent, cold path): pluggable sink, minimal
 

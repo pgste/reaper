@@ -57,6 +57,41 @@ happen on a dedicated writer thread. `dropped`/`sampled_out`/`writer_dropped`
 counters are exposed on `/api/v1/decisions/stats` and as Prometheus metrics so
 audit gaps are never silent.
 
+## Protecting sensitive data (masking / pseudonymization / encryption)
+
+Decision logs carry identity and — with the explain tier — resolved entity
+attributes. Three independent, composable protection layers are applied **once
+at capture**, so the query API, file/stdout sinks, exports, and the central
+pipeline only ever see protected values:
+
+| Env | Effect |
+|-----|--------|
+| `REAPER_DECISION_LOG_HASH_PRINCIPAL=true` + `REAPER_DECISION_LOG_HASH_SALT=<secret>` | `principal` becomes `sha256:<hex>` (HMAC-SHA-256): stable → joinable for investigations, irreversible, dictionary-attack-proof without the salt |
+| `REAPER_DECISION_LOG_CONTEXT_ALLOWLIST=request_id,ip` | drop all context keys not listed |
+| `REAPER_DECISION_LOG_MASK_KEYS=ssn,password,token` | replace those values with `"***"` in context **and** in explain `input_data` (case-insensitive) |
+| `REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA=true` + `REAPER_DECISION_LOG_ENCRYPTION_KEY=<64-hex>` | seal the explain snapshot with AES-256-GCM; the log store sees only ciphertext, the key holder (control plane, per tenant) decrypts |
+
+Properties worth knowing:
+
+- **Fail-closed.** Hashing without a salt, or encryption without a valid
+  32-byte key, is a startup error — the agent never silently logs raw data.
+  If encryption fails at runtime the entry is discarded, not logged plaintext.
+- **Masking happens before encryption**, so even the key holder never sees
+  masked fields.
+- **Secrets never echo.** `hash_salt`/`encryption_key` are excluded from
+  serialization, so `/api/v1/decisions/stats` config output can't leak them.
+
+Tooling:
+
+```bash
+reaper-cli decisions keygen        # generate salt + AES key as ready-to-paste env vars
+reaper-cli decisions decrypt --key <hex> '<input_data envelope or full entry JSON>'
+# or pipe an NDJSON line:  cat decisions.ndjson | tail -1 | reaper-cli decisions decrypt --key <hex> -
+```
+
+In ClickHouse, encrypted `input_data` is just an opaque JSON column — the
+control plane decrypts per tenant at query time.
+
 ## What's in each record
 
 Every decision logs: `timestamp`, `decision_id`, `trace_id`, `principal`,

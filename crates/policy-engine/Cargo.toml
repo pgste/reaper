@@ -26,6 +26,9 @@ pest_derive = "2.7"
 postcard = { workspace = true }
 regex = "1.10"
 sha2 = { workspace = true }
+hmac = { workspace = true }     # Keyed principal pseudonymization (decision logs)
+aes-gcm = { workspace = true }  # AEAD encryption of decision-log input_data
+base64 = { workspace = true }
 hex = "0.4"  # Hex encoding for checksums
 memchr = "2.7"  # SIMD-accelerated string search
 lazy_static = "1.4"  # Thread-local regex cache global state

@@ -30,6 +30,7 @@
 //! `Arc` (no deep clone) — never the request path.
 
 use crate::decision_log::{DecisionLogConfig, DecisionLogEntry};
+use crate::decision_privacy::DataProtection;
 use crossbeam_utils::CachePadded;
 use parking_lot::RwLock;
 use std::cell::Cell;
@@ -173,11 +174,23 @@ pub struct DecisionBuffer {
     /// File serialization and the write syscall happen on that thread, never on
     /// the request path.
     writer_tx: Option<SyncSender<WriterMsg>>,
+
+    /// Capture-time data protection (masking / pseudonymization / encryption).
+    /// Applied before an entry reaches the ring or the writer, so every
+    /// downstream view sees only protected data. None = nothing configured.
+    protection: Option<DataProtection>,
 }
 
 impl DecisionBuffer {
-    /// Create a new decision buffer with the given configuration
+    /// Create a new decision buffer with the given configuration.
+    ///
+    /// Fails closed on invalid data-protection config (hashing without a salt,
+    /// encryption without a valid key) — the agent must not start logging
+    /// unprotected data because a secret was missing.
     pub fn new(config: DecisionLogConfig) -> std::io::Result<Self> {
+        let protection = DataProtection::from_config(&config)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
         let writer_tx = if config.file_path.is_some() || config.emit_stdout {
             let file = if let Some(ref path) = config.file_path {
                 // Ensure parent directory exists
@@ -248,6 +261,7 @@ impl DecisionBuffer {
             writer_dropped: AtomicU64::new(0),
             sampled_out: AtomicU64::new(0),
             writer_tx,
+            protection,
         })
     }
 
@@ -335,6 +349,17 @@ impl DecisionBuffer {
         // Strip context if configured
         if !self.config.include_context {
             entry.context.clear();
+        }
+
+        // Data protection (masking / pseudonymization / encryption), applied
+        // before the entry reaches the ring or the writer so no downstream view
+        // ever sees raw values. Fail closed: if protection errors (e.g.
+        // encryption failure), the entry is discarded, never logged raw.
+        if let Some(ref protection) = self.protection {
+            if let Err(e) = protection.apply(&mut entry) {
+                tracing::error!(error = %e, "decision-log protection failed; entry discarded");
+                return;
+            }
         }
 
         // Update statistics. The sequence number doubles as the total-intake
@@ -598,6 +623,68 @@ mod tests {
             "policy".to_string(),
             "test-policy".to_string(),
         )
+    }
+
+    #[test]
+    fn test_protection_applies_to_ring_and_file_sink() {
+        // With protection configured, neither the query ring nor the file sink
+        // may ever contain the raw principal or masked values — protection is
+        // applied once at capture, upstream of both.
+        let path = std::env::temp_dir().join(format!(
+            "reaper_declog_prot_test_{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let config = DecisionLogConfig {
+            enabled: true,
+            file_path: Some(path.to_string_lossy().to_string()),
+            hash_principal: true,
+            hash_salt: Some("test-salt".to_string()),
+            mask_keys: vec!["token".to_string()],
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        let mut entry = test_entry("deny");
+        entry.principal = "alice@example.com".to_string();
+        entry.context.insert(
+            "token".to_string(),
+            serde_json::Value::String("s3cr3t".to_string()),
+        );
+        buffer.log(entry);
+        buffer.flush().unwrap();
+
+        // Ring view is protected.
+        let recent = buffer.get_recent(1);
+        assert!(recent[0].principal.starts_with("sha256:"));
+        assert_eq!(recent[0].context["token"], serde_json::json!("***"));
+
+        // File sink is protected too (written async by the writer thread).
+        let mut contents = String::new();
+        for _ in 0..200 {
+            contents = std::fs::read_to_string(&path).unwrap_or_default();
+            if !contents.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&path);
+        assert!(!contents.contains("alice@example.com"));
+        assert!(!contents.contains("s3cr3t"));
+        assert!(contents.contains("sha256:"));
+    }
+
+    #[test]
+    fn test_protection_misconfig_fails_buffer_creation() {
+        // Fail closed: a missing secret must prevent startup, not silently log raw.
+        let config = DecisionLogConfig {
+            enabled: true,
+            hash_principal: true,
+            hash_salt: None,
+            ..Default::default()
+        };
+        assert!(DecisionBuffer::new(config).is_err());
     }
 
     #[test]
