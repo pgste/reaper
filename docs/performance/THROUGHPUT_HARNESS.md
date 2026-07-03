@@ -66,6 +66,38 @@ Each row reports throughput (`req/s`) and the latency distribution
 - **compiled vs AST** — the evaluator speedup at the full request level.
 - **fast(sonic) vs std(serde)** — the JSON-parser speedup on the request path.
 
+## Example output
+
+From a 4-core sandbox over loopback (release build, 16 connections, 3s measure).
+Numbers are environment-specific — rerun on your target hardware:
+
+```
+config                        req/s    p50(µs)    p95(µs)    p99(µs)    max(µs)
+------------------------------------------------------------------------------
+TCP  fast  compiled           72080     212.33     343.94     434.81    4783.60
+UDS  fast  compiled           84376     174.77     308.91     419.35    6243.15
+TCP  fast  ast                71251     217.49     337.57     403.81    4629.45
+UDS  fast  ast                79719     190.73     311.44     388.55    3824.29
+TCP  std   compiled           64222     236.81     394.39     494.98    6366.97
+UDS  std   compiled           83102     181.98     302.08     388.47    4083.43
+
+  UDS vs TCP  (fast, compiled):  1.17x
+  compiled vs AST (TCP, fast):   1.01x
+  compiled vs AST (UDS, fast):   1.06x
+  fast(sonic) vs std(serde) TCP: 1.12x
+```
+
+Takeaways from this run:
+- **UDS is ~17% higher throughput and noticeably lower p50** than TCP for the
+  same work — the transport is a real win for co-located sidecars.
+- **compiled vs AST is only ~1–6% at the request level**, even though the pure
+  evaluator is 1.9–3.8× faster (`complex_policy_bench`). That is expected: a
+  request spends most of its time in the socket round trip and JSON parsing, so
+  the (sub-microsecond) evaluator is a small slice. Compiled still wins, and the
+  gap grows with policy complexity and shrinks with transport/parse overhead.
+- **sonic-rs (fast) beats serde_json (std) by ~12%** on TCP — JSON parsing is a
+  meaningful fraction of a small authz request.
+
 ## Interpreting the results
 
 - The **eval itself is sub-microsecond** (see `cargo bench -p policy-engine
