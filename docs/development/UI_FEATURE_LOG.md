@@ -118,3 +118,8 @@ deltas, Kafka ingestion in a later phase.
   data_checksum / data_stale — render a "data freshness" badge on agents
   and a stale marker on decision rows. Modes: monitor | flag | enforce
   (enforce = fail closed + not-ready).
+
+- D2 delta sync live: GET …/datastore/changes?since=N (deduped deltas,
+  snapshot_required signal), agent /api/v1/data/apply-deltas +
+  applied_seq; versions carry change_seq. UI can render replication lag
+  as (head_seq - agent applied_seq) per agent — a real "replica lag" gauge.

@@ -76,7 +76,19 @@ pub struct DatastoreStatus {
 pub struct DatastoreVersion {
     pub version: i64,
     pub checksum: String,
+    #[serde(default)]
+    pub change_seq: i64,
     pub document: serde_json::Value,
+}
+
+/// A page of the change stream.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatastoreChanges {
+    pub snapshot_required: bool,
+    #[serde(default)]
+    pub head_seq: i64,
+    #[serde(default)]
+    pub deltas: Vec<serde_json::Value>,
 }
 
 /// Client for communicating with the management server
@@ -276,6 +288,31 @@ impl ServerClient {
             org,
             namespace,
             version
+        );
+        let request = self.add_auth_headers(self.http_client.get(&url));
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(ServerClientError::ServerError { status, message });
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Pull the change stream after `since` (durable delta path — the log
+    /// is the source, notifications are only wake-ups).
+    pub async fn get_datastore_changes(
+        &self,
+        org: &str,
+        namespace: &str,
+        since: i64,
+    ) -> Result<DatastoreChanges, ServerClientError> {
+        let url = format!(
+            "{}/orgs/{}/namespaces/{}/datastore/changes?since={}",
+            self.base_url(),
+            org,
+            namespace,
+            since
         );
         let request = self.add_auth_headers(self.http_client.get(&url));
         let response = request.send().await?;

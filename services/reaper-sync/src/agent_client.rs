@@ -188,6 +188,7 @@ impl AgentClient {
         &self,
         version: i64,
         checksum: &str,
+        change_seq: i64,
         document: &serde_json::Value,
     ) -> Result<(), AgentClientError> {
         let url = format!(
@@ -197,6 +198,7 @@ impl AgentClient {
         let body = serde_json::json!({
             "version": version,
             "checksum": checksum,
+            "change_seq": change_seq,
             "document": document,
         });
         let response = self.http_client.post(&url).json(&body).send().await?;
@@ -210,6 +212,42 @@ impl AgentClient {
             });
         }
         Ok(())
+    }
+
+    /// Apply a contiguous delta batch. Ok(Ok(head)) = applied to head;
+    /// Ok(Err(agent_seq)) = 409 seq mismatch, the agent reports where it
+    /// actually is — pull from THERE (self-correcting, gap-proof).
+    pub async fn apply_data_deltas(
+        &self,
+        from_seq: i64,
+        head_seq: i64,
+        deltas: &[serde_json::Value],
+    ) -> Result<Result<i64, i64>, AgentClientError> {
+        let url = format!(
+            "{}/api/v1/data/apply-deltas",
+            self.agent_url.trim_end_matches('/')
+        );
+        let body = serde_json::json!({
+            "from_seq": from_seq,
+            "head_seq": head_seq,
+            "deltas": deltas,
+        });
+        let response = self.http_client.post(&url).json(&body).send().await?;
+        match response.status().as_u16() {
+            200 => Ok(Ok(head_seq)),
+            409 => {
+                let text = response.text().await.unwrap_or_default();
+                let agent_seq = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v.get("applied_seq").and_then(|s| s.as_i64()))
+                    .unwrap_or(-1);
+                Ok(Err(agent_seq))
+            }
+            status => {
+                let message = response.text().await.unwrap_or_default();
+                Err(AgentClientError::AgentError { status, message })
+            }
+        }
     }
 
     /// Replica heartbeat: confirm the agent is still on the current version

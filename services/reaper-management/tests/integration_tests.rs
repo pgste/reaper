@@ -1751,3 +1751,187 @@ async fn test_data_plane_end_to_end() {
     assert_eq!(status["counts"]["tuples"], 3);
     assert_eq!(status["counts"]["role_bindings"], 1);
 }
+
+/// The durable delta loop, end-to-end against the real APIs: snapshot,
+/// then mutations (including a cascade delete), then a /changes pull
+/// applied INCREMENTALLY to a live policy-engine store — which must
+/// converge to exactly what a fresh publish produces. Repeating the same
+/// pull (lost-ack redelivery) must change nothing.
+#[tokio::test]
+async fn test_data_plane_delta_sync() {
+    use policy_engine::{DataLoader, DataStore};
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("reaper_management=error")
+        .try_init();
+
+    let env = setup_test_env().await;
+
+    // Org, namespace, key, datastore.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Delta Org", "slug": "delta-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/delta-org/namespaces",
+            Some(json!({"slug": "prod"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let base = "/orgs/delta-org/namespaces/prod/datastore";
+    let call = |method: &'static str, path: String, body: Option<Value>| {
+        let app = env.app.clone();
+        let key = key.clone();
+        async move {
+            let response = app
+                .oneshot(authed_request(method, &path, body, &key))
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = parse_body(response).await;
+            (status, body)
+        }
+    };
+
+    let (status, _) = call(
+        "POST",
+        base.to_string(),
+        Some(json!({"template": "combined"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Seed + snapshot v1.
+    for body in [
+        json!({"entity_id": "alice", "entity_type": "user", "attributes": {"mfa": true}}),
+        json!({"entity_id": "bob", "entity_type": "user", "attributes": {}}),
+    ] {
+        let (status, _) = call("POST", format!("{base}/entities"), Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, _) = call(
+        "POST",
+        format!("{base}/tuples"),
+        Some(json!({"object": "doc-1", "relation": "owner", "subject": "bob"})),
+    )
+    .await;
+    let (status, published) = call("POST", format!("{base}/publish"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let snapshot_seq = {
+        // versions listing exposes the change_seq the snapshot pinned
+        let (_, versions) = call("GET", format!("{base}/versions"), None).await;
+        versions["versions"][0]["change_seq"].as_i64().unwrap()
+    };
+    assert_eq!(published["version"], 1);
+
+    // Replica: load snapshot v1.
+    let (_, v1) = call("GET", format!("{base}/versions/1"), None).await;
+    let replica = std::sync::Arc::new(DataStore::new());
+    let loader = DataLoader::new((*replica).clone());
+    loader
+        .load_json(&serde_json::to_string(&v1["document"]).unwrap())
+        .unwrap();
+
+    // Mutations AFTER the snapshot: attribute change, role grant, new
+    // tuple, and a cascade delete (bob dies; doc-1's owner edge must go).
+    let (status, _) = call(
+        "PUT",
+        format!("{base}/entities/alice/attributes"),
+        Some(json!({"mfa": false, "clearance": 4})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _) = call(
+        "POST",
+        format!("{base}/role-bindings"),
+        Some(json!({"subject": "alice", "role": "admin"})),
+    )
+    .await;
+    let (status, deleted) = call("DELETE", format!("{base}/entities/bob"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        deleted["cascaded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "doc-1"),
+        "cascade must mark doc-1 dirty: {deleted}"
+    );
+
+    // Pull the change stream from the snapshot position and apply.
+    let apply_changes = |replica: std::sync::Arc<DataStore>, changes: Value| {
+        let loader = DataLoader::new((*replica).clone());
+        for delta in changes["deltas"].as_array().unwrap() {
+            match delta["op"].as_str().unwrap() {
+                "upsert" => loader.upsert_entity_doc(&delta["document"]).unwrap(),
+                "delete" => loader.delete_entity(delta["entity_id"].as_str().unwrap()),
+                other => panic!("unknown op {other}"),
+            }
+        }
+    };
+    let (status, changes) = call("GET", format!("{base}/changes?since={snapshot_seq}"), None).await;
+    assert_eq!(status, StatusCode::OK, "changes failed: {changes}");
+    assert_eq!(changes["snapshot_required"], false);
+    assert!(changes["deltas"].as_array().unwrap().len() >= 3);
+    apply_changes(replica.clone(), changes.clone());
+
+    // Redelivery (lost ack): applying the SAME pull again must be a no-op.
+    apply_changes(replica.clone(), changes);
+
+    // Convergence: a fresh publish's document, loaded into a new store,
+    // must be indistinguishable from the incrementally patched replica.
+    let (status, _) = call("POST", format!("{base}/publish"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, v2) = call("GET", format!("{base}/versions/2"), None).await;
+    let fresh = std::sync::Arc::new(DataStore::new());
+    DataLoader::new((*fresh).clone())
+        .load_json(&serde_json::to_string(&v2["document"]).unwrap())
+        .unwrap();
+
+    let probe = |store: &DataStore| {
+        let interner = store.interner();
+        let mut out = Vec::new();
+        for id in ["alice", "bob", "doc-1"] {
+            let eid = interner.intern(id);
+            let entity = store.get(eid);
+            out.push(format!("{id}:present={}", entity.is_some()));
+        }
+        let owner = interner.intern("owner");
+        let doc1 = interner.intern("doc-1");
+        out.push(format!(
+            "doc-1.owners={}",
+            store.relationships().related(doc1, owner).len()
+        ));
+        out
+    };
+    assert_eq!(
+        probe(&replica),
+        probe(&fresh),
+        "delta-patched replica must converge with a fresh snapshot"
+    );
+    // Attribute maps compared as JSON Values (order-insensitive).
+    assert_eq!(
+        replica.entity_attributes_json("alice"),
+        fresh.entity_attributes_json("alice"),
+        "alice attributes must converge"
+    );
+
+    // And the specifics: bob gone, doc-1 ownerless, alice demoted+promoted.
+    let alice = replica.entity_attributes_json("alice").unwrap();
+    assert_eq!(alice["mfa"], false);
+    assert_eq!(alice["clearance"], 4);
+    assert_eq!(alice["roles"][0], "admin");
+}

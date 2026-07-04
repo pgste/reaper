@@ -47,7 +47,8 @@ jobs:
         run: |
           PROPTEST_CASES=2000 cargo test -p policy-engine --release \
             --test differential_parity_tests \
-            --test check_mode_differential_tests
+            --test check_mode_differential_tests \
+            --test delta_sync_differential_tests
 
       - name: Bench smoke (hot paths still build and run)
         run: |

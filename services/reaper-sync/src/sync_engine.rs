@@ -100,6 +100,8 @@ pub struct SyncEngine {
     total_policies_deployed: u64,
     /// Last (version, checksum) replicated to the agent (data plane).
     datastore_state: Option<(i64, String)>,
+    /// Our position in the control plane's change stream.
+    datastore_seq: i64,
 }
 
 impl SyncEngine {
@@ -116,6 +118,7 @@ impl SyncEngine {
             total_syncs: 0,
             total_policies_deployed: 0,
             datastore_state: None,
+            datastore_seq: 0,
         })
     }
 
@@ -326,14 +329,73 @@ impl SyncEngine {
                 .get_datastore_version(&ds.org, &ds.namespace, status.current_version)
                 .await?;
             self.agent_client
-                .deploy_data_version(bundle.version, &bundle.checksum, &bundle.document)
+                .deploy_data_version(
+                    bundle.version,
+                    &bundle.checksum,
+                    bundle.change_seq,
+                    &bundle.document,
+                )
                 .await?;
             info!(
                 version = bundle.version,
                 checksum = %bundle.checksum,
+                seq = bundle.change_seq,
                 "✓ data version replicated to agent"
             );
             self.datastore_state = Some((bundle.version, bundle.checksum));
+            self.datastore_seq = bundle.change_seq;
+        }
+
+        // DELTA PATH (durable, self-retrying): pull everything after our
+        // seq from the change log and push it as a contiguous batch. The
+        // log is the source — a lost notification can never lose data,
+        // the next poll pulls the same range. On a 409 the agent tells us
+        // where it actually is (restart, competing syncer) and we re-pull
+        // from THERE; on compaction the control plane says
+        // snapshot_required and we fall back to a full verified deploy.
+        let changes = self
+            .server_client
+            .get_datastore_changes(&ds.org, &ds.namespace, self.datastore_seq)
+            .await?;
+        if changes.snapshot_required {
+            info!(
+                since = self.datastore_seq,
+                "change log compacted past our position — full snapshot resync"
+            );
+            self.datastore_state = None; // force deploy next step
+            return Ok(());
+        }
+        if changes.head_seq > self.datastore_seq {
+            match self
+                .agent_client
+                .apply_data_deltas(self.datastore_seq, changes.head_seq, &changes.deltas)
+                .await?
+            {
+                Ok(applied) => {
+                    info!(
+                        from = self.datastore_seq,
+                        to = applied,
+                        deltas = changes.deltas.len(),
+                        "✓ delta batch replicated"
+                    );
+                    self.datastore_seq = applied;
+                }
+                Err(agent_seq) => {
+                    // Agent is elsewhere in the stream: adopt ITS position
+                    // (>=0) and let the next poll pull the right range; a
+                    // fresh agent (seq unknown) gets a full snapshot.
+                    if agent_seq >= 0 {
+                        info!(
+                            ours = self.datastore_seq,
+                            agents = agent_seq,
+                            "seq mismatch — adopting agent position"
+                        );
+                        self.datastore_seq = agent_seq;
+                    } else {
+                        self.datastore_state = None;
+                    }
+                }
+            }
         }
         Ok(())
     }

@@ -46,12 +46,13 @@ use uuid::Uuid;
 
 // Import from extracted modules
 use handlers::{
+    // Data handlers
+    apply_data_deltas,
     // Evaluation handlers
     batch_evaluate_policy,
     // Entity handlers
     batch_upsert_handler,
     check_document,
-    // Data handlers
     confirm_data_version,
     debug_datastore,
     delete_entity_handler,
@@ -523,6 +524,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/data/sync", post(sync_data))
         .route("/api/v1/data/deploy-version", post(deploy_data_version))
         .route("/api/v1/data/confirm-version", post(confirm_data_version))
+        .route("/api/v1/data/apply-deltas", post(apply_data_deltas))
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
         .route("/api/v1/policies/compile", post(deploy_compiled_policy))

@@ -561,6 +561,8 @@ jobs:
             --test differential_parity_tests 2>&1 | tee integration-reports/differential-parity.txt
           PROPTEST_CASES=500 cargo test -p policy-engine --release \
             --test check_mode_differential_tests 2>&1 | tee integration-reports/differential-check-mode.txt
+          PROPTEST_CASES=500 cargo test -p policy-engine --release \
+            --test delta_sync_differential_tests 2>&1 | tee integration-reports/differential-delta-sync.txt
 
       - name: Generate Integration Test Summary
         if: always()

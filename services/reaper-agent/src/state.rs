@@ -89,6 +89,12 @@ pub struct DataSyncState {
     pub checksum: RwLock<String>,
     /// Unix seconds of the last successful sync (0 = never).
     pub last_synced_epoch: AtomicU64,
+    /// Position in the control plane's change stream (delta sync). Set to
+    /// the snapshot's change_seq on deploy-version; advanced by
+    /// apply-deltas. Contiguity is enforced: a delta batch must start
+    /// exactly here or the agent 409s with this value so the sync client
+    /// self-corrects (pull-based gap repair).
+    pub applied_seq: AtomicI64,
     /// Staleness budget in seconds; 0 = no budget configured.
     pub max_staleness_secs: u64,
     /// Behavior when the budget is exceeded.
@@ -101,6 +107,7 @@ impl DataSyncState {
             version: AtomicI64::new(0),
             checksum: RwLock::new(String::new()),
             last_synced_epoch: AtomicU64::new(0),
+            applied_seq: AtomicI64::new(0),
             max_staleness_secs: std::env::var("REAPER_DATA_MAX_STALENESS_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())

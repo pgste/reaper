@@ -1,6 +1,6 @@
 # The Reaper Data Plane — Managed Authorization Data
 
-**Status: D1 SHIPPED** (see "Phase D1 — shipped" below); D2+ as planned.
+**Status: D1 + D2 SHIPPED** (delta sync live; see the shipped sections below).
 Companion to `DSL_V2_DESIGN.md` and `CORRECTNESS.md`.
 
 ## 1. The opportunity
@@ -282,7 +282,45 @@ today's embedded SQLite backend serves dev/self-contained deployments, and
 completing the Postgres driver in `db/connection.rs` (currently a stub) is
 the one open task — tracked for D2.
 
-## 8. Why this wins (positioning summary)
+## 8. Phase D2 — SHIPPED (durable, self-retrying delta sync)
+
+The replica loop is now incremental AND loss-proof:
+
+- **Transactional outbox**: every ADM mutation appends a dirty-entity
+  marker with a monotonic per-datastore `seq` (one counter bump per batch).
+  The log is the SOURCE; notifications are wake-ups. A lost event cannot
+  lose data — the next pull reads the same range. (Postgres LISTEN/NOTIFY
+  slots in as the wake-up once the pg driver lands.)
+- **GET …/datastore/changes?since=N**: deltas deduped to latest-state per
+  entity, each materialized by three indexed point queries
+  (`materialize_one`) — never an O(dataset) scan per poll. Upserts carry
+  the full doc; tombstones the id. Below the compaction floor →
+  `snapshot_required` and the replica full-syncs.
+- **Snapshot/delta lineage**: publish pins `change_seq` on the version;
+  agents loading snapshot vN resume deltas exactly from N's position —
+  "delta and primary have matching versions" by construction. Publish
+  compacts the log behind the previous snapshot.
+- **Agent `apply-deltas`**: contiguity enforced — a batch must start at
+  the replica's `applied_seq` or the 409 carries the agent's actual
+  position and the sync client re-pulls precisely the missing range
+  (self-retrying, gap-proof, survives agent restarts and competing
+  syncers). Applying advances seq + refreshes the staleness heartbeat.
+- **Engine primitives** (all idempotent for at-least-once delivery):
+  `DataStore::upsert` (cleans stale attribute-index entries + carried
+  edges), `remove_entity` (tombstone with full graph cascade),
+  `RelationshipGraph::remove_edge/detach_carried/detach` with per-entity
+  registries (O(degree), no map scans).
+- **Correctness gates**: `delta_sync_differential_tests` — random delta
+  sequences applied incrementally must be indistinguishable (store probes
+  + full RBAC/ABAC/ReBAC decision battery) from a fresh rebuild, including
+  redelivered deltas. Its FIRST run caught the referential-cascade hole
+  (a deleted group kept granting group-hop access as a dangling
+  reference); the contract is now pinned end to end — control-plane
+  entity deletes cascade tuples/bindings and dirty the other endpoints.
+  Plus `test_data_plane_delta_sync`: the full loop against the real APIs,
+  with redelivery idempotency and convergence against a fresh publish.
+
+## 9. Why this wins (positioning summary)
 
 - **vs OPA**: they made data your problem; we make it a product.
 - **vs OpenFGA/SpiceDB**: tuples AND attributes AND roles in one model —

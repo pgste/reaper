@@ -374,6 +374,10 @@ mod tests {
 pub struct DeployDataVersionRequest {
     /// Monotonic version number from the control plane.
     pub version: i64,
+    /// The snapshot's position in the change stream (adm_versions
+    /// .change_seq) — delta pulls resume from here. 0 for legacy callers.
+    #[serde(default)]
+    pub change_seq: i64,
     /// Published checksum ("sha256:…") — verified before anything loads.
     pub checksum: String,
     /// The materialized document: `{"entities": [...]}`.
@@ -487,6 +491,10 @@ pub async fn deploy_data_version(
     state
         .data_sync
         .record_sync(payload.version, payload.checksum.clone());
+    state
+        .data_sync
+        .applied_seq
+        .store(payload.change_seq, std::sync::atomic::Ordering::Release);
 
     if let Some(ref cache) = state.decision_cache {
         cache.invalidate();
@@ -553,6 +561,117 @@ pub async fn confirm_data_version(
     Ok(Json(json!({"version": current, "status": "confirmed"})))
 }
 
+/// One delta from the control plane's change stream.
+#[derive(Debug, Deserialize)]
+pub struct DataDelta {
+    pub op: String, // "upsert" | "delete"
+    pub entity_id: String,
+    #[serde(default)]
+    pub document: Option<Value>,
+}
+
+/// A contiguous slice of the change stream.
+#[derive(Debug, Deserialize)]
+pub struct ApplyDeltasRequest {
+    /// The seq the replica must currently be at (exclusive start).
+    pub from_seq: i64,
+    /// The seq this batch advances to.
+    pub head_seq: i64,
+    pub deltas: Vec<DataDelta>,
+}
+
+/// Apply a contiguous delta batch — the incremental half of read-replica
+/// sync. CONTIGUITY IS THE INTEGRITY RULE: the batch must start exactly at
+/// this replica's applied_seq; anything else gets a 409 carrying the
+/// replica's actual position, so the sync client re-pulls precisely the
+/// missing range (self-retrying, gap-proof). Deltas are entity-level
+/// last-state upserts/tombstones — idempotent under at-least-once
+/// delivery, proven equivalent to a fresh rebuild by
+/// delta_sync_differential_tests.
+pub async fn apply_data_deltas(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<ApplyDeltasRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    use std::sync::atomic::Ordering;
+
+    let current = state.data_sync.applied_seq.load(Ordering::Acquire);
+    if payload.from_seq != current {
+        return Err((
+            StatusCode::CONFLICT,
+            // The sync client parses applied_seq out of this body to
+            // re-pull from the right position.
+            format!(
+                "{{\"error\":\"seq_mismatch\",\"applied_seq\":{current},\"requested_from\":{}}}",
+                payload.from_seq
+            ),
+        ));
+    }
+    if payload.head_seq < payload.from_seq {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "head_seq must be >= from_seq".to_string(),
+        ));
+    }
+
+    let loader = DataLoader::new((*state.data_store).clone());
+    let mut upserts = 0usize;
+    let mut deletes = 0usize;
+    for delta in &payload.deltas {
+        match delta.op.as_str() {
+            "upsert" => {
+                let doc = delta.document.as_ref().ok_or((
+                    StatusCode::BAD_REQUEST,
+                    format!("upsert delta for '{}' missing document", delta.entity_id),
+                ))?;
+                loader.upsert_entity_doc(doc).map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("delta for '{}' failed: {e}", delta.entity_id),
+                    )
+                })?;
+                upserts += 1;
+            }
+            "delete" => {
+                loader.delete_entity(&delta.entity_id);
+                deletes += 1;
+            }
+            other => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown delta op '{other}'"),
+                ));
+            }
+        }
+    }
+
+    state
+        .data_sync
+        .applied_seq
+        .store(payload.head_seq, Ordering::Release);
+    // Advancing through the change stream IS a successful sync contact.
+    state.data_sync.record_heartbeat();
+
+    if (upserts + deletes) > 0 {
+        if let Some(ref cache) = state.decision_cache {
+            cache.invalidate();
+        }
+    }
+
+    info!(
+        from = payload.from_seq,
+        to = payload.head_seq,
+        upserts,
+        deletes,
+        "✓ delta batch applied"
+    );
+    Ok(Json(json!({
+        "applied_seq": payload.head_seq,
+        "upserts": upserts,
+        "deletes": deletes,
+        "status": "applied",
+    })))
+}
+
 #[cfg(test)]
 mod deploy_version_tests {
     use super::*;
@@ -587,6 +706,7 @@ mod deploy_version_tests {
             version: std::sync::atomic::AtomicI64::new(0),
             checksum: parking_lot::RwLock::new(String::new()),
             last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
+            applied_seq: std::sync::atomic::AtomicI64::new(0),
             max_staleness_secs: 10,
             mode: StalenessMode::Enforce,
         };

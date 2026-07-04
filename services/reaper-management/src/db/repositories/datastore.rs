@@ -223,7 +223,14 @@ impl<'a> DatastoreRepository<'a> {
         .get("min_seq");
 
         let rows = sqlx::query(
-            "SELECT entity_id, MAX(seq) AS last_seq,                     (SELECT tombstone FROM adm_changes c2                      WHERE c2.datastore_id = c1.datastore_id                        AND c2.entity_id = c1.entity_id AND c2.seq = MAX(c1.seq)) AS tombstone              FROM adm_changes c1              WHERE datastore_id = ? AND seq > ?              GROUP BY entity_id ORDER BY last_seq LIMIT ?",
+            "SELECT c.entity_id, c.seq AS last_seq, c.tombstone \
+             FROM adm_changes c \
+             JOIN (SELECT entity_id, MAX(seq) AS m FROM adm_changes \
+                   WHERE datastore_id = ?1 AND seq > ?2 \
+                   GROUP BY entity_id) latest \
+               ON c.entity_id = latest.entity_id AND c.seq = latest.m \
+             WHERE c.datastore_id = ?1 \
+             ORDER BY c.seq LIMIT ?3",
         )
         .bind(datastore_id.to_string())
         .bind(since_seq)
