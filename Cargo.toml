@@ -40,6 +40,7 @@ dashmap = "6.1.0"
 parking_lot = "0.12"
 rustc-hash = "2.0"  # Fast FxHashSet/FxHashMap for non-DoS-resistant hashing
 arc-swap = "1.7"
+smallvec = "1.13"   # Inline small collections (ReBAC adjacency lists stay heap-free)
 crossbeam-utils = "0.8"  # CachePadded to avoid false sharing between ring shards
 
 # Testing frameworks

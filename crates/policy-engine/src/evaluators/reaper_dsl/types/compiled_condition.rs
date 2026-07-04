@@ -30,6 +30,18 @@ pub enum CompiledCondition {
 
     // ============ Core Conditions ============
     Always,
+
+    /// ReBAC check with everything pre-interned: evaluation is DashMap gets on
+    /// (u32, u32) keys + binary search / bounded BFS. No strings, no allocs on
+    /// the direct path.
+    RebacCheck {
+        kind: super::condition::RebacKind,
+        subject: CompiledRebacRef,
+        relation: InternedString,
+        object: CompiledRebacRef,
+        via: Option<InternedString>,
+        max_depth: u32,
+    },
     ActionEquals {
         value: InternedString,
     },
@@ -301,4 +313,12 @@ impl CompiledCondition {
             _ => None,
         }
     }
+}
+
+/// Pre-resolved rebac argument.
+#[derive(Debug, Clone)]
+pub enum CompiledRebacRef {
+    Principal,
+    ResourceId,
+    Literal(InternedString),
 }

@@ -84,6 +84,9 @@ pub struct DataStore {
 
     /// Materialized view manager (Phase 6A-1)
     view_manager: Arc<ViewManager>,
+
+    /// ReBAC relationship graph (named directed edges, forward+reverse indexed)
+    relationships: Arc<crate::data::relationships::RelationshipGraph>,
 }
 
 impl DataStore {
@@ -97,6 +100,7 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
         }
     }
 
@@ -110,6 +114,7 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
         }
     }
 
@@ -126,10 +131,21 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
         }
     }
 
     /// Get the string interner
+    /// ReBAC relationship graph (edges declared in entity `relationships`).
+    pub fn relationships(&self) -> &crate::data::relationships::RelationshipGraph {
+        &self.relationships
+    }
+
+    /// Record `from #relation @to` in the relationship graph.
+    pub fn add_relationship(&self, from: EntityId, relation: InternedString, to: EntityId) {
+        self.relationships.add_edge(from, relation, to);
+    }
+
     pub fn interner(&self) -> &StringInterner {
         &self.interner
     }

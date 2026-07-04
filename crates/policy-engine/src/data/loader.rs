@@ -210,6 +210,16 @@ impl DataLoader {
                 builder = builder.with_parent(parent_id);
             }
 
+            // ReBAC edges: `id #relation @subject` into the relationship graph
+            // (forward + reverse indexed at write time).
+            for (relation, subjects) in &entity_doc.relationships {
+                let relation_id = interner.intern(relation);
+                for subject in subjects {
+                    let subject_id = interner.intern(subject);
+                    self.store.add_relationship(id, relation_id, subject_id);
+                }
+            }
+
             entities.push(builder.build());
         }
 
@@ -284,6 +294,10 @@ pub(crate) struct EntityDocument {
     pub attributes: HashMap<String, JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// ReBAC edges this entity declares: relation -> subject entity ids,
+    /// e.g. {"owner": ["alice"], "parent": ["folder-eng"]}.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub relationships: HashMap<String, Vec<String>>,
 }
 
 /// Convenience function to create a DataStore from JSON

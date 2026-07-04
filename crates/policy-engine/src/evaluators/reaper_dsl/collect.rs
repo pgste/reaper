@@ -52,6 +52,26 @@ pub fn collect_strings_for_interning(
 
     match condition {
         Condition::ActionEquals { value } => intern(value),
+
+        // Pre-intern rebac strings so compilation is alloc-free at eval time.
+        Condition::RebacCheck {
+            subject,
+            relation,
+            object,
+            via,
+            ..
+        } => {
+            use crate::evaluators::reaper_dsl::RebacRef;
+            intern(relation);
+            if let Some(v) = via {
+                intern(v);
+            }
+            for r in [subject, object] {
+                if let RebacRef::Literal(id) = r {
+                    intern(id);
+                }
+            }
+        }
         Condition::ResourceIdEquals { value } => intern(value),
 
         // ============ Consolidated Types ============

@@ -17,6 +17,7 @@ dashmap = { workspace = true }
 arc-swap = { workspace = true }
 parking_lot = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 crossbeam-utils = { workspace = true }
 tracing = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }

@@ -87,7 +87,18 @@ keeping the sub-microsecond compiled hot path for authorization decisions.
 - Decision-log entries carry `violations` when present (explain tier already
   ships context).
 
-### Phase 3 — First-class ReBAC
+### Phase 3 — First-class ReBAC — ✅ IMPLEMENTED
+
+Shipped as `rebac::related(subject, relation, object)`,
+`rebac::reachable(subject, relation, object, via, max_depth)` (subject-side
+group expansion), and `rebac::inherited(subject, relation, object, up,
+max_depth)` (object-side ancestor walk). Edges are declared per entity
+(`"relationships": {"owner": ["alice"]}`), doubly indexed at load
+(interned-u32 keys, sorted SmallVec adjacency, binary-search membership),
+traversals are bounded + cycle-safe with a hard node budget. Static-arg
+calls compile into the sub-microsecond path (CompiledCondition::RebacCheck,
+verified compiled-vs-AST parity); dynamic ids run on the AST evaluator.
+Original sketch below for reference.
 
 - **Data model:** entities gain named, directed edges:
 

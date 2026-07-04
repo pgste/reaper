@@ -175,6 +175,45 @@ impl ReaperDSLEvaluator {
         match condition {
             CompiledCondition::Always => true,
 
+            // ReBAC: pure interned graph lookups. Direct = one DashMap get +
+            // binary search (~100ns); traversals are bounded BFS.
+            CompiledCondition::RebacCheck {
+                kind,
+                subject,
+                relation,
+                object,
+                via,
+                max_depth,
+            } => {
+                use crate::evaluators::reaper_dsl::CompiledRebacRef;
+                use crate::evaluators::reaper_dsl::RebacKind;
+                let resolve = |r: &CompiledRebacRef| match r {
+                    CompiledRebacRef::Principal => user.id,
+                    CompiledRebacRef::ResourceId => resource.id,
+                    CompiledRebacRef::Literal(id) => *id,
+                };
+                let subject_id = resolve(subject);
+                let object_id = resolve(object);
+                let graph = self.store.relationships();
+                match kind {
+                    RebacKind::Direct => graph.has_relation(object_id, *relation, subject_id),
+                    RebacKind::Reachable => graph.has_relation_reachable(
+                        object_id,
+                        *relation,
+                        subject_id,
+                        via.expect("reachable always compiles with via"),
+                        *max_depth as usize,
+                    ),
+                    RebacKind::Inherited => graph.has_relation_inherited(
+                        object_id,
+                        *relation,
+                        subject_id,
+                        via.expect("inherited always compiles with via"),
+                        *max_depth as usize,
+                    ),
+                }
+            }
+
             CompiledCondition::ActionEquals { value } => _context
                 .get("action")
                 .map(|a| interner.resolve(*value).map(|v| a == &*v).unwrap_or(false))

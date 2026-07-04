@@ -241,6 +241,40 @@ impl ReapAstEvaluator {
                 builtin_functions::regex_escape(&value)
             }
 
+            // ===== ReBAC (relationship graph) =====
+            // rebac::related(subject, relation, object) -> bool
+            (Some("rebac"), "related") => {
+                let (subject, relation, object) = self.rebac_ids_3(args, context, "related")?;
+                Ok(EvalValue::Boolean(
+                    self.store
+                        .relationships()
+                        .has_relation(object, relation, subject),
+                ))
+            }
+            // rebac::reachable(subject, relation, object, via, max_depth) -> bool
+            // subject holds relation directly OR through groups reached via
+            // its own `via` edges (bounded, cycle-safe).
+            (Some("rebac"), "reachable") => {
+                let (subject, relation, object) = self.rebac_ids_3(args, context, "reachable")?;
+                let (via, max) = self.rebac_via_max(args, context, "reachable")?;
+                Ok(EvalValue::Boolean(
+                    self.store
+                        .relationships()
+                        .has_relation_reachable(object, relation, subject, via, max),
+                ))
+            }
+            // rebac::inherited(subject, relation, object, up, max_depth) -> bool
+            // relation holds on the object or any ancestor along `up` edges.
+            (Some("rebac"), "inherited") => {
+                let (subject, relation, object) = self.rebac_ids_3(args, context, "inherited")?;
+                let (up, max) = self.rebac_via_max(args, context, "inherited")?;
+                Ok(EvalValue::Boolean(
+                    self.store
+                        .relationships()
+                        .has_relation_inherited(object, relation, subject, up, max),
+                ))
+            }
+
             (Some("regex"), "matches") => {
                 if args.len() != 2 {
                     return Err(ReaperError::InvalidPolicy {
@@ -477,6 +511,89 @@ impl ReapAstEvaluator {
                         .map(|ns| format!("{}::{}", ns, function))
                         .unwrap_or_else(|| function.to_string())
                 ),
+            }),
+        }
+    }
+}
+
+impl super::ReapAstEvaluator {
+    /// Evaluate the common (subject, relation, object) prefix of a rebac::*
+    /// call into interned ids. Args are expressions, so any string-producing
+    /// value works: the `user`/`resource` pseudo-variables, bound variables,
+    /// entity attributes, or literals.
+    fn rebac_ids_3(
+        &self,
+        args: &[crate::reap::ast::Expr],
+        context: &super::types::EvalContext,
+        name: &str,
+    ) -> Result<
+        (
+            crate::data::EntityId,
+            crate::data::interning::InternedString,
+            crate::data::EntityId,
+        ),
+        ReaperError,
+    > {
+        if args.len() < 3 {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "rebac::{name} requires (subject, relation, object, ...), got {} args",
+                    args.len()
+                ),
+            });
+        }
+        let subject = self.rebac_string_arg(&args[0], context, name, "subject")?;
+        let relation = self.rebac_string_arg(&args[1], context, name, "relation")?;
+        let object = self.rebac_string_arg(&args[2], context, name, "object")?;
+        let interner = self.store.interner();
+        Ok((
+            interner.intern(&subject),
+            interner.intern(&relation),
+            interner.intern(&object),
+        ))
+    }
+
+    /// Evaluate the (via/up, max_depth) tail of traversing rebac::* calls.
+    fn rebac_via_max(
+        &self,
+        args: &[crate::reap::ast::Expr],
+        context: &super::types::EvalContext,
+        name: &str,
+    ) -> Result<(crate::data::interning::InternedString, usize), ReaperError> {
+        if args.len() != 5 {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "rebac::{name} requires (subject, relation, object, edge, max_depth), got {} args",
+                    args.len()
+                ),
+            });
+        }
+        let via = self.rebac_string_arg(&args[3], context, name, "edge")?;
+        let max = match self.evaluate_expr(&args[4], context)? {
+            super::types::EvalValue::Integer(n) if n > 0 => n as usize,
+            other => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "rebac::{name} max_depth must be a positive integer, got {other:?}"
+                    ),
+                })
+            }
+        };
+        // Explicit bound, clamped: traversal cost is capped by construction.
+        Ok((self.store.interner().intern(&via), max.min(16)))
+    }
+
+    fn rebac_string_arg(
+        &self,
+        arg: &crate::reap::ast::Expr,
+        context: &super::types::EvalContext,
+        name: &str,
+        position: &str,
+    ) -> Result<String, ReaperError> {
+        match self.evaluate_expr(arg, context)? {
+            super::types::EvalValue::String(s) => Ok(s),
+            other => Err(ReaperError::InvalidPolicy {
+                reason: format!("rebac::{name} {position} must be a string, got {other:?}"),
             }),
         }
     }

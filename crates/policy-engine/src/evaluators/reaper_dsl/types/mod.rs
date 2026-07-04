@@ -66,3 +66,6 @@ pub use v2::{
     CompiledCrossEntityComparison, CompiledRegexMatch, CompiledStringOperation,
     CompiledTimeCondition, CompiledVariableStringOp, CompiledWildcardComparison,
 };
+
+pub use compiled_condition::CompiledRebacRef;
+pub use condition::{RebacKind, RebacRef};

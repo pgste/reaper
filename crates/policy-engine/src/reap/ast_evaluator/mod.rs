@@ -106,7 +106,7 @@ impl ReapAstEvaluator {
             .transpose()?;
 
         let mut context = EvalContext {
-            variables: HashMap::new(),
+            variables: rebac_pseudo_vars(request),
             user_id,
             resource_id,
             request_context,
@@ -170,7 +170,7 @@ impl ReapAstEvaluator {
             .transpose()?;
 
         let base = EvalContext {
-            variables: HashMap::new(),
+            variables: rebac_pseudo_vars(request),
             user_id,
             resource_id,
             request_context,
@@ -859,6 +859,30 @@ mod tests {
         let decision = evaluator.evaluate(&request).unwrap();
         assert!(matches!(decision, PolicyAction::Allow));
     }
+}
+
+/// Pseudo-variable bindings so entity ids can appear as bare arguments in
+/// function calls (`rebac::related(user, "owner", resource)`): `user` = the
+/// request principal id, `resource` = the request resource id. Attribute
+/// access like `user.role` still routes to the entity keyword path, so these
+/// only surface where a plain identifier is evaluated as a variable.
+fn rebac_pseudo_vars(request: &PolicyRequest) -> HashMap<String, types::EvalValue> {
+    let mut vars = HashMap::with_capacity(2);
+    vars.insert(
+        "user".to_string(),
+        types::EvalValue::String(
+            request
+                .context
+                .get("principal")
+                .cloned()
+                .unwrap_or_default(),
+        ),
+    );
+    vars.insert(
+        "resource".to_string(),
+        types::EvalValue::String(request.resource.clone()),
+    );
+    vars
 }
 
 /// One matched deny rule in check mode.

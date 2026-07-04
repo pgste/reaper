@@ -26,11 +26,45 @@ use super::v2::{
     TimeCondition, VariableStringOperationCondition, WildcardComparison,
 };
 
+/// Which ReBAC check to run (see `data::relationships`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RebacKind {
+    /// subject ∈ object#relation (one lookup + binary search)
+    Direct,
+    /// subject reaches a holder of object#relation via its own `via` edges
+    Reachable,
+    /// relation holds on object or an ancestor along `up` edges
+    Inherited,
+}
+
+/// How a rebac argument resolves at evaluation time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RebacRef {
+    /// The request principal (the `user` pseudo-binding).
+    Principal,
+    /// The request resource id (the `resource` pseudo-binding).
+    ResourceId,
+    /// A literal entity id from the policy text.
+    Literal(String),
+}
+
 /// Policy condition (compiled from YAML/DSL)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Condition {
     /// Always true
     Always,
+
+    /// ReBAC relationship check: rebac::related / reachable / inherited.
+    /// Compiled to pure interned-id graph lookups (no strings at runtime).
+    RebacCheck {
+        kind: RebacKind,
+        subject: RebacRef,
+        relation: String,
+        object: RebacRef,
+        /// Traversal edge (`via` for Reachable, `up` for Inherited).
+        via: Option<String>,
+        max_depth: u32,
+    },
     /// Compare action to literal value
     ActionEquals {
         value: String,
