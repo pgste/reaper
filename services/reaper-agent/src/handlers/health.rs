@@ -75,6 +75,7 @@ pub async fn readiness_check(
         "status": "ready",
         "policies_loaded": engine_stats.total_policies,
         "data_version": data_version,
+        "data_applied_seq": state.data_sync.applied_seq.load(std::sync::atomic::Ordering::Acquire),
         "data_staleness_secs": state.data_sync.staleness_secs(),
         "data_stale": stale,
         "timestamp": chrono::Utc::now().to_rfc3339()

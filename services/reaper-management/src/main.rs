@@ -140,10 +140,17 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Run server with graceful shutdown
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(state.clone()))
-        .await?;
+    // Run server with graceful shutdown. ConnectInfo is REQUIRED: the
+    // rate-limit middleware extracts the peer address, and without
+    // into_make_service_with_connect_info every request 500s — a bug the
+    // router-level tests could never see (they bypass serve()); caught by
+    // the process-level data-plane E2E.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(state.clone()))
+    .await?;
 
     info!("Server shutdown complete");
     Ok(())
@@ -154,7 +161,11 @@ fn build_router(
     state: Arc<AppState>,
     rate_limiter: Option<Arc<rate_limit::ApiRateLimiter>>,
 ) -> Router {
-    let api_router = api::build_api_router();
+    // Serve the API at BOTH the root (existing consumers/tests) and the
+    // documented /api/v1 prefix (reaper-sync and external clients build
+    // URLs against /api/v1 — caught by the process-level data-plane E2E).
+    let api_router =
+        api::build_api_router().merge(Router::new().nest("/api/v1", api::build_api_router()));
 
     // Build the router with middleware
     // Middleware is applied in reverse order (last added runs first)

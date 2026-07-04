@@ -18,6 +18,11 @@ serde_json = { workspace = true }
 
 # Utils
 uuid = { workspace = true }
+tempfile = "3.8"
+
+# Real components under test (library use: bootstrap + the sync engine)
+reaper-management = { path = "../../services/reaper-management" }
+reaper-sync = { path = "../../services/reaper-sync" }
 futures = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -25,4 +30,9 @@ tracing-subscriber = { workspace = true }
 [[test]]
 name = "e2e_tests"
 path = "tests/e2e_tests.rs"
+harness = true
+
+[[test]]
+name = "data_plane_e2e"
+path = "tests/data_plane_e2e.rs"
 harness = true

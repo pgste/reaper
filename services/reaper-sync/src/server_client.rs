@@ -160,7 +160,12 @@ impl ServerClient {
     /// Add authentication headers to a request
     fn add_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.auth_token {
-            Some(token) => request.header(header::AUTHORIZATION, format!("Bearer {}", token)),
+            // JWTs carry dots; anything else is an API key and the
+            // management server only accepts those via X-API-Key.
+            Some(token) if token.contains('.') => {
+                request.header(header::AUTHORIZATION, format!("Bearer {}", token))
+            }
+            Some(token) => request.header("X-API-Key", token.clone()),
             None => request,
         }
     }

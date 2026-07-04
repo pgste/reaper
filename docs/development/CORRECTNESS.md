@@ -93,6 +93,7 @@ documented difference between `!=` (null-safe, fail-closed) and `!(==)`.
 
 | 7. Mutation testing (nightly) | `.github/workflows/mutation.yml` | cargo-mutants injects ~2,000 bugs (flipped operators, deleted match arms, forced returns) across both evaluators, the reap compiler, and the ReBAC graph; every surviving mutant is a bug the suites would not catch | holes in layers 1–6 themselves |
 | 8. Release gate | `.github/workflows/release.yml` (correctness-gate job) | no tag ships without the functional suite + differential suites at 2000 cases + bench smoke | releasing a regression |
+| 9a. Process-level E2E | `tests/e2e/tests/data_plane_e2e.rs` | REAL management + agent binaries as separate processes, replicated by the REAL reaper-sync engine over real HTTP: verified snapshot deploy, delta pull + contiguous apply (incl. cascade delete), agent kill/cold-respawn healed in ONE sync step. First run caught two production bugs the router-level tests could never see (ConnectInfo missing → every request 500; /api/v1 prefix unmounted) | broken-binary and cross-service integration bugs |
 | 9. Perf regression tracking | `.github/workflows/perf-tracking.yml` | criterion micro-benchmarks (evaluation + ReBAC hot paths) tracked per push; >30% regression fails the run and comments; main pushes update the gh-pages baseline | silent latency regressions on the primary (compiled) path |
 
 Layers 3–4 are the gate: they generate what nobody thought to write down.

@@ -476,8 +476,7 @@ impl<'a> DatastoreRepository<'a> {
         .bind(Utc::now().to_rfc3339())
         .execute(&mut *tx)
         .await?;
-        Self::record_changes_in(&mut tx, datastore_id, &[(binding.subject.clone(), false)])
-            .await?;
+        Self::record_changes_in(&mut tx, datastore_id, &[(binding.subject.clone(), false)]).await?;
         tx.commit().await?;
         Ok(())
     }
