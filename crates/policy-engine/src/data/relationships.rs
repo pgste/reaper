@@ -50,6 +50,12 @@ pub struct RelationshipGraph {
     forward: DashMap<(EntityId, InternedString), EdgeList>,
     /// (subject, relation) -> declaring entities, sorted.
     reverse: DashMap<(EntityId, InternedString), EdgeList>,
+    /// entity -> relations it CARRIES (declares) — makes entity-scoped edge
+    /// removal O(degree) instead of a full-map scan (delta sync applies
+    /// per-entity upserts; a 100k-key scan per delta would be quadratic).
+    carrier_rels: DashMap<EntityId, SmallVec<[InternedString; 4]>>,
+    /// entity -> relations it appears in as SUBJECT (edge target).
+    subject_rels: DashMap<EntityId, SmallVec<[InternedString; 4]>>,
 }
 
 impl RelationshipGraph {
@@ -70,6 +76,47 @@ impl RelationshipGraph {
             self.reverse.entry((to, relation)).or_default().value_mut(),
             from,
         );
+        register_rel(&self.carrier_rels, from, relation);
+        register_rel(&self.subject_rels, to, relation);
+    }
+
+    /// Remove one edge (both directions). Idempotent: removing a missing
+    /// edge is a no-op — delta deletes are at-least-once delivered.
+    pub fn remove_edge(&self, from: EntityId, relation: InternedString, to: EntityId) {
+        remove_from_list(&self.forward, (from, relation), to);
+        remove_from_list(&self.reverse, (to, relation), from);
+    }
+
+    /// Drop every edge this entity CARRIES (declares). The upsert primitive:
+    /// re-materializing an entity doc replaces its relationship block, so
+    /// its old carried edges must vanish — but edges OTHER entities declare
+    /// pointing at it are their documents' property and stay.
+    pub fn detach_carried(&self, entity: EntityId) {
+        if let Some((_, rels)) = self.carrier_rels.remove(&entity) {
+            for rel in rels {
+                if let Some((_, targets)) = self.forward.remove(&(entity, rel)) {
+                    for target in targets {
+                        remove_from_list(&self.reverse, (target, rel), entity);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fully detach an entity — carried edges AND edges pointing at it.
+    /// The tombstone primitive: a deleted entity must not linger as anyone's
+    /// owner/viewer/member (fail closed: absent entity grants nothing).
+    pub fn detach(&self, entity: EntityId) {
+        self.detach_carried(entity);
+        if let Some((_, rels)) = self.subject_rels.remove(&entity) {
+            for rel in rels {
+                if let Some((_, carriers)) = self.reverse.remove(&(entity, rel)) {
+                    for carrier in carriers {
+                        remove_from_list(&self.forward, (carrier, rel), entity);
+                    }
+                }
+            }
+        }
     }
 
     /// Subjects of `object #relation` (direct, one lookup).
@@ -205,6 +252,40 @@ impl RelationshipGraph {
 fn insert_sorted(list: &mut EdgeList, value: EntityId) {
     if let Err(pos) = list.binary_search(&value) {
         list.insert(pos, value);
+    }
+}
+
+/// Register `relation` in an entity's relation registry (dedup, unsorted —
+/// registries are tiny and only walked on detach).
+fn register_rel(
+    registry: &DashMap<EntityId, SmallVec<[InternedString; 4]>>,
+    entity: EntityId,
+    relation: InternedString,
+) {
+    let mut rels = registry.entry(entity).or_default();
+    if !rels.contains(&relation) {
+        rels.push(relation);
+    }
+}
+
+/// Remove `value` from the sorted list at `key`, dropping the key when the
+/// list empties (keeps the maps from accumulating tombstone keys).
+fn remove_from_list(
+    map: &DashMap<(EntityId, InternedString), EdgeList>,
+    key: (EntityId, InternedString),
+    value: EntityId,
+) {
+    let now_empty = match map.get_mut(&key) {
+        Some(mut list) => {
+            if let Ok(pos) = list.binary_search(&value) {
+                list.remove(pos);
+            }
+            list.is_empty()
+        }
+        None => return,
+    };
+    if now_empty {
+        map.remove_if(&key, |_, list| list.is_empty());
     }
 }
 

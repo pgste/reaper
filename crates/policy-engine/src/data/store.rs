@@ -326,6 +326,26 @@ impl DataStore {
     }
 
     /// Remove an entity by ID
+    /// UPSERT: replace an entity, cleaning the indexes its OLD attribute
+    /// values occupied (a plain insert leaves stale attribute/composite
+    /// index entries pointing at the previous values) and dropping the
+    /// relationship edges it previously carried. The delta-sync primitive —
+    /// applying the same upsert twice converges (idempotent).
+    pub fn upsert(&self, entity: Entity) {
+        let id = entity.id;
+        self.remove(id);
+        self.relationships().detach_carried(id);
+        self.insert(entity);
+    }
+
+    /// DELETE with cascade: the entity leaves the store AND the graph —
+    /// both edges it carried and edges pointing at it. A deleted entity
+    /// must not linger as anyone's owner/viewer/member (fail closed).
+    pub fn remove_entity(&self, id: EntityId) -> Option<Arc<Entity>> {
+        self.relationships().detach(id);
+        self.remove(id)
+    }
+
     pub fn remove(&self, id: EntityId) -> Option<Arc<Entity>> {
         let entity = self.entities.remove(&id).map(|(_, e)| e)?;
 

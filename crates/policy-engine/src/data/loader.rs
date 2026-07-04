@@ -228,6 +228,46 @@ impl DataLoader {
         Ok(count)
     }
 
+    /// UPSERT one entity document (delta-sync primitive): replaces the
+    /// entity, its indexed attribute values, and the edges it carries.
+    /// Idempotent — at-least-once delta delivery converges.
+    pub fn upsert_entity_doc(&self, doc: &JsonValue) -> Result<(), ReaperError> {
+        let entity_doc: EntityDocument =
+            serde_json::from_value(doc.clone()).map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("invalid entity document: {e}"),
+            })?;
+        let interner = self.store.interner();
+        let id = interner.intern(&entity_doc.id);
+        let entity_type = interner.intern(&entity_doc.entity_type);
+
+        let mut builder = EntityBuilder::new(id, entity_type);
+        for (key, value) in entity_doc.attributes {
+            let key_id = interner.intern(&key);
+            builder = builder.with_attribute(key_id, json_value_to_attribute(value, interner)?);
+        }
+        if let Some(parent) = entity_doc.parent {
+            builder = builder.with_parent(interner.intern(&parent));
+        }
+
+        // upsert() detaches previously carried edges; re-add the current set.
+        self.store.upsert(builder.build());
+        for (relation, subjects) in &entity_doc.relationships {
+            let relation_id = interner.intern(relation);
+            for subject in subjects {
+                self.store
+                    .add_relationship(id, relation_id, interner.intern(subject));
+            }
+        }
+        Ok(())
+    }
+
+    /// DELETE one entity by id (delta-sync tombstone): idempotent, cascades
+    /// through the relationship graph.
+    pub fn delete_entity(&self, entity_id: &str) {
+        let id = self.store.interner().intern(entity_id);
+        self.store.remove_entity(id);
+    }
+
     /// Get the underlying data store
     pub fn store(&self) -> &DataStore {
         &self.store
