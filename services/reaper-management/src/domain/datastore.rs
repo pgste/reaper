@@ -58,6 +58,14 @@ pub struct RelationDef {
     /// Entity types allowed as tuple subjects.
     #[serde(default)]
     pub subject: Vec<String>,
+    /// TRAVERSAL relations (used as `via`/`up` in rebac::reachable/
+    /// inherited) materialize the edge on the SUBJECT (subject → object),
+    /// because the engine's BFS walks outward from the subject. Zanzibar
+    /// tuples still read naturally — (group, member_of, alice) — but the
+    /// graph edge lands as alice → group. Non-traversal relations (owner,
+    /// viewer) stay on the object, which is what rebac::related reads.
+    #[serde(default)]
+    pub traversal: bool,
 }
 
 /// The full model definition for a datastore.
@@ -197,16 +205,19 @@ impl DatastoreTemplate {
                 name: "owner".into(),
                 object: "resource".into(),
                 subject: vec!["user".into()],
+                traversal: false,
             },
             RelationDef {
                 name: "viewer".into(),
                 object: "resource".into(),
                 subject: vec!["user".into(), "group".into()],
+                traversal: false,
             },
             RelationDef {
                 name: "member_of".into(),
                 object: "group".into(),
                 subject: vec!["user".into(), "group".into()],
+                traversal: true,
             },
         ];
         let abac_attrs_user = vec![
@@ -280,47 +291,60 @@ pub struct RelationTuple {
 /// Compile the ADM into the exact `{"entities": [...]}` document the
 /// policy-engine `DataLoader` consumes:
 /// - attributes pass through (typed, already validated)
-/// - role bindings become `roles: [..]` + deduped `permissions: [..]`
-///   attributes on the subject (RBAC-as-ABAC: one interned lookup at eval)
-/// - tuples become `relationships: {relation: [subjects]}` on the OBJECT —
-///   the shape `RelationshipGraph` ingests verbatim
-/// - objects referenced only by tuples get a minimal synthesized entity
-///   (type from the relation's `object` declaration)
+/// - UNSCOPED role bindings become `roles: [..]` + deduped
+///   `permissions: [..]` attributes on the subject (RBAC-as-ABAC: one
+///   interned lookup at eval). Scoped bindings are rejected at the API
+///   until the materializer represents them (D2) — a scoped grant must
+///   never silently widen to a global one.
+/// - tuples become graph edges with DIRECTION decided by the relation
+///   definition: traversal relations (member_of) land on the SUBJECT
+///   (subject → object, the direction rebac::reachable walks); everything
+///   else lands on the OBJECT (what rebac::related reads)
+/// - entities referenced only by tuples get a minimal synthesized record
+///   (type inferred from the relation definition)
 ///
-/// Output is deterministic (BTreeMap ordering) so the checksum is stable.
+/// Performance: single pass over each record set; all dedup via BTreeSet
+/// (O(log n) inserts — a 100k-subject relation must not go quadratic).
+/// Output ordering is deterministic (BTreeMap/BTreeSet) so checksums are
+/// stable across publishes of identical data.
 pub fn materialize(
     model: &ModelDefinition,
     entities: &[AdmEntity],
     bindings: &[RoleBinding],
     tuples: &[RelationTuple],
 ) -> serde_json::Value {
-    // subject -> (roles, permissions)
-    let mut roles_by_subject: BTreeMap<&str, (Vec<&str>, Vec<&str>)> = BTreeMap::new();
-    for b in bindings {
+    use std::collections::BTreeSet;
+
+    // subject -> (roles, permissions); BTreeSet = dedup + stable order.
+    let mut roles_by_subject: BTreeMap<&str, (BTreeSet<&str>, BTreeSet<&str>)> = BTreeMap::new();
+    for b in bindings.iter().filter(|b| b.scope.is_empty()) {
         let entry = roles_by_subject.entry(b.subject.as_str()).or_default();
-        if !entry.0.contains(&b.role.as_str()) {
-            entry.0.push(b.role.as_str());
-        }
+        entry.0.insert(b.role.as_str());
         if let Some(role) = model.role(&b.role) {
-            for p in &role.permissions {
-                if !entry.1.contains(&p.as_str()) {
-                    entry.1.push(p.as_str());
-                }
-            }
+            entry.1.extend(role.permissions.iter().map(String::as_str));
         }
     }
 
-    // object -> relation -> [subjects]
-    let mut rels_by_object: BTreeMap<&str, BTreeMap<&str, Vec<&str>>> = BTreeMap::new();
+    // carrier entity -> relation -> {targets}, direction per relation def.
+    let mut rels_by_carrier: BTreeMap<&str, BTreeMap<&str, BTreeSet<&str>>> = BTreeMap::new();
+    // carrier -> relation name, for type inference of synthesized entities.
+    let mut carrier_relation: BTreeMap<&str, (&str, bool)> = BTreeMap::new();
     for t in tuples {
-        let subjects = rels_by_object
-            .entry(t.object.as_str())
+        let traversal = model.relation(&t.relation).is_some_and(|d| d.traversal);
+        let (carrier, target) = if traversal {
+            (t.subject.as_str(), t.object.as_str())
+        } else {
+            (t.object.as_str(), t.subject.as_str())
+        };
+        rels_by_carrier
+            .entry(carrier)
             .or_default()
             .entry(t.relation.as_str())
-            .or_default();
-        if !subjects.contains(&t.subject.as_str()) {
-            subjects.push(t.subject.as_str());
-        }
+            .or_default()
+            .insert(target);
+        carrier_relation
+            .entry(carrier)
+            .or_insert((t.relation.as_str(), traversal));
     }
 
     let known: HashMap<&str, ()> = entities
@@ -328,7 +352,7 @@ pub fn materialize(
         .map(|e| (e.entity_id.as_str(), ()))
         .collect();
 
-    let mut docs = Vec::with_capacity(entities.len());
+    let mut docs = Vec::with_capacity(entities.len() + rels_by_carrier.len());
     for e in entities {
         let mut attributes = e.attributes.clone();
         if let Some((roles, perms)) = roles_by_subject.get(e.entity_id.as_str()) {
@@ -340,24 +364,34 @@ pub fn materialize(
             "type": e.entity_type,
             "attributes": attributes,
         });
-        if let Some(rels) = rels_by_object.get(e.entity_id.as_str()) {
+        if let Some(rels) = rels_by_carrier.get(e.entity_id.as_str()) {
             doc["relationships"] = serde_json::json!(rels);
         }
         docs.push(doc);
     }
 
-    // Synthesize entities for tuple objects with no explicit record, so the
-    // relationship graph is complete even before someone fills in attributes.
-    for (object, rels) in &rels_by_object {
-        if known.contains_key(object) {
+    // Synthesize records for tuple carriers with no explicit entity, so the
+    // relationship graph is complete before anyone fills in attributes.
+    for (carrier, rels) in &rels_by_carrier {
+        if known.contains_key(carrier) {
             continue;
         }
-        let inferred_type = rels
-            .keys()
-            .find_map(|r| model.relation(r).map(|d| d.object.clone()))
+        let inferred_type = carrier_relation
+            .get(carrier)
+            .and_then(|(rel, traversal)| {
+                model.relation(rel).map(|d| {
+                    if *traversal {
+                        // Carrier is the tuple SUBJECT; pick its first
+                        // declared subject type.
+                        d.subject.first().cloned().unwrap_or_else(|| "user".into())
+                    } else {
+                        d.object.clone()
+                    }
+                })
+            })
             .unwrap_or_else(|| "resource".to_string());
         docs.push(serde_json::json!({
-            "id": object,
+            "id": carrier,
             "type": inferred_type,
             "attributes": {},
             "relationships": rels,

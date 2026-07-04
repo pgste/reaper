@@ -185,18 +185,15 @@ async fn get_datastore(
 ) -> ApiResult<Json<Value>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
-    let repo = DatastoreRepository::new(&state.db);
-    let entities = repo.list_entities(store.id, None).await?;
-    let bindings = repo.list_bindings(store.id, None, None).await?;
-    let tuples = repo.list_tuples(store.id, None, None, None).await?;
+    let (entities, bindings, tuples) = DatastoreRepository::new(&state.db).counts(store.id).await?;
     Ok(Json(json!({
         "id": store.id,
         "template": store.template,
         "current_version": store.current_version,
         "counts": {
-            "entities": entities.len(),
-            "role_bindings": bindings.len(),
-            "tuples": tuples.len(),
+            "entities": entities,
+            "role_bindings": bindings,
+            "tuples": tuples,
         },
         "created_at": store.created_at,
         "updated_at": store.updated_at,
@@ -365,6 +362,16 @@ async fn add_binding(
             "role '{}' is not defined in the model",
             binding.role
         )));
+    }
+    // Scoped bindings are stored-but-not-yet-materialized (D2). Accepting
+    // one today would silently widen a scoped grant into a GLOBAL grant at
+    // publish time — reject loudly instead (fail closed, no surprises).
+    if !binding.scope.is_empty() {
+        return Err(ApiError::BadRequest(
+            "scoped role bindings are not supported yet — omit `scope` for a \
+             namespace-wide binding (resource-scoped bindings land in D2)"
+                .to_string(),
+        ));
     }
     DatastoreRepository::new(&state.db)
         .add_binding(store.id, &binding)

@@ -485,6 +485,23 @@ impl<'a> DatastoreRepository<'a> {
         })
     }
 
+    /// Record counts via COUNT(*) — the status endpoint must not pay for
+    /// materializing every row just to show three numbers.
+    pub async fn counts(&self, datastore_id: Uuid) -> Result<(i64, i64, i64), DatabaseError> {
+        let pool = self.pool()?;
+        let id = datastore_id.to_string();
+        let row = sqlx::query(
+            "SELECT \
+               (SELECT COUNT(*) FROM adm_entities WHERE datastore_id = ?1) AS entities, \
+               (SELECT COUNT(*) FROM adm_role_bindings WHERE datastore_id = ?1) AS bindings, \
+               (SELECT COUNT(*) FROM adm_tuples WHERE datastore_id = ?1) AS tuples",
+        )
+        .bind(&id)
+        .fetch_one(pool)
+        .await?;
+        Ok((row.get("entities"), row.get("bindings"), row.get("tuples")))
+    }
+
     pub async fn list_versions(
         &self,
         datastore_id: Uuid,

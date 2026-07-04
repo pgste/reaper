@@ -1585,6 +1585,54 @@ async fn test_data_plane_end_to_end() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
+    // Group membership (TRAVERSAL relation): carol ∈ team-eng, and team-eng
+    // holds viewer on doc-1. Access flows through the graph, not a direct
+    // grant — the exact pattern tuple-only stores sell as their headline.
+    for tuple in [
+        json!({"object": "team-eng", "relation": "member_of", "subject": "carol"}),
+        json!({"object": "doc-1", "relation": "viewer", "subject": "team-eng"}),
+    ] {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("{base}/tuples"),
+                Some(tuple),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({"entity_id": "carol", "entity_type": "user", "attributes": {}})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Scoped bindings must be rejected until the materializer represents
+    // them — a scoped grant silently going global would be a breach.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "viewer", "scope": "doc-9"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
     // --- Publish: immutable, checksummed version ---
     let response = env
         .app
@@ -1646,6 +1694,12 @@ async fn test_data_plane_end_to_end() {
             rule owners {
                 allow if rebac::related(user, "owner", resource)
             }
+            rule team_viewers_can_read {
+                allow if {
+                    context.action == "read" &&
+                    rebac::reachable(user, "viewer", resource, "member_of", 3)
+                }
+            }
         }
     "#
     .parse()
@@ -1669,4 +1723,31 @@ async fn test_data_plane_end_to_end() {
     // bob on another resource: nothing applies -> deny (default)
     let d = evaluator.evaluate(&request("bob", "doc-2")).unwrap();
     assert_eq!(format!("{d:?}"), "Deny", "no data, no access");
+
+    // carol: no role, no ownership — reaches doc-1 through team-eng
+    // (member_of traversal edge materialized subject→object). This is the
+    // direction contract: managed Zanzibar tuples MUST drive
+    // rebac::reachable correctly.
+    let read = |principal: &str, resource: &str| PolicyRequest {
+        resource: resource.to_string(),
+        action: "read".to_string(),
+        context: HashMap::from([("principal".to_string(), principal.to_string())]),
+    };
+    let d = evaluator.evaluate(&read("carol", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Allow", "carol via group-hop ReBAC");
+    // …but only for read (the rule gates on action).
+    let d = evaluator.evaluate(&request("carol", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Deny", "group viewers cannot write");
+
+    // Status endpoint reports COUNT(*)-backed numbers.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", base, None, &key))
+        .await
+        .unwrap();
+    let status = parse_body(response).await;
+    assert_eq!(status["counts"]["entities"], 3);
+    assert_eq!(status["counts"]["tuples"], 3);
+    assert_eq!(status["counts"]["role_bindings"], 1);
 }
