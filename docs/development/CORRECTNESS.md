@@ -147,6 +147,13 @@ silently ignored the variable before.
    AST fix (parity catch).
 5. Silent dropped binding in `x := var.attr == lit` compilation (audit).
 6. Suite runners silently passing/failing against an absent data file.
+7. Compiled Int/Bool→String coercion where `!=` also behaved like `==`
+   (mixed-type generator catch; sabotage-verified).
+8. Compiled comprehension over a missing source failed the rule where the
+   AST iterated an empty collection (totality audit).
+9. ReBAC traversal node-budget off-by-one and untested diagnostics
+   accessors (first cargo-mutants run: 6 surviving mutants on
+   `relationships.rs`, all now killed by boundary-exact tests).
 
 ### Comprehension contract (total iteration)
 - A missing or non-collection iteration source is an EMPTY collection —

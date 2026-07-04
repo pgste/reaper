@@ -245,6 +245,50 @@ mod tests {
     }
 
     #[test]
+    fn len_and_is_empty_track_edge_lists() {
+        let (g, i) = graph();
+        assert!(g.is_empty());
+        assert_eq!(g.len(), 0);
+        g.add_edge(i.intern("doc"), i.intern("owner"), i.intern("alice"));
+        assert!(!g.is_empty());
+        assert_eq!(g.len(), 1);
+        g.add_edge(i.intern("doc"), i.intern("viewer"), i.intern("bob"));
+        assert_eq!(g.len(), 2, "one forward list per (node, relation) pair");
+    }
+
+    /// The 4,096-node traversal budget must be EXACT: node number
+    /// BUDGET is still reachable, node BUDGET+1 never is. Written to kill
+    /// the `>` -> `>=` / `==` mutants cargo-mutants found surviving on the
+    /// budget comparison (an off-by-one here either shrinks the legal
+    /// search space or unbounds the DoS guard).
+    #[test]
+    fn traversal_node_budget_is_exact() {
+        let (g, i) = graph();
+        let parent = i.intern("parent");
+
+        // Chain c0 -> c1 -> ... -> c(B+1). BFS pops c(k-1) with
+        // visited.len() == k, so hit(c_k) is checked iff k <= BUDGET.
+        let n = TRAVERSAL_NODE_BUDGET + 2;
+        let nodes: Vec<_> = (0..n).map(|k| i.intern(&format!("c{k}"))).collect();
+        for w in nodes.windows(2) {
+            g.add_edge(w[0], parent, w[1]);
+        }
+
+        let deep_enough = TRAVERSAL_NODE_BUDGET + 10;
+        let last_inside = nodes[TRAVERSAL_NODE_BUDGET];
+        let first_outside = nodes[TRAVERSAL_NODE_BUDGET + 1];
+
+        assert!(
+            g.bfs_reaches(nodes[0], parent, deep_enough, |x| x == last_inside),
+            "node exactly AT the budget must still be reachable"
+        );
+        assert!(
+            !g.bfs_reaches(nodes[0], parent, deep_enough, |x| x == first_outside),
+            "node past the budget must be cut off (DoS guard)"
+        );
+    }
+
+    #[test]
     fn reachable_through_group_chain_with_depth_bound() {
         let (g, i) = graph();
         let (user, team, org, doc) = (
