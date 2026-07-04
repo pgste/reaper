@@ -37,7 +37,7 @@ keeping the sub-microsecond compiled hot path for authorization decisions.
 
 ## Design
 
-### Phase 1 — Structured `input` document (unlocks OPA-style use)
+### Phase 1 — Structured `input` document — ✅ IMPLEMENTED
 
 - New request field `input: serde_json::Value` (optional, alongside
   principal/action/resource which stay optional for pure document checks).
@@ -67,7 +67,9 @@ keeping the sub-microsecond compiled hot path for authorization decisions.
   `input`-touching rules first, optimize later — authorization hot path is
   unaffected).
 
-### Phase 2 — Violations with messages (the CI/gatekeeper feature)
+### Phase 2 — Violations with messages — ✅ IMPLEMENTED
+
+(Surfaced as `POST /api/v1/check` on the agent and `reaper-cli check -p policy.reap -i plan.json` with exit code 1 on violations.)
 
 - Rule form gains an optional message:
 

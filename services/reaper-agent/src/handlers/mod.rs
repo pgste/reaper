@@ -8,6 +8,7 @@
 //! - `data`: Data loading and synchronization
 //! - `decisions`: Decision logging and analytics
 
+pub mod check;
 pub mod data;
 pub mod decisions;
 pub mod entities;
@@ -19,6 +20,7 @@ pub mod policies;
 pub use health::{health_check, liveness_check, metrics, readiness_check};
 
 // Re-export evaluation handlers
+pub use check::check_document;
 pub use evaluate::{batch_evaluate_policy, evaluate_policy, fast_evaluate_policy};
 
 // Re-export policy management handlers

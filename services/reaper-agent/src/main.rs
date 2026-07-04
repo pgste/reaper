@@ -50,6 +50,7 @@ use handlers::{
     batch_evaluate_policy,
     // Entity handlers
     batch_upsert_handler,
+    check_document,
     debug_datastore,
     delete_entity_handler,
     // Policy management handlers
@@ -512,6 +513,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/fast-messages", post(fast_evaluate_policy))
         // Batch evaluation endpoint (parallel processing)
         .route("/api/v1/batch-messages", post(batch_evaluate_policy))
+        .route("/api/v1/check", post(check_document))
         // Data management - load entities
         .route("/api/v1/data", post(load_data_handler))
         .route("/api/v1/data/stream", post(load_data_stream_handler))

@@ -120,6 +120,39 @@ enum Commands {
         verbose: bool,
     },
 
+    /// Check a JSON document against a policy (CI mode): evaluates EVERY deny
+    /// rule and reports all violations with messages; exit code 1 on failure.
+    /// The conftest workflow: `reaper-cli check -p tf.reap -i plan.json`
+    Check {
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        #[arg(short, long)]
+        policy: String,
+
+        /// Path to the JSON input document ('-' for stdin)
+        #[arg(short, long)]
+        input: String,
+
+        /// Optional entity data file (for policies that also use user/resource)
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Principal id (optional; document checks usually have none)
+        #[arg(long)]
+        principal: Option<String>,
+
+        /// Action (default: "check")
+        #[arg(long, default_value = "check")]
+        action: String,
+
+        /// Resource (default: the input file name)
+        #[arg(long)]
+        resource: Option<String>,
+
+        /// Output format: text (default) or json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
     /// Generate a bundle signing keypair (Ed25519 or ECDSA P-256)
     Keygen {
         /// Signature algorithm: ed25519-sha256 or ecdsa-p256-sha256
@@ -785,6 +818,84 @@ fn handle_decisions_decrypt(key: &str, input: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handle: reaper check — evaluate a JSON document against a policy and
+/// report every violation (CI gate: exit 1 when not allowed).
+fn handle_check(
+    policy_path: &str,
+    input_path: &str,
+    data_path: Option<&str>,
+    principal: Option<&str>,
+    action: &str,
+    resource: Option<&str>,
+    format: &str,
+) -> anyhow::Result<()> {
+    use policy_engine::PolicyRequest;
+
+    let policy = ReaperPolicy::from_file_auto(policy_path)
+        .map_err(|e| anyhow::anyhow!("failed to load policy {policy_path}: {e}"))?;
+
+    let store = std::sync::Arc::new(DataStore::new());
+    if let Some(data) = data_path {
+        let json = std::fs::read_to_string(data)
+            .map_err(|e| anyhow::anyhow!("failed to read data file {data}: {e}"))?;
+        DataLoader::new((*store).clone())
+            .load_json(&json)
+            .map_err(|e| anyhow::anyhow!("failed to load data: {e}"))?;
+    }
+
+    let raw = if input_path == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(input_path)
+            .map_err(|e| anyhow::anyhow!("failed to read input {input_path}: {e}"))?
+    };
+    let input: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("input is not valid JSON: {e}"))?;
+
+    let mut context = std::collections::HashMap::new();
+    if let Some(pr) = principal {
+        context.insert("principal".to_string(), pr.to_string());
+    }
+    let request = PolicyRequest {
+        resource: resource.unwrap_or(input_path).to_string(),
+        action: action.to_string(),
+        context,
+    };
+
+    let evaluator = policy.build_ast_evaluator(store);
+    let result = evaluator
+        .check_with_input(&request, Some(&input))
+        .map_err(|e| anyhow::anyhow!("check failed: {e}"))?;
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&result)?),
+        _ => {
+            if result.violations.is_empty() {
+                println!("PASS: no violations");
+            } else {
+                for v in &result.violations {
+                    match &v.message {
+                        Some(msg) => println!("FAIL [{}]: {}", v.rule, msg),
+                        None => println!("FAIL [{}]", v.rule),
+                    }
+                }
+                println!("\n{} violation(s)", result.violations.len());
+            }
+            if !result.allowed && result.violations.is_empty() {
+                println!("DENIED: no allow rule matched (default deny)");
+            }
+        }
+    }
+
+    if !result.allowed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn handle_validate(
     policy_path: &str,
     data_path: Option<&str>,
@@ -1136,6 +1247,24 @@ async fn main() -> anyhow::Result<()> {
             ref data,
             verbose,
         } => handle_validate(policy, data.as_deref(), verbose)?,
+
+        Commands::Check {
+            ref policy,
+            ref input,
+            ref data,
+            ref principal,
+            ref action,
+            ref resource,
+            ref format,
+        } => handle_check(
+            policy,
+            input,
+            data.as_deref(),
+            principal.as_deref(),
+            action,
+            resource.as_deref(),
+            format,
+        )?,
 
         Commands::Keygen {
             ref algorithm,
