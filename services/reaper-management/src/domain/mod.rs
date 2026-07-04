@@ -6,6 +6,7 @@ pub mod agent;
 pub mod agent_deployment;
 pub mod billing;
 pub mod bundle;
+pub mod datastore;
 pub mod deployment;
 pub mod namespace;
 pub mod organization;

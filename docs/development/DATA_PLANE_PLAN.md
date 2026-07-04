@@ -1,7 +1,7 @@
 # The Reaper Data Plane — Managed Authorization Data
 
-**Status: PROPOSAL** (researched against the current codebase; phases at the
-bottom). Companion to `DSL_V2_DESIGN.md` and `CORRECTNESS.md`.
+**Status: D1 SHIPPED** (see "Phase D1 — shipped" below); D2+ as planned.
+Companion to `DSL_V2_DESIGN.md` and `CORRECTNESS.md`.
 
 ## 1. The opportunity
 
@@ -228,7 +228,61 @@ already covered by the frontend brief (extend it with the three managers —
 the personas don't change: Priya gets the managers, Ana gets data-change
 audit, Dev gets the API).
 
-## 7. Why this wins (positioning summary)
+## 7. Phase D1 — SHIPPED
+
+Implemented (management + agent, fully tested end-to-end):
+
+- Migration `006_data_plane.sql`: datastores, adm_entities, adm_role_bindings,
+  adm_tuples, adm_versions.
+- `domain/datastore.rs`: ModelDefinition (typed attrs / roles / relations),
+  four seed templates, write-time type-strict validation, deterministic
+  `materialize()` (BTreeMap ordering → stable checksums).
+- `api/datastore.rs`: the full manager surface (provision, model, entities +
+  attributes, role-bindings, tuples, publish, versions) under org auth +
+  API keys; `datastore_published` SSE event wakes the fleet.
+- Agent: `POST /api/v1/data/deploy-version` — **read-replica discipline**:
+  recomputes the sha256 over the CANONICAL serde_json serialization and
+  rejects mismatches before touching the store (corrupt payload = rejected
+  WAL segment); version regressions rejected (monotonic sync); idempotent
+  redelivery of the current version is a verified no-op.
+- **Configurable staleness budget** (the operator owns the availability vs.
+  certainty tradeoff): `REAPER_DATA_MAX_STALENESS_SECS` +
+  `REAPER_DATA_STALENESS_MODE`:
+  * `monitor` — metrics/log only (default)
+  * `flag` — keep serving; every decision log entry carries
+    `data_stale: true` so audits see exactly which decisions ran on old data
+  * `enforce` — FAIL CLOSED: all evaluations deny with matched_rule
+    `data_staleness_exceeded`, and `/ready` returns 503 so orchestrators
+    stop routing to the stale agent
+  An agent that never synced (bootstrap-file/standalone) has no staleness
+  clock — budgets apply only once the data plane is in use.
+- **Decision provenance**: every decision log entry now carries
+  `data_version` + `data_checksum` (skipped when never synced) — audits pin
+  exactly which data every decision saw.
+- End-to-end test (`test_data_plane_end_to_end`): provision → typed CRUD
+  (mistyped attribute rejected) → publish → checksum round-trip → document
+  loaded into the REAL policy engine → combined RBAC+ABAC+ReBAC policy
+  decides correctly on the managed data.
+
+Canonicalization note: checksums are computed over serde_json's sorted-key
+serialization on BOTH sides — deliberately not sonic_rs (which preserves
+insertion order and would make hashes transport-dependent). sonic_rs stays
+on the hot paths (evaluation responses, document parsing in DataLoader).
+
+### Persistence decision (any-cloud)
+
+Canonical backing store: **PostgreSQL** — managed offerings on every cloud
+(RDS/Aurora, Cloud SQL, Azure Database) and trivial self-host. In managed
+mode the end user NEVER sees the database — "provision a datastore" is the
+product surface. Self-hosted mode gets the same treatment as reaper itself:
+the docker-compose `management` profile and the Helm chart already ship a
+PostgreSQL instance, and the datastore rides in the same management DB (one
+fewer moving part). The repository layer is plain sqlx with portable SQL;
+today's embedded SQLite backend serves dev/self-contained deployments, and
+completing the Postgres driver in `db/connection.rs` (currently a stub) is
+the one open task — tracked for D2.
+
+## 8. Why this wins (positioning summary)
 
 - **vs OPA**: they made data your problem; we make it a product.
 - **vs OpenFGA/SpiceDB**: tuples AND attributes AND roles in one model —

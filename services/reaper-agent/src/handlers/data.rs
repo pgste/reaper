@@ -363,3 +363,178 @@ mod tests {
         ));
     }
 }
+
+// ============================================================================
+// Versioned data-plane deployment (read-replica style)
+// ============================================================================
+
+/// A published datastore version from the control plane
+/// (`GET /orgs/{o}/namespaces/{n}/datastore/versions/{v}`).
+#[derive(Debug, Deserialize)]
+pub struct DeployDataVersionRequest {
+    /// Monotonic version number from the control plane.
+    pub version: i64,
+    /// Published checksum ("sha256:…") — verified before anything loads.
+    pub checksum: String,
+    /// The materialized document: `{"entities": [...]}`.
+    pub document: Value,
+    /// Replace the whole store (default). `false` merges (advanced use).
+    #[serde(default = "default_replace")]
+    pub replace: bool,
+}
+
+fn default_replace() -> bool {
+    true
+}
+
+/// Deploy a VERIFIED, versioned data bundle — the data-plane sync path.
+///
+/// Integrity contract (read-replica discipline): the sha256 checksum
+/// published by the control plane is recomputed here over the CANONICAL
+/// serialization and must match before the store is touched. Canonical form
+/// is serde_json's sorted-key output — deliberately NOT sonic_rs, which
+/// preserves insertion order and would make the hash depend on transport
+/// ordering. A corrupt or tampered payload is rejected like a bad WAL
+/// segment; version regressions are rejected to keep sync monotonic.
+pub async fn deploy_data_version(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<DeployDataVersionRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    use sha2::{Digest, Sha256};
+
+    let current = state
+        .data_sync
+        .version
+        .load(std::sync::atomic::Ordering::Acquire);
+    if payload.version < current {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "version {} is older than current {} (sync must be monotonic)",
+                payload.version, current
+            ),
+        ));
+    }
+
+    // Canonical serialization -> checksum verification.
+    let canonical = serde_json::to_string(&payload.document).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("unserializable document: {e}"),
+        )
+    })?;
+    let computed = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+    let expected = payload
+        .checksum
+        .strip_prefix("sha256:")
+        .unwrap_or(&payload.checksum);
+    if !computed.eq_ignore_ascii_case(expected) {
+        error!(
+            version = payload.version,
+            expected, computed, "data version REJECTED: checksum mismatch"
+        );
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "checksum mismatch for version {}: expected {expected}, computed {computed} \
+                 — payload rejected, store untouched",
+                payload.version
+            ),
+        ));
+    }
+
+    // Idempotent redelivery of the current version: verified no-op.
+    if payload.version == current && current != 0 {
+        return Ok(Json(json!({
+            "version": current,
+            "status": "already_current",
+        })));
+    }
+
+    if payload.replace {
+        state.data_store.clear();
+    }
+    let loader = DataLoader::new((*state.data_store).clone());
+    let entity_count = loader.load_json(&canonical).map_err(|e| {
+        error!("failed to load verified data version: {e}");
+        (
+            StatusCode::BAD_REQUEST,
+            format!("failed to load data version: {e}"),
+        )
+    })?;
+
+    state
+        .data_sync
+        .record_sync(payload.version, payload.checksum.clone());
+
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
+
+    info!(
+        version = payload.version,
+        entities = entity_count,
+        "✓ data version deployed (checksum verified)"
+    );
+
+    Ok(Json(json!({
+        "version": payload.version,
+        "checksum": payload.checksum,
+        "entities_loaded": entity_count,
+        "status": "deployed",
+    })))
+}
+
+#[cfg(test)]
+mod deploy_version_tests {
+    use super::*;
+    use crate::state::{DataSyncState, StalenessMode};
+
+    #[test]
+    fn checksum_canonical_form_matches_control_plane() {
+        use sha2::{Digest, Sha256};
+        // The control plane hashes serde_json::to_string of the document.
+        // Round-tripping through Value must produce the same bytes (sorted
+        // keys — this is why the checksum path never uses sonic_rs).
+        let doc = serde_json::json!({
+            "entities": [
+                {"id": "alice", "type": "user",
+                 "attributes": {"role": "admin", "clearance": 5}}
+            ]
+        });
+        let a = serde_json::to_string(&doc).unwrap();
+        let reparsed: Value = serde_json::from_str(&a).unwrap();
+        let b = serde_json::to_string(&reparsed).unwrap();
+        assert_eq!(a, b, "canonical serialization must be stable");
+        assert_eq!(Sha256::digest(a.as_bytes()), Sha256::digest(b.as_bytes()));
+    }
+
+    #[test]
+    fn staleness_budget_semantics() {
+        std::env::remove_var("REAPER_DATA_MAX_STALENESS_SECS");
+        std::env::remove_var("REAPER_DATA_STALENESS_MODE");
+
+        // Never-synced agent (bootstrap/standalone): no staleness clock.
+        let s = DataSyncState {
+            version: std::sync::atomic::AtomicI64::new(0),
+            checksum: parking_lot::RwLock::new(String::new()),
+            last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
+            max_staleness_secs: 10,
+            mode: StalenessMode::Enforce,
+        };
+        assert!(!s.is_stale(), "never-synced has no staleness clock");
+        assert!(!s.must_deny());
+
+        // Synced long ago with a 10s budget: stale; behavior follows mode.
+        s.record_sync(1, "sha256:abc".into());
+        s.last_synced_epoch
+            .store(1, std::sync::atomic::Ordering::Release); // epoch 1 = 1970
+        assert!(s.is_stale());
+        assert!(s.must_deny(), "enforce mode fails closed");
+        assert!(s.flag_stale());
+
+        let (version, checksum) = s.provenance();
+        assert_eq!(version, 1);
+        assert_eq!(checksum.as_deref(), Some("sha256:abc"));
+    }
+}

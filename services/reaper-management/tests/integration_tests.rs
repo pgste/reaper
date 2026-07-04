@@ -1397,3 +1397,276 @@ async fn test_session_token_with_api_endpoints() {
     // Owner has admin scope, so this should work
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+// ============================================================================
+// Data plane (Authorization Data Model) — Phase D1
+// ============================================================================
+
+/// The full loop: provision a datastore, manage typed data through the
+/// managers' APIs, publish a checksummed version, then load the materialized
+/// document into the ACTUAL policy engine and watch a combined
+/// RBAC+ABAC+ReBAC policy decide with it. This is the "closes the loop"
+/// guarantee: data managed in the control plane drives real decisions.
+#[tokio::test]
+async fn test_data_plane_end_to_end() {
+    use policy_engine::reap::ReaperPolicy;
+    use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest};
+    use std::collections::HashMap;
+
+    let env = setup_test_env().await;
+
+    // --- Org + namespace + key ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Data Plane Org", "slug": "dp-org"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/dp-org/namespaces",
+            Some(json!({"slug": "prod", "display_name": "Production"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let base = "/orgs/dp-org/namespaces/prod/datastore";
+
+    // --- Provision from the combined template ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_body(response).await;
+    assert_eq!(body["template"], "combined");
+    assert!(body["model"]["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "editor"));
+
+    // Provisioning twice conflicts.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "rbac"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // --- Entities: typed validation is enforced at write time ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({
+                "entity_id": "alice", "entity_type": "user",
+                "attributes": {"mfa": true, "clearance": 5, "department": "eng"}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // clearance as a STRING must be rejected (type-strict at the source).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({
+                "entity_id": "bob", "entity_type": "user",
+                "attributes": {"clearance": "5"}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // bob, correctly typed, WITHOUT mfa (absence must fail guards downstream).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({
+                "entity_id": "bob", "entity_type": "user",
+                "attributes": {"clearance": 2}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // --- Role bindings (vocabulary-checked) ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "editor"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "warlock"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // --- Tuples (relation vocabulary-checked) ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/tuples"),
+            Some(json!({"object": "doc-1", "relation": "owner", "subject": "bob"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/tuples"),
+            Some(json!({"object": "doc-1", "relation": "haunts", "subject": "bob"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // --- Publish: immutable, checksummed version ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let published = parse_body(response).await;
+    assert_eq!(published["version"], 1);
+    let checksum = published["checksum"].as_str().unwrap().to_string();
+    assert!(checksum.starts_with("sha256:"));
+
+    // --- Fetch the version document (what agents load) ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/1"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let version_body = parse_body(response).await;
+    let document = version_body["document"].clone();
+
+    // Agent-side integrity contract: recomputing sha256 over the canonical
+    // serde_json serialization must reproduce the published checksum.
+    {
+        use sha2::{Digest, Sha256};
+        let canonical = serde_json::to_string(&document).unwrap();
+        let computed = format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()));
+        assert_eq!(computed, checksum, "canonical checksum must round-trip");
+    }
+
+    // --- THE LOOP: load into the real policy engine and decide ---
+    let store = std::sync::Arc::new(DataStore::new());
+    DataLoader::new((*store).clone())
+        .load_json(&serde_json::to_string(&document).unwrap())
+        .unwrap();
+
+    let policy: ReaperPolicy = r#"
+        policy data_plane_loop {
+            default: deny,
+            rule editors_with_mfa {
+                allow if {
+                    "editor" in user.roles &&
+                    user.mfa == true
+                }
+            }
+            rule owners {
+                allow if rebac::related(user, "owner", resource)
+            }
+        }
+    "#
+    .parse()
+    .unwrap();
+    let evaluator = policy.build_ast_evaluator(store);
+
+    let request = |principal: &str, resource: &str| PolicyRequest {
+        resource: resource.to_string(),
+        action: "write".to_string(),
+        context: HashMap::from([("principal".to_string(), principal.to_string())]),
+    };
+
+    // alice: editor binding (RBAC) + mfa attribute (ABAC) -> allow
+    let d = evaluator.evaluate(&request("alice", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Allow", "alice via RBAC+ABAC");
+
+    // bob: no role, no mfa — but OWNS doc-1 (ReBAC tuple) -> allow
+    let d = evaluator.evaluate(&request("bob", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Allow", "bob via ReBAC tuple");
+
+    // bob on another resource: nothing applies -> deny (default)
+    let d = evaluator.evaluate(&request("bob", "doc-2")).unwrap();
+    assert_eq!(format!("{d:?}"), "Deny", "no data, no access");
+}

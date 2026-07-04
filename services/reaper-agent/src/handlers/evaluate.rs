@@ -170,6 +170,27 @@ pub async fn evaluate_policy(
     let mut decision_id_buf = [0u8; Hyphenated::LENGTH];
     let decision_id: &str = uuid.as_hyphenated().encode_lower(&mut decision_id_buf);
 
+    // DATA-PLANE STALENESS GUARD (enforce mode): when the operator set
+    // REAPER_DATA_STALENESS_MODE=enforce and the sync budget is exceeded,
+    // fail CLOSED — stale data must not mint allows. Two relaxed atomic
+    // loads on the hot path; zero cost when no budget is configured.
+    if state.data_sync.must_deny() {
+        ERRORS_TOTAL.with_label_values(&["data_stale"]).inc();
+        let body = sonic_rs::to_vec(&EvalResponse {
+            decision_id: &decision_id,
+            decision: "deny",
+            policy_id: "",
+            policy_version: 0,
+            evaluation_time_microseconds: 0.0,
+            total_time_microseconds: 0.0,
+            matched_rule: "data_staleness_exceeded",
+            agent_id: &state.agent_id,
+            cache_hit: false,
+        })
+        .unwrap_or_default();
+        return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+    }
+
     // Determine which policy/policies to evaluate
     // Can specify: UUID, policy name, or nothing (evaluate all)
     let policy_ids: Vec<Uuid> = if let Some(id_str) = payload.policy_id.take() {
@@ -443,6 +464,10 @@ pub async fn evaluate_policy(
             .with_agent_id(state.agent_id.clone())
             .with_policy_version(matched_policy_version.to_string())
             .with_matched_rule(matched_rule.clone());
+            // Data-plane provenance: which datastore version/checksum this
+            // decision saw, and whether it ran past the staleness budget.
+            let (data_version, data_checksum) = state.data_sync.provenance();
+            entry = entry.with_data_sync(data_version, data_checksum, state.data_sync.flag_stale());
 
             // "Explain" tier (opt-in, typically denies-only): snapshot the
             // resolved principal/resource attributes the decision branched on.
@@ -692,6 +717,8 @@ pub async fn fast_evaluate_policy(
                     .map(|r| format!("rule_{}", r))
                     .unwrap_or_default(),
             );
+            let (data_version, data_checksum) = state.data_sync.provenance();
+            entry = entry.with_data_sync(data_version, data_checksum, state.data_sync.flag_stale());
             if buffer.should_capture_input(decision_str == "allow") {
                 entry.input_data = capture_input_data(
                     &state.data_store,

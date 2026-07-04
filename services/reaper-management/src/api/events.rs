@@ -307,6 +307,23 @@ fn event_to_sse(event: ServerEvent) -> Event {
             }))
             .unwrap_or_else(|_| Event::default().data("error")),
 
+        ServerEvent::DatastorePublished {
+            datastore_id,
+            org_id,
+            namespace_id,
+            version,
+            checksum,
+        } => Event::default()
+            .event("datastore_published")
+            .json_data(serde_json::json!({
+                "datastore_id": datastore_id,
+                "org_id": org_id,
+                "namespace_id": namespace_id,
+                "version": version,
+                "checksum": checksum
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
+
         ServerEvent::SyncStarted {
             source_id,
             source_name,

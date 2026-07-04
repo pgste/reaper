@@ -97,7 +97,7 @@ including a fail-open `!=` present in BOTH evaluators. UI relevance: a
 future "policy linter" panel can reuse the harness output, and the
 CORRECTNESS.md table is renderable as a trust page.
 
-## Data plane (PROPOSED — docs/development/DATA_PLANE_PLAN.md)
+## Data plane (D1 SHIPPED — docs/development/DATA_PLANE_PLAN.md)
 
 Managed authorization data: per-namespace data stores with a typed
 Authorization Data Model (entity types + attributes, roles + bindings,
@@ -108,3 +108,13 @@ editor, publish bar (draft→published diff), data-version badge on decision
 views. All backed by CRUD APIs under /orgs/{o}/ns/{n}/… so customers can
 build their own tooling on top; sync to reapers via snapshot bundles + SSE
 deltas, Kafka ingestion in a later phase.
+
+- D1 APIs live: POST/GET /orgs/{o}/namespaces/{n}/datastore (+/model,
+  /entities, /entities/{id}, /entities/{id}/attributes, /role-bindings,
+  /tuples, /publish, /versions, /versions/{v}). Typed validation errors are
+  UI-ready strings ("attribute 'clearance' must be Int…").
+- Staleness UX surfaces: agent /ready exposes data_version,
+  data_staleness_secs, data_stale; decision entries carry data_version /
+  data_checksum / data_stale — render a "data freshness" badge on agents
+  and a stale marker on decision rows. Modes: monitor | flag | enforce
+  (enforce = fail closed + not-ready).

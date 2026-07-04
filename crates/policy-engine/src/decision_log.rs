@@ -65,6 +65,21 @@ pub struct DecisionLogEntry {
     /// denies-only). Makes a decision reproducible.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_data: Option<serde_json::Value>,
+
+    /// Data-plane provenance: the datastore version this decision evaluated
+    /// against (audits can pin exactly what data a decision saw).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_version: Option<i64>,
+
+    /// Checksum of the data version (sha256:… as published by the control
+    /// plane; verified by the agent on load).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_checksum: Option<String>,
+
+    /// True when the agent's data exceeded its configured staleness budget
+    /// at evaluation time (REAPER_DATA_MAX_STALENESS_SECS, mode=flag).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub data_stale: bool,
 }
 
 impl DecisionLogEntry {
@@ -94,6 +109,9 @@ impl DecisionLogEntry {
             agent_id: None,
             matched_rule: None,
             input_data: None,
+            data_version: None,
+            data_checksum: None,
+            data_stale: false,
         }
     }
 
@@ -142,6 +160,16 @@ impl DecisionLogEntry {
     /// Set the matched rule name
     pub fn with_matched_rule(mut self, rule: String) -> Self {
         self.matched_rule = Some(rule);
+        self
+    }
+
+    /// Stamp data-plane sync provenance (version 0 = never synced: skipped).
+    pub fn with_data_sync(mut self, version: i64, checksum: Option<String>, stale: bool) -> Self {
+        if version > 0 {
+            self.data_version = Some(version);
+            self.data_checksum = checksum;
+        }
+        self.data_stale = stale;
         self
     }
 

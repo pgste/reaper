@@ -56,6 +56,8 @@ use handlers::{
     // Policy management handlers
     deploy_bundle,
     deploy_compiled_policy,
+    // Data handlers
+    deploy_data_version,
     deploy_policy,
     evaluate_policy,
     // Decision handlers
@@ -73,7 +75,6 @@ use handlers::{
     list_policies,
     liveness_check,
     load_bundles_atomic,
-    // Data handlers
     load_data_handler,
     load_data_stream_handler,
     metrics,
@@ -88,7 +89,7 @@ use observability::{
     ERRORS_TOTAL,
 };
 use opentelemetry::{global, trace::TraceContextExt, KeyValue};
-use state::{AgentState, AgentStats};
+use state::{AgentState, AgentStats, DataSyncState};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use types::{
     BatchEvaluateRequest, BatchRequestItem, BatchResponseItem, DecisionQuery, DeployBundleRequest,
@@ -499,6 +500,7 @@ async fn main() -> anyhow::Result<()> {
         decision_buffer,
         agent_id,
         decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
+        data_sync: Arc::new(DataSyncState::from_env()),
     });
 
     let app = Router::new()
@@ -518,6 +520,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/data", post(load_data_handler))
         .route("/api/v1/data/stream", post(load_data_stream_handler))
         .route("/api/v1/data/sync", post(sync_data))
+        .route("/api/v1/data/deploy-version", post(deploy_data_version))
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
         .route("/api/v1/policies/compile", post(deploy_compiled_policy))

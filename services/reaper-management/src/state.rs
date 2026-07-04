@@ -121,6 +121,15 @@ pub enum ServerEvent {
         namespace_id: Option<uuid::Uuid>,
         success: bool,
     },
+    /// A datastore version was published (data plane): agents fetch the
+    /// materialized document for `version` and hot-swap their DataStore.
+    DatastorePublished {
+        datastore_id: uuid::Uuid,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        version: i64,
+        checksum: String,
+    },
 }
 
 impl ServerEvent {
@@ -141,6 +150,7 @@ impl ServerEvent {
             ServerEvent::RolloutStarted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutWaveCompleted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutCompleted { org_id, .. } => Some(*org_id),
+            ServerEvent::DatastorePublished { org_id, .. } => Some(*org_id),
             ServerEvent::Ping { .. } => None,
         }
     }
@@ -162,6 +172,7 @@ impl ServerEvent {
             ServerEvent::RolloutStarted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutWaveCompleted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutCompleted { namespace_id, .. } => *namespace_id,
+            ServerEvent::DatastorePublished { namespace_id, .. } => *namespace_id,
             ServerEvent::Ping { .. } => None,
         }
     }

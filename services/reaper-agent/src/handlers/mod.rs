@@ -31,8 +31,8 @@ pub use policies::{
 
 // Re-export data handlers
 pub use data::{
-    load_data_handler, load_data_stream_handler, sync_data, LoadDataRequest, SyncDataRequest,
-    SyncDataResponse,
+    deploy_data_version, load_data_handler, load_data_stream_handler, sync_data, LoadDataRequest,
+    SyncDataRequest, SyncDataResponse,
 };
 
 // Re-export entity handlers

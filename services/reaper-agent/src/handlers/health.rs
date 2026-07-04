@@ -62,9 +62,21 @@ pub async fn readiness_check(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    // Data-plane sync state: operators watch staleness here; in enforce
+    // mode a stale agent reports NOT ready so orchestrators stop routing
+    // to it (fail closed at the traffic layer too).
+    let (data_version, _) = state.data_sync.provenance();
+    let stale = state.data_sync.is_stale();
+    if stale && state.data_sync.mode == crate::state::StalenessMode::Enforce {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     Ok(Json(json!({
         "status": "ready",
         "policies_loaded": engine_stats.total_policies,
+        "data_version": data_version,
+        "data_staleness_secs": state.data_sync.staleness_secs(),
+        "data_stale": stale,
         "timestamp": chrono::Utc::now().to_rfc3339()
     })))
 }
@@ -126,6 +138,7 @@ mod tests {
             decision_buffer: None,
             agent_id: "test-agent".to_string(),
             decision_metrics: Arc::new(crate::metrics_cache::DecisionMetrics::new()),
+            data_sync: std::sync::Arc::new(crate::state::DataSyncState::from_env()),
         })
     }
 

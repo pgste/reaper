@@ -97,6 +97,7 @@ impl Database {
             include_str!("migrations/003_security.sql"),
             include_str!("migrations/004_users_and_audit.sql"),
             include_str!("migrations/005_phase2_operations.sql"),
+            include_str!("migrations/006_data_plane.sql"),
         ];
 
         match &self.sqlite_pool {

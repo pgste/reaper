@@ -153,6 +153,7 @@ fn build_state() -> anyhow::Result<Arc<AgentState>> {
         decision_buffer: None,
         agent_id: "shard-bench".to_string(),
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
+        data_sync: std::sync::Arc::new(reaper_agent::state::DataSyncState::from_env()),
     }))
 }
 
