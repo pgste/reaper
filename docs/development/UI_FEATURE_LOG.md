@@ -96,3 +96,15 @@ push (PROPTEST_CASES=500). The program has caught 6 real bug classes,
 including a fail-open `!=` present in BOTH evaluators. UI relevance: a
 future "policy linter" panel can reuse the harness output, and the
 CORRECTNESS.md table is renderable as a trust page.
+
+## Data plane (PROPOSED — docs/development/DATA_PLANE_PLAN.md)
+
+Managed authorization data: per-namespace data stores with a typed
+Authorization Data Model (entity types + attributes, roles + bindings,
+relationship tuples) covering RBAC/ABAC/ReBAC and combinations. UI surfaces
+to plan for: Roles manager, Attributes manager, Relationship manager (graph
+view — shares the Policy Builder's ReBAC visualization), model/schema
+editor, publish bar (draft→published diff), data-version badge on decision
+views. All backed by CRUD APIs under /orgs/{o}/ns/{n}/… so customers can
+build their own tooling on top; sync to reapers via snapshot bundles + SSE
+deltas, Kafka ingestion in a later phase.
