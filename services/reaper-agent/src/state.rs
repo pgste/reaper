@@ -124,6 +124,16 @@ impl DataSyncState {
             .store(Self::now_epoch(), Ordering::Release);
     }
 
+    /// Refresh the staleness clock WITHOUT changing version/checksum — a
+    /// verified "you are already current" from the control plane is a
+    /// replica heartbeat: staleness measures lag behind the primary, not
+    /// time since the last data change. A quiet hour with no publishes
+    /// must not make a current agent look stale.
+    pub fn record_heartbeat(&self) {
+        self.last_synced_epoch
+            .store(Self::now_epoch(), Ordering::Release);
+    }
+
     /// Seconds since the last successful sync, if the agent has ever synced.
     /// An agent that never synced (bootstrap-file / standalone mode) has no
     /// staleness clock — budgets only apply once the data plane is in use.

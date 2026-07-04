@@ -33,6 +33,9 @@ pub struct SyncSettings {
     pub auth: AuthConfig,
     /// Scope configuration (teams, environments)
     pub scope: ScopeConfig,
+    /// Data-plane replication configuration
+    #[serde(default)]
+    pub datastore: DatastoreSyncConfig,
     /// Sync behavior configuration
     pub behavior: BehaviorConfig,
     /// Agent connection configuration
@@ -77,6 +80,30 @@ pub struct AuthConfig {
 }
 
 /// Scope configuration - what policies to sync
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DatastoreSyncConfig {
+    /// Enable data-plane replication (fetch published datastore versions
+    /// and keep the agent's DataStore current with heartbeat staleness).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Organization slug or id owning the datastore.
+    #[serde(default)]
+    pub org: String,
+    /// Namespace slug the datastore belongs to.
+    #[serde(default)]
+    pub namespace: String,
+}
+
+impl Default for DatastoreSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            org: String::new(),
+            namespace: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScopeConfig {
     /// Teams to sync policies for
@@ -231,6 +258,13 @@ impl SyncConfig {
                     api_version: default_api_version(),
                     timeout_seconds: default_timeout(),
                 },
+                datastore: DatastoreSyncConfig {
+                    enabled: std::env::var("REAPER_DATASTORE_SYNC_ENABLED")
+                        .map(|v| v == "true" || v == "1")
+                        .unwrap_or(false),
+                    org: std::env::var("REAPER_DATASTORE_ORG").unwrap_or_default(),
+                    namespace: std::env::var("REAPER_DATASTORE_NAMESPACE").unwrap_or_default(),
+                },
                 auth: AuthConfig {
                     auth_type: if auth_token.is_some() {
                         "api_token".to_string()
@@ -323,6 +357,7 @@ mod tests {
     fn test_config_validation_empty_server() {
         let config = SyncConfig {
             sync: SyncSettings {
+                datastore: Default::default(),
                 server: ServerConfig {
                     url: "".to_string(),
                     api_version: "v1".to_string(),

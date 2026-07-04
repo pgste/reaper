@@ -98,6 +98,8 @@ pub struct SyncEngine {
     /// Statistics
     total_syncs: u64,
     total_policies_deployed: u64,
+    /// Last (version, checksum) replicated to the agent (data plane).
+    datastore_state: Option<(i64, String)>,
 }
 
 impl SyncEngine {
@@ -113,6 +115,7 @@ impl SyncEngine {
             last_synced: HashMap::new(),
             total_syncs: 0,
             total_policies_deployed: 0,
+            datastore_state: None,
         })
     }
 
@@ -282,6 +285,59 @@ impl SyncEngine {
         }
     }
 
+    /// One data-plane replication step (read-replica loop):
+    /// - poll the control plane's current_version (COUNT-cheap status call)
+    /// - version changed (or first run) -> fetch + deploy the full verified
+    ///   document; the agent re-verifies the checksum before loading
+    /// - unchanged -> lightweight confirm heartbeat so the agent's
+    ///   staleness clock reflects "current", not "no recent publishes";
+    ///   a 409 (agent behind / diverged, e.g. after restart) triggers a
+    ///   full re-deploy in the SAME step — self-healing, no wait
+    pub async fn sync_datastore(&mut self) -> Result<(), SyncError> {
+        let ds = self.config.sync.datastore.clone();
+        if !ds.enabled {
+            return Ok(());
+        }
+
+        let status = self
+            .server_client
+            .get_datastore_status(&ds.org, &ds.namespace)
+            .await?;
+
+        if status.current_version == 0 {
+            debug!("datastore has no published versions yet");
+            return Ok(());
+        }
+
+        let needs_deploy = match &self.datastore_state {
+            Some((version, checksum)) if *version == status.current_version => {
+                // Heartbeat; false = agent behind/diverged -> full deploy.
+                !self
+                    .agent_client
+                    .confirm_data_version(*version, checksum)
+                    .await?
+            }
+            _ => true,
+        };
+
+        if needs_deploy {
+            let bundle = self
+                .server_client
+                .get_datastore_version(&ds.org, &ds.namespace, status.current_version)
+                .await?;
+            self.agent_client
+                .deploy_data_version(bundle.version, &bundle.checksum, &bundle.document)
+                .await?;
+            info!(
+                version = bundle.version,
+                checksum = %bundle.checksum,
+                "✓ data version replicated to agent"
+            );
+            self.datastore_state = Some((bundle.version, bundle.checksum));
+        }
+        Ok(())
+    }
+
     /// Run continuous synchronization
     #[instrument(skip(self))]
     pub async fn run_continuous(&mut self) -> Result<(), SyncError> {
@@ -299,6 +355,9 @@ impl SyncEngine {
             if !result.success {
                 warn!("Initial sync failed: {:?}", result.error);
             }
+            if let Err(e) = self.sync_datastore().await {
+                warn!("Initial data-plane replication failed: {e}");
+            }
         }
 
         // Continuous polling
@@ -306,6 +365,12 @@ impl SyncEngine {
             tokio::time::sleep(poll_interval).await;
 
             let result = self.sync_once().await;
+
+            // Data-plane replication rides the same poll: deploy on new
+            // versions, heartbeat otherwise (keeps agent staleness honest).
+            if let Err(e) = self.sync_datastore().await {
+                warn!("data-plane replication failed: {e}");
+            }
 
             if !result.success {
                 warn!("Sync iteration failed: {:?}", result.error);
@@ -343,6 +408,7 @@ mod tests {
     fn test_config() -> SyncConfig {
         SyncConfig {
             sync: crate::config::SyncSettings {
+                datastore: Default::default(),
                 server: crate::config::ServerConfig {
                     url: "http://localhost:8081".to_string(),
                     api_version: "v1".to_string(),

@@ -443,8 +443,29 @@ pub async fn deploy_data_version(
         ));
     }
 
-    // Idempotent redelivery of the current version: verified no-op.
+    // Idempotent redelivery of the current version. The payload checksum
+    // already verified above; it must ALSO match what we deployed — same
+    // version with different content is a split brain, never a no-op.
     if payload.version == current && current != 0 {
+        let stored = state.data_sync.checksum.read().clone();
+        if !stored.eq_ignore_ascii_case(&payload.checksum) {
+            error!(
+                version = current,
+                stored,
+                payload = payload.checksum,
+                "data version DIVERGENCE: same version, different checksum"
+            );
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "divergence at version {current}: agent has {stored}, control plane \
+                     sent {} — refusing to guess; republish a new version",
+                    payload.checksum
+                ),
+            ));
+        }
+        // Verified current = replica heartbeat: refresh the staleness clock.
+        state.data_sync.record_heartbeat();
         return Ok(Json(json!({
             "version": current,
             "status": "already_current",
@@ -483,6 +504,53 @@ pub async fn deploy_data_version(
         "entities_loaded": entity_count,
         "status": "deployed",
     })))
+}
+
+/// Lightweight replica heartbeat: the sync client confirms the agent is
+/// still on the control plane's current version WITHOUT shipping the
+/// document. Match -> staleness clock refreshes. Version/checksum mismatch
+/// -> 409, telling the sync client to push a full deploy-version.
+#[derive(Debug, Deserialize)]
+pub struct ConfirmDataVersionRequest {
+    pub version: i64,
+    pub checksum: String,
+}
+
+pub async fn confirm_data_version(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<ConfirmDataVersionRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let current = state
+        .data_sync
+        .version
+        .load(std::sync::atomic::Ordering::Acquire);
+    if current == 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "agent has never synced — push a full deploy-version".to_string(),
+        ));
+    }
+    if payload.version != current {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "agent at version {current}, control plane at {} — push deploy-version",
+                payload.version
+            ),
+        ));
+    }
+    let stored = state.data_sync.checksum.read().clone();
+    if !stored.eq_ignore_ascii_case(&payload.checksum) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "divergence at version {current}: agent has {stored}, control plane has {}",
+                payload.checksum
+            ),
+        ));
+    }
+    state.data_sync.record_heartbeat();
+    Ok(Json(json!({"version": current, "status": "confirmed"})))
 }
 
 #[cfg(test)]
@@ -536,5 +604,17 @@ mod deploy_version_tests {
         let (version, checksum) = s.provenance();
         assert_eq!(version, 1);
         assert_eq!(checksum.as_deref(), Some("sha256:abc"));
+
+        // REPLICA-LAG SEMANTICS: a verified "already current" heartbeat
+        // refreshes the clock without a new version — staleness measures
+        // lag behind the primary, not time since the last publish.
+        s.record_heartbeat();
+        assert!(!s.is_stale(), "heartbeat must clear staleness");
+        assert!(!s.must_deny());
+        assert_eq!(
+            s.version.load(std::sync::atomic::Ordering::Acquire),
+            1,
+            "heartbeat never changes the version"
+        );
     }
 }

@@ -51,12 +51,13 @@ use handlers::{
     // Entity handlers
     batch_upsert_handler,
     check_document,
+    // Data handlers
+    confirm_data_version,
     debug_datastore,
     delete_entity_handler,
     // Policy management handlers
     deploy_bundle,
     deploy_compiled_policy,
-    // Data handlers
     deploy_data_version,
     deploy_policy,
     evaluate_policy,
@@ -521,6 +522,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/data/stream", post(load_data_stream_handler))
         .route("/api/v1/data/sync", post(sync_data))
         .route("/api/v1/data/deploy-version", post(deploy_data_version))
+        .route("/api/v1/data/confirm-version", post(confirm_data_version))
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
         .route("/api/v1/policies/compile", post(deploy_compiled_policy))
