@@ -65,6 +65,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(publish),
         )
         .route(
+            "/orgs/{org}/namespaces/{ns}/datastore/changes",
+            get(get_changes),
+        )
+        .route(
             "/orgs/{org}/namespaces/{ns}/datastore/versions",
             get(list_versions),
         )
@@ -293,10 +297,13 @@ async fn delete_entity(
 ) -> ApiResult<Json<Value>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
-    let deleted = DatastoreRepository::new(&state.db)
-        .delete_entity(store.id, &entity_id)
+    // Referential cascade (contract pinned by the delta==rebuild
+    // differential): tuples and bindings touching the entity die with it,
+    // and the other endpoints' docs are marked dirty in the change log.
+    let (deleted, affected) = DatastoreRepository::new(&state.db)
+        .delete_entity_cascade(store.id, &entity_id)
         .await?;
-    Ok(Json(json!({"deleted": deleted})))
+    Ok(Json(json!({"deleted": deleted, "cascaded": affected})))
 }
 
 /// Replace an entity's attribute map (typed, validated). PUT semantics keep
@@ -491,6 +498,80 @@ async fn publish(
             "role_bindings": published.binding_count,
         },
         "published_at": published.published_at,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangesParams {
+    /// Last sequence the replica has applied (exclusive).
+    #[serde(default)]
+    since: i64,
+    /// Max deltas per page (post-dedup entities, not raw log rows).
+    limit: Option<i64>,
+}
+
+/// GET …/datastore/changes?since=N — the durable delta pull. Replicas ask
+/// "everything after my seq"; a lost notification can never lose data
+/// because this log is the source, not the event. Entities are DEDUPED to
+/// their latest state (a record churned 50 times syncs once) and each is
+/// materialized fresh via three indexed point queries. When `since` is
+/// older than the compaction floor the response says snapshot_required —
+/// the replica falls back to a full verified deploy.
+async fn get_changes(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, ns)): Path<(String, String)>,
+    Query(params): Query<ChangesParams>,
+) -> ApiResult<Json<Value>> {
+    let resolved = authorize(&state, &user, &org, &ns, false).await?;
+    let store = require_store(&state, &resolved).await?;
+    let repo = DatastoreRepository::new(&state.db);
+
+    let limit = params.limit.unwrap_or(500).clamp(1, 2000);
+    let (head_seq, min_available, marks) =
+        repo.changes_since(store.id, params.since, limit).await?;
+
+    // Replica older than the compaction floor: deltas can no longer bridge
+    // the gap — self-heal via snapshot (min_available == 0 means an empty
+    // log, which is only a gap if the head has moved past `since`).
+    let compacted_away = params.since < min_available.saturating_sub(1)
+        || (min_available == 0 && head_seq > params.since && marks.is_empty());
+    if params.since > 0 && compacted_away {
+        return Ok(Json(json!({
+            "snapshot_required": true,
+            "head_seq": head_seq,
+            "current_version": store.current_version,
+        })));
+    }
+
+    let mut deltas = Vec::with_capacity(marks.len());
+    for (entity_id, tombstone) in marks {
+        if tombstone {
+            deltas.push(json!({"op": "delete", "entity_id": entity_id}));
+            continue;
+        }
+        let (entity, bindings, tuples) = repo.entity_view(store.id, &entity_id).await?;
+        match crate::domain::datastore::materialize_one(
+            &store.model,
+            &entity_id,
+            entity.as_ref(),
+            &bindings,
+            &tuples,
+        ) {
+            Some(document) => deltas.push(json!({
+                "op": "upsert", "entity_id": entity_id, "document": document,
+            })),
+            // Nothing materializes anymore (e.g. its last tuple went away
+            // and it never had a record): tombstone converges the replica.
+            None => deltas.push(json!({"op": "delete", "entity_id": entity_id})),
+        }
+    }
+
+    Ok(Json(json!({
+        "snapshot_required": false,
+        "since": params.since,
+        "head_seq": head_seq,
+        "deltas": deltas,
     })))
 }
 

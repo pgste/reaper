@@ -32,6 +32,9 @@ pub struct DatastoreRecord {
 pub struct PublishedVersion {
     pub version: i64,
     pub checksum: String,
+    /// Position in the change stream at publish time — replicas loading
+    /// this snapshot resume delta pulls from here.
+    pub change_seq: i64,
     pub entity_count: i64,
     pub tuple_count: i64,
     pub binding_count: i64,
@@ -155,6 +158,172 @@ impl<'a> DatastoreRepository<'a> {
     }
 
     // ------------------------------------------------------------------
+    // Change log (transactional outbox — D2 delta sync)
+    // ------------------------------------------------------------------
+
+    /// Append dirty-entity markers with freshly allocated monotonic
+    /// sequence numbers. One counter bump for the whole batch keeps the
+    /// hot save path at two statements regardless of fan-out.
+    async fn record_changes(
+        &self,
+        datastore_id: Uuid,
+        marks: &[(String, bool)], // (entity_id, tombstone)
+    ) -> Result<(), DatabaseError> {
+        if marks.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            "UPDATE datastores SET change_seq = change_seq + ? WHERE id = ?              RETURNING change_seq",
+        )
+        .bind(marks.len() as i64)
+        .bind(datastore_id.to_string())
+        .fetch_one(pool)
+        .await?;
+        let head: i64 = row.get("change_seq");
+        let first = head - marks.len() as i64 + 1;
+        let now = Utc::now().to_rfc3339();
+        for (offset, (entity_id, tombstone)) in marks.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO adm_changes                  (id, datastore_id, seq, entity_id, tombstone, created_at)                  VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(datastore_id.to_string())
+            .bind(first + offset as i64)
+            .bind(entity_id)
+            .bind(*tombstone as i64)
+            .bind(&now)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Dirty markers since `since_seq` (exclusive), deduplicated to the
+    /// LATEST mark per entity (an entity churned 50 times syncs once).
+    /// Returns (head_seq, min_available_seq, marks).
+    pub async fn changes_since(
+        &self,
+        datastore_id: Uuid,
+        since_seq: i64,
+        limit: i64,
+    ) -> Result<(i64, i64, Vec<(String, bool)>), DatabaseError> {
+        let pool = self.pool()?;
+        let head: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = ?")
+            .bind(datastore_id.to_string())
+            .fetch_one(pool)
+            .await?
+            .get("change_seq");
+        let min_available: i64 = sqlx::query(
+            "SELECT COALESCE(MIN(seq), 0) AS min_seq FROM adm_changes WHERE datastore_id = ?",
+        )
+        .bind(datastore_id.to_string())
+        .fetch_one(pool)
+        .await?
+        .get("min_seq");
+
+        let rows = sqlx::query(
+            "SELECT entity_id, MAX(seq) AS last_seq,                     (SELECT tombstone FROM adm_changes c2                      WHERE c2.datastore_id = c1.datastore_id                        AND c2.entity_id = c1.entity_id AND c2.seq = MAX(c1.seq)) AS tombstone              FROM adm_changes c1              WHERE datastore_id = ? AND seq > ?              GROUP BY entity_id ORDER BY last_seq LIMIT ?",
+        )
+        .bind(datastore_id.to_string())
+        .bind(since_seq)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        let marks = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("entity_id"),
+                    row.get::<i64, _>("tombstone") != 0,
+                )
+            })
+            .collect();
+        Ok((head, min_available, marks))
+    }
+
+    /// Everything needed to materialize one entity's current doc: its
+    /// record, its (unscoped) bindings, and every tuple touching it —
+    /// three indexed point queries, never a dataset scan.
+    pub async fn entity_view(
+        &self,
+        datastore_id: Uuid,
+        entity_id: &str,
+    ) -> Result<(Option<AdmEntity>, Vec<RoleBinding>, Vec<RelationTuple>), DatabaseError> {
+        let entity = self.get_entity(datastore_id, entity_id).await?;
+        let bindings = self
+            .list_bindings(datastore_id, Some(entity_id), None)
+            .await?;
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            "SELECT object, relation, subject FROM adm_tuples              WHERE datastore_id = ? AND (object = ? OR subject = ?)              ORDER BY object, relation, subject",
+        )
+        .bind(datastore_id.to_string())
+        .bind(entity_id)
+        .bind(entity_id)
+        .fetch_all(pool)
+        .await?;
+        let tuples = rows
+            .into_iter()
+            .map(|row| RelationTuple {
+                object: row.get("object"),
+                relation: row.get("relation"),
+                subject: row.get("subject"),
+            })
+            .collect();
+        Ok((entity, bindings, tuples))
+    }
+
+    /// REFERENTIAL CASCADE for entity deletion (the contract the
+    /// delta==rebuild differential pinned): deleting an entity also deletes
+    /// every tuple touching it and every binding it holds — a deleted group
+    /// must not keep granting access as a dangling reference. Returns the
+    /// OTHER endpoints of removed tuples (their docs changed too).
+    pub async fn delete_entity_cascade(
+        &self,
+        datastore_id: Uuid,
+        entity_id: &str,
+    ) -> Result<(bool, Vec<String>), DatabaseError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            "SELECT object, subject FROM adm_tuples              WHERE datastore_id = ? AND (object = ? OR subject = ?)",
+        )
+        .bind(datastore_id.to_string())
+        .bind(entity_id)
+        .bind(entity_id)
+        .fetch_all(pool)
+        .await?;
+        let mut affected: Vec<String> = Vec::new();
+        for row in rows {
+            for side in ["object", "subject"] {
+                let id: String = row.get(side);
+                if id != entity_id && !affected.contains(&id) {
+                    affected.push(id);
+                }
+            }
+        }
+        sqlx::query(
+            "DELETE FROM adm_tuples              WHERE datastore_id = ? AND (object = ? OR subject = ?)",
+        )
+        .bind(datastore_id.to_string())
+        .bind(entity_id)
+        .bind(entity_id)
+        .execute(pool)
+        .await?;
+        sqlx::query("DELETE FROM adm_role_bindings WHERE datastore_id = ? AND subject = ?")
+            .bind(datastore_id.to_string())
+            .bind(entity_id)
+            .execute(pool)
+            .await?;
+        let deleted = self.delete_entity(datastore_id, entity_id).await?;
+
+        let mut marks: Vec<(String, bool)> = vec![(entity_id.to_string(), true)];
+        marks.extend(affected.iter().map(|id| (id.clone(), false)));
+        self.record_changes(datastore_id, &marks).await?;
+        Ok((deleted || !affected.is_empty(), affected))
+    }
+
+    // ------------------------------------------------------------------
     // Entities
     // ------------------------------------------------------------------
 
@@ -185,6 +354,8 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&now)
         .execute(pool)
         .await?;
+        self.record_changes(datastore_id, &[(entity.entity_id.clone(), false)])
+            .await?;
         Ok(())
     }
 
@@ -283,6 +454,8 @@ impl<'a> DatastoreRepository<'a> {
         .bind(Utc::now().to_rfc3339())
         .execute(pool)
         .await?;
+        self.record_changes(datastore_id, &[(binding.subject.clone(), false)])
+            .await?;
         Ok(())
     }
 
@@ -302,6 +475,10 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&binding.scope)
         .execute(pool)
         .await?;
+        if result.rows_affected() > 0 {
+            self.record_changes(datastore_id, &[(binding.subject.clone(), false)])
+                .await?;
+        }
         Ok(result.rows_affected() > 0)
     }
 
@@ -364,6 +541,14 @@ impl<'a> DatastoreRepository<'a> {
         .bind(Utc::now().to_rfc3339())
         .execute(pool)
         .await?;
+        self.record_changes(
+            datastore_id,
+            &[
+                (tuple.object.clone(), false),
+                (tuple.subject.clone(), false),
+            ],
+        )
+        .await?;
         Ok(())
     }
 
@@ -383,6 +568,16 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&tuple.subject)
         .execute(pool)
         .await?;
+        if result.rows_affected() > 0 {
+            self.record_changes(
+                datastore_id,
+                &[
+                    (tuple.object.clone(), false),
+                    (tuple.subject.clone(), false),
+                ],
+            )
+            .await?;
+        }
         Ok(result.rows_affected() > 0)
     }
 
@@ -448,11 +643,20 @@ impl<'a> DatastoreRepository<'a> {
         let version = store.current_version + 1;
         let now = Utc::now().to_rfc3339();
 
+        // Pin the snapshot to its position in the change stream: agents
+        // that load version N start pulling deltas from N's change_seq.
+        let head_seq: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = ?")
+            .bind(store.id.to_string())
+            .fetch_one(pool)
+            .await?
+            .get("change_seq");
+
         sqlx::query(
             r#"INSERT INTO adm_versions
                (id, datastore_id, version, checksum, document,
-                entity_count, tuple_count, binding_count, published_by, published_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                entity_count, tuple_count, binding_count, published_by, published_at,
+                change_seq)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(Uuid::new_v4().to_string())
         .bind(store.id.to_string())
@@ -464,8 +668,30 @@ impl<'a> DatastoreRepository<'a> {
         .bind(bindings.len() as i64)
         .bind(published_by)
         .bind(&now)
+        .bind(head_seq)
         .execute(pool)
         .await?;
+
+        // Compact the outbox behind the PREVIOUS snapshot: any replica older
+        // than that must full-sync anyway (changes_since reports the floor,
+        // the API tells such replicas snapshot_required).
+        if store.current_version > 0 {
+            if let Some(prev) = sqlx::query(
+                "SELECT change_seq FROM adm_versions                  WHERE datastore_id = ? AND version = ?",
+            )
+            .bind(store.id.to_string())
+            .bind(store.current_version)
+            .fetch_optional(pool)
+            .await?
+            {
+                let prev_seq: i64 = prev.get("change_seq");
+                sqlx::query("DELETE FROM adm_changes WHERE datastore_id = ? AND seq <= ?")
+                    .bind(store.id.to_string())
+                    .bind(prev_seq)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         sqlx::query("UPDATE datastores SET current_version = ?, updated_at = ? WHERE id = ?")
             .bind(version)
@@ -477,6 +703,7 @@ impl<'a> DatastoreRepository<'a> {
         Ok(PublishedVersion {
             version,
             checksum,
+            change_seq: head_seq,
             entity_count: entities.len() as i64,
             tuple_count: tuples.len() as i64,
             binding_count: bindings.len() as i64,
@@ -508,7 +735,7 @@ impl<'a> DatastoreRepository<'a> {
     ) -> Result<Vec<PublishedVersion>, DatabaseError> {
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT version, checksum, entity_count, tuple_count, binding_count, \
+            "SELECT version, checksum, change_seq, entity_count, tuple_count, binding_count, \
                     published_by, published_at \
              FROM adm_versions WHERE datastore_id = ? ORDER BY version DESC",
         )
@@ -520,6 +747,7 @@ impl<'a> DatastoreRepository<'a> {
             .map(|row| PublishedVersion {
                 version: row.get("version"),
                 checksum: row.get("checksum"),
+                change_seq: row.get("change_seq"),
                 entity_count: row.get("entity_count"),
                 tuple_count: row.get("tuple_count"),
                 binding_count: row.get("binding_count"),
@@ -537,7 +765,7 @@ impl<'a> DatastoreRepository<'a> {
     ) -> Result<Option<(PublishedVersion, String)>, DatabaseError> {
         let pool = self.pool()?;
         let row = sqlx::query(
-            "SELECT version, checksum, document, entity_count, tuple_count, binding_count, \
+            "SELECT version, checksum, change_seq, document, entity_count, tuple_count, binding_count, \
                     published_by, published_at \
              FROM adm_versions WHERE datastore_id = ? AND version = ?",
         )
@@ -550,6 +778,7 @@ impl<'a> DatastoreRepository<'a> {
                 PublishedVersion {
                     version: row.get("version"),
                     checksum: row.get("checksum"),
+                    change_seq: row.get("change_seq"),
                     entity_count: row.get("entity_count"),
                     tuple_count: row.get("tuple_count"),
                     binding_count: row.get("binding_count"),

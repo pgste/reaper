@@ -401,6 +401,80 @@ pub fn materialize(
     serde_json::json!({ "entities": docs })
 }
 
+/// Materialize ONE entity's current document for delta emission — the
+/// changes API must not pay O(dataset) per poll. Inputs are the entity's
+/// own record (None = referenced only by tuples), the bindings where it is
+/// the subject, and every tuple touching it (either endpoint); direction
+/// per relation definition, same rules as full materialize().
+/// Returns None when nothing materializes (no record, no carried edges) —
+/// the caller emits a tombstone delta.
+pub fn materialize_one(
+    model: &ModelDefinition,
+    entity_id: &str,
+    entity: Option<&AdmEntity>,
+    bindings: &[RoleBinding],
+    touching_tuples: &[RelationTuple],
+) -> Option<serde_json::Value> {
+    use std::collections::BTreeSet;
+
+    // Edges THIS entity carries, direction-resolved.
+    let mut rels: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for t in touching_tuples {
+        let traversal = model.relation(&t.relation).is_some_and(|d| d.traversal);
+        let (carrier, target) = if traversal {
+            (t.subject.as_str(), t.object.as_str())
+        } else {
+            (t.object.as_str(), t.subject.as_str())
+        };
+        if carrier == entity_id {
+            rels.entry(t.relation.as_str()).or_default().insert(target);
+        }
+    }
+
+    if entity.is_none() && rels.is_empty() {
+        return None;
+    }
+
+    let mut attributes = entity.map(|e| e.attributes.clone()).unwrap_or_default();
+    let mut roles: BTreeSet<&str> = BTreeSet::new();
+    let mut perms: BTreeSet<&str> = BTreeSet::new();
+    for b in bindings.iter().filter(|b| b.scope.is_empty()) {
+        roles.insert(b.role.as_str());
+        if let Some(role) = model.role(&b.role) {
+            perms.extend(role.permissions.iter().map(String::as_str));
+        }
+    }
+    if !roles.is_empty() {
+        attributes.insert("roles".into(), serde_json::json!(roles));
+        attributes.insert("permissions".into(), serde_json::json!(perms));
+    }
+
+    let entity_type = entity.map(|e| e.entity_type.clone()).unwrap_or_else(|| {
+        // Synthesized carrier: infer from any carried relation definition.
+        rels.keys()
+            .find_map(|r| {
+                model.relation(r).map(|d| {
+                    if d.traversal {
+                        d.subject.first().cloned().unwrap_or_else(|| "user".into())
+                    } else {
+                        d.object.clone()
+                    }
+                })
+            })
+            .unwrap_or_else(|| "resource".into())
+    });
+
+    let mut doc = serde_json::json!({
+        "id": entity_id,
+        "type": entity_type,
+        "attributes": attributes,
+    });
+    if !rels.is_empty() {
+        doc["relationships"] = serde_json::json!(rels);
+    }
+    Some(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
