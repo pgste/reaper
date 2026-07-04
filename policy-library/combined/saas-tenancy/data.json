@@ -1,0 +1,15 @@
+{"entities":[
+  {"id":"amy","type":"User","attributes":{"tenant":"acme","role":"member"},
+   "relationships":{"member_of":["squad-a"]}},
+  {"id":"adam","type":"User","attributes":{"tenant":"acme","role":"tenant_admin"}},
+  {"id":"walt","type":"User","attributes":{"tenant":"acme","role":"member"}},
+  {"id":"zoe","type":"User","attributes":{"tenant":"zenith","role":"member"},
+   "relationships":{"member_of":["squad-z"]}},
+  {"id":"sue","type":"User","attributes":{"tenant":"_internal","role":"support"}},
+  {"id":"squad-a","type":"Group","attributes":{}},
+  {"id":"squad-z","type":"Group","attributes":{}},
+  {"id":"proj-acme-1","type":"Project","attributes":{"tenant":"acme"},
+   "relationships":{"member":["squad-a"],"watcher":["walt"]}},
+  {"id":"proj-zenith-1","type":"Project","attributes":{"tenant":"zenith"},
+   "relationships":{"member":["squad-z"]}}
+]}

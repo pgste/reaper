@@ -5,6 +5,10 @@ OPA/Rego examples and rewritten in Reaper's `.reap` DSL — including things
 Rego cannot express natively (first-class ReBAC graph traversal) and the
 things it's famous for (Terraform plan and Kubernetes admission checks).
 
+Each scenario has a walkthrough `README.md` (renderable by the control-plane
+UI as a template gallery) and is browsable/runnable via
+`reaper-cli library list|show|run`.
+
 Every scenario is executable and CI-tested: `manifest.json` declares the
 expected decision for each case, and `crates/policy-engine/tests/
 policy_library_tests.rs` runs them all — authorization cases through BOTH the
@@ -21,6 +25,11 @@ check mode (asserting the exact violation set).
 | `kubernetes/admission-control` | document | OPA Gatekeeper library staples (disallowed tags, required labels, privilege, registries) |
 | `combined/healthcare-records` | RBAC+ABAC+ReBAC | HL7/consent patterns; the three models in ONE rule |
 | `combined/payroll` | ABAC+ReBAC | OPA's canonical "employees can read their own salary; managers their reports'" example |
+| `api-gateway/jwt-claims` | document+JWT | OPA `io.jwt.decode` / API Authorization tutorial (issuer/aud/exp/scopes, alg=none rejection) |
+| `api-gateway/scope-routing` | document+JWT | OPA-Envoy ext_authz route patterns (path/method/scope) |
+| `api-gateway/api-key-tiers` | ABAC | API-key middleware patterns — keys as attribute-bearing entities (tiers, revocation) |
+| `combined/github-org-model` | RBAC+ABAC+ReBAC | GitHub org/team/repo semantics — the clearest "why all three compose" example |
+| `combined/saas-tenancy` | RBAC+ABAC+ReBAC | B2B multi-tenancy: ABAC isolation wall + ReBAC sharing + RBAC break-glass |
 
 ## Try one
 

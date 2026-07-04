@@ -914,8 +914,23 @@ impl ReaperDSLEvaluator {
             None => return false,
         };
 
+        // Null checks compare PRESENCE (absent context key == null), so they
+        // must be handled before requiring a value — previously they fell into
+        // the catch-all and always returned false (`context.ticket != null`
+        // denied on the fast path while the AST evaluator allowed; caught by
+        // the policy-library parity suite).
+        let ctx_val_opt = context.get(&attr_name);
+        if matches!(&comp.target, CompiledCompareTarget::LiteralNull) {
+            let is_null = ctx_val_opt.is_none();
+            return match comp.op {
+                NumericOp::Equal => is_null,
+                NumericOp::NotEqual => !is_null,
+                _ => false,
+            };
+        }
+
         // Get the context value
-        let ctx_val = match context.get(&attr_name) {
+        let ctx_val = match ctx_val_opt {
             Some(v) => v,
             None => return false,
         };

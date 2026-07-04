@@ -1,0 +1,17 @@
+{
+  "name": "Multi-tenant SaaS (ABAC wall + ReBAC sharing + RBAC roles)",
+  "source": "B2B SaaS authorization patterns (Oso/Auth0 multi-tenancy guides)",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "squad member works in project", "principal": "amy", "action": "write", "resource": "proj-acme-1", "expect": "allow"},
+    {"name": "watcher reads but cannot write", "principal": "walt", "action": "read", "resource": "proj-acme-1", "expect": "allow"},
+    {"name": "watcher write denied", "principal": "walt", "action": "write", "resource": "proj-acme-1", "expect": "deny"},
+    {"name": "tenant admin manages anything in tenant", "principal": "adam", "action": "delete", "resource": "proj-acme-1", "expect": "allow"},
+    {"name": "cross-tenant member blocked by ABAC wall", "principal": "zoe", "action": "read", "resource": "proj-acme-1", "expect": "deny"},
+    {"name": "cross-tenant admin ALSO blocked", "principal": "adam", "action": "read", "resource": "proj-zenith-1", "expect": "deny"},
+    {"name": "support reads cross-tenant WITH ticket", "principal": "sue", "action": "read", "resource": "proj-acme-1", "context": {"ticket": "INC-1234"}, "expect": "allow"},
+    {"name": "support without ticket denied", "principal": "sue", "action": "read", "resource": "proj-acme-1", "expect": "deny"},
+    {"name": "support can never write", "principal": "sue", "action": "write", "resource": "proj-acme-1", "context": {"ticket": "INC-1234"}, "expect": "deny"}
+  ]
+}

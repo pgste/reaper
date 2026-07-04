@@ -1,0 +1,8 @@
+{"entities":[
+  {"id":"key-free-1","type":"ApiKey","attributes":{"tier":"free","environment":"prod","status":"active"}},
+  {"id":"key-pro-1","type":"ApiKey","attributes":{"tier":"pro","environment":"prod","status":"active"}},
+  {"id":"key-ent-1","type":"ApiKey","attributes":{"tier":"enterprise","environment":"staging","status":"active"}},
+  {"id":"key-dead-1","type":"ApiKey","attributes":{"tier":"enterprise","environment":"prod","status":"revoked"}},
+  {"id":"api-prod","type":"Api","attributes":{"environment":"prod"}},
+  {"id":"api-staging","type":"Api","attributes":{"environment":"staging"}}
+]}

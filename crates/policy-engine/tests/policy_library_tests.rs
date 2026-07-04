@@ -39,6 +39,9 @@ struct Case {
     expect: String,
     #[serde(default)]
     violations: Option<Vec<String>>,
+    /// Extra request context entries (e.g. a support ticket id).
+    #[serde(default)]
+    context: Option<HashMap<String, String>>,
 }
 
 fn library_root() -> PathBuf {
@@ -131,7 +134,7 @@ fn every_library_scenario_meets_its_manifest() {
             } else {
                 // Authorization case: AST decision must match, and the
                 // compiled evaluator (when the policy compiles) must agree.
-                let mut context = HashMap::new();
+                let mut context = case.context.clone().unwrap_or_default();
                 context.insert(
                     "principal".to_string(),
                     case.principal.clone().expect("authz case needs principal"),

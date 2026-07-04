@@ -22,6 +22,16 @@ pub fn now_ns() -> Result<EvalValue, ReaperError> {
 
 /// time::now_ms() - Returns current time in milliseconds since Unix epoch
 #[inline]
+/// Current unix time in SECONDS — the unit JWT `exp`/`nbf`/`iat` use.
+pub fn now_secs() -> Result<EvalValue, ReaperError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ReaperError::InvalidPolicy {
+            reason: format!("System time error: {}", e),
+        })?;
+    Ok(EvalValue::Integer(now.as_secs() as i64))
+}
+
 pub fn now_ms() -> Result<EvalValue, ReaperError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

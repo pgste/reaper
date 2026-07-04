@@ -241,6 +241,37 @@ impl ReapAstEvaluator {
                 builtin_functions::regex_escape(&value)
             }
 
+            // ===== JWT / auth artifacts =====
+            // jwt::decode(token) -> claims object (NO signature verification;
+            // verify at the trust boundary — OPA io.jwt.decode parity).
+            (Some("jwt"), "decode") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "jwt::decode(token) takes exactly 1 argument".to_string(),
+                    });
+                }
+                let token = self.rebac_string_arg(&args[0], context, "jwt::decode", "token")?;
+                builtin_functions::jwt::decode(&token)
+            }
+            // jwt::header(token) -> {alg, kid, typ, ...}
+            (Some("jwt"), "header") => {
+                if args.len() != 1 {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "jwt::header(token) takes exactly 1 argument".to_string(),
+                    });
+                }
+                let token = self.rebac_string_arg(&args[0], context, "jwt::header", "token")?;
+                builtin_functions::jwt::header(&token)
+            }
+            (Some("time"), "now_secs") => {
+                if !args.is_empty() {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "time::now_secs() takes no arguments".to_string(),
+                    });
+                }
+                builtin_functions::time::now_secs()
+            }
+
             // ===== ReBAC (relationship graph) =====
             // rebac::related(subject, relation, object) -> bool
             (Some("rebac"), "related") => {

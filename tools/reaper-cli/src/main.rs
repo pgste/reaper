@@ -41,6 +41,8 @@ fn handle_analyze_policy(
     anyhow::bail!("eBPF commands are only available on Linux")
 }
 
+mod library;
+
 #[derive(Parser)]
 #[command(name = "reaper")]
 #[command(about = "Reaper CLI - High-Performance Policy Management")]
@@ -168,6 +170,12 @@ enum Commands {
     Decisions {
         #[command(subcommand)]
         action: DecisionsAction,
+    },
+
+    /// Browse and run the bundled policy examples library
+    Library {
+        #[command(subcommand)]
+        action: LibraryAction,
     },
 
     /// Policy management commands (platform/agent)
@@ -362,6 +370,30 @@ enum DecisionsAction {
         /// entry / NDJSON line containing an "input_data" field. Use '-' to
         /// read from stdin (e.g. pipe a line from decisions.ndjson).
         input: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryAction {
+    /// List all scenarios (id, name, models, cases)
+    List {
+        /// Path to the policy library (default: ./policy-library or $REAPER_LIBRARY_PATH)
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Show a scenario: its walkthrough (README) and the policy source
+    Show {
+        /// Scenario id as printed by `library list` (e.g. combined/saas-tenancy)
+        id: String,
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Run a scenario's manifest cases and report PASS/FAIL (exit 1 on failure)
+    Run {
+        /// Scenario id, or omit to run the entire library
+        id: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
     },
 }
 
@@ -1274,6 +1306,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Decisions { ref action } => match action {
             DecisionsAction::Keygen => handle_decisions_keygen()?,
             DecisionsAction::Decrypt { key, input } => handle_decisions_decrypt(key, input)?,
+        },
+
+        Commands::Library { ref action } => match action {
+            LibraryAction::List { path } => library::list(path.as_deref())?,
+            LibraryAction::Show { id, path } => library::show(id, path.as_deref())?,
+            LibraryAction::Run { id, path } => library::run(id.as_deref(), path.as_deref())?,
         },
 
         Commands::Policy { ref action } => handle_policy_action(action, &cli, &client).await?,

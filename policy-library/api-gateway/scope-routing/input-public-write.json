@@ -1,0 +1,5 @@
+{
+ "path": "/api/v1/public/products",
+ "method": "POST",
+ "token": ""
+}

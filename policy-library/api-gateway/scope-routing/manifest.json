@@ -1,0 +1,13 @@
+{
+  "name": "Gateway route rules (Envoy ext_authz pattern)",
+  "source": "OPA-Envoy plugin tutorials; Kong/OPA route authz blogs",
+  "policy": "policy.reap",
+  "cases": [
+    {"name": "health endpoint open", "input": "input-health.json", "expect": "allow", "violations": []},
+    {"name": "public API read open", "input": "input-public-read.json", "expect": "allow", "violations": []},
+    {"name": "public API write denied", "input": "input-public-write.json", "expect": "deny"},
+    {"name": "admin route with admin scope", "input": "input-admin-ok.json", "expect": "allow", "violations": []},
+    {"name": "admin route without scope denied", "input": "input-admin-no-scope.json", "expect": "deny"},
+    {"name": "internal path denied with message", "input": "input-internal.json", "expect": "deny", "violations": ["internal_paths_never_via_gateway"]}
+  ]
+}

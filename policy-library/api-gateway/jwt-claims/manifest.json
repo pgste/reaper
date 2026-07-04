@@ -1,0 +1,14 @@
+{
+  "name": "API gateway JWT claims validation",
+  "source": "OPA io.jwt.decode envoy/api-authz patterns (OPA docs 'API Authorization' tutorial)",
+  "policy": "policy.reap",
+  "cases": [
+    {"name": "valid read token on GET", "input": "input-read-ok.json", "expect": "allow", "violations": []},
+    {"name": "write scope on POST", "input": "input-write-ok.json", "expect": "allow", "violations": []},
+    {"name": "expired token denied", "input": "input-expired.json", "expect": "deny"},
+    {"name": "wrong issuer denied", "input": "input-wrong-issuer.json", "expect": "deny"},
+    {"name": "alg=none hard-denied with message", "input": "input-alg-none.json", "expect": "deny", "violations": ["reject_alg_none"]},
+    {"name": "read-only token cannot POST", "input": "input-scope-missing.json", "expect": "deny"},
+    {"name": "garbage token fails closed, no error", "input": "input-garbage.json", "expect": "deny"}
+  ]
+}

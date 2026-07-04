@@ -1,0 +1,5 @@
+{
+ "path": "/healthz",
+ "method": "GET",
+ "token": ""
+}

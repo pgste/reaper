@@ -1,0 +1,5 @@
+{
+ "token": "Bearer not.a.jwt-at-all",
+ "path": "/orders",
+ "method": "GET"
+}

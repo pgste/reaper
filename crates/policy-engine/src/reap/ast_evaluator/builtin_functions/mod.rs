@@ -8,6 +8,7 @@
 //! - type_check: is_string, is_number, is_bool, is_array, is_set, is_object, is_null, concat
 
 pub(super) mod json;
+pub(super) mod jwt;
 pub(super) mod math;
 pub(super) mod regex;
 pub(super) mod time;
