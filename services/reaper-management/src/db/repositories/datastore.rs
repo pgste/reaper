@@ -162,30 +162,35 @@ impl<'a> DatastoreRepository<'a> {
     // ------------------------------------------------------------------
 
     /// Append dirty-entity markers with freshly allocated monotonic
-    /// sequence numbers. One counter bump for the whole batch keeps the
-    /// hot save path at two statements regardless of fan-out.
-    async fn record_changes(
-        &self,
+    /// sequence numbers, INSIDE the caller's transaction. This is what
+    /// makes the outbox actually transactional: the mutation and its log
+    /// entry commit or roll back TOGETHER — a crash between them cannot
+    /// produce a change the replicas never hear about. One counter bump
+    /// per batch keeps the save path lean regardless of fan-out.
+    async fn record_changes_in(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         datastore_id: Uuid,
         marks: &[(String, bool)], // (entity_id, tombstone)
     ) -> Result<(), DatabaseError> {
         if marks.is_empty() {
             return Ok(());
         }
-        let pool = self.pool()?;
         let row = sqlx::query(
-            "UPDATE datastores SET change_seq = change_seq + ? WHERE id = ?              RETURNING change_seq",
+            "UPDATE datastores SET change_seq = change_seq + ? WHERE id = ? \
+             RETURNING change_seq",
         )
         .bind(marks.len() as i64)
         .bind(datastore_id.to_string())
-        .fetch_one(pool)
+        .fetch_one(&mut **tx)
         .await?;
         let head: i64 = row.get("change_seq");
         let first = head - marks.len() as i64 + 1;
         let now = Utc::now().to_rfc3339();
         for (offset, (entity_id, tombstone)) in marks.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO adm_changes                  (id, datastore_id, seq, entity_id, tombstone, created_at)                  VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO adm_changes \
+                 (id, datastore_id, seq, entity_id, tombstone, created_at) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(Uuid::new_v4().to_string())
             .bind(datastore_id.to_string())
@@ -193,7 +198,7 @@ impl<'a> DatastoreRepository<'a> {
             .bind(entity_id)
             .bind(*tombstone as i64)
             .bind(&now)
-            .execute(pool)
+            .execute(&mut **tx)
             .await?;
         }
         Ok(())
@@ -309,24 +314,31 @@ impl<'a> DatastoreRepository<'a> {
                 }
             }
         }
+        let mut tx = pool.begin().await?;
         sqlx::query(
-            "DELETE FROM adm_tuples              WHERE datastore_id = ? AND (object = ? OR subject = ?)",
+            "DELETE FROM adm_tuples WHERE datastore_id = ? AND (object = ? OR subject = ?)",
         )
         .bind(datastore_id.to_string())
         .bind(entity_id)
         .bind(entity_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
         sqlx::query("DELETE FROM adm_role_bindings WHERE datastore_id = ? AND subject = ?")
             .bind(datastore_id.to_string())
             .bind(entity_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
-        let deleted = self.delete_entity(datastore_id, entity_id).await?;
+        let del = sqlx::query("DELETE FROM adm_entities WHERE datastore_id = ? AND entity_id = ?")
+            .bind(datastore_id.to_string())
+            .bind(entity_id)
+            .execute(&mut *tx)
+            .await?;
+        let deleted = del.rows_affected() > 0;
 
         let mut marks: Vec<(String, bool)> = vec![(entity_id.to_string(), true)];
         marks.extend(affected.iter().map(|id| (id.clone(), false)));
-        self.record_changes(datastore_id, &marks).await?;
+        Self::record_changes_in(&mut tx, datastore_id, &marks).await?;
+        tx.commit().await?;
         Ok((deleted || !affected.is_empty(), affected))
     }
 
@@ -343,6 +355,7 @@ impl<'a> DatastoreRepository<'a> {
         let now = Utc::now().to_rfc3339();
         let attrs = serde_json::to_string(&entity.attributes)
             .map_err(|e| DatabaseError::Config(format!("serialize attributes: {e}")))?;
+        let mut tx = pool.begin().await?;
         sqlx::query(
             r#"INSERT INTO adm_entities
                (id, datastore_id, entity_id, entity_type, attributes, created_at, updated_at)
@@ -359,10 +372,11 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&attrs)
         .bind(&now)
         .bind(&now)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-        self.record_changes(datastore_id, &[(entity.entity_id.clone(), false)])
+        Self::record_changes_in(&mut tx, datastore_id, &[(entity.entity_id.clone(), false)])
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -448,6 +462,7 @@ impl<'a> DatastoreRepository<'a> {
         binding: &RoleBinding,
     ) -> Result<(), DatabaseError> {
         let pool = self.pool()?;
+        let mut tx = pool.begin().await?;
         sqlx::query(
             r#"INSERT INTO adm_role_bindings (id, datastore_id, subject, role, scope, created_at)
                VALUES (?, ?, ?, ?, ?, ?)
@@ -459,10 +474,11 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&binding.role)
         .bind(&binding.scope)
         .bind(Utc::now().to_rfc3339())
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-        self.record_changes(datastore_id, &[(binding.subject.clone(), false)])
+        Self::record_changes_in(&mut tx, datastore_id, &[(binding.subject.clone(), false)])
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -472,6 +488,7 @@ impl<'a> DatastoreRepository<'a> {
         binding: &RoleBinding,
     ) -> Result<bool, DatabaseError> {
         let pool = self.pool()?;
+        let mut tx = pool.begin().await?;
         let result = sqlx::query(
             "DELETE FROM adm_role_bindings \
              WHERE datastore_id = ? AND subject = ? AND role = ? AND scope = ?",
@@ -480,12 +497,13 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&binding.subject)
         .bind(&binding.role)
         .bind(&binding.scope)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
         if result.rows_affected() > 0 {
-            self.record_changes(datastore_id, &[(binding.subject.clone(), false)])
+            Self::record_changes_in(&mut tx, datastore_id, &[(binding.subject.clone(), false)])
                 .await?;
         }
+        tx.commit().await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -535,6 +553,7 @@ impl<'a> DatastoreRepository<'a> {
         tuple: &RelationTuple,
     ) -> Result<(), DatabaseError> {
         let pool = self.pool()?;
+        let mut tx = pool.begin().await?;
         sqlx::query(
             r#"INSERT INTO adm_tuples (id, datastore_id, object, relation, subject, created_at)
                VALUES (?, ?, ?, ?, ?, ?)
@@ -546,9 +565,10 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&tuple.relation)
         .bind(&tuple.subject)
         .bind(Utc::now().to_rfc3339())
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-        self.record_changes(
+        Self::record_changes_in(
+            &mut tx,
             datastore_id,
             &[
                 (tuple.object.clone(), false),
@@ -556,6 +576,7 @@ impl<'a> DatastoreRepository<'a> {
             ],
         )
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -565,6 +586,7 @@ impl<'a> DatastoreRepository<'a> {
         tuple: &RelationTuple,
     ) -> Result<bool, DatabaseError> {
         let pool = self.pool()?;
+        let mut tx = pool.begin().await?;
         let result = sqlx::query(
             "DELETE FROM adm_tuples \
              WHERE datastore_id = ? AND object = ? AND relation = ? AND subject = ?",
@@ -573,10 +595,11 @@ impl<'a> DatastoreRepository<'a> {
         .bind(&tuple.object)
         .bind(&tuple.relation)
         .bind(&tuple.subject)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
         if result.rows_affected() > 0 {
-            self.record_changes(
+            Self::record_changes_in(
+                &mut tx,
                 datastore_id,
                 &[
                     (tuple.object.clone(), false),
@@ -585,6 +608,7 @@ impl<'a> DatastoreRepository<'a> {
             )
             .await?;
         }
+        tx.commit().await?;
         Ok(result.rows_affected() > 0)
     }
 
