@@ -302,6 +302,9 @@ async fn main() -> anyhow::Result<()> {
         config.observability.enable_enhanced_metrics,
     ));
     let started_at = std::time::Instant::now();
+    // Data-plane sync state: shared by the heartbeat reporter (two-way
+    // visibility) and the data handlers/staleness guard.
+    let data_sync = Arc::new(DataSyncState::from_env());
 
     if config.observability.enable_enhanced_metrics {
         info!("Enhanced metrics enabled (REAPER_ENHANCED_METRICS=true)");
@@ -337,6 +340,7 @@ async fn main() -> anyhow::Result<()> {
                     stats.clone(),
                     started_at,
                     shutdown_rx.clone(),
+                    data_sync.clone(),
                 );
 
                 // Spawn sync service
@@ -502,7 +506,7 @@ async fn main() -> anyhow::Result<()> {
         decision_buffer,
         agent_id,
         decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
-        data_sync: Arc::new(DataSyncState::from_env()),
+        data_sync: data_sync.clone(),
     });
 
     let app = Router::new()

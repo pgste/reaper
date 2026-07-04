@@ -48,6 +48,8 @@ pub struct SyncService {
     sse_connected: bool,
     /// Pinned public key for bundle signature verification (parsed from config).
     verifying_key: Option<reaper_core::bundle_signing::VerifyingKey>,
+    /// Data-plane replica state, reported with every heartbeat.
+    data_sync: Arc<crate::state::DataSyncState>,
 }
 
 impl SyncService {
@@ -60,6 +62,7 @@ impl SyncService {
         stats: Arc<AgentStats>,
         started_at: Instant,
         shutdown_rx: watch::Receiver<bool>,
+        data_sync: Arc<crate::state::DataSyncState>,
     ) -> (Self, watch::Receiver<Option<BundleUpdate>>) {
         let (update_tx, update_rx) = watch::channel(None);
 
@@ -108,6 +111,7 @@ impl SyncService {
             shutdown_rx,
             sse_connected: false,
             verifying_key,
+            data_sync,
         };
 
         (service, update_rx)
@@ -459,6 +463,7 @@ impl SyncService {
         // Get current bundle info from client
         let (current_bundle_id, current_bundle_version) = self.client.get_current_bundle_sync();
 
+        let (data_version, _) = self.data_sync.provenance();
         AgentMetrics {
             requests_total,
             requests_per_second,
@@ -472,6 +477,13 @@ impl SyncService {
             uptime_seconds,
             current_bundle_id,
             current_bundle_version,
+            data_version: (data_version > 0).then_some(data_version),
+            data_applied_seq: Some(
+                self.data_sync
+                    .applied_seq
+                    .load(std::sync::atomic::Ordering::Acquire),
+            ),
+            data_stale: Some(self.data_sync.is_stale()),
         }
     }
 

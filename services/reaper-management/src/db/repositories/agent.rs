@@ -321,8 +321,9 @@ impl<'a> AgentRepository<'a> {
             INSERT INTO agent_metrics_latest (
                 agent_id, requests_total, requests_per_second,
                 latency_p50_us, latency_p99_us, decisions_allow, decisions_deny,
-                memory_bytes, current_bundle_id, current_bundle_version, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                memory_bytes, current_bundle_id, current_bundle_version, updated_at,
+                data_version, data_applied_seq, data_stale
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(agent_id) DO UPDATE SET
                 requests_total = excluded.requests_total,
                 requests_per_second = excluded.requests_per_second,
@@ -333,7 +334,10 @@ impl<'a> AgentRepository<'a> {
                 memory_bytes = excluded.memory_bytes,
                 current_bundle_id = excluded.current_bundle_id,
                 current_bundle_version = excluded.current_bundle_version,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                data_version = excluded.data_version,
+                data_applied_seq = excluded.data_applied_seq,
+                data_stale = excluded.data_stale
         "#;
 
         sqlx::query(sql)
@@ -348,6 +352,9 @@ impl<'a> AgentRepository<'a> {
             .bind(metrics.current_bundle_id.map(|id| id.to_string()))
             .bind(&metrics.current_bundle_version)
             .bind(&now)
+            .bind(metrics.data_version)
+            .bind(metrics.data_applied_seq)
+            .bind(metrics.data_stale.map(|b| b as i64))
             .execute(pool)
             .await?;
 
@@ -367,7 +374,8 @@ impl<'a> AgentRepository<'a> {
         let sql = r#"
             SELECT requests_total, requests_per_second, latency_p50_us, latency_p99_us,
                    decisions_allow, decisions_deny, memory_bytes,
-                   current_bundle_id, current_bundle_version
+                   current_bundle_id, current_bundle_version,
+                   data_version, data_applied_seq, data_stale
             FROM agent_metrics_latest
             WHERE agent_id = ?
         "#;
@@ -392,6 +400,9 @@ impl<'a> AgentRepository<'a> {
                 uptime_seconds: 0, // Not stored
                 current_bundle_id: current_bundle_id.and_then(|s| Uuid::parse_str(&s).ok()),
                 current_bundle_version: r.get("current_bundle_version"),
+                data_version: r.get("data_version"),
+                data_applied_seq: r.get("data_applied_seq"),
+                data_stale: r.get::<Option<i64>, _>("data_stale").map(|v| v != 0),
             }
         }))
     }

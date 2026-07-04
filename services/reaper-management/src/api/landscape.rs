@@ -136,6 +136,11 @@ pub struct DetailedAgentMetrics {
     pub uptime_seconds: u64,
     pub current_bundle_id: Option<Uuid>,
     pub current_bundle_version: Option<String>,
+    /// Data-plane replica state (two-way visibility): which datastore
+    /// version this reaper serves, its change-stream position, staleness.
+    pub data_version: Option<i64>,
+    pub data_applied_seq: Option<i64>,
+    pub data_stale: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -316,6 +321,9 @@ async fn get_agent_metrics(
             uptime_seconds: m.uptime_seconds,
             current_bundle_id: m.current_bundle_id,
             current_bundle_version: m.current_bundle_version,
+            data_version: m.data_version,
+            data_applied_seq: m.data_applied_seq,
+            data_stale: m.data_stale,
         }),
     }))
 }

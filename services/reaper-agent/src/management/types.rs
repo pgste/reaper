@@ -80,6 +80,12 @@ pub struct AgentMetrics {
     pub current_bundle_id: Option<Uuid>,
     /// Current bundle version
     pub current_bundle_version: Option<String>,
+    /// Data-plane replica state: datastore version this agent serves.
+    pub data_version: Option<i64>,
+    /// Position in the change stream (delta sync).
+    pub data_applied_seq: Option<i64>,
+    /// Whether the agent's staleness budget is currently exceeded.
+    pub data_stale: Option<bool>,
 }
 
 /// Heartbeat response

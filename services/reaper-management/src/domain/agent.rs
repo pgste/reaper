@@ -137,6 +137,15 @@ pub struct AgentMetrics {
     pub current_bundle_id: Option<Uuid>,
     /// Current bundle version
     pub current_bundle_version: Option<String>,
+    /// Data-plane replica state reported by the agent (two-way sync
+    /// visibility: which datastore version it serves, where it is in the
+    /// change stream, and whether its staleness budget is exceeded).
+    #[serde(default)]
+    pub data_version: Option<i64>,
+    #[serde(default)]
+    pub data_applied_seq: Option<i64>,
+    #[serde(default)]
+    pub data_stale: Option<bool>,
 }
 
 impl Agent {

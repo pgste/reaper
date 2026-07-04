@@ -182,8 +182,23 @@ impl<'a> ApiKeyRepository<'a> {
                     }
                 }
 
-                // Update last_used_at
-                let _ = self.update_last_used(api_key.id).await;
+                // Touch last_used_at OFF the request path, and only when
+                // it's actually stale: the previous synchronous UPDATE put
+                // a write commit inside EVERY authenticated request —
+                // measured at ~75% of control-plane save latency. Audit
+                // freshness of "last used" is minutes-granularity; one
+                // write per key per minute preserves it.
+                let needs_touch = api_key
+                    .last_used_at
+                    .map_or(true, |t| Utc::now() - t > chrono::Duration::seconds(60));
+                if needs_touch {
+                    let db = self.db.clone();
+                    let key_id = api_key.id;
+                    tokio::spawn(async move {
+                        let repo = ApiKeyRepository::new(&db);
+                        let _ = repo.update_last_used(key_id).await;
+                    });
+                }
 
                 Ok(Some(api_key))
             }

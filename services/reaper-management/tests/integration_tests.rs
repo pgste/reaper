@@ -1935,3 +1935,103 @@ async fn test_data_plane_delta_sync() {
     assert_eq!(alice["clearance"], 4);
     assert_eq!(alice["roles"][0], "admin");
 }
+
+/// Save-path latency measurement (run explicitly: `--ignored`). Times the
+/// FULL stack per write — HTTP router, auth, schema validation, and the
+/// transactional mutation+outbox commit (WAL, synchronous=NORMAL) — the
+/// number an API caller actually experiences.
+#[tokio::test]
+#[ignore]
+async fn measure_data_plane_save_latency() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Perf Org", "slug": "perf-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/perf-org/namespaces",
+            Some(json!({"slug": "prod"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let base = "/orgs/perf-org/namespaces/prod/datastore";
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    let mut timings_us: Vec<u128> = Vec::with_capacity(500);
+    for i in 0..500 {
+        let body = json!({
+            "entity_id": format!("user-{i}"), "entity_type": "user",
+            "attributes": {"mfa": i % 2 == 0, "clearance": (i % 7) as i64}
+        });
+        let request = authed_request("POST", &format!("{base}/entities"), Some(body), &key);
+        let start = std::time::Instant::now();
+        let response = env.app.clone().oneshot(request).await.unwrap();
+        timings_us.push(start.elapsed().as_micros());
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    timings_us.sort_unstable();
+    let pct =
+        |p: f64| timings_us[((timings_us.len() as f64 * p) as usize).min(timings_us.len() - 1)];
+    println!(
+        "entity save (full stack, tx mutation+outbox): p50={}µs p95={}µs p99={}µs max={}µs",
+        pct(0.50),
+        pct(0.95),
+        pct(0.99),
+        pct(1.0) - 0
+    );
+
+    // Control: authed READ through the same stack — isolates auth+router
+    // overhead from the transactional write commit.
+    let mut read_us: Vec<u128> = Vec::with_capacity(200);
+    for _ in 0..200 {
+        let request = authed_request("GET", &format!("{base}/role-bindings"), None, &key);
+        let start = std::time::Instant::now();
+        let response = env.app.clone().oneshot(request).await.unwrap();
+        read_us.push(start.elapsed().as_micros());
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    read_us.sort_unstable();
+    println!(
+        "authed read control: p50={}µs p95={}µs",
+        read_us[100], read_us[190]
+    );
+
+    let start = std::time::Instant::now();
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    println!(
+        "publish (materialize 500 entities + checksum + version row): {}ms",
+        start.elapsed().as_millis()
+    );
+}

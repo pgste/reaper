@@ -76,7 +76,11 @@ impl Database {
                 .filename(url.trim_start_matches("sqlite:").trim_start_matches("//"))
                 .create_if_missing(true)
                 .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                .synchronous(sqlx::sqlite::SqliteSynchronous::Normal),
+                .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+                // Writers WAIT briefly under contention instead of failing
+                // with SQLITE_BUSY — control-plane saves must be reliable,
+                // and at UI/API rates a rare few-ms wait is invisible.
+                .busy_timeout(std::time::Duration::from_secs(5)),
         )
         .await?;
 
@@ -99,6 +103,7 @@ impl Database {
             include_str!("migrations/005_phase2_operations.sql"),
             include_str!("migrations/006_data_plane.sql"),
             include_str!("migrations/007_change_log.sql"),
+            include_str!("migrations/008_agent_data_sync.sql"),
         ];
 
         match &self.sqlite_pool {
