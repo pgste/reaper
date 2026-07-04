@@ -72,13 +72,16 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let mut config = Config::default();
 
-        // Server overrides
-        if let Ok(port) = std::env::var("REAPER_PORT") {
-            config.server.port = port.parse().unwrap_or(8081);
-        }
-        if let Ok(bind) = std::env::var("REAPER_BIND_ADDRESS") {
-            config.server.bind_address = bind;
-        }
+        // Server overrides: REAPER_MANAGEMENT_PORT/_BIND_ADDRESS win, then the
+        // generic REAPER_PORT/REAPER_BIND_ADDRESS, then combined REAPER_BIND_ADDR
+        // — same layered scheme as every Reaper service (reaper_core::resolve_bind).
+        let (bind, port) = reaper_core::resolve_bind(
+            "REAPER_MANAGEMENT",
+            &config.server.bind_address,
+            config.server.port,
+        );
+        config.server.bind_address = bind;
+        config.server.port = port;
 
         // Database overrides
         if let Ok(url) = std::env::var("REAPER_DATABASE_URL") {

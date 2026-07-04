@@ -16,8 +16,8 @@ metadata:
     app.kubernetes.io/component: management
 data:
   RUST_LOG: "info,reaper_management=info"
-  REAPER_PORT: "3000"
-  REAPER_BIND_ADDRESS: "0.0.0.0"
+  REAPER_MANAGEMENT_PORT: "3000"
+  REAPER_MANAGEMENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_STORAGE_TYPE: "filesystem"
   REAPER_STORAGE_PATH: "/var/lib/reaper/storage"
 

@@ -99,7 +99,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/agents/{id}", get(get_agent))
         .with_state(state);
 
-    let listener = TcpListener::bind("0.0.0.0:8081").await?;
+    // REAPER_PLATFORM_PORT / REAPER_PORT / REAPER_BIND_ADDR (see resolve_bind)
+    let (bind, port) = reaper_core::resolve_bind("REAPER_PLATFORM", "0.0.0.0", 8081);
+    let listener = TcpListener::bind(format!("{bind}:{port}")).await?;
     info!("🎯 Reaper Platform listening on {}", listener.local_addr()?);
     info!("");
     info!("📋 Policy Management API:");

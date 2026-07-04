@@ -16,7 +16,8 @@ metadata:
     app.kubernetes.io/component: platform
 data:
   RUST_LOG: "info,reaper_platform=info"
-  REAPER_BIND_ADDR: "0.0.0.0:8081"
+  REAPER_PLATFORM_BIND_ADDRESS: "0.0.0.0"
+  REAPER_PLATFORM_PORT: "8081"
 
 ---
 # PersistentVolumeClaim for platform data

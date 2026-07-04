@@ -9,8 +9,8 @@ metadata:
     app.kubernetes.io/component: management
 data:
   RUST_LOG: "info,reaper_management={{ .Values.management.config.logLevel }}"
-  REAPER_PORT: "3000"
-  REAPER_BIND_ADDRESS: "0.0.0.0"
+  REAPER_MANAGEMENT_PORT: {{ .Values.management.service.port | quote }}
+  REAPER_MANAGEMENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_STORAGE_TYPE: {{ .Values.management.config.storageType | quote }}
   REAPER_STORAGE_PATH: {{ .Values.management.config.storagePath | quote }}
 {{- end }}
