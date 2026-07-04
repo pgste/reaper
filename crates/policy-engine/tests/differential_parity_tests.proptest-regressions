@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc aa1f7c194ee35d7609b72723abfaec86568e85257889d37a9ffa28398875f9e3 # shrinks to policy = GenPolicy { default_allow: false, rules: [(true, Cond { atoms: [AttrEqStr { entity: false, attr: "role", val: "admin", negate: true }], any: false })] }, world = World { user_attrs: [(0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)], res_attrs: [(0, 0), (0, 0), (0, 0)], edges: [], memberships: [], group_nest: false }
+cc d7f811afc50ca45cfa2ece19c313207af85786e14e5a7efca3a4a22f0b29f35b # shrinks to policy = GenPolicy { default_allow: true, rules: [(false, Cond { atoms: [BadgeEqStr { negate: true }], any: false })] }, world = World { user_attrs: [(0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)], badges: [0, 1, 0], res_attrs: [(0, 0), (0, 0), (0, 0)], edges: [], memberships: [], group_nest: false }

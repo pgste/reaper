@@ -1,0 +1,14 @@
+{
+  "name": "Release gates (comprehensions over entity data)",
+  "source": "Deploy-freeze / approvals pattern; entity-data counterpart to the terraform & kubernetes input-document scenarios",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "green checks + two lead approvals ships", "principal": "dev-dana", "action": "deploy", "resource": "svc-checkout", "expect": "allow"},
+    {"name": "failed check freezes release despite approvals (deny wins)", "principal": "dev-dana", "action": "deploy", "resource": "svc-payments", "expect": "deny"},
+    {"name": "one lead approval is not enough for a developer", "principal": "dev-dana", "action": "deploy", "resource": "svc-search", "expect": "deny"},
+    {"name": "release manager ships with a single lead approval", "principal": "rm-riley", "action": "deploy", "resource": "svc-search", "expect": "allow"},
+    {"name": "service with NO checks attribute: empty iteration, approvals decide", "principal": "dev-dana", "action": "deploy", "resource": "svc-legacy", "expect": "allow"},
+    {"name": "release manager blocked by failed check too", "principal": "rm-riley", "action": "deploy", "resource": "svc-payments", "expect": "deny"}
+  ]
+}

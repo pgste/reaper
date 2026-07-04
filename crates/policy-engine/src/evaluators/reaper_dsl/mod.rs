@@ -1027,7 +1027,12 @@ impl ReaperDSLEvaluator {
                 match entity.get_attribute(*attribute) {
                     Some(AttributeValue::List(items)) => items.clone(),
                     Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
-                    _ => return None,
+                    // TOTAL ITERATION (matches the AST contract): a missing
+                    // or non-collection source is an EMPTY collection, so
+                    // the comprehension yields empty and the assignment
+                    // still binds — returning None here made the rule fail
+                    // where the AST evaluator continued with an empty list.
+                    _ => Vec::new(),
                 }
             }
             CompiledIterationSource::Variable { variable } => {
@@ -1036,10 +1041,12 @@ impl ReaperDSLEvaluator {
                         match attr_val {
                             AttributeValue::List(items) => items.clone(),
                             AttributeValue::Set(items) => items.iter().cloned().collect(),
-                            _ => return None,
+                            // Total iteration: non-collection = empty.
+                            _ => Vec::new(),
                         }
                     } else {
-                        return None;
+                        // Total iteration: unbound variable = empty.
+                        Vec::new()
                     }
                 } else {
                     return None;

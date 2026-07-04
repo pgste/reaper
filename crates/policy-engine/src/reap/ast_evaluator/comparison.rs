@@ -140,24 +140,20 @@ impl ReapAstEvaluator {
     where
         F: Fn(f64, f64) -> bool,
     {
+        // TOTAL-COMPARISON CONTRACT: ordering over a non-numeric value is
+        // FALSE, never an error. A live policy must degrade toward deny,
+        // not fail the request — and the compiled evaluator and the
+        // differential oracle already answer false here.
         let a_num = match a {
             EvalValue::Integer(i) => *i as f64,
             EvalValue::Float(f) => *f,
-            _ => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "Numeric comparison requires integer or float".to_string(),
-                })
-            }
+            _ => return Ok(false),
         };
 
         let b_num = match b {
             EvalValue::Integer(i) => *i as f64,
             EvalValue::Float(f) => *f,
-            _ => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "Numeric comparison requires integer or float".to_string(),
-                })
-            }
+            _ => return Ok(false),
         };
 
         Ok(cmp(a_num, b_num))

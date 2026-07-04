@@ -32,39 +32,37 @@ pub fn eval_attribute_comparison(
     interner: &StringInterner,
 ) -> bool {
     match &comp.target {
+        // TYPE-STRICT TOTAL COMPARISONS (see docs/development/CORRECTNESS.md):
+        // a literal only matches a value of its own type (Int/Float cross-
+        // numeric excepted). `==` on a type mismatch is false; `!=` on a
+        // PRESENT scalar of a different type is true (the values differ);
+        // missing/Null satisfies neither. No coercion — `user.level == "5"`
+        // does NOT match Int(5); it did before, which made the compiled
+        // evaluator disagree with the AST and the oracle.
         CompiledCompareTarget::LiteralNum(threshold) => {
-            // For numeric comparisons, try nested attribute access
-            let actual = match get_nested_attr(
-                &comp.entity_type,
-                comp.attribute,
-                user,
-                resource,
-                interner,
-            ) {
-                Some(AttributeValue::Int(n)) => n as f64,
-                Some(AttributeValue::Float(f)) => f,
-                _ => return false,
-            };
-            compare_f64(actual, *threshold, &comp.op)
+            match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
+                Some(AttributeValue::Int(n)) => compare_f64(n as f64, *threshold, &comp.op),
+                Some(AttributeValue::Float(f)) => compare_f64(f, *threshold, &comp.op),
+                Some(AttributeValue::Null) | None => false,
+                // Present non-numeric scalar: differs from any number.
+                Some(AttributeValue::String(_)) | Some(AttributeValue::Bool(_)) => {
+                    matches!(comp.op, NumericOp::NotEqual)
+                }
+                Some(_) => false, // collections/objects: not comparable
+            }
         }
         CompiledCompareTarget::LiteralString(expected) => {
             match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
-                Some(AttributeValue::String(actual)) => {
-                    match comp.op {
-                        NumericOp::Equal => actual == *expected,
-                        NumericOp::NotEqual => actual != *expected,
-                        _ => false, // Other ops don't apply to strings
-                    }
-                }
-                Some(AttributeValue::Bool(actual)) => interner
-                    .resolve(*expected)
-                    .map(|v| &*v == actual.to_string().as_str())
-                    .unwrap_or(false),
-                Some(AttributeValue::Int(actual)) => interner
-                    .resolve(*expected)
-                    .map(|v| &*v == actual.to_string().as_str())
-                    .unwrap_or(false),
-                _ => false,
+                Some(AttributeValue::String(actual)) => match comp.op {
+                    NumericOp::Equal => actual == *expected,
+                    NumericOp::NotEqual => actual != *expected,
+                    _ => false, // ordering doesn't apply to strings
+                },
+                Some(AttributeValue::Null) | None => false,
+                Some(AttributeValue::Bool(_))
+                | Some(AttributeValue::Int(_))
+                | Some(AttributeValue::Float(_)) => matches!(comp.op, NumericOp::NotEqual),
+                Some(_) => false,
             }
         }
         CompiledCompareTarget::LiteralBool(expected) => {
@@ -74,7 +72,11 @@ pub fn eval_attribute_comparison(
                     NumericOp::NotEqual => actual != *expected,
                     _ => false,
                 },
-                _ => false,
+                Some(AttributeValue::Null) | None => false,
+                Some(AttributeValue::String(_))
+                | Some(AttributeValue::Int(_))
+                | Some(AttributeValue::Float(_)) => matches!(comp.op, NumericOp::NotEqual),
+                Some(_) => false,
             }
         }
         CompiledCompareTarget::LiteralNull => {
@@ -152,26 +154,18 @@ pub fn eval_wildcard_comparison(
         interner,
     );
 
-    // NULL SEMANTICS: `matched` is None when either side is missing or not a
-    // comparable collection/scalar pair. In that case BOTH `==` and `!=` fail
-    // — absence must never satisfy a guard (fail closed). Negation applies
-    // only to a comparison that actually took place.
+    // NULL SEMANTICS: `matched` is None when either side is MISSING (or the
+    // left side is not a collection / right side not a scalar). In that case
+    // BOTH `==` and `!=` fail — absence must never satisfy a guard (fail
+    // closed). When both sides are present, existential equality is typed
+    // and total: a scalar of a non-matching element type simply matches no
+    // element (== false, != true), same as the AST's values_equal.
     let matched = match (collection, scalar_val) {
-        (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => Some(
-            items
-                .iter()
-                .any(|item| matches!(item, AttributeValue::String(s) if *s == expected)),
-        ),
-        (Some(AttributeValue::Set(items)), Some(AttributeValue::String(expected))) => {
-            Some(items.contains(&AttributeValue::String(expected)))
+        (Some(AttributeValue::List(items)), Some(scalar)) if is_scalar_attr(&scalar) => {
+            Some(items.iter().any(|item| item == &scalar))
         }
-        (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => Some(
-            items
-                .iter()
-                .any(|item| matches!(item, AttributeValue::Int(i) if *i == expected)),
-        ),
-        (Some(AttributeValue::Set(items)), Some(AttributeValue::Int(expected))) => {
-            Some(items.contains(&AttributeValue::Int(expected)))
+        (Some(AttributeValue::Set(items)), Some(scalar)) if is_scalar_attr(&scalar) => {
+            Some(items.contains(&scalar))
         }
         _ => None,
     };
@@ -535,9 +529,29 @@ pub fn compare_attr_values(
             compare_floats(*l, r_f64, op)
         }
 
-        // Default: not comparable
+        // TYPE-STRICT NotEqual: two PRESENT scalars of different types differ
+        // by definition (matches AST !values_equal). Restricted to scalars —
+        // collections keep their own (existential) semantics elsewhere.
+        (Some(l), Some(r), AttrCompareOp::NotEqual) if is_scalar_attr(l) && is_scalar_attr(r) => {
+            true
+        }
+
+        // Default: not comparable — includes anything missing or Null,
+        // which satisfies neither == nor != (fail closed).
         _ => false,
     }
+}
+
+/// Scalar (non-collection, non-null) attribute values, for the type-strict
+/// NotEqual rule above.
+fn is_scalar_attr(v: &AttributeValue) -> bool {
+    matches!(
+        v,
+        AttributeValue::String(_)
+            | AttributeValue::Int(_)
+            | AttributeValue::Float(_)
+            | AttributeValue::Bool(_)
+    )
 }
 
 /// Helper for float comparisons with a given operator.

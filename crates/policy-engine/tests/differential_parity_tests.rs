@@ -88,6 +88,19 @@ enum Atom {
     InArray {
         val: &'static str,
     },
+    /// user.badge vs mixed-TYPE literals — pins strict typing (no coercion)
+    BadgeEqStr {
+        negate: bool,
+    }, // user.badge ==/!= "5"
+    BadgeEqNum {
+        negate: bool,
+    }, // user.badge ==/!= 7
+    BadgeEqBool {
+        negate: bool,
+    }, // user.badge ==/!= true
+    BadgeOrd {
+        op: &'static str,
+    }, // user.badge <op> 3 (ordering over non-numbers is false, total)
     /// rebac::related(user, rel, resource)
     RebacDirect {
         rel: &'static str,
@@ -129,6 +142,16 @@ impl Atom {
             Atom::CtxEq { key, val } => format!("context.{key} == \"{val}\""),
             Atom::CtxNotNull { key } => format!("context.{key} != null"),
             Atom::InArray { val } => format!("\"{val}\" in user.tags"),
+            Atom::BadgeEqStr { negate } => {
+                format!("user.badge {} \"5\"", if *negate { "!=" } else { "==" })
+            }
+            Atom::BadgeEqNum { negate } => {
+                format!("user.badge {} 7", if *negate { "!=" } else { "==" })
+            }
+            Atom::BadgeEqBool { negate } => {
+                format!("user.badge {} true", if *negate { "!=" } else { "==" })
+            }
+            Atom::BadgeOrd { op } => format!("user.badge {op} 3"),
             Atom::RebacDirect { rel } => {
                 format!("rebac::related(user, \"{rel}\", resource)")
             }
@@ -172,6 +195,10 @@ fn atom_strategy() -> impl Strategy<Value = Atom> {
             .prop_map(|(key, val)| Atom::CtxEq { key, val }),
         prop::sample::select(CTX_KEYS).prop_map(|key| Atom::CtxNotNull { key }),
         prop::sample::select(ROLES).prop_map(|val| Atom::InArray { val }),
+        any::<bool>().prop_map(|negate| Atom::BadgeEqStr { negate }),
+        any::<bool>().prop_map(|negate| Atom::BadgeEqNum { negate }),
+        any::<bool>().prop_map(|negate| Atom::BadgeEqBool { negate }),
+        prop::sample::select(&[">", ">=", "<", "<="][..]).prop_map(|op| Atom::BadgeOrd { op }),
         prop::sample::select(&["owner", "viewer"][..]).prop_map(|rel| Atom::RebacDirect { rel }),
         (prop::sample::select(&["owner", "viewer"][..]), 1u8..4)
             .prop_map(|(rel, depth)| Atom::RebacReach { rel, depth }),
@@ -234,11 +261,22 @@ fn policy_strategy() -> impl Strategy<Value = GenPolicy> {
         })
 }
 
+/// Per-user `badge` attribute whose TYPE varies — pins the type-strict
+/// total-comparison contract (no Int/Bool→String coercion; `!=` true only
+/// for a present value that differs; ordering only over numbers).
+/// 0 = String "5", 1 = Int 2, 2 = Int 7, 3 = Bool true, 4 = absent.
+const BADGE_STR5: usize = 0;
+const BADGE_INT2: usize = 1;
+const BADGE_INT7: usize = 2;
+const BADGE_TRUE: usize = 3;
+const BADGE_ABSENT: usize = 4;
+
 /// Random world: per-user role/level/dept/tags, per-resource dept/level,
 /// random relationship edges.
 #[derive(Debug, Clone)]
 struct World {
     user_attrs: Vec<(usize, usize, usize, usize)>, // role, level, dept, tag
+    badges: Vec<usize>,                            // mixed-TYPE badge per user
     res_attrs: Vec<(usize, usize)>,                // dept, level
     edges: Vec<(usize, usize, usize)>, // resource, relation(owner/viewer), holder idx (user or group)
     memberships: Vec<(usize, usize)>,  // user -> group
@@ -251,6 +289,7 @@ fn world_strategy() -> impl Strategy<Value = World> {
             (0..ROLES.len(), 0usize..6, 0..DEPTS.len(), 0..ROLES.len()),
             USERS.len()..=USERS.len(),
         ),
+        prop::collection::vec(0usize..5, USERS.len()..=USERS.len()),
         prop::collection::vec(
             (0..DEPTS.len(), 0usize..6),
             RESOURCES.len()..=RESOURCES.len(),
@@ -267,8 +306,9 @@ fn world_strategy() -> impl Strategy<Value = World> {
         any::<bool>(),
     )
         .prop_map(
-            |(user_attrs, res_attrs, edges, memberships, group_nest)| World {
+            |(user_attrs, badges, res_attrs, edges, memberships, group_nest)| World {
                 user_attrs,
+                badges,
                 res_attrs,
                 edges,
                 memberships,
@@ -290,10 +330,24 @@ fn build_world(world: &World) -> Arc<DataStore> {
         if !groups.is_empty() {
             rels.insert("member_of".to_string(), groups);
         }
+        let mut attributes = serde_json::json!({
+            "role": ROLES[*role], "level": *level as i64,
+            "dept": DEPTS[*dept], "tags": [ROLES[*tag]],
+        });
+        // Mixed-TYPE badge: string / int / bool / absent.
+        let badge = match world.badges[i] {
+            BADGE_STR5 => Some(serde_json::json!("5")),
+            BADGE_INT2 => Some(serde_json::json!(2)),
+            BADGE_INT7 => Some(serde_json::json!(7)),
+            BADGE_TRUE => Some(serde_json::json!(true)),
+            _ => None,
+        };
+        if let Some(b) = badge {
+            attributes["badge"] = b;
+        }
         entities.push(serde_json::json!({
             "id": USERS[i], "type": "User",
-            "attributes": {"role": ROLES[*role], "level": *level as i64,
-                            "dept": DEPTS[*dept], "tags": [ROLES[*tag]]},
+            "attributes": attributes,
             "relationships": rels,
         }));
     }
@@ -453,6 +507,36 @@ fn oracle_atom(atom: &Atom, world: &World, request: &PolicyRequest) -> bool {
         Atom::CtxEq { key, val } => request.context.get(*key).map(String::as_str) == Some(*val),
         Atom::CtxNotNull { key } => request.context.contains_key(*key),
         Atom::InArray { val } => u.is_some_and(|u| ROLES[world.user_attrs[u].3] == *val),
+        // Type-strict TOTAL comparisons over the mixed-type badge:
+        // == is true only for a same-typed equal value; != is true only for
+        // a PRESENT value that differs (a different type differs); ordering
+        // is true only over numbers. Absent satisfies nothing.
+        Atom::BadgeEqStr { negate } => u.is_some_and(|u| {
+            let b = world.badges[u];
+            b != BADGE_ABSENT && ((b == BADGE_STR5) != *negate)
+        }),
+        Atom::BadgeEqNum { negate } => u.is_some_and(|u| {
+            let b = world.badges[u];
+            b != BADGE_ABSENT && ((b == BADGE_INT7) != *negate)
+        }),
+        Atom::BadgeEqBool { negate } => u.is_some_and(|u| {
+            let b = world.badges[u];
+            b != BADGE_ABSENT && ((b == BADGE_TRUE) != *negate)
+        }),
+        Atom::BadgeOrd { op } => u.is_some_and(|u| {
+            let n: i64 = match world.badges[u] {
+                BADGE_INT2 => 2,
+                BADGE_INT7 => 7,
+                _ => return false, // non-numeric or absent: ordering is false
+            };
+            match *op {
+                ">" => n > 3,
+                ">=" => n >= 3,
+                "<" => n < 3,
+                "<=" => n <= 3,
+                _ => unreachable!(),
+            }
+        }),
         Atom::RebacDirect { rel } => match (u, r) {
             (Some(u), Some(r)) => oracle_holders(world, r, rel).contains(&Holder::User(u)),
             _ => false,
