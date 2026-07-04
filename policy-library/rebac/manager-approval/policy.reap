@@ -1,0 +1,30 @@
+// ReBAC — org-chart approvals: a manager (direct or up the chain) may
+// approve an expense report; the submitter may read but never approve
+// their own.
+policy manager_approval {
+    default: deny,
+
+    rule submitter_reads_own {
+        allow if {
+            context.action == "read" &&
+            rebac::related(user, "submitter", resource)
+        }
+    }
+
+    rule no_self_approval {
+        deny if {
+            context.action == "approve" &&
+            rebac::related(user, "submitter", resource)
+        }
+    }
+
+    // report#approver@direct-manager; higher management reaches the approver
+    // through its own downward `manages` edges (vp --manages--> mgr ...), so
+    // skip-level approval works without granting it explicitly per report.
+    rule management_chain_approves {
+        allow if {
+            context.action == "approve" &&
+            rebac::reachable(user, "approver", resource, "manages", 3)
+        }
+    }
+}

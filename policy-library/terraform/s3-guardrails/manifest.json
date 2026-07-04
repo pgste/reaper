@@ -1,0 +1,10 @@
+{
+  "name": "Terraform S3 + blast-radius guardrails",
+  "source": "https://www.openpolicyagent.org/docs/latest/terraform/ + conftest AWS examples",
+  "policy": "policy.reap",
+  "cases": [
+    {"name": "violating plan trips 3 rules", "input": "input-violating.json", "expect": "deny",
+     "violations": ["no_public_buckets", "encryption_required", "no_iam_deletions"]},
+    {"name": "clean plan passes", "input": "input-clean.json", "expect": "allow", "violations": []}
+  ]
+}

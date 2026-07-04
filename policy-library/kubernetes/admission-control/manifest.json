@@ -1,0 +1,10 @@
+{
+  "name": "Kubernetes admission control (Gatekeeper staples)",
+  "source": "OPA Gatekeeper policy library (k8srequiredlabels, k8sallowedrepos, k8scontainerlimits, psp-privileged)",
+  "policy": "policy.reap",
+  "cases": [
+    {"name": "bad pod trips all five rules", "input": "input-violating.json", "expect": "deny",
+     "violations": ["disallow_latest_tag", "approved_registries_only", "no_privileged_containers", "owner_label_required", "resource_limits_required"]},
+    {"name": "clean pod admitted", "input": "input-clean.json", "expect": "allow", "violations": []}
+  ]
+}

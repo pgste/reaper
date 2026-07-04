@@ -1,0 +1,7 @@
+{"request":{"operation":"CREATE","object":{
+  "metadata":{"name":"good-pod","labels":{"app":"demo","owner":"team-eng"}},
+  "spec":{"containers":[
+    {"name":"web","image":"registry.corp.internal/web:1.4.2",
+     "securityContext":{"privileged":false},
+     "resources":{"limits":{"cpu":"1","memory":"512Mi"}}}
+  ]}}}}

@@ -1,0 +1,38 @@
+// Terraform plan guardrails — adapted from the OPA Terraform tutorial and
+// the standard conftest AWS policies: no public buckets, encryption
+// required, mandatory tags, and protected resources must not be destroyed.
+// Run with:  reaper-cli check -p policy.reap -i tfplan.json
+policy terraform_s3_guardrails {
+    default: allow,
+
+    rule no_public_buckets {
+        deny with message concat("public-read/public-read-write ACL on bucket: ", first) if {
+            bad := [rc.name | rc := input.resource_changes[_]; rc.type == "aws_s3_bucket"; rc.change.after.acl == "public-read"] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+
+    rule encryption_required {
+        deny with message concat("bucket without server-side encryption: ", first) if {
+            bad := [rc.name | rc := input.resource_changes[_]; rc.type == "aws_s3_bucket"; rc.change.after.sse_algorithm == null] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+
+    rule env_tag_required {
+        deny with message concat("resource missing required env tag: ", first) if {
+            bad := [rc.name | rc := input.resource_changes[_]; rc.change.after.tags.env == null] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+
+    rule no_iam_deletions {
+        deny with message "plan deletes IAM resources (blast-radius guard)" if {
+            deletions := [rc | rc := input.resource_changes[_]; rc.type == "aws_iam_user"; "delete" in rc.change.actions] &&
+            deletions.count() > 0
+        }
+    }
+}

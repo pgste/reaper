@@ -1,0 +1,9 @@
+{"entities":[
+  {"id":"emp-dev","type":"User","attributes":{},"relationships":{"reports_to":["mgr-team"]}},
+  {"id":"mgr-team","type":"User","attributes":{},"relationships":{"reports_to":["vp-eng"],"manages":["emp-dev"]}},
+  {"id":"vp-eng","type":"User","attributes":{},"relationships":{"manages":["mgr-team"]}},
+  {"id":"mgr-other","type":"User","attributes":{},"relationships":{"manages":["emp-other"]}},
+  {"id":"emp-other","type":"User","attributes":{}},
+  {"id":"expense-42","type":"Expense","attributes":{},
+   "relationships":{"submitter":["emp-dev"],"approver":["mgr-team"]}}
+]}

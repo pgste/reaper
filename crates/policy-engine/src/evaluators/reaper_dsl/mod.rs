@@ -249,7 +249,40 @@ impl ReaperDSLEvaluator {
             CompiledCondition::TimeOp(cond) => time_eval::eval_time_operation(cond, user, resource),
 
             CompiledCondition::CrossEntityCompare(comp) => {
-                comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                // context.* on either side resolves from the REQUEST, not an
+                // entity. Previously this silently compared against None and
+                // returned false (`context.principal == resource.owner` denied
+                // everything) — a miscompile caught by the policy-library
+                // compiled-vs-AST parity suite.
+                let ctx_side = |attr: crate::data::InternedString| {
+                    let name = interner.resolve(attr)?;
+                    // EvalContext::get already special-cases "action"/"resource".
+                    let raw: &str = _context.get(name.as_ref())?;
+                    if let Ok(n) = raw.parse::<f64>() {
+                        return Some(AttributeValue::Float(n));
+                    }
+                    Some(AttributeValue::String(interner.intern(raw)))
+                };
+                let needs_ctx = matches!(comp.left_entity, EntityType::Context)
+                    || matches!(comp.right_entity, EntityType::Context);
+                if needs_ctx {
+                    let side = |etype: &EntityType, attr: crate::data::InternedString| {
+                        if matches!(etype, EntityType::Context) {
+                            ctx_side(attr)
+                        } else {
+                            entity_helpers::get_nested_attr(etype, attr, user, resource, interner)
+                        }
+                    };
+                    let left = side(&comp.left_entity, comp.left_attr);
+                    let right = side(&comp.right_entity, comp.right_attr);
+                    comparison_eval::compare_attr_values(
+                        left.as_ref(),
+                        right.as_ref(),
+                        &comp.op.into(),
+                    )
+                } else {
+                    comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                }
             }
 
             CompiledCondition::WildcardCompare(comp) => {

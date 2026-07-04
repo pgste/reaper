@@ -1,0 +1,13 @@
+{
+  "name": "Manager approval chain",
+  "source": "Styra/OPA org-chart authorization pattern",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "direct manager approves", "principal": "mgr-team", "action": "approve", "resource": "expense-42", "expect": "allow"},
+    {"name": "skip-level approves through manages chain", "principal": "vp-eng", "action": "approve", "resource": "expense-42", "expect": "allow"},
+    {"name": "unrelated manager cannot approve", "principal": "mgr-other", "action": "approve", "resource": "expense-42", "expect": "deny"},
+    {"name": "submitter reads own report", "principal": "emp-dev", "action": "read", "resource": "expense-42", "expect": "allow"},
+    {"name": "submitter cannot self-approve", "principal": "emp-dev", "action": "approve", "resource": "expense-42", "expect": "deny"}
+  ]
+}

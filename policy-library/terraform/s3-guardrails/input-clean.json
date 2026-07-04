@@ -1,0 +1,4 @@
+{"format_version":"1.2","resource_changes":[
+  {"address":"aws_s3_bucket.data","type":"aws_s3_bucket","name":"data",
+   "change":{"actions":["create"],"after":{"acl":"private","sse_algorithm":"aws:kms","tags":{"env":"prod"}}}}
+]}

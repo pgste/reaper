@@ -90,3 +90,7 @@ harness = false
 [[test]]
 name = "gherkin_tests"
 harness = false
+
+[[bench]]
+name = "rebac_bench"
+harness = false

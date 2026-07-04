@@ -1,0 +1,95 @@
+{
+ "entities": [
+  {
+   "id": "alice",
+   "type": "User",
+   "attributes": {},
+   "relationships": {
+    "member_of": [
+     "team-eng"
+    ]
+   }
+  },
+  {
+   "id": "bob",
+   "type": "User",
+   "attributes": {},
+   "relationships": {
+    "member_of": [
+     "team-design"
+    ]
+   }
+  },
+  {
+   "id": "eve",
+   "type": "User",
+   "attributes": {}
+  },
+  {
+   "id": "mallet",
+   "type": "User",
+   "attributes": {}
+  },
+  {
+   "id": "team-eng",
+   "type": "Group",
+   "attributes": {},
+   "relationships": {
+    "member_of": [
+     "org-all"
+    ]
+   }
+  },
+  {
+   "id": "team-design",
+   "type": "Group",
+   "attributes": {},
+   "relationships": {
+    "member_of": [
+     "org-all"
+    ]
+   }
+  },
+  {
+   "id": "org-all",
+   "type": "Group",
+   "attributes": {}
+  },
+  {
+   "id": "folder-root",
+   "type": "Folder",
+   "attributes": {},
+   "relationships": {
+    "owner": [
+     "eve"
+    ]
+   }
+  },
+  {
+   "id": "folder-specs",
+   "type": "Folder",
+   "attributes": {},
+   "relationships": {
+    "parent": [
+     "folder-root"
+    ]
+   }
+  },
+  {
+   "id": "doc-design",
+   "type": "Document",
+   "attributes": {},
+   "relationships": {
+    "parent": [
+     "folder-specs"
+    ],
+    "editor": [
+     "team-design"
+    ],
+    "viewer": [
+     "org-all"
+    ]
+   }
+  }
+ ]
+}

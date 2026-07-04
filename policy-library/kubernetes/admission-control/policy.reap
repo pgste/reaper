@@ -1,0 +1,45 @@
+// Kubernetes admission control — the OPA Gatekeeper library staples:
+// no :latest images, approved registries only, no privileged containers,
+// required labels, resource limits mandatory.
+// Input: a Kubernetes AdmissionReview request (input.request.object = Pod).
+policy k8s_admission {
+    default: allow,
+
+    rule disallow_latest_tag {
+        deny with message concat("image uses :latest tag: ", first) if {
+            bad := [c.image | c := input.request.object.spec.containers[_]; c.image.endswith(":latest")] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+
+    rule approved_registries_only {
+        deny with message concat("image from unapproved registry: ", first) if {
+            bad := [c.image | c := input.request.object.spec.containers[_]; !c.image.startswith("registry.corp.internal/")] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+
+    rule no_privileged_containers {
+        deny with message concat("privileged container: ", first) if {
+            bad := [c.name | c := input.request.object.spec.containers[_]; c.securityContext.privileged == true] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+
+    rule owner_label_required {
+        deny with message "pod is missing required label: owner" if {
+            input.request.object.metadata.labels.owner == null
+        }
+    }
+
+    rule resource_limits_required {
+        deny with message concat("container without resource limits: ", first) if {
+            bad := [c.name | c := input.request.object.spec.containers[_]; c.resources.limits == null] &&
+            first := bad[0] &&
+            bad.count() > 0
+        }
+    }
+}

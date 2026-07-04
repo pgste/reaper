@@ -1,0 +1,8 @@
+{"format_version":"1.2","resource_changes":[
+  {"address":"aws_s3_bucket.logs","type":"aws_s3_bucket","name":"logs",
+   "change":{"actions":["create"],"after":{"acl":"public-read","sse_algorithm":"AES256","tags":{"env":"prod"}}}},
+  {"address":"aws_s3_bucket.data","type":"aws_s3_bucket","name":"data",
+   "change":{"actions":["create"],"after":{"acl":"private","tags":{"env":"prod"}}}},
+  {"address":"aws_iam_user.ci","type":"aws_iam_user","name":"ci",
+   "change":{"actions":["delete"],"after":{"tags":{"env":"prod"}}}}
+]}
