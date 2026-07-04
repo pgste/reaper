@@ -165,6 +165,65 @@ platform:
         - ALL
 
 # =============================================================================
+# Decision-log pipeline (audit): agent NDJSON -> Vector sidecar -> ClickHouse
+# =============================================================================
+# One switch deploys the whole audit path (see deploy/decision-logs/ and
+# docs/architecture/DECISION_LOG_PIPELINE.md):
+#   - every agent pod captures decisions to a shared file and ships them via a
+#     Vector sidecar (disk WAL + end-to-end acks; a store outage never blocks
+#     the agent),
+#   - a bundled single-node ClickHouse stores them (or point `clickhouse.url`
+#     at your own / ClickHouse Cloud and set clickhouse.enabled=false),
+#   - the management server's query API (GET /api/v1/orgs/{org}/decisions...)
+#     is wired to the same store automatically.
+decisionLogs:
+  enabled: false
+
+  # --- capture (agent) ---
+  sampleAllowRate: "1.0"     # deny-priority sampling: denies always kept
+  inputData: false           # "explain" tier snapshot (denies-only by default)
+  # Every record ships with this tenant_id. For the managed stack set it to the
+  # org UUID so the control-plane query API (which scopes by org id) finds it;
+  # leave "" for single-tenant self-host + REAPER_CLICKHOUSE_TENANT_FILTER=false
+  # on the management server.
+  tenantId: ""
+  # Data protection (masking/pseudonymization/encryption; see
+  # deploy/decision-logs/README.md). Secrets come from an existing Secret with
+  # keys REAPER_DECISION_LOG_HASH_SALT and/or REAPER_DECISION_LOG_ENCRYPTION_KEY
+  # (generate with: reaper-cli decisions keygen).
+  hashPrincipal: false
+  maskKeys: ""               # e.g. "ssn,password,token"
+  encryptInputData: false
+  protectionExistingSecret: ""
+
+  # --- shipper (Vector sidecar on every agent pod) ---
+  vector:
+    image: timberio/vector:0.41.1-debian
+    resources:
+      requests: { cpu: 20m, memory: 64Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+    bufferMaxBytes: "1073741824"   # 1 GiB disk WAL per pod (emptyDir)
+
+  # --- store (ClickHouse) ---
+  clickhouse:
+    enabled: true              # bundled single-node CH; disable to bring your own
+    image: clickhouse/clickhouse-server:24.8
+    url: ""                    # override when enabled=false (e.g. ClickHouse Cloud)
+    database: reaper_audit
+    username: reaper
+    password: ""               # REQUIRED with bundled CH unless existingSecret set
+    # Existing Secret with keys REAPER_CLICKHOUSE_USER / REAPER_CLICKHOUSE_PASSWORD
+    existingSecret: ""
+    retentionDays: 90          # TTL DELETE on the bundled store
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 250m, memory: 1Gi }
+      limits: { cpu: "2", memory: 4Gi }
+
+# =============================================================================
 # Reaper Agent
 # =============================================================================
 agent:

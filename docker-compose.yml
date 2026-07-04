@@ -365,12 +365,62 @@ services:
       - "com.reaper.service=promtail"
       - "com.reaper.profile=observability"
 
+  # ==========================================================================
+  # Decision-log audit pipeline (audit profile): agent NDJSON -> Vector -> ClickHouse
+  #   docker compose --profile engine --profile audit up -d
+  #   DECISION_LOG_ENABLED=true            # turn capture on for the agent
+  #   REAPER_CLICKHOUSE_URL=http://clickhouse:8123   # for the management query API
+  # ==========================================================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: reaper-clickhouse
+    profiles: ["audit"]
+    ports:
+      - "8123:8123"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - ./deploy/decision-logs/clickhouse-schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - reaper-net
+    labels:
+      - "com.reaper.service=audit-store"
+      - "com.reaper.profile=audit"
+
+  vector:
+    image: timberio/vector:0.41.1-debian
+    container_name: reaper-vector
+    profiles: ["audit"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - REAPER_TENANT_ID=${REAPER_TENANT_ID:-}
+    volumes:
+      - ./deploy/decision-logs/vector-file.toml:/etc/vector/vector.toml:ro
+      - agent-logs:/var/log/reaper:ro
+      - vector-buffer:/var/lib/vector
+    networks:
+      - reaper-net
+    labels:
+      - "com.reaper.service=audit-shipper"
+      - "com.reaper.profile=audit"
+
 networks:
   reaper-net:
     driver: bridge
     name: reaper-network
 
+
 volumes:
+  clickhouse-data:
+  vector-buffer:
   reaper-sockets:
     name: reaper-sockets
   postgres-data:

@@ -280,6 +280,114 @@ impl DecisionStore {
             top_denied_policies,
         })
     }
+
+    /// Bucketed time series (for UI charts): total/allow/deny counts and avg
+    /// eval time per `bucket_secs` interval within the range.
+    pub async fn timeseries(
+        &self,
+        tenant_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+        bucket_secs: u32,
+    ) -> Result<Vec<TimeseriesPoint>, DecisionStoreError> {
+        let (sql, params) = build_timeseries_sql(&self.config, tenant_id, from, to, bucket_secs);
+        let rows = self.run(&sql, &params).await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|v| {
+                let n = |k: &str| -> u64 {
+                    v.get(k)
+                        .and_then(|x| {
+                            x.as_u64()
+                                .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+                        })
+                        .unwrap_or(0)
+                };
+                Some(TimeseriesPoint {
+                    bucket: v.get("bucket")?.as_str()?.to_string(),
+                    total: n("total"),
+                    allows: n("allows"),
+                    denies: n("denies"),
+                    avg_evaluation_time_ns: v
+                        .get("avg_evaluation_time_ns")
+                        .and_then(|x| {
+                            x.as_f64()
+                                .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+                        })
+                        .unwrap_or(0.0),
+                })
+            })
+            .collect())
+    }
+
+    /// Distinct filter values with counts (for UI filter dropdowns): actions,
+    /// decisions, policy names, and agent ids seen in the range.
+    pub async fn facets(
+        &self,
+        tenant_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<Value, DecisionStoreError> {
+        let (sql, params) = build_facets_sql(&self.config, tenant_id, from, to);
+        let rows = self.run(&sql, &params).await?;
+        let mut facets = serde_json::Map::new();
+        for row in rows {
+            let (Some(facet), Some(value)) = (
+                row.get("facet").and_then(Value::as_str).map(str::to_string),
+                row.get("value").and_then(Value::as_str).map(str::to_string),
+            ) else {
+                continue;
+            };
+            let count = row
+                .get("count")
+                .and_then(|c| {
+                    c.as_u64()
+                        .or_else(|| c.as_str().and_then(|s| s.parse().ok()))
+                })
+                .unwrap_or(0);
+            facets
+                .entry(facet)
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .expect("facet entries are arrays")
+                .push(serde_json::json!({ "value": value, "count": count }));
+        }
+        Ok(Value::Object(facets))
+    }
+}
+
+/// One bucket of the decision time series.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TimeseriesPoint {
+    /// Bucket start (ClickHouse DateTime string, UTC).
+    pub bucket: String,
+    pub total: u64,
+    pub allows: u64,
+    pub denies: u64,
+    pub avg_evaluation_time_ns: f64,
+}
+
+/// Parse a UI-friendly interval ("30s", "5m", "1h", "1d", or raw seconds)
+/// into seconds, clamped to [10s, 7d]. Unknown input falls back to 1h.
+pub fn parse_interval_secs(s: Option<&str>) -> u32 {
+    let parsed = s
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            let (num, unit) = match s.chars().last() {
+                Some(c @ ('s' | 'm' | 'h' | 'd')) => (&s[..s.len() - 1], c),
+                _ => (s, 's'),
+            };
+            let n: u64 = num.parse().ok()?;
+            Some(match unit {
+                'm' => n * 60,
+                'h' => n * 3600,
+                'd' => n * 86_400,
+                _ => n,
+            })
+        })
+        .unwrap_or(3600);
+    parsed.clamp(10, 7 * 86_400) as u32
 }
 
 /// Parse a JSONEachRow decision into a DecisionRow, decoding the embedded
@@ -437,6 +545,69 @@ fn build_stats_sql(
     )
 }
 
+fn build_timeseries_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+    bucket_secs: u32,
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let range = DecisionQuery {
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        ..Default::default()
+    };
+    let where_sql = where_clause(config, tenant_id, &range, &mut params);
+    params.push(("bucket_secs".to_string(), bucket_secs.to_string()));
+    (
+        format!(
+            "SELECT toString(toStartOfInterval(timestamp, toIntervalSecond({{bucket_secs:UInt32}}))) AS bucket, \
+             count() AS total, \
+             countIf(decision = 'allow') AS allows, \
+             countIf(decision = 'deny') AS denies, \
+             avg(evaluation_time_ns) AS avg_evaluation_time_ns \
+             FROM decisions FINAL {where_sql} \
+             GROUP BY bucket ORDER BY bucket"
+        ),
+        params,
+    )
+}
+
+/// One UNION ALL query returning (facet, value, count) triples for every
+/// filterable dimension, top-50 each by frequency.
+fn build_facets_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let range = DecisionQuery {
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        ..Default::default()
+    };
+    let where_sql = where_clause(config, tenant_id, &range, &mut params);
+    // Column names are a fixed allowlist here, never user input.
+    let facet = |col: &str| {
+        format!(
+            "SELECT '{col}' AS facet, {col} AS value, count() AS count \
+             FROM decisions FINAL {where_sql} GROUP BY value ORDER BY count DESC LIMIT 50"
+        )
+    };
+    (
+        [
+            facet("action"),
+            facet("decision"),
+            facet("policy_name"),
+            facet("agent_id"),
+        ]
+        .join(" UNION ALL "),
+        params,
+    )
+}
+
 fn build_top_denied_sql(
     config: &DecisionStoreConfig,
     tenant_id: &str,
@@ -557,6 +728,43 @@ mod tests {
         let row = parse_row(raw).unwrap();
         assert_eq!(row.context["ip"], "10.0.0.1");
         assert_eq!(row.input_data["enc"], "aes256gcm");
+    }
+
+    #[test]
+    fn timeseries_sql_buckets_and_binds() {
+        let (sql, params) =
+            build_timeseries_sql(&config(true), "org-1", Some("2026-07-01"), None, 300);
+        assert!(sql.contains("toIntervalSecond({bucket_secs:UInt32})"));
+        assert!(sql.contains("GROUP BY bucket ORDER BY bucket"));
+        assert!(sql.contains("tenant_id = {tenant:String}"));
+        assert!(params.iter().any(|(n, v)| n == "bucket_secs" && v == "300"));
+    }
+
+    #[test]
+    fn facets_sql_unions_fixed_columns_only() {
+        let (sql, params) = build_facets_sql(&config(true), "org-1", None, None);
+        assert_eq!(sql.matches("UNION ALL").count(), 3);
+        for col in ["action", "decision", "policy_name", "agent_id"] {
+            assert!(sql.contains(&format!("'{col}' AS facet")));
+        }
+        assert!(params.iter().any(|(n, v)| n == "tenant" && v == "org-1"));
+    }
+
+    #[test]
+    fn interval_parsing_units_and_clamps() {
+        assert_eq!(parse_interval_secs(Some("30s")), 30);
+        assert_eq!(parse_interval_secs(Some("5m")), 300);
+        assert_eq!(parse_interval_secs(Some("1h")), 3600);
+        assert_eq!(parse_interval_secs(Some("1d")), 86_400);
+        assert_eq!(parse_interval_secs(Some("120")), 120, "raw seconds");
+        assert_eq!(parse_interval_secs(None), 3600, "default 1h");
+        assert_eq!(parse_interval_secs(Some("garbage")), 3600, "fallback 1h");
+        assert_eq!(parse_interval_secs(Some("1s")), 10, "clamped up");
+        assert_eq!(
+            parse_interval_secs(Some("400d")),
+            7 * 86_400,
+            "clamped down"
+        );
     }
 
     #[test]

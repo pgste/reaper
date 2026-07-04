@@ -13,10 +13,12 @@ data:
   REAPER_MANAGEMENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_STORAGE_TYPE: {{ .Values.management.config.storageType | quote }}
   REAPER_STORAGE_PATH: {{ .Values.management.config.storagePath | quote }}
-  {{- with .Values.management.decisionLogs }}
-  {{- if .clickhouseUrl }}
-  REAPER_CLICKHOUSE_URL: {{ .clickhouseUrl | quote }}
-  REAPER_CLICKHOUSE_DATABASE: {{ .clickhouseDatabase | default "reaper_audit" | quote }}
-  {{- end }}
+  {{- if .Values.management.decisionLogs.clickhouseUrl }}
+  REAPER_CLICKHOUSE_URL: {{ .Values.management.decisionLogs.clickhouseUrl | quote }}
+  REAPER_CLICKHOUSE_DATABASE: {{ .Values.management.decisionLogs.clickhouseDatabase | default "reaper_audit" | quote }}
+  {{- else if .Values.decisionLogs.enabled }}
+  # Auto-wired to the chart's decision-log pipeline store.
+  REAPER_CLICKHOUSE_URL: {{ include "reaper.decisionlogs.clickhouseUrl" . | quote }}
+  REAPER_CLICKHOUSE_DATABASE: {{ .Values.decisionLogs.clickhouse.database | quote }}
   {{- end }}
 {{- end }}

@@ -92,6 +92,34 @@ reaper-cli decisions decrypt --key <hex> '<input_data envelope or full entry JSO
 In ClickHouse, encrypted `input_data` is just an opaque JSON column — the
 control plane decrypts per tenant at query time.
 
+## Deploying the pipeline
+
+**Kubernetes (Helm)** — one switch deploys capture + shipper + store and wires
+the management query API:
+
+```bash
+helm install reaper ./deploy/helm/reaper -f profiles/managed-stack.yaml \
+    --set decisionLogs.clickhouse.password=$(openssl rand -hex 24)
+```
+
+Every agent pod gets a Vector sidecar tailing the shared decision file with an
+on-disk buffer (a ClickHouse outage never blocks the agent); the bundled
+single-node ClickHouse initializes the schema on first start (90-day retention
+by default via `decisionLogs.clickhouse.retentionDays`). Bring your own store
+with `decisionLogs.clickhouse.enabled=false` + `url` + `existingSecret`.
+
+**Docker Compose** — the main compose file has an `audit` profile:
+
+```bash
+DECISION_LOG_ENABLED=true \
+REAPER_CLICKHOUSE_URL=http://clickhouse:8123 \
+docker compose --profile engine --profile audit up -d
+```
+
+The agent writes to the shared `agent-logs` volume, Vector
+(`deploy/decision-logs/vector-file.toml`) tails it into ClickHouse, and the
+management service (if running) serves the query API from the same store.
+
 ## Querying from the control plane
 
 `reaper-management` serves the full history (cross-agent, tenant-scoped)

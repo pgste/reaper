@@ -49,8 +49,23 @@ pick a shape instead of hand-assembling `enabled` flags. Two audiences:
 | `engine` | consumers | Agent only (HTTP enforcement) | `-f profiles/engine.yaml` |
 | `engine-uds-sharded` | consumers | Agent only + thread-per-core UDS (highest throughput) | `-f profiles/engine-uds-sharded.yaml` |
 | `platform` | single team | Agent + Platform (basic mgmt, no DB) | `-f profiles/platform.yaml` |
-| `managed-stack` | **you (SaaS)** | Management + PostgreSQL + managed agents | `-f profiles/managed-stack.yaml` |
-| `full` | demo/staging | Everything + metrics | `-f profiles/full.yaml` |
+| `managed-stack` | **you (SaaS)** | Management + PostgreSQL + managed agents + audit pipeline (ClickHouse/Vector) | `-f profiles/managed-stack.yaml` |
+| `full` | demo/staging | Everything + metrics + audit pipeline | `-f profiles/full.yaml` |
+
+The `managed-stack` and `full` profiles enable the **decision-log audit
+pipeline** (`decisionLogs.enabled=true`): every agent pod writes decision
+NDJSON to a pod-shared file, a Vector sidecar ships it (disk WAL, end-to-end
+acks) into a bundled single-node ClickHouse, and the management query API
+(`GET /api/v1/orgs/{org}/decisions`, `/stats`, `/timeseries`, `/facets`,
+`/{id}`) is auto-wired to that store. Required at install:
+`--set decisionLogs.clickhouse.password=$(openssl rand -hex 24)`. To bring
+your own ClickHouse/ClickHouse Cloud set `decisionLogs.clickhouse.enabled=false`
+and `decisionLogs.clickhouse.url` (+ credentials via
+`decisionLogs.clickhouse.existingSecret`). Multi-tenant: set
+`decisionLogs.tenantId` to the org UUID the agents serve. Data protection
+(masking/pseudonymization/encryption) via `decisionLogs.hashPrincipal`,
+`maskKeys`, `encryptInputData` + `protectionExistingSecret` (generate secrets
+with `reaper-cli decisions keygen`).
 
 ```bash
 # Consumer: drop-in enforcement agent

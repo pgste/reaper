@@ -1,0 +1,59 @@
+{{- if .Values.decisionLogs.enabled }}
+# Vector sidecar config: tails the agent's decision NDJSON file (shared
+# emptyDir) and ships to ClickHouse with a disk WAL + end-to-end acks, so a
+# store outage never blocks the agent and restarts don't lose records.
+# Mirrors deploy/decision-logs/vector.toml (the non-K8s reference).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "reaper.agent.fullname" . }}-vector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+data:
+  vector.toml: |
+    data_dir = "/var/lib/vector"
+
+    [sources.decisions]
+    type = "file"
+    include = ["/var/log/reaper/decisions.ndjson"]
+    read_from = "beginning"
+
+    [transforms.parse]
+    type = "remap"
+    inputs = ["decisions"]
+    source = '''
+    . = parse_json!(string!(.message))
+    .timestamp = to_timestamp!(.timestamp)
+    .decision_id = string!(.decision_id)
+    # Tenant injected from the deployment (never self-asserted by the agent
+    # payload): the control-plane query API scopes by this value.
+    .tenant_id = "${REAPER_TENANT_ID:-}"
+    if is_object(.context)    { .context = encode_json(.context) }
+    if is_object(.input_data) { .input_data = encode_json(.input_data) }
+    '''
+
+    [sinks.clickhouse]
+    type = "clickhouse"
+    inputs = ["parse"]
+    endpoint = "${CLICKHOUSE_URL}"
+    database = {{ .Values.decisionLogs.clickhouse.database | quote }}
+    table = "decisions"
+    skip_unknown_fields = true
+    batch.max_bytes = 10000000
+    batch.timeout_secs = 1
+
+    [sinks.clickhouse.auth]
+    strategy = "basic"
+    user = "${REAPER_CLICKHOUSE_USER:-default}"
+    password = "${REAPER_CLICKHOUSE_PASSWORD:-}"
+
+    [sinks.clickhouse.buffer]
+    type = "disk"
+    max_size = {{ .Values.decisionLogs.vector.bufferMaxBytes }}
+    when_full = "block"
+
+    [sinks.clickhouse.acknowledgements]
+    enabled = true
+{{- end }}

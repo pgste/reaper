@@ -47,11 +47,13 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
 ENGINE = ReplacingMergeTree(ingested_at)                     -- retries collapse on decision_id
 PARTITION BY (tenant_id, toYYYYMM(timestamp))                -- monthly; drop = instant purge
 ORDER BY (tenant_id, toStartOfHour(timestamp), action, resource, principal, decision_id)
-TTL toDateTime(timestamp) + INTERVAL 90 DAY TO VOLUME 's3',  -- hot NVMe -> cold object store
-    toDateTime(timestamp) + INTERVAL 6 YEAR DELETE           -- HIPAA-dominant; archive to WORM first
+TTL toDateTime(timestamp) + INTERVAL 90 DAY DELETE           -- retention (archive to WORM first for compliance)
 SETTINGS index_granularity = 8192;
--- NOTE: TTL ... TO VOLUME 's3' requires a storage_policy with an s3 disk; drop
--- that clause for a single-disk dev setup.
+-- PRODUCTION TIERING: with a storage_policy that has an s3 disk, replace the
+-- TTL above with hot->cold tiering + long retention, e.g.
+--   TTL toDateTime(timestamp) + INTERVAL 90 DAY TO VOLUME 's3',
+--       toDateTime(timestamp) + INTERVAL 6 YEAR DELETE
+-- (the plain DELETE default keeps this schema runnable on single-disk setups).
 
 -- Deduped view (collapse at-least-once retries at query time).
 CREATE VIEW IF NOT EXISTS reaper_audit.decisions_deduped AS

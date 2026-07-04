@@ -52,6 +52,10 @@ spec:
             {{- if .Values.management.decisionLogs.existingSecret }}
             - secretRef:
                 name: {{ .Values.management.decisionLogs.existingSecret }}
+            {{- else if .Values.decisionLogs.enabled }}
+            # ClickHouse creds from the chart's decision-log pipeline
+            - secretRef:
+                name: {{ include "reaper.decisionlogs.credsSecret" . }}
             {{- end }}
           volumeMounts:
             - name: storage

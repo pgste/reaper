@@ -30,6 +30,8 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/orgs/{org}/decisions", get(list_decisions))
         .route("/orgs/{org}/decisions/stats", get(decision_stats))
+        .route("/orgs/{org}/decisions/timeseries", get(decision_timeseries))
+        .route("/orgs/{org}/decisions/facets", get(decision_facets))
         .route("/orgs/{org}/decisions/{decision_id}", get(get_decision))
 }
 
@@ -37,6 +39,14 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct StatsParams {
     pub from: Option<String>,
     pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TimeseriesParams {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    /// Bucket size: "30s", "5m", "1h" (default), "1d", or raw seconds.
+    pub interval: Option<String>,
 }
 
 /// Authorize the caller for decision reads on `org` and return the tenant id
@@ -114,6 +124,48 @@ async fn decision_stats(
         .await
         .map_err(map_store_error)?;
     Ok(Json(serde_json::to_value(stats).unwrap_or_default()))
+}
+
+/// GET /api/v1/orgs/{org}/decisions/timeseries — bucketed counts for charts.
+async fn decision_timeseries(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(org): Path<String>,
+    Query(params): Query<TimeseriesParams>,
+) -> ApiResult<Json<Value>> {
+    let tenant = authorize(&state, &user, &org).await?;
+    let store = store_or_unavailable(&state)?;
+    let bucket_secs = crate::decisions::parse_interval_secs(params.interval.as_deref());
+    let points = store
+        .timeseries(
+            &tenant,
+            params.from.as_deref(),
+            params.to.as_deref(),
+            bucket_secs,
+        )
+        .await
+        .map_err(map_store_error)?;
+    Ok(Json(json!({
+        "interval_secs": bucket_secs,
+        "points": points,
+    })))
+}
+
+/// GET /api/v1/orgs/{org}/decisions/facets — distinct filter values with
+/// counts (actions, decisions, policy names, agent ids) for UI dropdowns.
+async fn decision_facets(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(org): Path<String>,
+    Query(params): Query<StatsParams>,
+) -> ApiResult<Json<Value>> {
+    let tenant = authorize(&state, &user, &org).await?;
+    let store = store_or_unavailable(&state)?;
+    let facets = store
+        .facets(&tenant, params.from.as_deref(), params.to.as_deref())
+        .await
+        .map_err(map_store_error)?;
+    Ok(Json(json!({ "facets": facets })))
 }
 
 /// GET /api/v1/orgs/{org}/decisions/{decision_id} — explain view for one

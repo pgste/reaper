@@ -70,12 +70,24 @@ spec:
             - name: REAPER_UDS_PERMISSIONS
               value: {{ .Values.agent.uds.permissions | quote }}
             {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            {{- include "reaper.decisionlogs.agentEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if and .Values.decisionLogs.enabled .Values.decisionLogs.protectionExistingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.decisionLogs.protectionExistingSecret }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data
             {{- if .Values.agent.uds.enabled }}
             - name: uds
               mountPath: {{ .Values.agent.uds.socketDir }}
+            {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            - name: decision-logs
+              mountPath: /var/log/reaper
             {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
@@ -97,6 +109,9 @@ spec:
             failureThreshold: 3
           securityContext:
             {{- toYaml .Values.agent.securityContext | nindent 12 }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.vectorSidecar" . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: data
           emptyDir: {}
@@ -104,6 +119,9 @@ spec:
         # Pod-local socket dir shared with a co-located UDS client sidecar.
         - name: uds
           emptyDir: {}
+        {{- end }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.volumes" . | nindent 8 }}
         {{- end }}
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
@@ -205,12 +223,24 @@ spec:
             - name: REAPER_UDS_PERMISSIONS
               value: {{ .Values.agent.uds.permissions | quote }}
             {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            {{- include "reaper.decisionlogs.agentEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if and .Values.decisionLogs.enabled .Values.decisionLogs.protectionExistingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.decisionLogs.protectionExistingSecret }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data
             {{- if .Values.agent.uds.enabled }}
             - name: uds
               mountPath: {{ .Values.agent.uds.socketDir }}
+            {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            - name: decision-logs
+              mountPath: /var/log/reaper
             {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
@@ -232,6 +262,9 @@ spec:
             failureThreshold: 3
           securityContext:
             {{- toYaml .Values.agent.securityContext | nindent 12 }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.vectorSidecar" . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: data
           emptyDir: {}
@@ -239,6 +272,9 @@ spec:
         # Pod-local socket dir shared with a co-located UDS client sidecar.
         - name: uds
           emptyDir: {}
+        {{- end }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.volumes" . | nindent 8 }}
         {{- end }}
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:

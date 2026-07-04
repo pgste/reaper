@@ -8,7 +8,8 @@
 #
 #   helm install reaper ./deploy/helm/reaper -f profiles/managed-stack.yaml \
 #       --set management.secrets.jwtSecret=$(openssl rand -hex 32) \
-#       --set postgresql.auth.password=$(openssl rand -hex 24)
+#       --set postgresql.auth.password=$(openssl rand -hex 24) \
+#       --set decisionLogs.clickhouse.password=$(openssl rand -hex 24)
 #
 # REQUIRED before production:
 #   - management.secrets.jwtSecret  (or management.secrets.existingSecret)
@@ -57,3 +58,20 @@ agent:
 metrics:
   serviceMonitor:
     enabled: true
+
+# --- Central decision-log pipeline (audit) ----------------------------------
+# Agents write decision NDJSON to a pod-shared file; a Vector sidecar ships it
+# (disk WAL + end-to-end acks) into the bundled ClickHouse; the management
+# query API (GET /api/v1/orgs/{org}/decisions...) is auto-wired to that store.
+# REQUIRED: --set decisionLogs.clickhouse.password=$(openssl rand -hex 24)
+# Multi-tenant note: set decisionLogs.tenantId to the org UUID these agents
+# serve (the query API scopes by org id).
+decisionLogs:
+  enabled: true
+  sampleAllowRate: "1.0"   # lower (e.g. "0.05") on high-volume fleets
+  clickhouse:
+    enabled: true
+    retentionDays: 90
+    persistence:
+      enabled: true
+      size: 50Gi

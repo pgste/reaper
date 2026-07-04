@@ -1,0 +1,40 @@
+# Vector: tail the agent's decision NDJSON file -> ClickHouse.
+# Used by the main docker-compose "audit" profile (agent and Vector share the
+# decision-logs volume). Reference variant with stdin source: vector.toml.
+
+data_dir = "/var/lib/vector"
+
+[sources.decisions]
+type = "file"
+include = ["/var/log/reaper/decisions.ndjson"]
+read_from = "beginning"
+
+[transforms.parse]
+type = "remap"
+inputs = ["decisions"]
+source = '''
+. = parse_json!(string!(.message))
+.timestamp = to_timestamp!(.timestamp)
+.decision_id = string!(.decision_id)
+.tenant_id = "${REAPER_TENANT_ID:-}"
+if is_object(.context)    { .context = encode_json(.context) }
+if is_object(.input_data) { .input_data = encode_json(.input_data) }
+'''
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["parse"]
+endpoint = "${CLICKHOUSE_URL:-http://clickhouse:8123}"
+database = "reaper_audit"
+table = "decisions"
+skip_unknown_fields = true
+batch.max_bytes = 10000000
+batch.timeout_secs = 1
+
+[sinks.clickhouse.buffer]
+type = "disk"
+max_size = 1073741824
+when_full = "block"
+
+[sinks.clickhouse.acknowledgements]
+enabled = true
