@@ -100,6 +100,7 @@ pub use decision_log::{DecisionLogConfig, DecisionLogEntry};
 pub use decision_privacy::{
     decrypt_input_data, generate_encryption_key_hex, pseudonymize, DataProtection,
 };
+pub use reap::{CheckResult, Violation};
 
 // Re-export cache configuration for environment-based cache setup
 pub use cache_config::{CacheConfig, CacheConfigBuilder};

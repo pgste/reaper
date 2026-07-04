@@ -68,13 +68,30 @@ impl ReapAstEvaluator {
 
     /// Evaluate a policy request
     pub fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyAction, ReaperError> {
+        self.evaluate_with_input(request, None)
+    }
+
+    /// Evaluate a policy request with an optional structured `input` document
+    /// (arbitrary nested JSON — Terraform plans, K8s admission requests, any
+    /// document the policy inspects via the `input` entity).
+    ///
+    /// `principal` is optional here: pure document policies have no subject.
+    /// Rules that touch `user.*` against an absent principal simply fail to
+    /// match (entity not found), they don't abort the evaluation.
+    pub fn evaluate_with_input(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<PolicyAction, ReaperError> {
         // Get user and resource IDs from the DataStore
         let interner = self.store.interner();
-        let user_id = interner.intern(request.context.get("principal").ok_or_else(|| {
-            ReaperError::InvalidPolicy {
-                reason: "Request must have 'principal' in context".to_string(),
-            }
-        })?);
+        let user_id = interner.intern(
+            request
+                .context
+                .get("principal")
+                .map(String::as_str)
+                .unwrap_or(""),
+        );
         let resource_id = interner.intern(&request.resource);
 
         // Create evaluation context
@@ -82,11 +99,18 @@ impl ReapAstEvaluator {
         // Add action to context if not already present
         request_context.insert("action".to_string(), request.action.clone());
 
+        // Convert the input document once per evaluation (rules then navigate
+        // the tree with zero re-parsing).
+        let input_value = input
+            .map(super::ast_evaluator::builtin_functions::json::json_to_eval_value)
+            .transpose()?;
+
         let mut context = EvalContext {
             variables: HashMap::new(),
             user_id,
             resource_id,
             request_context,
+            input: input_value,
         };
 
         // Security-first evaluation: Deny rules ALWAYS take precedence over Allow rules
@@ -113,6 +137,92 @@ impl ReapAstEvaluator {
 
         // Phase 3: No rule matched - return default decision
         Ok(self.policy.default_decision.clone().into())
+    }
+
+    /// Check-mode evaluation (the conftest/gatekeeper driver): evaluate EVERY
+    /// deny rule against the request + `input` document and collect all
+    /// matching rules as violations, with their `with message` text rendered
+    /// using the variables the rule bound. Decision-mode `evaluate()` is
+    /// untouched (first-match, sub-microsecond path).
+    ///
+    /// `allowed` is true when no deny rule matched AND the policy would allow
+    /// (an allow rule matches or the default is allow).
+    pub fn check_with_input(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<CheckResult, ReaperError> {
+        let interner = self.store.interner();
+        let user_id = interner.intern(
+            request
+                .context
+                .get("principal")
+                .map(String::as_str)
+                .unwrap_or(""),
+        );
+        let resource_id = interner.intern(&request.resource);
+
+        let mut request_context = request.context.clone();
+        request_context.insert("action".to_string(), request.action.clone());
+
+        let input_value = input
+            .map(super::ast_evaluator::builtin_functions::json::json_to_eval_value)
+            .transpose()?;
+
+        let base = EvalContext {
+            variables: HashMap::new(),
+            user_id,
+            resource_id,
+            request_context,
+            input: input_value,
+        };
+
+        let mut violations = Vec::new();
+        for rule in &self.policy.rules {
+            if !matches!(rule.decision, super::ast::Decision::Deny) {
+                continue;
+            }
+            // Scoped context per rule: variables bound by one rule's condition
+            // must not leak into the next, and stay available for its message.
+            let mut ctx = base.clone();
+            if self.evaluate_condition(&rule.condition, &mut ctx)? {
+                let message = match &rule.message {
+                    Some(expr) => Some(eval_value_to_message(&self.evaluate_expr(expr, &ctx)?)),
+                    None => None,
+                };
+                violations.push(Violation {
+                    rule: rule.name.clone(),
+                    message,
+                });
+            }
+        }
+
+        let allowed = if violations.is_empty() {
+            match self.policy.default_decision {
+                super::ast::Decision::Allow => true,
+                super::ast::Decision::Deny => {
+                    // default-deny policy: allowed only if an allow rule matches
+                    let mut ctx = base.clone();
+                    let mut any = false;
+                    for rule in &self.policy.rules {
+                        if matches!(rule.decision, super::ast::Decision::Allow)
+                            && self.evaluate_condition(&rule.condition, &mut ctx)?
+                        {
+                            any = true;
+                            break;
+                        }
+                    }
+                    any
+                }
+            }
+        } else {
+            false
+        };
+
+        Ok(CheckResult {
+            allowed,
+            violations,
+        })
     }
 
     /// Evaluate a condition
@@ -748,5 +858,40 @@ mod tests {
 
         let decision = evaluator.evaluate(&request).unwrap();
         assert!(matches!(decision, PolicyAction::Allow));
+    }
+}
+
+/// One matched deny rule in check mode.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Violation {
+    /// Rule name that matched.
+    pub rule: String,
+    /// Rendered `with message` text (None when the rule has no message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Result of check-mode evaluation: every matching deny rule, not just the first.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CheckResult {
+    pub allowed: bool,
+    pub violations: Vec<Violation>,
+}
+
+/// Render an evaluated message expression as human-readable text.
+fn eval_value_to_message(value: &types::EvalValue) -> String {
+    use types::EvalValue as V;
+    match value {
+        V::String(s) => s.clone(),
+        V::Integer(i) => i.to_string(),
+        V::Float(f) => f.to_string(),
+        V::Boolean(b) => b.to_string(),
+        V::Null => String::new(),
+        V::Array(items) | V::Set(items) => items
+            .iter()
+            .map(eval_value_to_message)
+            .collect::<Vec<_>>()
+            .join(""),
+        V::Object(_) => format!("{value:?}"),
     }
 }

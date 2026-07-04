@@ -242,3 +242,38 @@ fn eval_value_to_serde(eval: &EvalValue) -> Result<serde_json::Value, ReaperErro
         }
     }
 }
+
+/// Convert a `serde_json::Value` tree into an `EvalValue` tree (all targets).
+///
+/// Used to bind the per-request `input` document once, before rule
+/// evaluation — rules then navigate the converted tree with no re-parsing.
+pub(in crate::reap::ast_evaluator) fn json_to_eval_value(
+    json: &serde_json::Value,
+) -> Result<EvalValue, ReaperError> {
+    Ok(match json {
+        serde_json::Value::Null => EvalValue::Null,
+        serde_json::Value::Bool(b) => EvalValue::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                EvalValue::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                EvalValue::Float(f)
+            } else {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("unrepresentable JSON number: {n}"),
+                });
+            }
+        }
+        serde_json::Value::String(s) => EvalValue::String(s.clone()),
+        serde_json::Value::Array(arr) => EvalValue::Array(
+            arr.iter()
+                .map(json_to_eval_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        serde_json::Value::Object(obj) => EvalValue::Object(
+            obj.iter()
+                .map(|(k, v)| Ok((k.clone(), json_to_eval_value(v)?)))
+                .collect::<Result<HashMap<_, _>, ReaperError>>()?,
+        ),
+    })
+}

@@ -263,6 +263,7 @@ async fn test_bundle_deployment_with_version_tracking() {
         metadata,
         default_decision: Decision::Deny,
         rules: vec![ReapRule {
+            message: None,
             name: "allow-admins".to_string(),
             decision: Decision::Allow,
             condition: ReapCondition::True,
@@ -490,6 +491,7 @@ async fn test_atomic_package_stage_and_commit() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Deny,
         rules: vec![ReapRule {
+            message: None,
             name: "allow-admin".to_string(),
             decision: Decision::Allow,
             condition: ReapCondition::True,

@@ -48,23 +48,25 @@ pub(super) fn parse_entity_attr(
 pub(super) fn parse_var_attr(pair: pest::iterators::Pair<Rule>) -> Result<VarAttr, ReaperError> {
     let mut inner = pair.into_inner();
     let variable = inner.next().unwrap().as_str().to_string();
-    let attribute = inner.next().unwrap().as_str().to_string();
 
-    // Check for optional bracket index
-    let index = if let Some(bracket_pair) = inner.next() {
-        if bracket_pair.as_rule() == Rule::bracket_index {
-            let index_value_pair = bracket_pair.into_inner().next().unwrap();
-            Some(parse_bracket_index(index_value_pair)?)
-        } else {
-            None
+    // Collect EVERY dotted attribute segment (v.a.b.c -> "a.b.c"); evaluation
+    // navigates the nested value. A trailing bracket index may follow.
+    let mut attributes: Vec<String> = Vec::new();
+    let mut index = None;
+    for item in inner {
+        match item.as_rule() {
+            Rule::ident => attributes.push(item.as_str().to_string()),
+            Rule::bracket_index => {
+                let index_value_pair = item.into_inner().next().unwrap();
+                index = Some(parse_bracket_index(index_value_pair)?);
+            }
+            _ => {}
         }
-    } else {
-        None
-    };
+    }
 
     Ok(VarAttr {
         variable,
-        attribute,
+        attribute: attributes.join("."),
         index,
     })
 }

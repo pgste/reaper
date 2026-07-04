@@ -118,6 +118,11 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                         Entity::User => DslEntityType::User,
                         Entity::Resource => DslEntityType::Resource,
                         Entity::Context => DslEntityType::Context,
+                        Entity::Input => {
+                            return Err(ReaperError::InvalidPolicy {
+                                reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),
+                            })
+                        },
                     };
                     let index = attr.index.map(|i| match i {
                         Index::Number(n) => crate::evaluators::reaper_dsl::IndexExpr::Number(n),
@@ -451,6 +456,7 @@ mod tests {
             metadata: HashMap::new(),
             default_decision: Decision::Deny,
             rules: vec![Rule {
+                message: None,
                 name: "admin".to_string(),
                 decision: Decision::Allow,
                 condition: Condition::Comparison {

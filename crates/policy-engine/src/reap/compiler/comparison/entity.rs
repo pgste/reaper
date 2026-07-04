@@ -13,11 +13,15 @@ use crate::reap::ast::{Entity, EntityAttr, Index, Operator, Value};
 use reaper_core::ReaperError;
 
 /// Convert AST Entity to DSL EntityType
-fn entity_to_type(entity: &Entity) -> EntityType {
+fn entity_to_type(entity: &Entity) -> Result<EntityType, ReaperError> {
     match entity {
-        Entity::User => EntityType::User,
-        Entity::Resource => EntityType::Resource,
-        Entity::Context => EntityType::Context,
+        Entity::User => Ok(EntityType::User),
+        Entity::Resource => Ok(EntityType::Resource),
+        Entity::Context => Ok(EntityType::Context),
+        Entity::Input => Err(ReaperError::InvalidPolicy {
+            reason: "`input` document access is not compiled yet; policy runs on the AST evaluator"
+                .to_string(),
+        }),
     }
 }
 
@@ -42,7 +46,7 @@ pub fn compile_value_comparison(
     op: Operator,
     value: Value,
 ) -> Result<DslCondition, ReaperError> {
-    let entity_type = entity_to_type(&left.entity);
+    let entity_type = entity_to_type(&left.entity)?;
 
     // Handle null comparisons
     if matches!(value, Value::Null) {
@@ -142,8 +146,8 @@ pub fn compile_attr_comparison(
     op: Operator,
     right: EntityAttr,
 ) -> Result<DslCondition, ReaperError> {
-    let left_type = entity_to_type(&left.entity);
-    let right_type = entity_to_type(&right.entity);
+    let left_type = entity_to_type(&left.entity)?;
+    let right_type = entity_to_type(&right.entity)?;
     let left_has_wildcard = matches!(left.index, Some(Index::Wildcard));
     let right_has_wildcard = matches!(right.index, Some(Index::Wildcard));
 
@@ -277,16 +281,16 @@ fn compile_wildcard_comparison(
     // Determine which side has the collection (wildcard) and which has the scalar
     let (collection_entity, collection_attr, scalar_entity, scalar_attr) = if left_has_wildcard {
         (
-            entity_to_type(&left.entity),
+            entity_to_type(&left.entity)?,
             left.attribute,
-            entity_to_type(&right.entity),
+            entity_to_type(&right.entity)?,
             right.attribute,
         )
     } else {
         (
-            entity_to_type(&right.entity),
+            entity_to_type(&right.entity)?,
             right.attribute,
-            entity_to_type(&left.entity),
+            entity_to_type(&left.entity)?,
             left.attribute,
         )
     };

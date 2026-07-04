@@ -112,10 +112,20 @@ fn parse_rule(pair: pest::iterators::Pair<Rule>) -> Result<crate::reap::ast::Rul
     let name = inner.next().unwrap().as_str().to_string();
     let decision_pair = inner.next().unwrap();
     let decision = Decision::from(decision_pair.as_str());
-    let condition_pair = inner.next().unwrap();
-    let condition = parse_condition(condition_pair)?;
+
+    let mut next = inner.next().unwrap();
+    let message = if next.as_rule() == Rule::message_clause {
+        let expr_pair = next.into_inner().next().unwrap();
+        let expr = super::parser::expression::parse_comp_expr(expr_pair)?;
+        next = inner.next().unwrap();
+        Some(expr)
+    } else {
+        None
+    };
+    let condition = parse_condition(next)?;
 
     Ok(crate::reap::ast::Rule {
+        message,
         name,
         decision,
         condition,

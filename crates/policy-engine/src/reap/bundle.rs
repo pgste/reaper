@@ -776,6 +776,7 @@ mod tests {
             metadata: HashMap::new(),
             default_decision: Decision::Deny,
             rules: vec![Rule {
+                message: None,
                 name: "admin".to_string(),
                 decision: Decision::Allow,
                 condition: Condition::True,

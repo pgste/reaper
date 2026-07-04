@@ -19,6 +19,9 @@ pub(super) struct EvalContext {
     pub(super) resource_id: EntityId,
     /// Request context (includes action and other attributes)
     pub(super) request_context: HashMap<String, String>,
+    /// Structured request document (`input`): arbitrary nested JSON converted
+    /// once per evaluation. None when the request carries no document.
+    pub(super) input: Option<EvalValue>,
 }
 
 /// Runtime value during evaluation

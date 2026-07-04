@@ -13,7 +13,7 @@ pub use ast::{
     AssignmentValue, ComparisonLeft, ComparisonRight, Condition as ReapCondition, Decision, Entity,
     EntityAttr, Expr, Index, Operator, Policy, Rule as ReapRule, Value as ReapValue, VarAttr,
 };
-pub use ast_evaluator::ReapAstEvaluator;
+pub use ast_evaluator::{CheckResult, ReapAstEvaluator, Violation};
 pub use bundle::{
     stable_policy_id, BundleFormat, PackageMetadata, PolicyBundle, PolicyEntry, PolicyPackage,
     PrecompilationHints,
