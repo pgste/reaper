@@ -49,6 +49,11 @@ pub enum StringOp {
     LowerEquals,
     /// string.upper() == value
     UpperEquals,
+    /// string.lower() != value — native so a missing attribute FAILS the
+    /// guard (Not(LowerEquals) would let absent attributes pass, fail-open).
+    LowerNotEquals,
+    /// string.upper() != value — native negation, same fail-closed contract.
+    UpperNotEquals,
 }
 
 /// Collection count operators

@@ -61,6 +61,8 @@ pub fn eval_string_operation(
                     StringOp::EndsWith => resolved.ends_with(&op.value),
                     StringOp::LowerEquals => resolved.to_lowercase() == op.value,
                     StringOp::UpperEquals => resolved.to_uppercase() == op.value,
+                    StringOp::LowerNotEquals => resolved.to_lowercase() != op.value,
+                    StringOp::UpperNotEquals => resolved.to_uppercase() != op.value,
                 })
                 .unwrap_or(false)
         }
@@ -86,6 +88,8 @@ pub fn eval_variable_string_operation(
                     StringOp::EndsWith => resolved.ends_with(&op.value),
                     StringOp::LowerEquals => resolved.to_lowercase() == op.value,
                     StringOp::UpperEquals => resolved.to_uppercase() == op.value,
+                    StringOp::LowerNotEquals => resolved.to_lowercase() != op.value,
+                    StringOp::UpperNotEquals => resolved.to_uppercase() != op.value,
                 };
             }
         }
@@ -567,6 +571,54 @@ mod tests {
             &EntityType::User,
             name_key,
             "Alice Smith",
+            &user,
+            &resource,
+            &interner
+        ));
+    }
+
+    #[test]
+    fn lower_not_equals_fails_closed_on_missing_attribute() {
+        let interner = create_test_interner();
+        let user = create_test_user(&interner);
+        let resource = create_test_resource(&interner);
+
+        let missing = interner.intern("nonexistent");
+        let name_key = interner.intern("name");
+
+        // Missing attribute: `.lower() != "x"` must FAIL (absence never
+        // satisfies an inequality guard), and `.lower() == "x"` fails too.
+        let op_ne = CompiledStringOperation {
+            entity_type: EntityType::User,
+            attribute: missing,
+            op: StringOp::LowerNotEquals,
+            value: "admin".to_string(),
+        };
+        assert!(!eval_string_operation(&op_ne, &user, &resource, &interner));
+
+        // Present and different after lowercasing → true.
+        let op_ne_present = CompiledStringOperation {
+            entity_type: EntityType::User,
+            attribute: name_key,
+            op: StringOp::LowerNotEquals,
+            value: "bob".to_string(),
+        };
+        assert!(eval_string_operation(
+            &op_ne_present,
+            &user,
+            &resource,
+            &interner
+        ));
+
+        // Present and equal after lowercasing ("Alice Smith") → false.
+        let op_ne_equal = CompiledStringOperation {
+            entity_type: EntityType::User,
+            attribute: name_key,
+            op: StringOp::LowerNotEquals,
+            value: "alice smith".to_string(),
+        };
+        assert!(!eval_string_operation(
+            &op_ne_equal,
             &user,
             &resource,
             &interner

@@ -25,4 +25,12 @@ policy rbac_simple {
     rule user_own_resources {
         allow if user.id == resource.owner_id
     }
+
+    // Viewers get read-only access
+    rule viewer_read {
+        allow if {
+            user.role == "viewer" &&
+            context.action == "read"
+        }
+    }
 }

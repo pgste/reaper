@@ -96,6 +96,15 @@ pub fn run_comparison_reaper_only(
         loader
             .load_json(&content)
             .map_err(|e| format!("Failed to load data: {:?}", e))?;
+    } else if !suite.data_file.is_empty() {
+        // A declared-but-missing data file must FAIL the suite, not silently
+        // evaluate every case against an empty store (which turns "entity
+        // not found" errors into bogus test outcomes).
+        return Err(format!(
+            "suite declares data_file {:?} but it does not exist",
+            data_path.display()
+        )
+        .into());
     }
 
     let store_arc = Arc::new(store);

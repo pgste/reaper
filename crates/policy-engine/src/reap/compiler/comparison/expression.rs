@@ -125,14 +125,15 @@ pub fn compile_expr_comparison(
                     op: StringOp::LowerEquals,
                     value,
                 })),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringOp(
-                    StringOperationCondition {
-                        entity_type,
-                        attribute,
-                        op: StringOp::LowerEquals,
-                        value,
-                    },
-                )))),
+                // NotEqual compiles NATIVELY, never as Not(Equal): a missing
+                // attribute must fail the guard (fail closed), and Not() would
+                // invert that miss into a pass.
+                Operator::NotEqual => Ok(DslCondition::StringOp(StringOperationCondition {
+                    entity_type,
+                    attribute,
+                    op: StringOp::LowerNotEquals,
+                    value,
+                })),
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!(
                         "Operator {:?} not supported for .lower() comparisons. Use == or !=",
@@ -161,14 +162,13 @@ pub fn compile_expr_comparison(
                     op: StringOp::UpperEquals,
                     value,
                 })),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringOp(
-                    StringOperationCondition {
-                        entity_type,
-                        attribute,
-                        op: StringOp::UpperEquals,
-                        value,
-                    },
-                )))),
+                // Native NotEqual — see the .lower() arm for why.
+                Operator::NotEqual => Ok(DslCondition::StringOp(StringOperationCondition {
+                    entity_type,
+                    attribute,
+                    op: StringOp::UpperNotEquals,
+                    value,
+                })),
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!(
                         "Operator {:?} not supported for .upper() comparisons. Use == or !=",
@@ -240,12 +240,11 @@ pub fn compile_expr_comparison(
                 variable: var_name,
                 value,
             }),
-            Operator::NotEqual => Ok(DslCondition::Not(Box::new(
-                DslCondition::VariableEqualsLiteral {
-                    variable: var_name,
-                    value,
-                },
-            ))),
+            // Native NotEqual: an unbound variable must fail the guard.
+            Operator::NotEqual => Ok(DslCondition::VariableNotEqualsLiteral {
+                variable: var_name,
+                value,
+            }),
             Operator::GreaterEqual => Ok(DslCondition::VariableCompare {
                 variable: var_name,
                 op: AttrCompareOp::GreaterEqual,

@@ -205,6 +205,12 @@ pub enum Condition {
         variable: String,
         value: LiteralValue,
     },
+    /// `var != literal` compiled NATIVELY (never as Not(VariableEqualsLiteral)):
+    /// an unbound variable must FAIL the guard, not satisfy it (fail closed).
+    VariableNotEqualsLiteral {
+        variable: String,
+        value: LiteralValue,
+    },
     VariableCompare {
         variable: String,
         op: AttrCompareOp,
@@ -280,6 +286,13 @@ pub enum Condition {
 
     // ============ Variable Attribute Comparisons ============
     VariableAttrEqualsLiteral {
+        variable: String,
+        attribute: String,
+        value: LiteralValue,
+    },
+    /// `var.attr != literal` compiled NATIVELY: a missing attribute must FAIL
+    /// the guard (fail closed), which Not(VariableAttrEqualsLiteral) gets wrong.
+    VariableAttrNotEqualsLiteral {
         variable: String,
         attribute: String,
         value: LiteralValue,

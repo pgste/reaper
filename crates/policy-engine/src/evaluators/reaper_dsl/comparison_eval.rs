@@ -152,20 +152,32 @@ pub fn eval_wildcard_comparison(
         interner,
     );
 
-    match (collection, scalar_val) {
-        (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => items
-            .iter()
-            .any(|item| matches!(item, AttributeValue::String(s) if *s == expected)),
+    // NULL SEMANTICS: `matched` is None when either side is missing or not a
+    // comparable collection/scalar pair. In that case BOTH `==` and `!=` fail
+    // — absence must never satisfy a guard (fail closed). Negation applies
+    // only to a comparison that actually took place.
+    let matched = match (collection, scalar_val) {
+        (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => Some(
+            items
+                .iter()
+                .any(|item| matches!(item, AttributeValue::String(s) if *s == expected)),
+        ),
         (Some(AttributeValue::Set(items)), Some(AttributeValue::String(expected))) => {
-            items.contains(&AttributeValue::String(expected))
+            Some(items.contains(&AttributeValue::String(expected)))
         }
-        (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => items
-            .iter()
-            .any(|item| matches!(item, AttributeValue::Int(i) if *i == expected)),
+        (Some(AttributeValue::List(items)), Some(AttributeValue::Int(expected))) => Some(
+            items
+                .iter()
+                .any(|item| matches!(item, AttributeValue::Int(i) if *i == expected)),
+        ),
         (Some(AttributeValue::Set(items)), Some(AttributeValue::Int(expected))) => {
-            items.contains(&AttributeValue::Int(expected))
+            Some(items.contains(&AttributeValue::Int(expected)))
         }
-        _ => false,
+        _ => None,
+    };
+    match matched {
+        Some(m) => m != comp.negated,
+        None => false,
     }
 }
 
@@ -602,6 +614,65 @@ mod tests {
         );
 
         Entity::new(resource_id, resource_type, attrs)
+    }
+
+    #[test]
+    fn wildcard_not_equal_fails_closed_on_missing_attributes() {
+        let interner = create_test_interner();
+        let user = create_test_user(&interner); // roles = [admin, viewer]
+        let resource = create_test_resource(&interner); // owner = "alice"
+
+        let wildcard =
+            |collection_attr: &str, scalar_attr: &str, negated: bool| CompiledWildcardComparison {
+                collection_entity: EntityType::User,
+                collection_attr: interner.intern(collection_attr),
+                scalar_entity: EntityType::Resource,
+                scalar_attr: interner.intern(scalar_attr),
+                negated,
+            };
+
+        // Missing collection attribute: both == and != must FAIL.
+        assert!(!eval_wildcard_comparison(
+            &wildcard("nonexistent", "owner", false),
+            &user,
+            &resource,
+            &interner
+        ));
+        assert!(!eval_wildcard_comparison(
+            &wildcard("nonexistent", "owner", true),
+            &user,
+            &resource,
+            &interner
+        ));
+
+        // Missing scalar attribute: both == and != must FAIL.
+        assert!(!eval_wildcard_comparison(
+            &wildcard("roles", "nonexistent", true),
+            &user,
+            &resource,
+            &interner
+        ));
+
+        // Present, no element matches ("alice" not in roles): != is true.
+        assert!(eval_wildcard_comparison(
+            &wildcard("roles", "owner", true),
+            &user,
+            &resource,
+            &interner
+        ));
+        // Present and matching (readers contains "admin"? use owner=="alice"
+        // against a collection containing it): == false here, so != true was
+        // checked above; verify the complement on a matching pair.
+        let matching = CompiledWildcardComparison {
+            collection_entity: EntityType::Resource,
+            collection_attr: interner.intern("readers"), // ["admin"]
+            scalar_entity: EntityType::User,
+            scalar_attr: interner.intern("role"), // "admin"
+            negated: true,
+        };
+        assert!(!eval_wildcard_comparison(
+            &matching, &user, &resource, &interner
+        ));
     }
 
     #[test]

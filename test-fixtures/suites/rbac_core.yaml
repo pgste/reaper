@@ -7,8 +7,10 @@ description: "Core RBAC policy tests covering admin, manager, and user roles"
 policies:
   - path: "crates/policy-engine/examples/policies/rbac.reap"
 
+# Deterministic committed fixture (test-data/rbac-test-data.json is a
+# gitignored generated benchmark artifact, absent on fresh clones).
 data:
-  - path: "test-data/rbac-test-data.json"
+  - path: "test-fixtures/rbac-fixture.json"
 
 test_cases:
   # Admin scenarios

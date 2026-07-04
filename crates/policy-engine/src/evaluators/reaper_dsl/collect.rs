@@ -207,7 +207,8 @@ pub fn collect_strings_for_interning(
             collect_expr_type_strings(expr_type, cache, interner);
         }
         // Variable comparisons
-        Condition::VariableEqualsLiteral { variable, value } => {
+        Condition::VariableEqualsLiteral { variable, value }
+        | Condition::VariableNotEqualsLiteral { variable, value } => {
             intern(variable);
             if let LiteralValue::String(s) = value {
                 intern(s);
@@ -287,6 +288,11 @@ pub fn collect_strings_for_interning(
         }
         // Variable attribute comparisons (for comprehension filters)
         Condition::VariableAttrEqualsLiteral {
+            variable,
+            attribute,
+            value,
+        }
+        | Condition::VariableAttrNotEqualsLiteral {
             variable,
             attribute,
             value,

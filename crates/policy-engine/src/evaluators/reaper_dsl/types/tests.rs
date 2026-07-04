@@ -69,6 +69,7 @@ mod tests {
             collection_attr: "roles".to_string(),
             scalar_entity: EntityType::Resource,
             scalar_attr: "required_role".to_string(),
+            negated: false,
         };
         assert!(matches!(comp.collection_entity, EntityType::User));
     }
@@ -202,6 +203,7 @@ mod tests {
             collection_attr: "roles".to_string(),
             scalar_entity: EntityType::Resource,
             scalar_attr: "required_role".to_string(),
+            negated: false,
         };
 
         let compiled = comp.to_compiled(&interner);
@@ -414,6 +416,7 @@ mod tests {
             collection_attr: "roles".to_string(),
             scalar_entity: EntityType::Resource,
             scalar_attr: "required_role".to_string(),
+            negated: false,
         });
 
         if let Condition::WildcardCompare(comp) = cond {

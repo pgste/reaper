@@ -192,20 +192,18 @@ pub fn compile_var_attr_comparison(
             };
 
             match op {
-                Operator::Equal | Operator::NotEqual => {
-                    // For == and !=, use VariableAttrEqualsLiteral
-                    // NotEqual will be handled by wrapping in Not
-                    let cond = DslCondition::VariableAttrEqualsLiteral {
-                        variable: var_attr.variable,
-                        attribute: var_attr.attribute,
-                        value: literal_value,
-                    };
-                    if op == Operator::NotEqual {
-                        Ok(DslCondition::Not(Box::new(cond)))
-                    } else {
-                        Ok(cond)
-                    }
-                }
+                // NotEqual compiles NATIVELY (never Not(Equal)): a missing
+                // attribute must fail the guard, not satisfy it (fail closed).
+                Operator::Equal => Ok(DslCondition::VariableAttrEqualsLiteral {
+                    variable: var_attr.variable,
+                    attribute: var_attr.attribute,
+                    value: literal_value,
+                }),
+                Operator::NotEqual => Ok(DslCondition::VariableAttrNotEqualsLiteral {
+                    variable: var_attr.variable,
+                    attribute: var_attr.attribute,
+                    value: literal_value,
+                }),
                 Operator::GreaterEqual
                 | Operator::GreaterThan
                 | Operator::LessEqual
@@ -315,41 +313,22 @@ pub fn compile_var_attr_comparison_assignment(
                 }
             };
 
-            match op {
-                Operator::Equal | Operator::NotEqual => {
-                    let cond = DslCondition::VariableAttrEqualsLiteral {
-                        variable: var_attr.variable,
-                        attribute: var_attr.attribute,
-                        value: literal_value,
-                    };
-                    if op == Operator::NotEqual {
-                        Ok(DslCondition::Not(Box::new(cond)))
-                    } else {
-                        Ok(cond)
-                    }
-                }
-                Operator::GreaterEqual | Operator::GreaterThan | Operator::LessEqual | Operator::LessThan => {
-                    let attr_op = match op {
-                        Operator::GreaterEqual => AttrCompareOp::GreaterEqual,
-                        Operator::GreaterThan => AttrCompareOp::Greater,
-                        Operator::LessEqual => AttrCompareOp::LessEqual,
-                        Operator::LessThan => AttrCompareOp::Less,
-                        _ => unreachable!(),
-                    };
-                    Ok(DslCondition::VariableAttrCompare {
-                        variable: var_attr.variable,
-                        attribute: var_attr.attribute,
-                        op: attr_op,
-                        value: literal_value,
-                    })
-                }
-                _ => Err(ReaperError::InvalidPolicy {
-                    reason: format!(
-                        "Operator {:?} not supported for variable attribute comparison assignments.",
-                        op
-                    ),
-                }),
-            }
+            // AUDIT (differential correctness program): the previous
+            // compilation DROPPED `result_variable` and emitted a bare guard
+            // condition — `x := p.active == true` silently became
+            // `p.active == true`, gating the rule instead of binding x. That
+            // is a semantics divergence from the AST evaluator. Until a real
+            // ComparisonResultAssignment exists for var.attr sources, reject
+            // compilation so the engine falls back to the (correct) AST
+            // evaluator for these policies.
+            let _ = literal_value;
+            Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "comparison-result assignment `{} := {}.{} {:?} <literal>` is not \
+                     supported by the compiled evaluator yet (AST evaluator handles it)",
+                    result_variable, var_attr.variable, var_attr.attribute, op
+                ),
+            })
         }
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(

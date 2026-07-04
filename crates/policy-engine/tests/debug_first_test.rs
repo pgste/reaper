@@ -33,17 +33,21 @@ fn test_type_checking_bdd_scenario() {
     let loader = DataLoader::new(store.clone());
 
     // Load the same data as the BDD test
-    let data = std::fs::read_to_string(
-        "/Volumes/PGS-E/Code/reaper/test-data/type-checking-test-data.json",
-    )
+    let data = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/type-checking-test-data.json"
+    ))
     .expect("read data file");
     loader.load_json(&data).expect("load data");
 
     let store_arc = Arc::new(store);
 
     // Load the same policy
-    let policy = ReaperPolicy::from_file_auto("/Volumes/PGS-E/Code/reaper/crates/policy-engine/examples/policies/type_checking_policy.reap")
-        .expect("load policy");
+    let policy = ReaperPolicy::from_file_auto(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/policies/type_checking_policy.reap"
+    ))
+    .expect("load policy");
 
     eprintln!("Policy name: {}", policy.name());
 
@@ -531,17 +535,21 @@ fn test_bdd_object_validation() {
     let loader = DataLoader::new(store.clone());
 
     // Load the same data as the BDD test
-    let data = std::fs::read_to_string(
-        "/Volumes/PGS-E/Code/reaper/test-data/type-checking-test-data.json",
-    )
+    let data = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/type-checking-test-data.json"
+    ))
     .expect("read data file");
     loader.load_json(&data).expect("load data");
 
     let store_arc = Arc::new(store);
 
     // Load the same policy
-    let policy = ReaperPolicy::from_file_auto("/Volumes/PGS-E/Code/reaper/crates/policy-engine/examples/policies/type_checking_policy.reap")
-        .expect("load policy");
+    let policy = ReaperPolicy::from_file_auto(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/policies/type_checking_policy.reap"
+    ))
+    .expect("load policy");
 
     // Test AST first
     let ast_eval = policy.clone().build_ast_evaluator(store_arc.clone());

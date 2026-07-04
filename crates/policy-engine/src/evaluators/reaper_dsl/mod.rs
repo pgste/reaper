@@ -607,6 +607,12 @@ impl ReaperDSLEvaluator {
                 variable_eval::eval_variable_equals_literal(*variable, value, variables, interner)
             }
 
+            CompiledCondition::VariableNotEqualsLiteral { variable, value } => {
+                variable_eval::eval_variable_not_equals_literal(
+                    *variable, value, variables, interner,
+                )
+            }
+
             CompiledCondition::VariableCompare {
                 variable,
                 op,
@@ -804,6 +810,14 @@ impl ReaperDSLEvaluator {
                 attribute,
                 value,
             } => variable_eval::eval_variable_attr_equals_literal(
+                *variable, *attribute, value, variables, interner,
+            ),
+
+            CompiledCondition::VariableAttrNotEqualsLiteral {
+                variable,
+                attribute,
+                value,
+            } => variable_eval::eval_variable_attr_not_equals_literal(
                 *variable, *attribute, value, variables, interner,
             ),
 

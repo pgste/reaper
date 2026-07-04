@@ -64,6 +64,36 @@
           "attribute": "owner_id"
         }
       }
+    },
+    {
+      "name": "viewer_read",
+      "description": "Viewers can read any resource",
+      "decision": "allow",
+      "condition": {
+        "operator": "and",
+        "conditions": [
+          {
+            "operator": "equal",
+            "left": {
+              "entity": "user",
+              "attribute": "role"
+            },
+            "right": {
+              "value": "viewer"
+            }
+          },
+          {
+            "operator": "equal",
+            "left": {
+              "entity": "context",
+              "attribute": "action"
+            },
+            "right": {
+              "value": "read"
+            }
+          }
+        ]
+      }
     }
   ]
 }

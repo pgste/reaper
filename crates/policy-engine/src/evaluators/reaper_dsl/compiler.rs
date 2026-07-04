@@ -258,6 +258,12 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
                 value: compile_literal(value, interner),
             }
         }
+        Condition::VariableNotEqualsLiteral { variable, value } => {
+            CompiledCondition::VariableNotEqualsLiteral {
+                variable: interner.intern(variable),
+                value: compile_literal(value, interner),
+            }
+        }
         Condition::VariableCompare {
             variable,
             op,
@@ -367,6 +373,15 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
             attribute,
             value,
         } => CompiledCondition::VariableAttrEqualsLiteral {
+            variable: interner.intern(variable),
+            attribute: interner.intern(attribute),
+            value: compile_literal(value, interner),
+        },
+        Condition::VariableAttrNotEqualsLiteral {
+            variable,
+            attribute,
+            value,
+        } => CompiledCondition::VariableAttrNotEqualsLiteral {
             variable: interner.intern(variable),
             attribute: interner.intern(attribute),
             value: compile_literal(value, interner),
@@ -652,6 +667,7 @@ mod tests {
             collection_attr: "roles".to_string(),
             scalar_entity: EntityType::Resource,
             scalar_attr: "required_role".to_string(),
+            negated: false,
         });
 
         let compiled = compile_condition(&cond, &interner);

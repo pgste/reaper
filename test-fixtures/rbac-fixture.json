@@ -1,0 +1,104 @@
+{
+  "entities": [
+    {
+      "id": "user_0",
+      "type": "User",
+      "attributes": {
+        "id": "user_0",
+        "name": "Admin Zero",
+        "role": "admin",
+        "active": true
+      }
+    },
+    {
+      "id": "user_1",
+      "type": "User",
+      "attributes": {
+        "id": "user_1",
+        "name": "Manager One",
+        "role": "manager",
+        "active": true
+      }
+    },
+    {
+      "id": "user_50",
+      "type": "User",
+      "attributes": {
+        "id": "user_50",
+        "name": "User Fifty",
+        "role": "user",
+        "active": true
+      }
+    },
+    {
+      "id": "user_700",
+      "type": "User",
+      "attributes": {
+        "id": "user_700",
+        "name": "Viewer SevenHundred",
+        "role": "viewer",
+        "active": true
+      }
+    },
+    {
+      "id": "resource_50",
+      "type": "Resource",
+      "attributes": {
+        "id": "resource_50",
+        "type": "document",
+        "owner_id": "user_50",
+        "status": "active"
+      }
+    },
+    {
+      "id": "resource_51",
+      "type": "Resource",
+      "attributes": {
+        "id": "resource_51",
+        "type": "file",
+        "owner_id": "user_50",
+        "status": "active"
+      }
+    },
+    {
+      "id": "resource_100",
+      "type": "Resource",
+      "attributes": {
+        "id": "resource_100",
+        "type": "report",
+        "owner_id": "user_1",
+        "status": "active"
+      }
+    },
+    {
+      "id": "resource_200",
+      "type": "Resource",
+      "attributes": {
+        "id": "resource_200",
+        "type": "document",
+        "owner_id": "user_1",
+        "status": "active"
+      }
+    },
+    {
+      "id": "resource_500",
+      "type": "Resource",
+      "attributes": {
+        "id": "resource_500",
+        "type": "project",
+        "owner_id": "user_1",
+        "status": "active"
+      }
+    },
+    {
+      "id": "resource_900",
+      "type": "Resource",
+      "attributes": {
+        "id": "resource_900",
+        "type": "document",
+        "owner_id": "user_1",
+        "status": "active"
+      }
+    }
+  ]
+}

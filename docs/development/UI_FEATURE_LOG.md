@@ -84,11 +84,15 @@ Assessment: yes, and the architecture is already shaped for it.
   first step.
 - Decision: PARKED until requested; nothing in current work blocks it.
 
-## Correctness/parity program (queued next)
+## Correctness/parity program (SHIPPED — see docs/development/CORRECTNESS.md)
 
-The policy-library parity harness has now caught two real compiled-vs-AST
-miscompiles (context cross-entity compare; context null checks). Decision:
-invest in a systematic differential-testing layer (property-based random
-policy/data/request generation asserting compiled == AST, plus the library as
-a growing golden corpus). UI relevance: a future "policy linter" panel can
-reuse the same harness output.
+Six-layer verification: unit tests, golden corpus (policy-library),
+differential+oracle property suites for BOTH authorization (incl. ReBAC over
+random graphs) and check mode (Terraform/K8s input documents), YAML suite
+runners on committed fixtures, BDD. Null/undefined semantics are now a
+written contract (missing data never satisfies anything but `== null` /
+`!= null` — fail closed), enforced by an independent oracle in CI on every
+push (PROPTEST_CASES=500). The program has caught 6 real bug classes,
+including a fail-open `!=` present in BOTH evaluators. UI relevance: a
+future "policy linter" panel can reuse the harness output, and the
+CORRECTNESS.md table is renderable as a trust page.

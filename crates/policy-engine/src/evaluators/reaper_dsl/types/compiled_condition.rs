@@ -142,6 +142,11 @@ pub enum CompiledCondition {
         variable: InternedString,
         value: CompiledLiteralValue,
     },
+    /// Native `var != literal` — an unbound variable fails the guard.
+    VariableNotEqualsLiteral {
+        variable: InternedString,
+        value: CompiledLiteralValue,
+    },
     VariableCompare {
         variable: InternedString,
         op: AttrCompareOp,
@@ -217,6 +222,12 @@ pub enum CompiledCondition {
 
     // ============ Variable Attribute Comparisons ============
     VariableAttrEqualsLiteral {
+        variable: InternedString,
+        attribute: InternedString,
+        value: CompiledLiteralValue,
+    },
+    /// Native `var.attr != literal` — missing attribute fails the guard.
+    VariableAttrNotEqualsLiteral {
         variable: InternedString,
         attribute: InternedString,
         value: CompiledLiteralValue,

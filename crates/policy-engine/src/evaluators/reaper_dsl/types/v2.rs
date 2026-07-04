@@ -129,6 +129,9 @@ pub struct WildcardComparison {
     pub scalar_entity: EntityType,
     /// Scalar attribute
     pub scalar_attr: String,
+    /// Negated (`!=`) form. Kept as a flag (not Not(..)) so a MISSING
+    /// collection or scalar attribute fails the guard either way (fail closed).
+    pub negated: bool,
 }
 
 // ============================================================================
@@ -251,6 +254,8 @@ pub struct CompiledWildcardComparison {
     pub scalar_entity: EntityType,
     /// Scalar attribute (interned)
     pub scalar_attr: InternedString,
+    /// Negated (`!=`) form — see WildcardComparison::negated.
+    pub negated: bool,
 }
 
 /// Compiled regex match condition (V2)
@@ -365,6 +370,7 @@ impl WildcardComparison {
             collection_attr: interner.intern(&self.collection_attr),
             scalar_entity: self.scalar_entity.clone(),
             scalar_attr: interner.intern(&self.scalar_attr),
+            negated: self.negated,
         }
     }
 }

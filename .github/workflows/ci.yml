@@ -547,6 +547,21 @@ jobs:
           cargo test -p policy-engine --test comparison_runner 2>&1 | tee integration-reports/comparison-tests.txt
           echo "COMPARISON_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run Policy Library (golden corpus)
+        run: |
+          cargo test -p policy-engine --test policy_library_tests 2>&1 | tee integration-reports/policy-library.txt
+
+      # Differential correctness program: random policies/worlds/documents,
+      # compiled == AST == independent oracle, plus semantic laws
+      # (rule-order invariance, deny monotonicity). These are the gate that
+      # catches miscompiles and fail-open semantics regressions.
+      - name: Run Differential Correctness Suites (500 cases)
+        run: |
+          PROPTEST_CASES=500 cargo test -p policy-engine --release \
+            --test differential_parity_tests 2>&1 | tee integration-reports/differential-parity.txt
+          PROPTEST_CASES=500 cargo test -p policy-engine --release \
+            --test check_mode_differential_tests 2>&1 | tee integration-reports/differential-check-mode.txt
+
       - name: Generate Integration Test Summary
         if: always()
         run: |
