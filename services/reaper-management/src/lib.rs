@@ -19,6 +19,7 @@ pub mod billing;
 pub mod bundle;
 pub mod config;
 pub mod db;
+pub mod decisions;
 pub mod deployment;
 pub mod domain;
 pub mod graceful;

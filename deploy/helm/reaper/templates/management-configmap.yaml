@@ -13,4 +13,10 @@ data:
   REAPER_MANAGEMENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_STORAGE_TYPE: {{ .Values.management.config.storageType | quote }}
   REAPER_STORAGE_PATH: {{ .Values.management.config.storagePath | quote }}
+  {{- with .Values.management.decisionLogs }}
+  {{- if .clickhouseUrl }}
+  REAPER_CLICKHOUSE_URL: {{ .clickhouseUrl | quote }}
+  REAPER_CLICKHOUSE_DATABASE: {{ .clickhouseDatabase | default "reaper_audit" | quote }}
+  {{- end }}
+  {{- end }}
 {{- end }}

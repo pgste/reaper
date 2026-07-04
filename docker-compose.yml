@@ -74,6 +74,11 @@ services:
       - REAPER_JWT_SECRET=${JWT_SECRET:-development-jwt-secret-change-in-production}
       - REAPER_STORAGE_TYPE=filesystem
       - REAPER_STORAGE_PATH=/var/lib/reaper/storage
+      # Decision-log query API (enable after `docker compose -f deploy/decision-logs/docker-compose.yml up`)
+      - REAPER_CLICKHOUSE_URL=${REAPER_CLICKHOUSE_URL:-}
+      - REAPER_CLICKHOUSE_DATABASE=${REAPER_CLICKHOUSE_DATABASE:-reaper_audit}
+      - REAPER_CLICKHOUSE_USER=${REAPER_CLICKHOUSE_USER:-}
+      - REAPER_CLICKHOUSE_PASSWORD=${REAPER_CLICKHOUSE_PASSWORD:-}
     volumes:
       - management-storage:/var/lib/reaper/storage
     networks:

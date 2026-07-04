@@ -92,6 +92,30 @@ reaper-cli decisions decrypt --key <hex> '<input_data envelope or full entry JSO
 In ClickHouse, encrypted `input_data` is just an opaque JSON column — the
 control plane decrypts per tenant at query time.
 
+## Querying from the control plane
+
+`reaper-management` serves the full history (cross-agent, tenant-scoped)
+straight from ClickHouse once pointed at it:
+
+```bash
+REAPER_CLICKHOUSE_URL=http://clickhouse:8123 \
+REAPER_CLICKHOUSE_DATABASE=reaper_audit \
+REAPER_CLICKHOUSE_USER=reaper REAPER_CLICKHOUSE_PASSWORD=... \
+./reaper-management
+```
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/v1/orgs/{org}/decisions` | filtered history (`principal`, `action`, `resource`, `decision`, `policy_name`, `agent_id`, `from`, `to`, `limit`, `offset`) |
+| `GET /api/v1/orgs/{org}/decisions/stats` | totals, allow/deny counts, active agents, avg eval time, top denied policies |
+| `GET /api/v1/orgs/{org}/decisions/{decision_id}` | one decision incl. `input_data` (decrypt with the tenant key) |
+
+Queries are pinned to the caller's organization (the `tenant_id` Vector
+injects) and use ClickHouse server-side parameter binding — filters never
+touch the SQL text. Requires `agent:read` or `org:admin` scope. For
+single-tenant self-host stores (empty `tenant_id`) set
+`REAPER_CLICKHOUSE_TENANT_FILTER=false`.
+
 ## What's in each record
 
 Every decision logs: `timestamp`, `decision_id`, `trace_id`, `principal`,

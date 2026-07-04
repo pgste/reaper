@@ -24,6 +24,15 @@ management:
     type: ClusterIP
     port: 3000
 
+  # Decision-log query API: point at the ClickHouse the Vector pipeline ships
+  # into (deploy/decision-logs/) to enable GET /api/v1/orgs/{org}/decisions.
+  # Credentials go in an existing Secret (keys: REAPER_CLICKHOUSE_USER,
+  # REAPER_CLICKHOUSE_PASSWORD) referenced via existingSecret.
+  decisionLogs:
+    clickhouseUrl: ""
+    clickhouseDatabase: reaper_audit
+    existingSecret: ""
+
   ingress:
     enabled: false
     className: ""

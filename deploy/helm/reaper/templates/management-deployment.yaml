@@ -49,6 +49,10 @@ spec:
                 name: {{ include "reaper.management.fullname" . }}-config
             - secretRef:
                 name: {{ .Values.management.secrets.existingSecret | default (printf "%s-secrets" (include "reaper.management.fullname" .)) }}
+            {{- if .Values.management.decisionLogs.existingSecret }}
+            - secretRef:
+                name: {{ .Values.management.decisionLogs.existingSecret }}
+            {{- end }}
           volumeMounts:
             - name: storage
               mountPath: /var/lib/reaper/storage

@@ -198,6 +198,8 @@ pub struct AppState {
     pub started_at: chrono::DateTime<chrono::Utc>,
     /// JWKS validator for external IdP tokens
     pub jwks_validator: Option<Arc<JwksValidator>>,
+    /// ClickHouse-backed decision-log store (None until REAPER_CLICKHOUSE_URL is set)
+    pub decision_store: Option<Arc<crate::decisions::DecisionStore>>,
     /// Shutdown signal for graceful shutdown
     shutdown_signal: ShutdownSignal,
     /// Flag indicating server is shutting down
@@ -236,6 +238,12 @@ impl AppState {
         let bundle_service =
             Arc::new(BundleService::new(db.clone(), storage.clone()).with_signer(signer));
         let jwks_validator = Arc::new(JwksValidator::new());
+        let decision_store = crate::decisions::DecisionStore::from_env().map(Arc::new);
+        if decision_store.is_some() {
+            tracing::info!("Decision-log query API enabled (ClickHouse)");
+        } else {
+            tracing::info!("Decision-log query API disabled (set REAPER_CLICKHOUSE_URL to enable)");
+        }
 
         Self {
             db,
@@ -245,6 +253,7 @@ impl AppState {
             event_tx,
             started_at: chrono::Utc::now(),
             jwks_validator: Some(jwks_validator),
+            decision_store,
             shutdown_signal: ShutdownSignal::new(),
             is_shutting_down: Arc::new(AtomicBool::new(false)),
         }

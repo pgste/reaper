@@ -1,0 +1,629 @@
+//! Control-plane decision-log queries (ClickHouse-backed).
+//!
+//! The agents' in-memory ring only covers the last N decisions on one agent.
+//! This module gives the control plane the *full* picture: tenant-scoped
+//! queries over the central ClickHouse store that Vector ships decision NDJSON
+//! into (see `deploy/decision-logs/` and DECISION_LOG_PIPELINE.md).
+//!
+//! Design choices:
+//! - **ClickHouse HTTP interface via `reqwest`** — no native-protocol crate to
+//!   carry; works against self-hosted and ClickHouse Cloud alike.
+//! - **Server-side query parameters** (`{name:String}` placeholders bound via
+//!   `param_*`), so user-supplied filters are never spliced into SQL —
+//!   injection-safe by construction.
+//! - **Tenant scoping is mandatory by default**: every query is pinned to the
+//!   caller's organization id (the `tenant_id` Vector injects). Self-hosted
+//!   single-tenant stores (empty `tenant_id`) can disable the filter with
+//!   `REAPER_CLICKHOUSE_TENANT_FILTER=false`.
+//! - **`FINAL` reads** collapse at-least-once ingest duplicates at query time
+//!   (ReplacingMergeTree by `decision_id`).
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Configuration for the ClickHouse decision store, from environment.
+#[derive(Debug, Clone)]
+pub struct DecisionStoreConfig {
+    /// Base URL of the ClickHouse HTTP interface, e.g. `http://clickhouse:8123`.
+    pub url: String,
+    pub database: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    /// When false (single-tenant self-host), queries are not filtered by
+    /// tenant_id. Defaults to true — never disable in the managed stack.
+    pub tenant_filter: bool,
+}
+
+impl DecisionStoreConfig {
+    /// Read from environment. Returns None when REAPER_CLICKHOUSE_URL is unset
+    /// (decision queries disabled — endpoints answer 503 with setup guidance).
+    pub fn from_env() -> Option<Self> {
+        let url = std::env::var("REAPER_CLICKHOUSE_URL").ok()?;
+        if url.trim().is_empty() {
+            return None;
+        }
+        Some(Self {
+            url: url.trim_end_matches('/').to_string(),
+            database: std::env::var("REAPER_CLICKHOUSE_DATABASE")
+                .unwrap_or_else(|_| "reaper_audit".to_string()),
+            user: std::env::var("REAPER_CLICKHOUSE_USER").ok(),
+            password: std::env::var("REAPER_CLICKHOUSE_PASSWORD").ok(),
+            tenant_filter: std::env::var("REAPER_CLICKHOUSE_TENANT_FILTER")
+                .map(|v| v.to_lowercase() != "false")
+                .unwrap_or(true),
+        })
+    }
+}
+
+/// Filters for listing decisions. All optional; combined with AND.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DecisionQuery {
+    pub principal: Option<String>,
+    pub action: Option<String>,
+    pub resource: Option<String>,
+    /// "allow" / "deny" / "log"
+    pub decision: Option<String>,
+    pub policy_name: Option<String>,
+    pub agent_id: Option<String>,
+    /// Inclusive lower bound, RFC3339 or `YYYY-MM-DD HH:MM:SS`.
+    pub from: Option<String>,
+    /// Exclusive upper bound.
+    pub to: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+}
+
+/// One decision row as returned to API clients (matches the agent's
+/// DecisionLogEntry fields plus ingest metadata).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DecisionRow {
+    pub timestamp: String,
+    pub decision_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trace_id: String,
+    pub principal: String,
+    pub action: String,
+    pub resource: String,
+    pub decision: String,
+    pub policy_id: String,
+    pub policy_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub policy_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub matched_rule: String,
+    pub evaluation_time_ns: u64,
+    #[serde(default)]
+    pub cache_hit: u8,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_id: String,
+    /// Raw JSON string in ClickHouse; surfaced as parsed JSON when possible.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub context: Value,
+    /// Explain snapshot (possibly an encryption envelope). Parsed JSON when
+    /// present; the control plane can decrypt per tenant with
+    /// `policy_engine::decrypt_input_data`.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub input_data: Value,
+}
+
+/// Aggregate stats for a tenant + time range.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DecisionStats {
+    pub total: u64,
+    pub allows: u64,
+    pub denies: u64,
+    pub agents: u64,
+    pub avg_evaluation_time_ns: f64,
+    /// Top denied (policy_name, count) pairs.
+    pub top_denied_policies: Vec<(String, u64)>,
+}
+
+/// Errors from the decision store.
+#[derive(Debug, thiserror::Error)]
+pub enum DecisionStoreError {
+    #[error(
+        "decision store not configured: set REAPER_CLICKHOUSE_URL (see deploy/decision-logs/)"
+    )]
+    NotConfigured,
+    #[error("ClickHouse request failed: {0}")]
+    Http(String),
+    #[error("ClickHouse returned an error: {0}")]
+    Query(String),
+    #[error("failed to parse ClickHouse response: {0}")]
+    Parse(String),
+}
+
+/// ClickHouse-backed decision store client.
+pub struct DecisionStore {
+    config: DecisionStoreConfig,
+    client: reqwest::Client,
+}
+
+impl DecisionStore {
+    pub fn new(config: DecisionStoreConfig) -> Self {
+        Self {
+            config,
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// Build from env; None when not configured.
+    pub fn from_env() -> Option<Self> {
+        DecisionStoreConfig::from_env().map(Self::new)
+    }
+
+    /// Run a SQL statement with bound parameters, returning JSONEachRow lines.
+    async fn run(
+        &self,
+        sql: &str,
+        params: &[(String, String)],
+    ) -> Result<Vec<Value>, DecisionStoreError> {
+        let mut req = self
+            .client
+            .post(&self.config.url)
+            .query(&[
+                ("database", self.config.database.as_str()),
+                ("default_format", "JSONEachRow"),
+            ])
+            .body(sql.to_string());
+
+        // Server-side parameter binding: values never touch the SQL text.
+        for (name, value) in params {
+            req = req.query(&[(format!("param_{name}"), value)]);
+        }
+        if let Some(ref user) = self.config.user {
+            req = req.header("X-ClickHouse-User", user);
+        }
+        if let Some(ref password) = self.config.password {
+            req = req.header("X-ClickHouse-Key", password);
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| DecisionStoreError::Http(e.to_string()))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| DecisionStoreError::Http(e.to_string()))?;
+        if !status.is_success() {
+            // ClickHouse puts the error text in the body; don't echo the SQL.
+            return Err(DecisionStoreError::Query(
+                body.lines().next().unwrap_or("unknown error").to_string(),
+            ));
+        }
+
+        body.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).map_err(|e| DecisionStoreError::Parse(e.to_string())))
+            .collect()
+    }
+
+    /// List decisions for a tenant, newest first.
+    pub async fn list(
+        &self,
+        tenant_id: &str,
+        query: &DecisionQuery,
+    ) -> Result<Vec<DecisionRow>, DecisionStoreError> {
+        let (sql, params) = build_list_sql(&self.config, tenant_id, query);
+        let rows = self.run(&sql, &params).await?;
+        rows.into_iter()
+            .map(|v| parse_row(v).map_err(DecisionStoreError::Parse))
+            .collect()
+    }
+
+    /// Fetch one decision by id (tenant-scoped).
+    pub async fn get_by_id(
+        &self,
+        tenant_id: &str,
+        decision_id: &str,
+    ) -> Result<Option<DecisionRow>, DecisionStoreError> {
+        let (sql, params) = build_get_sql(&self.config, tenant_id, decision_id);
+        let mut rows = self.run(&sql, &params).await?;
+        match rows.pop() {
+            Some(v) => Ok(Some(parse_row(v).map_err(DecisionStoreError::Parse)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Aggregate stats for a tenant + optional time range.
+    pub async fn stats(
+        &self,
+        tenant_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<DecisionStats, DecisionStoreError> {
+        let (sql, params) = build_stats_sql(&self.config, tenant_id, from, to);
+        let rows = self.run(&sql, &params).await?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| DecisionStoreError::Parse("empty stats result".to_string()))?;
+
+        let (top_sql, top_params) = build_top_denied_sql(&self.config, tenant_id, from, to);
+        let top_rows = self.run(&top_sql, &top_params).await?;
+        let top_denied_policies = top_rows
+            .into_iter()
+            .filter_map(|v| {
+                Some((
+                    v.get("policy_name")?.as_str()?.to_string(),
+                    v.get("count")?
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .or_else(|| v.get("count")?.as_u64())?,
+                ))
+            })
+            .collect();
+
+        let get_u64 = |k: &str| -> u64 {
+            row.get(k)
+                .map(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0)
+        };
+        Ok(DecisionStats {
+            total: get_u64("total"),
+            allows: get_u64("allows"),
+            denies: get_u64("denies"),
+            agents: get_u64("agents"),
+            avg_evaluation_time_ns: row
+                .get("avg_evaluation_time_ns")
+                .and_then(|v| {
+                    v.as_f64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                })
+                .unwrap_or(0.0),
+            top_denied_policies,
+        })
+    }
+}
+
+/// Parse a JSONEachRow decision into a DecisionRow, decoding the embedded
+/// context/input_data JSON strings into structured values.
+fn parse_row(mut v: Value) -> Result<DecisionRow, String> {
+    // ClickHouse quotes 64-bit integers as JSON strings by default
+    // (output_format_json_quote_64bit_integers); normalize back to a number.
+    if let Some(n) = v
+        .get("evaluation_time_ns")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("evaluation_time_ns".to_string(), Value::from(n));
+        }
+    }
+    // ClickHouse returns context/input_data as JSON *strings*; decode them so
+    // API clients get structured objects (leave as null when empty).
+    for key in ["context", "input_data"] {
+        let decoded = match v.get(key).and_then(Value::as_str) {
+            Some(s) if !s.trim().is_empty() && s != "{}" => {
+                serde_json::from_str(s).unwrap_or(Value::Null)
+            }
+            _ => Value::Null,
+        };
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(key.to_string(), decoded);
+        }
+    }
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
+const LIST_COLUMNS: &str = "timestamp, decision_id, trace_id, principal, action, resource, \
+     decision, policy_id, policy_name, policy_version, matched_rule, \
+     evaluation_time_ns, cache_hit, agent_id, context, input_data";
+
+/// Shared WHERE-clause builder. Every branch appends a `{name:Type}`
+/// placeholder and the bound value — never string-spliced input.
+fn where_clause(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    query: &DecisionQuery,
+    params: &mut Vec<(String, String)>,
+) -> String {
+    let mut conds: Vec<String> = Vec::new();
+    if config.tenant_filter {
+        conds.push("tenant_id = {tenant:String}".to_string());
+        params.push(("tenant".to_string(), tenant_id.to_string()));
+    }
+    let mut bind = |cond: &str, name: &str, value: &Option<String>| {
+        if let Some(v) = value {
+            conds.push(cond.to_string());
+            params.push((name.to_string(), v.clone()));
+        }
+    };
+    bind(
+        "principal = {principal:String}",
+        "principal",
+        &query.principal,
+    );
+    bind("action = {action:String}", "action", &query.action);
+    bind("resource = {resource:String}", "resource", &query.resource);
+    bind("decision = {decision:String}", "decision", &query.decision);
+    bind(
+        "policy_name = {policy_name:String}",
+        "policy_name",
+        &query.policy_name,
+    );
+    bind("agent_id = {agent_id:String}", "agent_id", &query.agent_id);
+    bind(
+        "timestamp >= parseDateTime64BestEffort({from:String})",
+        "from",
+        &query.from,
+    );
+    bind(
+        "timestamp < parseDateTime64BestEffort({to:String})",
+        "to",
+        &query.to,
+    );
+
+    if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conds.join(" AND "))
+    }
+}
+
+fn build_list_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    query: &DecisionQuery,
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let where_sql = where_clause(config, tenant_id, query, &mut params);
+    // limit/offset are validated numerics, not strings; still bound as params.
+    let limit = query.limit.unwrap_or(100).min(1000);
+    let offset = query.offset.unwrap_or(0);
+    params.push(("limit".to_string(), limit.to_string()));
+    params.push(("offset".to_string(), offset.to_string()));
+    (
+        format!(
+            "SELECT {LIST_COLUMNS} FROM decisions FINAL {where_sql} \
+             ORDER BY timestamp DESC LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}"
+        ),
+        params,
+    )
+}
+
+fn build_get_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    decision_id: &str,
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let tenant_cond = if config.tenant_filter {
+        params.push(("tenant".to_string(), tenant_id.to_string()));
+        "tenant_id = {tenant:String} AND "
+    } else {
+        ""
+    };
+    params.push(("decision_id".to_string(), decision_id.to_string()));
+    (
+        format!(
+            "SELECT {LIST_COLUMNS} FROM decisions FINAL \
+             WHERE {tenant_cond}decision_id = {{decision_id:String}} \
+             ORDER BY timestamp DESC LIMIT 1"
+        ),
+        params,
+    )
+}
+
+fn build_stats_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let range = DecisionQuery {
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        ..Default::default()
+    };
+    let where_sql = where_clause(config, tenant_id, &range, &mut params);
+    (
+        format!(
+            "SELECT count() AS total, \
+             countIf(decision = 'allow') AS allows, \
+             countIf(decision = 'deny') AS denies, \
+             uniqExact(agent_id) AS agents, \
+             avg(evaluation_time_ns) AS avg_evaluation_time_ns \
+             FROM decisions FINAL {where_sql}"
+        ),
+        params,
+    )
+}
+
+fn build_top_denied_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let range = DecisionQuery {
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        decision: Some("deny".to_string()),
+        ..Default::default()
+    };
+    let where_sql = where_clause(config, tenant_id, &range, &mut params);
+    (
+        format!(
+            "SELECT policy_name, count() AS count FROM decisions FINAL {where_sql} \
+             GROUP BY policy_name ORDER BY count DESC LIMIT 10"
+        ),
+        params,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(tenant_filter: bool) -> DecisionStoreConfig {
+        DecisionStoreConfig {
+            url: "http://localhost:8123".to_string(),
+            database: "reaper_audit".to_string(),
+            user: None,
+            password: None,
+            tenant_filter,
+        }
+    }
+
+    #[test]
+    fn list_sql_is_tenant_scoped_and_fully_parameterized() {
+        let query = DecisionQuery {
+            principal: Some("alice'; DROP TABLE decisions;--".to_string()),
+            decision: Some("deny".to_string()),
+            from: Some("2026-07-01T00:00:00Z".to_string()),
+            limit: Some(50),
+            ..Default::default()
+        };
+        let (sql, params) = build_list_sql(&config(true), "org-123", &query);
+
+        // Injection attempt must never appear in the SQL text.
+        assert!(!sql.contains("DROP TABLE"), "{sql}");
+        assert!(sql.contains("tenant_id = {tenant:String}"));
+        assert!(sql.contains("principal = {principal:String}"));
+        assert!(sql.contains("ORDER BY timestamp DESC"));
+        assert!(sql.contains("FINAL"), "must dedup at-least-once ingest");
+
+        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("tenant"), Some("org-123"));
+        assert_eq!(get("principal"), Some("alice'; DROP TABLE decisions;--"));
+        assert_eq!(get("limit"), Some("50"));
+    }
+
+    #[test]
+    fn list_sql_caps_limit() {
+        let query = DecisionQuery {
+            limit: Some(1_000_000),
+            ..Default::default()
+        };
+        let (_, params) = build_list_sql(&config(true), "t", &query);
+        let limit = params.iter().find(|(n, _)| n == "limit").unwrap();
+        assert_eq!(limit.1, "1000");
+    }
+
+    #[test]
+    fn tenant_filter_can_be_disabled_for_single_tenant() {
+        let (sql, params) = build_list_sql(&config(false), "ignored", &DecisionQuery::default());
+        assert!(!sql.contains("tenant_id"));
+        assert!(!params.iter().any(|(n, _)| n == "tenant"));
+    }
+
+    #[test]
+    fn get_sql_binds_decision_id() {
+        let (sql, params) = build_get_sql(&config(true), "org-1", "abc-123");
+        assert!(sql.contains("decision_id = {decision_id:String}"));
+        assert!(sql.contains("tenant_id = {tenant:String}"));
+        assert!(params
+            .iter()
+            .any(|(n, v)| n == "decision_id" && v == "abc-123"));
+    }
+
+    #[test]
+    fn stats_sql_counts_by_decision() {
+        let (sql, params) = build_stats_sql(&config(true), "org-1", Some("2026-07-01"), None);
+        assert!(sql.contains("countIf(decision = 'allow')"));
+        assert!(sql.contains("parseDateTime64BestEffort({from:String})"));
+        assert!(params.iter().any(|(n, _)| n == "from"));
+    }
+
+    #[test]
+    fn parse_row_decodes_embedded_json_strings() {
+        let raw = serde_json::json!({
+            "timestamp": "2026-07-04 10:00:00.000",
+            "decision_id": "d-1",
+            "trace_id": "",
+            "principal": "sha256:abcd",
+            "action": "read",
+            "resource": "/x",
+            "decision": "deny",
+            "policy_id": "p-1",
+            "policy_name": "pol",
+            "policy_version": "3",
+            "matched_rule": "",
+            "evaluation_time_ns": 450u64,
+            "cache_hit": 0u8,
+            "agent_id": "agent-1",
+            "context": "{\"ip\":\"10.0.0.1\"}",
+            "input_data": "{\"enc\":\"aes256gcm\",\"nonce\":\"aa\",\"ciphertext\":\"bb\"}",
+        });
+        let row = parse_row(raw).unwrap();
+        assert_eq!(row.context["ip"], "10.0.0.1");
+        assert_eq!(row.input_data["enc"], "aes256gcm");
+    }
+
+    #[test]
+    fn config_from_env_requires_url() {
+        // No REAPER_CLICKHOUSE_URL in the test env → disabled.
+        std::env::remove_var("REAPER_CLICKHOUSE_URL");
+        assert!(DecisionStoreConfig::from_env().is_none());
+    }
+
+    /// End-to-end over a fake ClickHouse HTTP endpoint: verifies the request
+    /// shape (POST body = SQL, `param_*` query args, auth headers) and
+    /// JSONEachRow response parsing, without needing a real ClickHouse.
+    #[tokio::test]
+    async fn store_speaks_clickhouse_http_contract() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 16384];
+            let n = sock.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+
+            let row = r#"{"timestamp":"2026-07-04 10:00:00.000","decision_id":"d-1","trace_id":"","principal":"sha256:ab","action":"read","resource":"/x","decision":"deny","policy_id":"p","policy_name":"pol","policy_version":"1","matched_rule":"","evaluation_time_ns":"450","cache_hit":0,"agent_id":"a1","context":"{}","input_data":""}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                row.len() + 1,
+                format!("{row}\n")
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            req
+        });
+
+        let store = DecisionStore::new(DecisionStoreConfig {
+            url: format!("http://{addr}"),
+            database: "reaper_audit".to_string(),
+            user: Some("svc".to_string()),
+            password: Some("pw".to_string()),
+            tenant_filter: true,
+        });
+        let rows = store
+            .list(
+                "org-1",
+                &DecisionQuery {
+                    decision: Some("deny".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].decision_id, "d-1");
+        assert_eq!(rows[0].evaluation_time_ns, 450, "quoted UInt64 parsed");
+        assert!(rows[0].input_data.is_null(), "empty input_data → null");
+
+        let req = server.await.unwrap();
+        assert!(req.starts_with("POST"), "SQL goes in a POST body");
+        assert!(
+            req.contains("param_tenant=org-1"),
+            "tenant bound server-side"
+        );
+        assert!(req.contains("param_decision=deny"));
+        assert!(req.contains("default_format=JSONEachRow"));
+        assert!(req.contains("x-clickhouse-user: svc") || req.contains("X-ClickHouse-User: svc"));
+        assert!(req.contains("SELECT"), "body carries the SQL");
+    }
+}

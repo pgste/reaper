@@ -222,7 +222,14 @@ buffer.type = "disk"
    (mirrors the pluggable-evaluator pattern); keep SSE tail.
 3. **Reference pipeline:** commit `vector.toml` + ClickHouse schema/migrations + Helm wiring
    (Vector sidecar + optional bundled ClickHouse) so managed and self-hosted get the same setup.
-4. **Control-plane query API + UI** over ClickHouse (tenant-scoped filters, rollups, export).
+4. **Control-plane query API + UI** over ClickHouse — API ✅ done: `reaper-management` exposes
+   `GET /api/v1/orgs/{org}/decisions` (filters: principal/action/resource/decision/
+   policy_name/agent_id/from/to + pagination), `/decisions/stats`, and `/decisions/{id}`
+   (explain view). ClickHouse HTTP interface via reqwest with server-side `param_*`
+   binding (injection-safe), `FINAL` dedup reads, org-id tenant scoping enforced from the
+   caller's auth (never from input). Configure `REAPER_CLICKHOUSE_URL` (+ `_DATABASE`,
+   `_USER`, `_PASSWORD`; `REAPER_CLICKHOUSE_TENANT_FILTER=false` for single-tenant
+   self-host). UI remains future work.
 5. **Compliance tier:** S3 Object-Lock archive branch + retention config; document SOC2/HIPAA/PCI
    posture (immutability, retention, no sampling of the audit copy).
 6. *(scale)* **Optional Redpanda/Kafka** front + optional embedded native-ClickHouse shipper.
