@@ -292,7 +292,7 @@ impl Default for DecisionLogConfig {
 impl DecisionLogConfig {
     /// Create from environment variables
     pub fn from_env() -> Self {
-        Self {
+        let mut config = Self {
             enabled: std::env::var("REAPER_DECISION_LOG_ENABLED")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
@@ -347,6 +347,47 @@ impl DecisionLogConfig {
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
             encryption_key: std::env::var("REAPER_DECISION_LOG_ENCRYPTION_KEY").ok(),
+        };
+
+        // REAPER_DECISION_LOG_MODE: a one-word intent knob applied on top of
+        // the fine-grained vars (mode wins — it's the explicit statement of
+        // what must reach the store):
+        //   full    -> EVERY decision ships: allows + denies, sampling forced
+        //              off. The complete-audit mode for compliance/central
+        //              ClickHouse capture.
+        //   sampled -> denies always; allows kept at SAMPLE_ALLOW_RATE.
+        //   denies  -> denies only (minimal volume).
+        if let Ok(mode) = std::env::var("REAPER_DECISION_LOG_MODE") {
+            config.apply_mode(&mode);
+        }
+        config
+    }
+
+    /// Apply a named capture mode preset (see `from_env`). Unknown modes are
+    /// ignored (fine-grained settings stay as-is) with a warning.
+    pub fn apply_mode(&mut self, mode: &str) {
+        match mode.to_lowercase().trim() {
+            "full" | "all" => {
+                self.log_allows = true;
+                self.log_denies = true;
+                self.sample_allow_rate = 1.0;
+            }
+            "sampled" => {
+                self.log_allows = true;
+                self.log_denies = true;
+                // sample_allow_rate stays as configured
+            }
+            "denies" | "denies-only" | "deny" => {
+                self.log_allows = false;
+                self.log_denies = true;
+            }
+            "" => {}
+            other => {
+                tracing::warn!(
+                    mode = other,
+                    "unknown REAPER_DECISION_LOG_MODE (use full|sampled|denies); ignoring"
+                );
+            }
         }
     }
 }
@@ -425,5 +466,59 @@ mod tests {
         assert_eq!(config.buffer_capacity, 10_000);
         assert!(config.log_allows);
         assert!(config.log_denies);
+    }
+
+    #[test]
+    fn test_mode_full_forces_complete_capture() {
+        // Even with sampling configured down and allows off, mode=full wins:
+        // every decision (allows included) must reach the store.
+        let mut config = DecisionLogConfig {
+            log_allows: false,
+            sample_allow_rate: 0.01,
+            ..Default::default()
+        };
+        config.apply_mode("full");
+        assert!(config.log_allows);
+        assert!(config.log_denies);
+        assert_eq!(config.sample_allow_rate, 1.0);
+
+        // "all" is an accepted alias.
+        let mut config = DecisionLogConfig {
+            sample_allow_rate: 0.5,
+            ..Default::default()
+        };
+        config.apply_mode("ALL");
+        assert_eq!(config.sample_allow_rate, 1.0);
+    }
+
+    #[test]
+    fn test_mode_sampled_keeps_configured_rate() {
+        let mut config = DecisionLogConfig {
+            log_allows: false,
+            sample_allow_rate: 0.25,
+            ..Default::default()
+        };
+        config.apply_mode("sampled");
+        assert!(config.log_allows, "sampled mode re-enables allows");
+        assert_eq!(config.sample_allow_rate, 0.25, "rate untouched");
+    }
+
+    #[test]
+    fn test_mode_denies_only() {
+        let mut config = DecisionLogConfig::default();
+        config.apply_mode("denies");
+        assert!(!config.log_allows);
+        assert!(config.log_denies);
+    }
+
+    #[test]
+    fn test_mode_unknown_is_ignored() {
+        let mut config = DecisionLogConfig {
+            sample_allow_rate: 0.5,
+            ..Default::default()
+        };
+        config.apply_mode("bogus");
+        assert_eq!(config.sample_allow_rate, 0.5);
+        assert!(config.log_allows);
     }
 }

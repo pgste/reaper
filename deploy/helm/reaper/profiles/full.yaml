@@ -44,7 +44,9 @@ metrics:
 # serve (the query API scopes by org id).
 decisionLogs:
   enabled: true
-  sampleAllowRate: "1.0"   # lower (e.g. "0.05") on high-volume fleets
+  mode: full               # complete audit: every decision (allows included)
+                           # ships to ClickHouse. Use mode: sampled +
+                           # sampleAllowRate (e.g. "0.05") on high-volume fleets.
   clickhouse:
     enabled: true
     retentionDays: 90

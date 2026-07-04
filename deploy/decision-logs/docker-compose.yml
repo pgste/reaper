@@ -1,19 +1,58 @@
-# Runnable reference: Reaper decision logs -> Vector -> ClickHouse.
+# Complete, self-contained decision-log pipeline:
 #
-#   docker compose -f deploy/decision-logs/docker-compose.yml up -d
-#   # then run the agent with:
-#   #   REAPER_DECISION_LOG_ENABLED=true REAPER_DECISION_LOG_STDOUT=true \
-#   #   REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE=0.1 ./reaper-agent | \
-#   #   docker compose -f deploy/decision-logs/docker-compose.yml exec -T vector vector --config /etc/vector/vector.toml
-#   # (or point Vector's `file` source at the agent's REAPER_DECISION_LOG_FILE)
+#     Reaper agent ──NDJSON file──▶ Vector ──batched inserts──▶ ClickHouse
 #
-# Query:  docker compose exec clickhouse clickhouse-client -q \
-#           "SELECT decision, count() FROM reaper_audit.decisions GROUP BY decision"
+# One command from the repo root:
+#
+#   docker compose -f deploy/decision-logs/docker-compose.yml up -d --build
+#
+# The agent runs in FULL audit mode (every decision — allows included — ships
+# to ClickHouse). Try it:
+#
+#   # load data + a policy, then evaluate (see docs/getting-started/)
+#   curl -s -X POST localhost:8080/api/v1/fast-messages -H 'Content-Type: application/json' \
+#     -d '{"principal":"alice","action":"read","resource":"doc1","policy_name":"demo"}'
+#
+#   # watch decisions land in the store
+#   docker compose -f deploy/decision-logs/docker-compose.yml exec clickhouse \
+#     clickhouse-client -q "SELECT timestamp, principal, action, resource, decision \
+#                           FROM reaper_audit.decisions ORDER BY timestamp DESC LIMIT 10"
+#
+# Volume knobs (env): DECISION_LOG_MODE=full|sampled|denies (default full),
+# DECISION_LOG_SAMPLE_ALLOW_RATE=0.05 (with mode=sampled).
+#
+# NOTE: the main docker-compose.yml offers the same pipeline as the `audit`
+# profile, composable with the platform/management stacks.
+
 services:
+  agent:
+    build:
+      context: ../..
+      dockerfile: services/reaper-agent/Dockerfile
+    image: reaper-agent:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info,reaper_agent=info
+      - REAPER_AGENT_BIND_ADDRESS=0.0.0.0
+      - REAPER_AGENT_PORT=8080
+      # Decision logging: full audit mode -> every decision ships.
+      - REAPER_DECISION_LOG_ENABLED=true
+      - REAPER_DECISION_LOG_MODE=${DECISION_LOG_MODE:-full}
+      - REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE=${DECISION_LOG_SAMPLE_ALLOW_RATE:-1.0}
+      - REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson
+    volumes:
+      - decision-logs:/var/log/reaper
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     ports:
-      - "8123:8123"     # HTTP (Vector inserts here)
+      - "8123:8123"     # HTTP (Vector inserts + management query API)
       - "9000:9000"     # native
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
@@ -31,11 +70,14 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      agent:
+        condition: service_started
+    environment:
+      - REAPER_TENANT_ID=${REAPER_TENANT_ID:-}
     volumes:
-      - ./vector.toml:/etc/vector/vector.toml:ro
+      - ./vector-file.toml:/etc/vector/vector.toml:ro
+      - decision-logs:/var/log/reaper:ro
       - vector-buffer:/var/lib/vector   # disk WAL survives restarts
-    # For a file source, also mount the agent's log dir here and set the
-    # `file` source in vector.toml.
 
   # Optional S3-compatible WORM archive for the compliance tier.
   # minio:
@@ -48,6 +90,7 @@ services:
   #   volumes: [minio-data:/data]
 
 volumes:
+  decision-logs:
   ch-data:
   vector-buffer:
   # minio-data:

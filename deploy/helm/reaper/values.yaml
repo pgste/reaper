@@ -180,7 +180,13 @@ decisionLogs:
   enabled: false
 
   # --- capture (agent) ---
-  sampleAllowRate: "1.0"     # deny-priority sampling: denies always kept
+  # Capture mode (the explicit intent knob; wins over sampleAllowRate):
+  #   full    -> EVERY decision ships to the store, allows included (complete
+  #              audit; sampling forced off) - the default here.
+  #   sampled -> denies always; allows kept at sampleAllowRate.
+  #   denies  -> denies only (minimal volume).
+  mode: full
+  sampleAllowRate: "1.0"     # used by mode=sampled; denies are never sampled
   inputData: false           # "explain" tier snapshot (denies-only by default)
   # Every record ships with this tenant_id. For the managed stack set it to the
   # org UUID so the control-plane query API (which scopes by org id) finds it;

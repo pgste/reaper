@@ -156,6 +156,10 @@ Decision-log pipeline names and endpoints
   value: /var/log/reaper/decisions.ndjson
 - name: REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE
   value: {{ .Values.decisionLogs.sampleAllowRate | quote }}
+{{- with .Values.decisionLogs.mode }}
+- name: REAPER_DECISION_LOG_MODE
+  value: {{ . | quote }}
+{{- end }}
 {{- if .Values.decisionLogs.inputData }}
 - name: REAPER_DECISION_LOG_INPUT_DATA
   value: "true"

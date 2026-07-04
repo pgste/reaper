@@ -23,7 +23,8 @@ self-hosted. Cost is just the bytes you choose to keep; control it with retentio
 ## Quick start (local)
 
 ```bash
-docker compose -f deploy/decision-logs/docker-compose.yml up -d   # ClickHouse + Vector
+# Complete pipeline in one command (agent in FULL audit mode + Vector + ClickHouse):
+docker compose -f deploy/decision-logs/docker-compose.yml up -d --build
 
 REAPER_DECISION_LOG_ENABLED=true \
 REAPER_DECISION_LOG_STDOUT=true \
@@ -42,7 +43,8 @@ docker compose -f deploy/decision-logs/docker-compose.yml exec clickhouse \
 | `REAPER_DECISION_LOG_ENABLED=true` | turn logging on |
 | `REAPER_DECISION_LOG_STDOUT=true` | emit NDJSON to stdout (container-native) |
 | `REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson` | or/also a file for Vector to tail (durable WAL) |
-| `REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE=0.01` | keep 1% of allows + **100% of denies** (deny-priority sampling) — the cheapest volume lever |
+| `REAPER_DECISION_LOG_MODE=full` | **complete audit**: every decision — allows included — ships to the store (sampling forced off). `sampled` = denies always + allows at the rate below; `denies` = denies only. The mode wins over the fine-grained flags |
+| `REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE=0.01` | with `mode=sampled`: keep 1% of allows + **100% of denies** (deny-priority sampling) — the cheapest volume lever |
 | `REAPER_DECISION_LOG_ALLOWS=false` | drop allows entirely (denies only) |
 | `REAPER_DECISION_LOG_CONTEXT=false` | strip request context (privacy) |
 | `REAPER_DECISION_LOG_INPUT_DATA=true` | "explain" tier: snapshot resolved principal/resource attributes into `input_data` |
