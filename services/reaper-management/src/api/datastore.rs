@@ -488,6 +488,16 @@ async fn publish(
         version: published.version,
         checksum: published.checksum.clone(),
     });
+    // …and sibling management instances via pg_notify (no-op on SQLite).
+    crate::events_pg::notify_datastore_published(
+        &state,
+        store.id,
+        resolved.org_id,
+        Some(resolved.namespace_id),
+        published.version,
+        &published.checksum,
+    )
+    .await;
 
     Ok(Json(json!({
         "version": published.version,

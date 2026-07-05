@@ -22,6 +22,7 @@ pub mod db;
 pub mod decisions;
 pub mod deployment;
 pub mod domain;
+pub mod events_pg;
 pub mod graceful;
 pub mod landscape;
 pub mod metrics;

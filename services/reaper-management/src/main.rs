@@ -125,6 +125,16 @@ async fn main() -> anyhow::Result<()> {
     // Create application state
     let state = Arc::new(AppState::new(db, config.clone(), storage));
 
+    // Cross-instance eventing: on PostgreSQL, LISTEN for sibling
+    // instances' publish notifications and re-broadcast them locally so
+    // agents connected to THIS instance wake up too.
+    if state.db.db_type() == "postgres" {
+        reaper_management::events_pg::spawn_pg_event_bridge(
+            state.clone(),
+            config.database.url.clone(),
+        );
+    }
+
     // Create rate limiter
     let rate_limiter = rate_limit::create_rate_limiter(&config.rate_limit);
 
