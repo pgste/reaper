@@ -465,22 +465,16 @@ impl BundleService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::storage::FilesystemStorage;
     use sha2::Digest;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, Arc<Database>, Arc<dyn BundleStorage>) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
         let storage_path = temp_dir.path().join("storage");
         std::fs::create_dir_all(&storage_path).unwrap();
 
-        let db_config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url: format!("sqlite:{}", db_path.display()),
-            max_connections: 5,
-        };
+        let db_config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();

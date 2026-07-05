@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS rollback_configs (
     org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     namespace_id TEXT REFERENCES namespaces(id) ON DELETE CASCADE,
     is_enabled INTEGER DEFAULT 0,
-    error_rate_threshold REAL DEFAULT 5.0,  -- Percentage (e.g., 5.0 = 5%)
+    error_rate_threshold DOUBLE PRECISION DEFAULT 5.0,  -- Percentage (e.g., 5.0 = 5%)
     window_seconds INTEGER DEFAULT 300,     -- Time window to evaluate errors
     min_requests INTEGER DEFAULT 100,       -- Minimum requests before triggering
     created_at TEXT NOT NULL,

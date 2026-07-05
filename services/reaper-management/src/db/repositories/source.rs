@@ -203,43 +203,41 @@ impl<'a> PolicySourceRepository<'a> {
             .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let mut updates = Vec::new();
+        let mut updates: Vec<String> = Vec::new();
         let mut bindings: Vec<String> = Vec::new();
 
         if let Some(name) = &input.name {
-            updates.push("name = ?");
+            updates.push("name = ?".to_string());
             bindings.push(name.clone());
         }
 
         if let Some(description) = &input.description {
-            updates.push("description = ?");
+            updates.push("description = ?".to_string());
             bindings.push(description.clone());
         }
 
         if let Some(config) = &input.config {
-            updates.push("config = ?");
+            updates.push("config = ?".to_string());
             bindings.push(serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()));
         }
 
+        // Numeric columns are inlined: binding a text param into an INTEGER
+        // column works on SQLite (type affinity) but is a type error on
+        // PostgreSQL, and this builder's bindings are all strings. Both
+        // values are numeric literals, so no injection surface.
         if let Some(sync_interval) = input.sync_interval_secs {
-            updates.push("sync_interval_secs = ?");
-            bindings.push(sync_interval.to_string());
+            updates.push(format!("sync_interval_secs = {}", sync_interval));
         }
 
         if let Some(is_enabled) = input.is_enabled {
-            updates.push("is_enabled = ?");
-            bindings.push(if is_enabled {
-                "1".to_string()
-            } else {
-                "0".to_string()
-            });
+            updates.push(format!("is_enabled = {}", if is_enabled { 1 } else { 0 }));
         }
 
         if updates.is_empty() {
             return Ok(false);
         }
 
-        updates.push("updated_at = ?");
+        updates.push("updated_at = ?".to_string());
         bindings.push(Utc::now().to_rfc3339());
 
         let sql = crate::db::numbered_placeholders(&format!(
@@ -371,21 +369,14 @@ impl<'a> PolicySourceRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

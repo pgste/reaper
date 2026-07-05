@@ -33,7 +33,7 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[(
 
 static INSTALL_DRIVERS: Once = Once::new();
 
-fn install_drivers() {
+pub(crate) fn install_drivers() {
     INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
 }
 

@@ -11,7 +11,7 @@ use reaper_management::{
     api::build_api_router,
     auth::api_key::{ApiKeyRepository, CreateApiKey},
     auth::jwks::{JwksConfig, JwksConfigRepository},
-    config::{AuthConfig, Config, DatabaseConfig},
+    config::{AuthConfig, Config},
     db::repositories::AgentRepository,
     db::Database,
     storage::FilesystemStorage,
@@ -34,15 +34,10 @@ struct TestEnv {
 /// Test helper to set up a test environment
 async fn setup_test_env() -> TestEnv {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test.db");
     let storage_path = temp_dir.path().join("storage");
     std::fs::create_dir_all(&storage_path).unwrap();
 
-    let db_config = DatabaseConfig {
-        db_type: "sqlite".to_string(),
-        url: format!("sqlite:{}", db_path.display()),
-        max_connections: 5,
-    };
+    let db_config = reaper_management::db::ephemeral_test_config(temp_dir.path()).await;
 
     let db = Database::new(&db_config).await.unwrap();
     db.run_migrations().await.unwrap();

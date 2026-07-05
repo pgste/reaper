@@ -41,7 +41,7 @@ impl<'a> UserRepository<'a> {
         )
         .bind(user.id.to_string())
         .bind(&user.email)
-        .bind(user.email_verified)
+        .bind(user.email_verified as i64)
         .bind(&user.password_hash)
         .bind(user.status.to_string())
         .bind(user.created_at.to_rfc3339())
