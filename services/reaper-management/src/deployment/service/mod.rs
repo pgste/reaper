@@ -725,7 +725,7 @@ mod tests {
     }
 
     async fn create_test_org(db: &Database) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
@@ -743,7 +743,7 @@ mod tests {
     }
 
     async fn create_test_bundle(db: &Database, org_id: Uuid) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let bundle_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
@@ -764,7 +764,7 @@ mod tests {
     }
 
     async fn create_test_agents(db: &Database, org_id: Uuid, count: usize) -> Vec<Uuid> {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         let mut agent_ids = Vec::new();
 

@@ -23,7 +23,7 @@ impl<'a> PolicyRepository<'a> {
     pub async fn create(&self, org_id: Uuid, input: CreatePolicy) -> Result<Policy, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -76,7 +76,7 @@ impl<'a> PolicyRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -104,7 +104,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -134,7 +134,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Vec<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let limit = limit.unwrap_or(100);
@@ -167,7 +167,7 @@ impl<'a> PolicyRepository<'a> {
     pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM policies WHERE org_id = $1")
@@ -186,7 +186,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current policy
@@ -232,7 +232,7 @@ impl<'a> PolicyRepository<'a> {
             )
             .bind(&name)
             .bind(&description)
-            .bind(is_active)
+            .bind(is_active as i64)
             .bind(new_version)
             .bind(&now)
             .bind(id.to_string())
@@ -249,7 +249,7 @@ impl<'a> PolicyRepository<'a> {
             )
             .bind(&name)
             .bind(&description)
-            .bind(is_active)
+            .bind(is_active as i64)
             .bind(&now)
             .bind(id.to_string())
             .execute(pool)
@@ -263,7 +263,7 @@ impl<'a> PolicyRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM policies WHERE id = $1")
@@ -278,7 +278,7 @@ impl<'a> PolicyRepository<'a> {
     async fn get_current_version(&self, policy_id: Uuid) -> Result<i32, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i32,) = sqlx::query_as(
@@ -295,7 +295,7 @@ impl<'a> PolicyRepository<'a> {
     pub async fn get_versions(&self, policy_id: Uuid) -> Result<Vec<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -326,7 +326,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -354,7 +354,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -377,7 +377,7 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// Convert a database row to a Policy
-    fn row_to_policy(&self, row: sqlx::sqlite::SqliteRow) -> Result<Policy, DatabaseError> {
+    fn row_to_policy(&self, row: sqlx::any::AnyRow) -> Result<Policy, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -431,7 +431,7 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// Convert a database row to a PolicyVersion
-    fn row_to_version(&self, row: sqlx::sqlite::SqliteRow) -> Result<PolicyVersion, DatabaseError> {
+    fn row_to_version(&self, row: sqlx::any::AnyRow) -> Result<PolicyVersion, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;

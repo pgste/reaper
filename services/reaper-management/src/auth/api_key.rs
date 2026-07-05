@@ -110,7 +110,7 @@ impl<'a> ApiKeyRepository<'a> {
     ) -> Result<ApiKeyCreated, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let (full_key, prefix, hash) = ApiKeyGenerator::generate();
@@ -155,7 +155,7 @@ impl<'a> ApiKeyRepository<'a> {
 
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let hash = ApiKeyGenerator::hash_key(key);
@@ -210,7 +210,7 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<ApiKey>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -234,7 +234,7 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<ApiKey>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -261,7 +261,7 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn revoke(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("UPDATE api_keys SET is_revoked = 1 WHERE id = $1")
@@ -276,7 +276,7 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
@@ -291,7 +291,7 @@ impl<'a> ApiKeyRepository<'a> {
     async fn update_last_used(&self, id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -305,7 +305,7 @@ impl<'a> ApiKeyRepository<'a> {
     }
 
     /// Convert database row to ApiKey
-    fn row_to_api_key(&self, row: sqlx::sqlite::SqliteRow) -> Result<ApiKey, DatabaseError> {
+    fn row_to_api_key(&self, row: sqlx::any::AnyRow) -> Result<ApiKey, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;

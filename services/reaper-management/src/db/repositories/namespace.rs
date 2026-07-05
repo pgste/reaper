@@ -30,7 +30,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Namespace, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -51,7 +51,7 @@ impl<'a> NamespaceRepository<'a> {
         .bind(input.parent_id.map(|p| p.to_string()))
         .bind(&input.description)
         .bind(&settings_json)
-        .bind(true)
+        .bind(1i64)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(pool)
@@ -75,7 +75,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -103,7 +103,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Option<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -128,7 +128,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -155,7 +155,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn list_roots(&self, org_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -182,7 +182,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn list_children(&self, parent_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -209,7 +209,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn update(&self, id: Uuid, input: UpdateNamespace) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let mut updates = Vec::new();
@@ -265,7 +265,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Delete child namespaces first (recursive via ON DELETE CASCADE or manually)
@@ -284,7 +284,7 @@ impl<'a> NamespaceRepository<'a> {
     }
 
     /// Convert database row to Namespace
-    fn row_to_namespace(&self, row: sqlx::sqlite::SqliteRow) -> Result<Namespace, DatabaseError> {
+    fn row_to_namespace(&self, row: sqlx::any::AnyRow) -> Result<Namespace, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -300,7 +300,10 @@ impl<'a> NamespaceRepository<'a> {
         let settings =
             serde_json::from_str(&settings_str).unwrap_or_else(|_| serde_json::json!({}));
 
-        let is_active: bool = row.get("is_active");
+        // Flags are INTEGER 0/1 in both backends; sqlx::Any surfaces them
+        // as integers, never bool.
+        let is_active: i64 = row.get("is_active");
+        let is_active = is_active != 0;
 
         let created_at_str: String = row.get("created_at");
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
@@ -336,7 +339,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<AgentSubscription, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -350,7 +353,7 @@ impl<'a> NamespaceRepository<'a> {
         )
         .bind(agent_id.to_string())
         .bind(input.namespace_id.to_string())
-        .bind(input.include_children)
+        .bind(input.include_children as i64)
         .bind(now.to_rfc3339())
         .execute(pool)
         .await?;
@@ -370,7 +373,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Vec<AgentSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -399,7 +402,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Vec<AgentSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -428,7 +431,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Vec<Uuid>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -459,7 +462,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query(
@@ -476,7 +479,7 @@ impl<'a> NamespaceRepository<'a> {
     /// Convert database row to AgentSubscription
     fn row_to_subscription(
         &self,
-        row: sqlx::sqlite::SqliteRow,
+        row: sqlx::any::AnyRow,
     ) -> Result<AgentSubscription, DatabaseError> {
         let agent_id_str: String = row.get("agent_id");
         let agent_id = Uuid::parse_str(&agent_id_str)
@@ -486,7 +489,8 @@ impl<'a> NamespaceRepository<'a> {
         let namespace_id = Uuid::parse_str(&namespace_id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid namespace UUID: {}", e)))?;
 
-        let include_children: bool = row.get("include_children");
+        let include_children: i64 = row.get("include_children");
+        let include_children = include_children != 0;
 
         let created_at_str: String = row.get("created_at");
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)

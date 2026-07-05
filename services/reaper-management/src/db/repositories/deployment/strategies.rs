@@ -22,7 +22,7 @@ impl<'a> StrategyOps<'a> {
     ) -> Result<DeploymentStrategy, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -62,7 +62,7 @@ impl<'a> StrategyOps<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<DeploymentStrategy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -87,7 +87,7 @@ impl<'a> StrategyOps<'a> {
     ) -> Result<Vec<DeploymentStrategy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = if let Some(ns_id) = namespace_id {
@@ -126,7 +126,7 @@ impl<'a> StrategyOps<'a> {
     ) -> Result<Option<DeploymentStrategy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // First try namespace-specific default, then org-wide default
@@ -163,7 +163,7 @@ impl<'a> StrategyOps<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = "DELETE FROM deployment_strategies WHERE id = $1";
@@ -187,7 +187,7 @@ impl<'a> StrategyOps<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         if let Some(ns_id) = namespace_id {

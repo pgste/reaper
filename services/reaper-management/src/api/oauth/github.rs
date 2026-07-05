@@ -157,7 +157,7 @@ pub(super) async fn github_callback(
         .map(|secs| Utc::now() + Duration::seconds(secs));
 
     // Store OAuth connection
-    let pool = state.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
     let connection_id = Uuid::new_v4();
     let now = Utc::now().to_rfc3339();
     let scopes_json = serde_json::to_string(
@@ -305,7 +305,7 @@ pub(super) async fn create_source_from_github(
     );
 
     // Create the Git source
-    let pool = state.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
     let source_id = Uuid::new_v4();
     let now = Utc::now().to_rfc3339();
     let branch = request.branch.unwrap_or_else(|| "main".to_string());

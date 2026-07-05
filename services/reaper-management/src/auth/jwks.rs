@@ -437,7 +437,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<JwksConfig, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -472,7 +472,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Option<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -496,7 +496,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -521,7 +521,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -543,7 +543,7 @@ impl<'a> JwksConfigRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM jwks_configs WHERE id = $1")
@@ -562,7 +562,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -588,7 +588,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -605,7 +605,7 @@ impl<'a> JwksConfigRepository<'a> {
 
     fn row_to_config(
         &self,
-        row: &sqlx::sqlite::SqliteRow,
+        row: &sqlx::any::AnyRow,
     ) -> Result<JwksConfig, crate::db::DatabaseError> {
         use sqlx::Row;
 

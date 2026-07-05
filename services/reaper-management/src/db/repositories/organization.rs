@@ -23,7 +23,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn create(&self, input: CreateOrganization) -> Result<Organization, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -56,7 +56,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -80,7 +80,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn get_by_slug(&self, slug: &str) -> Result<Option<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -108,7 +108,7 @@ impl<'a> OrganizationRepository<'a> {
     ) -> Result<Vec<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let limit = limit.unwrap_or(100);
@@ -139,7 +139,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn count(&self) -> Result<i64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM organizations")
@@ -157,7 +157,7 @@ impl<'a> OrganizationRepository<'a> {
     ) -> Result<Option<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current org to merge updates
@@ -198,7 +198,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM organizations WHERE id = $1")
@@ -210,10 +210,7 @@ impl<'a> OrganizationRepository<'a> {
     }
 
     /// Convert a database row to an Organization
-    fn row_to_organization(
-        &self,
-        row: sqlx::sqlite::SqliteRow,
-    ) -> Result<Organization, DatabaseError> {
+    fn row_to_organization(&self, row: sqlx::any::AnyRow) -> Result<Organization, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;

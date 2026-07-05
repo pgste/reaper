@@ -51,9 +51,9 @@ impl<'a> DatastoreRepository<'a> {
         Self { db }
     }
 
-    fn pool(&self) -> Result<&sqlx::SqlitePool, DatabaseError> {
+    fn pool(&self) -> Result<&sqlx::AnyPool, DatabaseError> {
         self.db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))
     }
 
@@ -120,7 +120,7 @@ impl<'a> DatastoreRepository<'a> {
         row.map(Self::row_to_record).transpose()
     }
 
-    fn row_to_record(row: sqlx::sqlite::SqliteRow) -> Result<DatastoreRecord, DatabaseError> {
+    fn row_to_record(row: sqlx::any::AnyRow) -> Result<DatastoreRecord, DatabaseError> {
         let model: ModelDefinition =
             serde_json::from_str(row.get::<String, _>("model").as_str())
                 .map_err(|e| DatabaseError::Config(format!("corrupt model json: {e}")))?;
@@ -168,7 +168,7 @@ impl<'a> DatastoreRepository<'a> {
     /// produce a change the replicas never hear about. One counter bump
     /// per batch keeps the save path lean regardless of fan-out.
     async fn record_changes_in(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Any>,
         datastore_id: Uuid,
         marks: &[(String, bool)], // (entity_id, tombstone)
     ) -> Result<(), DatabaseError> {
@@ -398,7 +398,7 @@ impl<'a> DatastoreRepository<'a> {
         row.map(Self::row_to_entity).transpose()
     }
 
-    fn row_to_entity(row: sqlx::sqlite::SqliteRow) -> Result<AdmEntity, DatabaseError> {
+    fn row_to_entity(row: sqlx::any::AnyRow) -> Result<AdmEntity, DatabaseError> {
         let attributes = serde_json::from_str(row.get::<String, _>("attributes").as_str())
             .map_err(|e| DatabaseError::Config(format!("corrupt attributes json: {e}")))?;
         Ok(AdmEntity {

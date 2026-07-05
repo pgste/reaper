@@ -54,7 +54,7 @@ pub(super) async fn get_user_id_from_session(
 
 /// Get GitHub access token for an org
 pub(super) async fn get_github_token(state: &AppState, org_id: Uuid) -> ApiResult<String> {
-    let pool = state.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
     let row: Option<(String, Option<String>)> = sqlx::query_as(
         "SELECT access_token_encrypted, token_expires_at FROM oauth_connections WHERE org_id = $1 AND provider = 'github'",

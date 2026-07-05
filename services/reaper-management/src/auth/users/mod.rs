@@ -31,7 +31,7 @@ impl<'a> UserRepository<'a> {
 
     /// Create a new user
     pub async fn create(&self, user: &User) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query(
             r#"
@@ -62,7 +62,7 @@ impl<'a> UserRepository<'a> {
 
     /// Find user by ID
     pub async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let row: Option<(
             String,
@@ -88,7 +88,7 @@ impl<'a> UserRepository<'a> {
 
     /// Find user by email
     pub async fn find_by_email(&self, email: &str) -> Result<Option<User>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let row: Option<(
             String,
@@ -114,7 +114,7 @@ impl<'a> UserRepository<'a> {
 
     /// Update user's last login time
     pub async fn update_last_login(&self, user_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("UPDATE users SET last_login_at = $1, updated_at = $2 WHERE id = $3")
             .bind(Utc::now().to_rfc3339())
@@ -128,7 +128,7 @@ impl<'a> UserRepository<'a> {
 
     /// Update user's password
     pub async fn update_password(&self, user_id: Uuid, new_hash: &str) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3")
             .bind(new_hash)
@@ -142,7 +142,7 @@ impl<'a> UserRepository<'a> {
 
     /// Update user status
     pub async fn update_status(&self, user_id: Uuid, status: UserStatus) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("UPDATE users SET status = $1, updated_at = $2 WHERE id = $3")
             .bind(status.to_string())
@@ -156,7 +156,7 @@ impl<'a> UserRepository<'a> {
 
     /// Mark user's email as verified
     pub async fn verify_email(&self, user_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query(
             "UPDATE users SET email_verified = 1, status = 'active', updated_at = $1 WHERE id = $2",
@@ -218,7 +218,7 @@ impl<'a> UserOrgRepository<'a> {
 
     /// Add user to org with role
     pub async fn add_membership(&self, membership: &UserOrg) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query(
             r#"
@@ -244,7 +244,7 @@ impl<'a> UserOrgRepository<'a> {
         user_id: Uuid,
         org_id: Uuid,
     ) -> Result<Option<OrgRole>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let row: Option<(String,)> =
             sqlx::query_as("SELECT role FROM user_orgs WHERE user_id = $1 AND org_id = $2")
@@ -265,7 +265,7 @@ impl<'a> UserOrgRepository<'a> {
 
     /// Get all orgs for a user
     pub async fn get_user_orgs(&self, user_id: Uuid) -> Result<Vec<UserOrg>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let rows: Vec<(String, String, String, String, Option<String>, String)> = sqlx::query_as(
             "SELECT id, user_id, org_id, role, invited_by, joined_at FROM user_orgs WHERE user_id = $1",
@@ -279,7 +279,7 @@ impl<'a> UserOrgRepository<'a> {
 
     /// Get all members of an org
     pub async fn get_org_members(&self, org_id: Uuid) -> Result<Vec<UserOrg>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let rows: Vec<(String, String, String, String, Option<String>, String)> = sqlx::query_as(
             "SELECT id, user_id, org_id, role, invited_by, joined_at FROM user_orgs WHERE org_id = $1",
@@ -298,7 +298,7 @@ impl<'a> UserOrgRepository<'a> {
         org_id: Uuid,
         new_role: OrgRole,
     ) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let result =
             sqlx::query("UPDATE user_orgs SET role = $1 WHERE user_id = $2 AND org_id = $3")
@@ -317,7 +317,7 @@ impl<'a> UserOrgRepository<'a> {
 
     /// Remove user from org
     pub async fn remove_membership(&self, user_id: Uuid, org_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("DELETE FROM user_orgs WHERE user_id = $1 AND org_id = $2")
             .bind(user_id.to_string())
@@ -362,7 +362,7 @@ impl<'a> SessionRepository<'a> {
 
     /// Create a new session
     pub async fn create(&self, session: &Session) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query(
             r#"
@@ -385,7 +385,7 @@ impl<'a> SessionRepository<'a> {
 
     /// Find session by token (validates and returns session with user)
     pub async fn find_by_token(&self, token: &str) -> Result<Option<Session>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let token_hash = hash_token(token);
 
@@ -437,7 +437,7 @@ impl<'a> SessionRepository<'a> {
 
     /// Delete session (logout)
     pub async fn delete(&self, session_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("DELETE FROM sessions WHERE id = $1")
             .bind(session_id.to_string())
@@ -449,7 +449,7 @@ impl<'a> SessionRepository<'a> {
 
     /// Delete session by token
     pub async fn delete_by_token(&self, token: &str) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let token_hash = hash_token(token);
 
@@ -463,7 +463,7 @@ impl<'a> SessionRepository<'a> {
 
     /// Delete all sessions for a user
     pub async fn delete_all_for_user(&self, user_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
             .bind(user_id.to_string())
@@ -475,7 +475,7 @@ impl<'a> SessionRepository<'a> {
 
     /// Clean up expired sessions
     pub async fn cleanup_expired(&self) -> Result<u64, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let result = sqlx::query("DELETE FROM sessions WHERE expires_at < $1")
             .bind(Utc::now().to_rfc3339())
@@ -498,7 +498,7 @@ impl<'a> PasswordResetRepository<'a> {
 
     /// Create a new password reset token
     pub async fn create(&self, token: &PasswordResetToken) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query(
             r#"
@@ -523,7 +523,7 @@ impl<'a> PasswordResetRepository<'a> {
         &self,
         token: &str,
     ) -> Result<Option<PasswordResetToken>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let token_hash = hash_token(token);
 
@@ -563,7 +563,7 @@ impl<'a> PasswordResetRepository<'a> {
 
     /// Mark token as used
     pub async fn mark_used(&self, token_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2")
             .bind(Utc::now().to_rfc3339())
@@ -576,7 +576,7 @@ impl<'a> PasswordResetRepository<'a> {
 
     /// Invalidate all reset tokens for a user
     pub async fn invalidate_for_user(&self, user_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL")
             .bind(user_id.to_string())
@@ -599,7 +599,7 @@ impl<'a> EmailVerificationRepository<'a> {
 
     /// Create a new email verification token
     pub async fn create(&self, token: &EmailVerificationToken) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query(
             r#"
@@ -623,7 +623,7 @@ impl<'a> EmailVerificationRepository<'a> {
         &self,
         token: &str,
     ) -> Result<Option<EmailVerificationToken>, UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let token_hash = hash_token(token);
 
@@ -658,7 +658,7 @@ impl<'a> EmailVerificationRepository<'a> {
 
     /// Delete verification token after successful verification
     pub async fn delete(&self, token_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("DELETE FROM email_verification_tokens WHERE id = $1")
             .bind(token_id.to_string())
@@ -670,7 +670,7 @@ impl<'a> EmailVerificationRepository<'a> {
 
     /// Delete all verification tokens for a user
     pub async fn delete_for_user(&self, user_id: Uuid) -> Result<(), UserError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         sqlx::query("DELETE FROM email_verification_tokens WHERE user_id = $1")
             .bind(user_id.to_string())

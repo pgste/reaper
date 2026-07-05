@@ -260,7 +260,7 @@ mod tests {
 
     async fn create_test_org(db: &Database) -> Uuid {
         use chrono::Utc;
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -279,7 +279,7 @@ mod tests {
 
     async fn create_test_bundle(db: &Database, org_id: Uuid) -> Uuid {
         use chrono::Utc;
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let bundle_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -301,7 +301,7 @@ mod tests {
 
     async fn create_test_agent(db: &Database, org_id: Uuid) -> Uuid {
         use chrono::Utc;
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let agent_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(

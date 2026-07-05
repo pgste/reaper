@@ -23,7 +23,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn create(&self, org_id: Uuid, input: CreateTeam) -> Result<Team, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -54,7 +54,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -82,7 +82,7 @@ impl<'a> TeamRepository<'a> {
     ) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -112,7 +112,7 @@ impl<'a> TeamRepository<'a> {
     ) -> Result<Vec<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let limit = limit.unwrap_or(100);
@@ -145,7 +145,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE org_id = $1")
@@ -160,7 +160,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn update(&self, id: Uuid, input: UpdateTeam) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current team to merge updates
@@ -194,7 +194,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM teams WHERE id = $1")
@@ -206,7 +206,7 @@ impl<'a> TeamRepository<'a> {
     }
 
     /// Convert a database row to a Team
-    fn row_to_team(&self, row: sqlx::sqlite::SqliteRow) -> Result<Team, DatabaseError> {
+    fn row_to_team(&self, row: sqlx::any::AnyRow) -> Result<Team, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;

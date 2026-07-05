@@ -24,7 +24,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn create(&self, deployment: &AgentDeployment) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query(
@@ -53,7 +53,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
@@ -77,7 +77,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Vec<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
@@ -104,7 +104,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Option<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
@@ -130,7 +130,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Option<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
@@ -158,7 +158,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let deployed_at = if status == AgentDeploymentStatus::Deployed {
@@ -188,7 +188,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn acknowledge(&self, id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query("UPDATE agent_deployments SET acknowledged_at = $1 WHERE id = $2")
@@ -204,7 +204,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn get_summary(&self, rollout_id: Uuid) -> Result<DeploymentSummary, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
@@ -240,7 +240,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Vec<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
@@ -319,7 +319,7 @@ impl<'a> RollbackConfigRepository<'a> {
     ) -> Result<Option<RollbackConfig>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(
@@ -362,7 +362,7 @@ impl<'a> RollbackConfigRepository<'a> {
     pub async fn upsert(&self, config: &RollbackConfig) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query(

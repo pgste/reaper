@@ -28,7 +28,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<WebhookSubscription, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let id = Uuid::new_v4();
@@ -75,7 +75,7 @@ impl<'a> WebhookRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let row: Option<WebhookRow> = sqlx::query_as(
@@ -101,7 +101,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Option<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let row: Option<WebhookRow> = sqlx::query_as(
@@ -128,7 +128,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Vec<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let query = if active_only {
@@ -165,7 +165,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Vec<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         // SQLite JSON contains check
@@ -203,7 +203,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Option<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let now = Utc::now();
@@ -279,7 +279,7 @@ impl<'a> WebhookRepository<'a> {
     pub async fn record_trigger(&self, id: Uuid, success: bool) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let now = Utc::now();
@@ -319,7 +319,7 @@ impl<'a> WebhookRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let result = sqlx::query("DELETE FROM webhook_subscriptions WHERE id = $1")

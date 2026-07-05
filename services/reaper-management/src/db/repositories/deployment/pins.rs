@@ -23,7 +23,7 @@ impl<'a> PinOps<'a> {
     ) -> Result<VersionPin, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -58,7 +58,7 @@ impl<'a> PinOps<'a> {
     pub async fn get(&self, agent_id: Uuid) -> Result<Option<VersionPin>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -85,7 +85,7 @@ impl<'a> PinOps<'a> {
     pub async fn list(&self, org_id: Uuid) -> Result<Vec<VersionPin>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -107,7 +107,7 @@ impl<'a> PinOps<'a> {
     pub async fn delete(&self, agent_id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = "DELETE FROM version_pins WHERE agent_id = $1";
@@ -130,7 +130,7 @@ impl<'a> PinOps<'a> {
     pub async fn delete_expired(&self) -> Result<u64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();

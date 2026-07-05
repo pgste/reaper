@@ -492,7 +492,7 @@ mod tests {
     }
 
     async fn create_test_org(db: &Database) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
@@ -510,7 +510,7 @@ mod tests {
     }
 
     async fn create_test_policy(db: &Database, org_id: Uuid, name: &str) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let policy_id = Uuid::new_v4();
         let version_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();

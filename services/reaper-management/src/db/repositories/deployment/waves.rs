@@ -23,7 +23,7 @@ impl<'a> WaveOps<'a> {
     ) -> Result<RolloutWave, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -55,7 +55,7 @@ impl<'a> WaveOps<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<RolloutWave>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -80,7 +80,7 @@ impl<'a> WaveOps<'a> {
     ) -> Result<Vec<RolloutWave>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -107,7 +107,7 @@ impl<'a> WaveOps<'a> {
     ) -> Result<RolloutWave, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -166,7 +166,7 @@ impl<'a> WaveOps<'a> {
     ) -> Result<RolloutWave, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"

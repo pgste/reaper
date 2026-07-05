@@ -220,7 +220,7 @@ async fn deep_health_handler(
 async fn check_database(state: &AppState) -> ComponentHealth {
     let start = Instant::now();
 
-    match state.db.sqlite_pool() {
+    match state.db.any_pool() {
         Some(pool) => {
             match tokio::time::timeout(
                 Duration::from_secs(5),
@@ -275,7 +275,7 @@ async fn check_database(state: &AppState) -> ComponentHealth {
 
 /// Quick database check (no latency measurement)
 async fn quick_check_database(state: &AppState) -> bool {
-    match state.db.sqlite_pool() {
+    match state.db.any_pool() {
         Some(pool) => tokio::time::timeout(
             Duration::from_secs(2),
             sqlx::query("SELECT 1").fetch_one(pool),

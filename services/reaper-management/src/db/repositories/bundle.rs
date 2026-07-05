@@ -28,7 +28,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -67,7 +67,7 @@ impl<'a> BundleRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Bundle>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -93,7 +93,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<Vec<Bundle>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = if status_filter.is_some() {
@@ -134,7 +134,7 @@ impl<'a> BundleRepository<'a> {
     pub async fn get_promoted(&self, org_id: Uuid) -> Result<Option<Bundle>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -164,7 +164,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current bundle for audit log
@@ -240,7 +240,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -282,7 +282,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let bundle = self
@@ -319,7 +319,7 @@ impl<'a> BundleRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = "DELETE FROM bundles WHERE id = $1";
@@ -342,7 +342,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -389,7 +389,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = "DELETE FROM bundle_policies WHERE bundle_id = $1 AND policy_id = $2";
@@ -410,7 +410,7 @@ impl<'a> BundleRepository<'a> {
     pub async fn get_policies(&self, bundle_id: Uuid) -> Result<Vec<BundlePolicy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -450,7 +450,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<Vec<BundlePromotion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -503,7 +503,7 @@ impl<'a> BundleRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -532,7 +532,7 @@ impl<'a> BundleRepository<'a> {
     async fn update_policy_count(&self, bundle_id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let count_sql = "SELECT COUNT(*) as cnt FROM bundle_policies WHERE bundle_id = $1";
@@ -554,7 +554,7 @@ impl<'a> BundleRepository<'a> {
     }
 
     /// Convert database row to Bundle
-    fn row_to_bundle(&self, row: &sqlx::sqlite::SqliteRow) -> Result<Bundle, DatabaseError> {
+    fn row_to_bundle(&self, row: &sqlx::any::AnyRow) -> Result<Bundle, DatabaseError> {
         let id: String = row.get("id");
         let org_id: String = row.get("org_id");
         let status: String = row.get("status");
@@ -608,7 +608,7 @@ mod tests {
     }
 
     async fn create_test_org(db: &Database) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(

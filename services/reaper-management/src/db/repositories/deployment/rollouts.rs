@@ -22,7 +22,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -55,7 +55,7 @@ impl<'a> RolloutOps<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Rollout>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -81,7 +81,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Vec<Rollout>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -110,7 +110,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Vec<Rollout>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = if let Some(ns_id) = namespace_id {
@@ -160,7 +160,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -227,7 +227,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -254,7 +254,7 @@ impl<'a> RolloutOps<'a> {
     pub async fn advance_wave(&self, id: Uuid) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();

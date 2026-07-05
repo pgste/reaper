@@ -24,7 +24,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn create(&self, org_id: Uuid, input: RegisterAgent) -> Result<Agent, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -69,7 +69,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -97,7 +97,7 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<Option<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -122,7 +122,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -153,7 +153,7 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<Vec<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -181,7 +181,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn update_heartbeat(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -203,7 +203,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn mark_inactive(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -224,7 +224,7 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<usize, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -245,7 +245,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM agents WHERE id = $1")
@@ -257,7 +257,7 @@ impl<'a> AgentRepository<'a> {
     }
 
     /// Convert database row to Agent
-    fn row_to_agent(&self, row: sqlx::sqlite::SqliteRow) -> Result<Agent, DatabaseError> {
+    fn row_to_agent(&self, row: sqlx::any::AnyRow) -> Result<Agent, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -312,7 +312,7 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -368,7 +368,7 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<Option<crate::domain::agent::AgentMetrics>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"

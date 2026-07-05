@@ -30,7 +30,7 @@ impl<'a> PolicySourceRepository<'a> {
     ) -> Result<PolicySource, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -51,7 +51,7 @@ impl<'a> PolicySourceRepository<'a> {
         .bind(&config_json)
         .bind(input.sync_interval_secs as i64)
         .bind(SyncStatus::Pending.to_string())
-        .bind(true)
+        .bind(1i64)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(pool)
@@ -79,7 +79,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -109,7 +109,7 @@ impl<'a> PolicySourceRepository<'a> {
     ) -> Result<Option<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -136,7 +136,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -165,7 +165,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn list_due_for_sync(&self) -> Result<Vec<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get all enabled sources with sync_interval > 0
@@ -200,7 +200,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn update(&self, id: Uuid, input: UpdatePolicySource) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let mut updates = Vec::new();
@@ -267,7 +267,7 @@ impl<'a> PolicySourceRepository<'a> {
     ) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -295,7 +295,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result = sqlx::query("DELETE FROM policy_sources WHERE id = $1")
@@ -307,7 +307,7 @@ impl<'a> PolicySourceRepository<'a> {
     }
 
     /// Convert database row to PolicySource
-    fn row_to_source(&self, row: sqlx::sqlite::SqliteRow) -> Result<PolicySource, DatabaseError> {
+    fn row_to_source(&self, row: sqlx::any::AnyRow) -> Result<PolicySource, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -346,7 +346,8 @@ impl<'a> PolicySourceRepository<'a> {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
 
-        let is_enabled: bool = row.get("is_enabled");
+        let is_enabled: i64 = row.get("is_enabled");
+        let is_enabled = is_enabled != 0;
 
         Ok(PolicySource {
             id,

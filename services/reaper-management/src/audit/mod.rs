@@ -328,7 +328,7 @@ impl<'a> AuditRepository<'a> {
 
     /// Create a new audit entry
     pub async fn create(&self, entry: &AuditEntry) -> Result<(), AuditError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let details_json = entry
             .details
@@ -371,7 +371,7 @@ impl<'a> AuditRepository<'a> {
 
     /// Query audit logs with filters
     pub async fn query(&self, params: &AuditQuery) -> Result<Vec<AuditEntry>, AuditError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         // Build dynamic query
         let mut query = String::from(
@@ -506,7 +506,7 @@ impl<'a> AuditRepository<'a> {
 
     /// Count entries matching a query
     pub async fn count(&self, params: &AuditQuery) -> Result<u64, AuditError> {
-        let pool = self.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
 
         let mut query = String::from("SELECT COUNT(*) FROM audit_log WHERE 1=1");
         let mut bindings: Vec<String> = Vec::new();

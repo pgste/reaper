@@ -42,7 +42,7 @@ pub(super) async fn list_connections(
         })?;
 
     // Get connections
-    let pool = state.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
     let rows: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
         "SELECT provider, provider_username, scopes, created_at FROM oauth_connections WHERE org_id = $1",
     )
@@ -90,7 +90,7 @@ pub(super) async fn get_connection(
         })?;
 
     // Get connection
-    let pool = state.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
     let row: Option<(String, Option<String>, String, String)> = sqlx::query_as(
         "SELECT provider, provider_username, scopes, created_at FROM oauth_connections WHERE org_id = $1 AND provider = $2",
     )
@@ -157,7 +157,7 @@ pub(super) async fn delete_connection(
     }
 
     // Delete connection
-    let pool = state.db.sqlite_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
     let result = sqlx::query("DELETE FROM oauth_connections WHERE org_id = $1 AND provider = $2")
         .bind(organization.id.to_string())
         .bind(&provider)

@@ -12,7 +12,7 @@ use crate::domain::deployment::{
 
 /// Convert a SQLite row to a DeploymentStrategy
 pub(super) fn row_to_strategy(
-    row: &sqlx::sqlite::SqliteRow,
+    row: &sqlx::any::AnyRow,
 ) -> Result<DeploymentStrategy, DatabaseError> {
     let id: String = row.get("id");
     let org_id: String = row.get("org_id");
@@ -53,7 +53,7 @@ pub(super) fn row_to_strategy(
 }
 
 /// Convert a SQLite row to a Rollout
-pub(super) fn row_to_rollout(row: &sqlx::sqlite::SqliteRow) -> Result<Rollout, DatabaseError> {
+pub(super) fn row_to_rollout(row: &sqlx::any::AnyRow) -> Result<Rollout, DatabaseError> {
     let id: String = row.get("id");
     let bundle_id: String = row.get("bundle_id");
     let strategy_id: Option<String> = row.get("strategy_id");
@@ -108,7 +108,7 @@ pub(super) fn row_to_rollout(row: &sqlx::sqlite::SqliteRow) -> Result<Rollout, D
 }
 
 /// Convert a SQLite row to a RolloutWave
-pub(super) fn row_to_wave(row: &sqlx::sqlite::SqliteRow) -> Result<RolloutWave, DatabaseError> {
+pub(super) fn row_to_wave(row: &sqlx::any::AnyRow) -> Result<RolloutWave, DatabaseError> {
     let id: String = row.get("id");
     let rollout_id: String = row.get("rollout_id");
     let target_agents_json: String = row.get("target_agents");
@@ -148,7 +148,7 @@ pub(super) fn row_to_wave(row: &sqlx::sqlite::SqliteRow) -> Result<RolloutWave, 
 }
 
 /// Convert a SQLite row to a VersionPin
-pub(super) fn row_to_pin(row: &sqlx::sqlite::SqliteRow) -> Result<VersionPin, DatabaseError> {
+pub(super) fn row_to_pin(row: &sqlx::any::AnyRow) -> Result<VersionPin, DatabaseError> {
     let agent_id: String = row.get("agent_id");
     let bundle_id: String = row.get("bundle_id");
     let expires_at: Option<String> = row.get("expires_at");
