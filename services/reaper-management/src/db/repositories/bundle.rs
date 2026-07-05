@@ -37,7 +37,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             INSERT INTO bundles (id, org_id, name, description, version, status, policy_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, '1.0.0', ?, 0, ?, ?)
+            VALUES ($1, $2, $3, $4, '1.0.0', $5, 0, $6, $7)
         "#;
 
         sqlx::query(sql)
@@ -74,7 +74,7 @@ impl<'a> BundleRepository<'a> {
             SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
                    policy_count, created_at, updated_at, compiled_at, promoted_at
             FROM bundles
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -101,7 +101,7 @@ impl<'a> BundleRepository<'a> {
                 SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
                        policy_count, created_at, updated_at, compiled_at, promoted_at
                 FROM bundles
-                WHERE org_id = ? AND status = ?
+                WHERE org_id = $1 AND status = $2
                 ORDER BY created_at DESC
             "#
         } else {
@@ -109,7 +109,7 @@ impl<'a> BundleRepository<'a> {
                 SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
                        policy_count, created_at, updated_at, compiled_at, promoted_at
                 FROM bundles
-                WHERE org_id = ?
+                WHERE org_id = $1
                 ORDER BY created_at DESC
             "#
         };
@@ -141,7 +141,7 @@ impl<'a> BundleRepository<'a> {
             SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
                    policy_count, created_at, updated_at, compiled_at, promoted_at
             FROM bundles
-            WHERE org_id = ? AND status = 'promoted'
+            WHERE org_id = $1 AND status = 'promoted'
             ORDER BY promoted_at DESC
             LIMIT 1
         "#;
@@ -180,22 +180,22 @@ impl<'a> BundleRepository<'a> {
             BundleStatus::Compiled => {
                 r#"
                     UPDATE bundles
-                    SET status = ?, updated_at = ?, compiled_at = ?
-                    WHERE id = ?
+                    SET status = $1, updated_at = $2, compiled_at = $3
+                    WHERE id = $4
                 "#
             }
             BundleStatus::Promoted => {
                 r#"
                     UPDATE bundles
-                    SET status = ?, updated_at = ?, promoted_at = ?
-                    WHERE id = ?
+                    SET status = $1, updated_at = $2, promoted_at = $3
+                    WHERE id = $4
                 "#
             }
             _ => {
                 r#"
                     UPDATE bundles
-                    SET status = ?, updated_at = ?
-                    WHERE id = ?
+                    SET status = $1, updated_at = $2
+                    WHERE id = $3
                 "#
             }
         };
@@ -247,9 +247,9 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             UPDATE bundles
-            SET status = 'compiled', storage_key = ?, size_bytes = ?, checksum = ?,
-                policy_count = ?, compiled_at = ?, updated_at = ?
-            WHERE id = ?
+            SET status = 'compiled', storage_key = $1, size_bytes = $2, checksum = $3,
+                policy_count = $4, compiled_at = $5, updated_at = $6
+            WHERE id = $7
         "#;
 
         sqlx::query(sql)
@@ -297,8 +297,8 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             UPDATE bundles
-            SET name = ?, description = ?, version = ?, updated_at = ?
-            WHERE id = ?
+            SET name = $1, description = $2, version = $3, updated_at = $4
+            WHERE id = $5
         "#;
 
         sqlx::query(sql)
@@ -322,7 +322,7 @@ impl<'a> BundleRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let sql = "DELETE FROM bundles WHERE id = ?";
+        let sql = "DELETE FROM bundles WHERE id = $1";
 
         let result = sqlx::query(sql).bind(id.to_string()).execute(pool).await?;
 
@@ -349,7 +349,7 @@ impl<'a> BundleRepository<'a> {
         let now = Utc::now();
 
         // Get current policy version
-        let version_sql = "SELECT current_version FROM policies WHERE id = ?";
+        let version_sql = "SELECT current_version FROM policies WHERE id = $1";
         let version: i32 = sqlx::query(version_sql)
             .bind(policy_id.to_string())
             .fetch_optional(pool)
@@ -359,7 +359,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             INSERT INTO bundle_policies (id, bundle_id, policy_id, policy_version, priority, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT(bundle_id, policy_id) DO UPDATE SET
                 policy_version = excluded.policy_version,
                 priority = excluded.priority
@@ -392,7 +392,7 @@ impl<'a> BundleRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let sql = "DELETE FROM bundle_policies WHERE bundle_id = ? AND policy_id = ?";
+        let sql = "DELETE FROM bundle_policies WHERE bundle_id = $1 AND policy_id = $2";
 
         sqlx::query(sql)
             .bind(bundle_id.to_string())
@@ -416,7 +416,7 @@ impl<'a> BundleRepository<'a> {
         let sql = r#"
             SELECT bundle_id, policy_id, policy_version, priority
             FROM bundle_policies
-            WHERE bundle_id = ?
+            WHERE bundle_id = $1
             ORDER BY priority ASC
         "#;
 
@@ -456,7 +456,7 @@ impl<'a> BundleRepository<'a> {
         let sql = r#"
             SELECT id, bundle_id, from_status, to_status, promoted_by, notes, created_at
             FROM bundle_promotions
-            WHERE bundle_id = ?
+            WHERE bundle_id = $1
             ORDER BY created_at DESC
         "#;
 
@@ -511,7 +511,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             INSERT INTO bundle_promotions (id, bundle_id, from_status, to_status, promoted_by, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#;
 
         sqlx::query(sql)
@@ -535,14 +535,14 @@ impl<'a> BundleRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let count_sql = "SELECT COUNT(*) as cnt FROM bundle_policies WHERE bundle_id = ?";
+        let count_sql = "SELECT COUNT(*) as cnt FROM bundle_policies WHERE bundle_id = $1";
         let count: i32 = sqlx::query(count_sql)
             .bind(bundle_id.to_string())
             .fetch_one(pool)
             .await
             .map(|r| r.get::<i32, _>("cnt"))?;
 
-        let update_sql = "UPDATE bundles SET policy_count = ?, updated_at = ? WHERE id = ?";
+        let update_sql = "UPDATE bundles SET policy_count = $1, updated_at = $2 WHERE id = $3";
         sqlx::query(update_sql)
             .bind(count)
             .bind(Utc::now().to_rfc3339())
@@ -612,7 +612,7 @@ mod tests {
         let org_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)"
         )
         .bind(org_id.to_string())
         .bind("Test Org")

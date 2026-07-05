@@ -176,7 +176,7 @@ pub(super) async fn github_callback(
             id, user_id, org_id, provider, provider_user_id, provider_username,
             access_token_encrypted, refresh_token_encrypted, token_expires_at,
             scopes, created_at, updated_at
-        ) VALUES (?, ?, ?, 'github', ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES ($1, $2, $3, 'github', $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT(org_id, provider) DO UPDATE SET
             user_id = excluded.user_id,
             provider_user_id = excluded.provider_user_id,
@@ -323,7 +323,7 @@ pub(super) async fn create_source_from_github(
     sqlx::query(
         r#"
         INSERT INTO sources (id, org_id, namespace_id, name, source_type, config, is_active, created_at, updated_at)
-        VALUES (?, ?, NULL, ?, 'git', ?, 1, ?, ?)
+        VALUES ($1, $2, NULL, $3, 'git', $4, 1, $5, $6)
         "#,
     )
     .bind(source_id.to_string())

@@ -264,7 +264,7 @@ mod tests {
         let org_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -283,7 +283,7 @@ mod tests {
         let bundle_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(bundle_id.to_string())
         .bind(org_id.to_string())
@@ -305,7 +305,7 @@ mod tests {
         let agent_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO agents (id, org_id, name, status, registered_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agents (id, org_id, name, status, registered_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(agent_id.to_string())
         .bind(org_id.to_string())

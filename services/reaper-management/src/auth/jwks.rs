@@ -445,7 +445,7 @@ impl<'a> JwksConfigRepository<'a> {
 
         let sql = r#"
             INSERT INTO jwks_configs (id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, 3600, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, 1, 3600, $7, $8)
         "#;
 
         sqlx::query(sql)
@@ -478,7 +478,7 @@ impl<'a> JwksConfigRepository<'a> {
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -502,7 +502,7 @@ impl<'a> JwksConfigRepository<'a> {
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE org_id = ? AND is_active = 1
+            WHERE org_id = $1 AND is_active = 1
             ORDER BY name ASC
         "#;
 
@@ -527,7 +527,7 @@ impl<'a> JwksConfigRepository<'a> {
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name ASC
         "#;
 
@@ -546,7 +546,7 @@ impl<'a> JwksConfigRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM jwks_configs WHERE id = ?")
+        let result = sqlx::query("DELETE FROM jwks_configs WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -568,7 +568,7 @@ impl<'a> JwksConfigRepository<'a> {
         let now = Utc::now();
 
         let result =
-            sqlx::query("UPDATE jwks_configs SET is_active = ?, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE jwks_configs SET is_active = $1, updated_at = $2 WHERE id = $3")
                 .bind(is_active as i32)
                 .bind(now.to_rfc3339())
                 .bind(id.to_string())
@@ -594,7 +594,7 @@ impl<'a> JwksConfigRepository<'a> {
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE issuer = ? AND is_active = 1
+            WHERE issuer = $1 AND is_active = 1
             ORDER BY created_at DESC
         "#;
 

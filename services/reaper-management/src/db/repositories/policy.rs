@@ -33,7 +33,7 @@ impl<'a> PolicyRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO policies (id, org_id, team_id, source_id, name, description, language, source_path, current_version, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 1, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -56,7 +56,7 @@ impl<'a> PolicyRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at)
-            VALUES (?, ?, 1, ?, ?, ?)
+            VALUES ($1, $2, 1, $3, $4, $5)
             "#,
         )
         .bind(version_id.to_string())
@@ -83,7 +83,7 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
             FROM policies
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -111,7 +111,7 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
             FROM policies
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -144,9 +144,9 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
             FROM policies
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(org_id.to_string())
@@ -170,7 +170,7 @@ impl<'a> PolicyRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM policies WHERE org_id = ?")
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM policies WHERE org_id = $1")
             .bind(org_id.to_string())
             .fetch_one(pool)
             .await?;
@@ -210,7 +210,7 @@ impl<'a> PolicyRepository<'a> {
             sqlx::query(
                 r#"
                 INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
             )
             .bind(version_id.to_string())
@@ -226,8 +226,8 @@ impl<'a> PolicyRepository<'a> {
             sqlx::query(
                 r#"
                 UPDATE policies
-                SET name = ?, description = ?, is_active = ?, current_version = ?, updated_at = ?
-                WHERE id = ?
+                SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
+                WHERE id = $6
                 "#,
             )
             .bind(&name)
@@ -243,8 +243,8 @@ impl<'a> PolicyRepository<'a> {
             sqlx::query(
                 r#"
                 UPDATE policies
-                SET name = ?, description = ?, is_active = ?, updated_at = ?
-                WHERE id = ?
+                SET name = $1, description = $2, is_active = $3, updated_at = $4
+                WHERE id = $5
                 "#,
             )
             .bind(&name)
@@ -266,7 +266,7 @@ impl<'a> PolicyRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM policies WHERE id = ?")
+        let result = sqlx::query("DELETE FROM policies WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -282,7 +282,7 @@ impl<'a> PolicyRepository<'a> {
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i32,) = sqlx::query_as(
-            "SELECT COALESCE(MAX(version), 0) FROM policy_versions WHERE policy_id = ?",
+            "SELECT COALESCE(MAX(version), 0) FROM policy_versions WHERE policy_id = $1",
         )
         .bind(policy_id.to_string())
         .fetch_one(pool)
@@ -302,7 +302,7 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, policy_id, version, content, content_hash, source_commit, created_at
             FROM policy_versions
-            WHERE policy_id = ?
+            WHERE policy_id = $1
             ORDER BY version DESC
             "#,
         )
@@ -333,7 +333,7 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, policy_id, version, content, content_hash, source_commit, created_at
             FROM policy_versions
-            WHERE policy_id = ? AND version = ?
+            WHERE policy_id = $1 AND version = $2
             "#,
         )
         .bind(policy_id.to_string())
@@ -361,7 +361,7 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, policy_id, version, content, content_hash, source_commit, created_at
             FROM policy_versions
-            WHERE policy_id = ?
+            WHERE policy_id = $1
             ORDER BY version DESC
             LIMIT 1
             "#,

@@ -37,7 +37,7 @@ impl<'a> StrategyOps<'a> {
 
         let sql = r#"
             INSERT INTO deployment_strategies (id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#;
 
         sqlx::query(sql)
@@ -68,7 +68,7 @@ impl<'a> StrategyOps<'a> {
         let sql = r#"
             SELECT id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at
             FROM deployment_strategies
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -94,7 +94,7 @@ impl<'a> StrategyOps<'a> {
             let sql = r#"
                 SELECT id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at
                 FROM deployment_strategies
-                WHERE org_id = ? AND (namespace_id = ? OR namespace_id IS NULL)
+                WHERE org_id = $1 AND (namespace_id = $2 OR namespace_id IS NULL)
                 ORDER BY is_default DESC, name ASC
             "#;
             sqlx::query(sql)
@@ -106,7 +106,7 @@ impl<'a> StrategyOps<'a> {
             let sql = r#"
                 SELECT id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at
                 FROM deployment_strategies
-                WHERE org_id = ?
+                WHERE org_id = $1
                 ORDER BY is_default DESC, name ASC
             "#;
             sqlx::query(sql)
@@ -134,7 +134,7 @@ impl<'a> StrategyOps<'a> {
             let sql = r#"
                 SELECT id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at
                 FROM deployment_strategies
-                WHERE org_id = ? AND is_default = 1 AND (namespace_id = ? OR namespace_id IS NULL)
+                WHERE org_id = $1 AND is_default = 1 AND (namespace_id = $2 OR namespace_id IS NULL)
                 ORDER BY namespace_id DESC NULLS LAST
                 LIMIT 1
             "#;
@@ -147,7 +147,7 @@ impl<'a> StrategyOps<'a> {
             let sql = r#"
                 SELECT id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at
                 FROM deployment_strategies
-                WHERE org_id = ? AND is_default = 1 AND namespace_id IS NULL
+                WHERE org_id = $1 AND is_default = 1 AND namespace_id IS NULL
                 LIMIT 1
             "#;
             sqlx::query(sql)
@@ -166,7 +166,7 @@ impl<'a> StrategyOps<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let sql = "DELETE FROM deployment_strategies WHERE id = ?";
+        let sql = "DELETE FROM deployment_strategies WHERE id = $1";
         let result = sqlx::query(sql).bind(id.to_string()).execute(pool).await?;
 
         if result.rows_affected() == 0 {
@@ -191,14 +191,14 @@ impl<'a> StrategyOps<'a> {
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         if let Some(ns_id) = namespace_id {
-            let sql = "UPDATE deployment_strategies SET is_default = 0 WHERE org_id = ? AND namespace_id = ?";
+            let sql = "UPDATE deployment_strategies SET is_default = 0 WHERE org_id = $1 AND namespace_id = $2";
             sqlx::query(sql)
                 .bind(org_id.to_string())
                 .bind(ns_id.to_string())
                 .execute(pool)
                 .await?;
         } else {
-            let sql = "UPDATE deployment_strategies SET is_default = 0 WHERE org_id = ? AND namespace_id IS NULL";
+            let sql = "UPDATE deployment_strategies SET is_default = 0 WHERE org_id = $1 AND namespace_id IS NULL";
             sqlx::query(sql)
                 .bind(org_id.to_string())
                 .execute(pool)

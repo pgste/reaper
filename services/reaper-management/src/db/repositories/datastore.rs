@@ -77,7 +77,7 @@ impl<'a> DatastoreRepository<'a> {
         sqlx::query(
             r#"INSERT INTO datastores
                (id, org_id, namespace_id, template, model, current_version, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 0, ?, ?)"#,
+               VALUES ($1, $2, $3, $4, $5, 0, $6, $7)"#,
         )
         .bind(id.to_string())
         .bind(org_id.to_string())
@@ -110,7 +110,7 @@ impl<'a> DatastoreRepository<'a> {
         let row = sqlx::query(
             r#"SELECT id, org_id, namespace_id, template, model, current_version,
                       created_at, updated_at
-               FROM datastores WHERE org_id = ? AND namespace_id = ?"#,
+               FROM datastores WHERE org_id = $1 AND namespace_id = $2"#,
         )
         .bind(org_id.to_string())
         .bind(namespace_id.to_string())
@@ -148,7 +148,7 @@ impl<'a> DatastoreRepository<'a> {
         let pool = self.pool()?;
         let model_json = serde_json::to_string(model)
             .map_err(|e| DatabaseError::Config(format!("serialize model: {e}")))?;
-        sqlx::query("UPDATE datastores SET model = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE datastores SET model = $1, updated_at = $2 WHERE id = $3")
             .bind(&model_json)
             .bind(Utc::now().to_rfc3339())
             .bind(datastore_id.to_string())
@@ -176,7 +176,7 @@ impl<'a> DatastoreRepository<'a> {
             return Ok(());
         }
         let row = sqlx::query(
-            "UPDATE datastores SET change_seq = change_seq + ? WHERE id = ? \
+            "UPDATE datastores SET change_seq = change_seq + $1 WHERE id = $2 \
              RETURNING change_seq",
         )
         .bind(marks.len() as i64)
@@ -190,7 +190,7 @@ impl<'a> DatastoreRepository<'a> {
             sqlx::query(
                 "INSERT INTO adm_changes \
                  (id, datastore_id, seq, entity_id, tombstone, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(Uuid::new_v4().to_string())
             .bind(datastore_id.to_string())
@@ -214,13 +214,13 @@ impl<'a> DatastoreRepository<'a> {
         limit: i64,
     ) -> Result<(i64, i64, Vec<(String, bool)>), DatabaseError> {
         let pool = self.pool()?;
-        let head: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = ?")
+        let head: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = $1")
             .bind(datastore_id.to_string())
             .fetch_one(pool)
             .await?
             .get("change_seq");
         let min_available: i64 = sqlx::query(
-            "SELECT COALESCE(MIN(seq), 0) AS min_seq FROM adm_changes WHERE datastore_id = ?",
+            "SELECT COALESCE(MIN(seq), 0) AS min_seq FROM adm_changes WHERE datastore_id = $1",
         )
         .bind(datastore_id.to_string())
         .fetch_one(pool)
@@ -231,11 +231,11 @@ impl<'a> DatastoreRepository<'a> {
             "SELECT c.entity_id, c.seq AS last_seq, c.tombstone \
              FROM adm_changes c \
              JOIN (SELECT entity_id, MAX(seq) AS m FROM adm_changes \
-                   WHERE datastore_id = ?1 AND seq > ?2 \
+                   WHERE datastore_id = $1 AND seq > $2 \
                    GROUP BY entity_id) latest \
                ON c.entity_id = latest.entity_id AND c.seq = latest.m \
-             WHERE c.datastore_id = ?1 \
-             ORDER BY c.seq LIMIT ?3",
+             WHERE c.datastore_id = $1 \
+             ORDER BY c.seq LIMIT $3",
         )
         .bind(datastore_id.to_string())
         .bind(since_seq)
@@ -268,7 +268,7 @@ impl<'a> DatastoreRepository<'a> {
             .await?;
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT object, relation, subject FROM adm_tuples              WHERE datastore_id = ? AND (object = ? OR subject = ?)              ORDER BY object, relation, subject",
+            "SELECT object, relation, subject FROM adm_tuples              WHERE datastore_id = $1 AND (object = $2 OR subject = $3)              ORDER BY object, relation, subject",
         )
         .bind(datastore_id.to_string())
         .bind(entity_id)
@@ -298,7 +298,7 @@ impl<'a> DatastoreRepository<'a> {
     ) -> Result<(bool, Vec<String>), DatabaseError> {
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT object, subject FROM adm_tuples              WHERE datastore_id = ? AND (object = ? OR subject = ?)",
+            "SELECT object, subject FROM adm_tuples              WHERE datastore_id = $1 AND (object = $2 OR subject = $3)",
         )
         .bind(datastore_id.to_string())
         .bind(entity_id)
@@ -316,23 +316,24 @@ impl<'a> DatastoreRepository<'a> {
         }
         let mut tx = pool.begin().await?;
         sqlx::query(
-            "DELETE FROM adm_tuples WHERE datastore_id = ? AND (object = ? OR subject = ?)",
+            "DELETE FROM adm_tuples WHERE datastore_id = $1 AND (object = $2 OR subject = $3)",
         )
         .bind(datastore_id.to_string())
         .bind(entity_id)
         .bind(entity_id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("DELETE FROM adm_role_bindings WHERE datastore_id = ? AND subject = ?")
+        sqlx::query("DELETE FROM adm_role_bindings WHERE datastore_id = $1 AND subject = $2")
             .bind(datastore_id.to_string())
             .bind(entity_id)
             .execute(&mut *tx)
             .await?;
-        let del = sqlx::query("DELETE FROM adm_entities WHERE datastore_id = ? AND entity_id = ?")
-            .bind(datastore_id.to_string())
-            .bind(entity_id)
-            .execute(&mut *tx)
-            .await?;
+        let del =
+            sqlx::query("DELETE FROM adm_entities WHERE datastore_id = $1 AND entity_id = $2")
+                .bind(datastore_id.to_string())
+                .bind(entity_id)
+                .execute(&mut *tx)
+                .await?;
         let deleted = del.rows_affected() > 0;
 
         let mut marks: Vec<(String, bool)> = vec![(entity_id.to_string(), true)];
@@ -359,7 +360,7 @@ impl<'a> DatastoreRepository<'a> {
         sqlx::query(
             r#"INSERT INTO adm_entities
                (id, datastore_id, entity_id, entity_type, attributes, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                ON CONFLICT(datastore_id, entity_id)
                DO UPDATE SET entity_type = excluded.entity_type,
                              attributes = excluded.attributes,
@@ -388,7 +389,7 @@ impl<'a> DatastoreRepository<'a> {
         let pool = self.pool()?;
         let row = sqlx::query(
             "SELECT entity_id, entity_type, attributes FROM adm_entities \
-             WHERE datastore_id = ? AND entity_id = ?",
+             WHERE datastore_id = $1 AND entity_id = $2",
         )
         .bind(datastore_id.to_string())
         .bind(entity_id)
@@ -417,7 +418,7 @@ impl<'a> DatastoreRepository<'a> {
             Some(t) => {
                 sqlx::query(
                     "SELECT entity_id, entity_type, attributes FROM adm_entities \
-                     WHERE datastore_id = ? AND entity_type = ? ORDER BY entity_id",
+                     WHERE datastore_id = $1 AND entity_type = $2 ORDER BY entity_id",
                 )
                 .bind(datastore_id.to_string())
                 .bind(t)
@@ -427,7 +428,7 @@ impl<'a> DatastoreRepository<'a> {
             None => {
                 sqlx::query(
                     "SELECT entity_id, entity_type, attributes FROM adm_entities \
-                     WHERE datastore_id = ? ORDER BY entity_id",
+                     WHERE datastore_id = $1 ORDER BY entity_id",
                 )
                 .bind(datastore_id.to_string())
                 .fetch_all(pool)
@@ -444,7 +445,7 @@ impl<'a> DatastoreRepository<'a> {
     ) -> Result<bool, DatabaseError> {
         let pool = self.pool()?;
         let result =
-            sqlx::query("DELETE FROM adm_entities WHERE datastore_id = ? AND entity_id = ?")
+            sqlx::query("DELETE FROM adm_entities WHERE datastore_id = $1 AND entity_id = $2")
                 .bind(datastore_id.to_string())
                 .bind(entity_id)
                 .execute(pool)
@@ -465,7 +466,7 @@ impl<'a> DatastoreRepository<'a> {
         let mut tx = pool.begin().await?;
         sqlx::query(
             r#"INSERT INTO adm_role_bindings (id, datastore_id, subject, role, scope, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES ($1, $2, $3, $4, $5, $6)
                ON CONFLICT(datastore_id, subject, role, scope) DO NOTHING"#,
         )
         .bind(Uuid::new_v4().to_string())
@@ -490,7 +491,7 @@ impl<'a> DatastoreRepository<'a> {
         let mut tx = pool.begin().await?;
         let result = sqlx::query(
             "DELETE FROM adm_role_bindings \
-             WHERE datastore_id = ? AND subject = ? AND role = ? AND scope = ?",
+             WHERE datastore_id = $1 AND subject = $2 AND role = $3 AND scope = $4",
         )
         .bind(datastore_id.to_string())
         .bind(&binding.subject)
@@ -523,6 +524,7 @@ impl<'a> DatastoreRepository<'a> {
             sql.push_str(" AND role = ?");
         }
         sql.push_str(" ORDER BY subject, role, scope");
+        let sql = crate::db::numbered_placeholders(&sql);
 
         let mut query = sqlx::query(&sql).bind(datastore_id.to_string());
         if let Some(s) = subject {
@@ -555,7 +557,7 @@ impl<'a> DatastoreRepository<'a> {
         let mut tx = pool.begin().await?;
         sqlx::query(
             r#"INSERT INTO adm_tuples (id, datastore_id, object, relation, subject, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES ($1, $2, $3, $4, $5, $6)
                ON CONFLICT(datastore_id, object, relation, subject) DO NOTHING"#,
         )
         .bind(Uuid::new_v4().to_string())
@@ -588,7 +590,7 @@ impl<'a> DatastoreRepository<'a> {
         let mut tx = pool.begin().await?;
         let result = sqlx::query(
             "DELETE FROM adm_tuples \
-             WHERE datastore_id = ? AND object = ? AND relation = ? AND subject = ?",
+             WHERE datastore_id = $1 AND object = $2 AND relation = $3 AND subject = $4",
         )
         .bind(datastore_id.to_string())
         .bind(&tuple.object)
@@ -631,6 +633,7 @@ impl<'a> DatastoreRepository<'a> {
             sql.push_str(" AND subject = ?");
         }
         sql.push_str(" ORDER BY object, relation, subject");
+        let sql = crate::db::numbered_placeholders(&sql);
 
         let mut query = sqlx::query(&sql).bind(datastore_id.to_string());
         for value in [object, relation, subject].into_iter().flatten() {
@@ -675,7 +678,7 @@ impl<'a> DatastoreRepository<'a> {
 
         // Pin the snapshot to its position in the change stream: agents
         // that load version N start pulling deltas from N's change_seq.
-        let head_seq: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = ?")
+        let head_seq: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = $1")
             .bind(store.id.to_string())
             .fetch_one(pool)
             .await?
@@ -686,7 +689,7 @@ impl<'a> DatastoreRepository<'a> {
                (id, datastore_id, version, checksum, document,
                 entity_count, tuple_count, binding_count, published_by, published_at,
                 change_seq)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
         )
         .bind(Uuid::new_v4().to_string())
         .bind(store.id.to_string())
@@ -707,7 +710,7 @@ impl<'a> DatastoreRepository<'a> {
         // the API tells such replicas snapshot_required).
         if store.current_version > 0 {
             if let Some(prev) = sqlx::query(
-                "SELECT change_seq FROM adm_versions                  WHERE datastore_id = ? AND version = ?",
+                "SELECT change_seq FROM adm_versions                  WHERE datastore_id = $1 AND version = $2",
             )
             .bind(store.id.to_string())
             .bind(store.current_version)
@@ -715,7 +718,7 @@ impl<'a> DatastoreRepository<'a> {
             .await?
             {
                 let prev_seq: i64 = prev.get("change_seq");
-                sqlx::query("DELETE FROM adm_changes WHERE datastore_id = ? AND seq <= ?")
+                sqlx::query("DELETE FROM adm_changes WHERE datastore_id = $1 AND seq <= $2")
                     .bind(store.id.to_string())
                     .bind(prev_seq)
                     .execute(pool)
@@ -723,7 +726,7 @@ impl<'a> DatastoreRepository<'a> {
             }
         }
 
-        sqlx::query("UPDATE datastores SET current_version = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE datastores SET current_version = $1, updated_at = $2 WHERE id = $3")
             .bind(version)
             .bind(&now)
             .bind(store.id.to_string())
@@ -749,9 +752,9 @@ impl<'a> DatastoreRepository<'a> {
         let id = datastore_id.to_string();
         let row = sqlx::query(
             "SELECT \
-               (SELECT COUNT(*) FROM adm_entities WHERE datastore_id = ?1) AS entities, \
-               (SELECT COUNT(*) FROM adm_role_bindings WHERE datastore_id = ?1) AS bindings, \
-               (SELECT COUNT(*) FROM adm_tuples WHERE datastore_id = ?1) AS tuples",
+               (SELECT COUNT(*) FROM adm_entities WHERE datastore_id = $1) AS entities, \
+               (SELECT COUNT(*) FROM adm_role_bindings WHERE datastore_id = $1) AS bindings, \
+               (SELECT COUNT(*) FROM adm_tuples WHERE datastore_id = $1) AS tuples",
         )
         .bind(&id)
         .fetch_one(pool)
@@ -767,7 +770,7 @@ impl<'a> DatastoreRepository<'a> {
         let rows = sqlx::query(
             "SELECT version, checksum, change_seq, entity_count, tuple_count, binding_count, \
                     published_by, published_at \
-             FROM adm_versions WHERE datastore_id = ? ORDER BY version DESC",
+             FROM adm_versions WHERE datastore_id = $1 ORDER BY version DESC",
         )
         .bind(datastore_id.to_string())
         .fetch_all(pool)
@@ -797,7 +800,7 @@ impl<'a> DatastoreRepository<'a> {
         let row = sqlx::query(
             "SELECT version, checksum, change_seq, document, entity_count, tuple_count, binding_count, \
                     published_by, published_at \
-             FROM adm_versions WHERE datastore_id = ? AND version = ?",
+             FROM adm_versions WHERE datastore_id = $1 AND version = $2",
         )
         .bind(datastore_id.to_string())
         .bind(version)

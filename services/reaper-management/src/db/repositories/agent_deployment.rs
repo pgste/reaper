@@ -31,7 +31,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             r#"
             INSERT INTO agent_deployments
                 (id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(deployment.id.to_string())
@@ -60,7 +60,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE id = ?
+                FROM agent_deployments WHERE id = $1
                 "#,
             )
             .bind(id.to_string())
@@ -84,7 +84,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE rollout_id = ?
+                FROM agent_deployments WHERE rollout_id = $1
                 ORDER BY created_at
                 "#,
             )
@@ -111,7 +111,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE agent_id = ?
+                FROM agent_deployments WHERE agent_id = $1
                 ORDER BY created_at DESC LIMIT 1
                 "#,
             )
@@ -137,7 +137,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE agent_id = ? AND bundle_id = ?
+                FROM agent_deployments WHERE agent_id = $1 AND bundle_id = $2
                 ORDER BY created_at DESC LIMIT 1
                 "#,
             )
@@ -170,8 +170,8 @@ impl<'a> AgentDeploymentRepository<'a> {
         sqlx::query(
             r#"
             UPDATE agent_deployments
-            SET status = ?, error_message = ?, deployed_at = COALESCE(?, deployed_at)
-            WHERE id = ?
+            SET status = $1, error_message = $2, deployed_at = COALESCE($3, deployed_at)
+            WHERE id = $4
             "#,
         )
         .bind(status.to_string())
@@ -191,7 +191,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             .sqlite_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
-        sqlx::query("UPDATE agent_deployments SET acknowledged_at = ? WHERE id = ?")
+        sqlx::query("UPDATE agent_deployments SET acknowledged_at = $1 WHERE id = $2")
             .bind(Utc::now().to_rfc3339())
             .bind(id.to_string())
             .execute(pool)
@@ -216,7 +216,7 @@ impl<'a> AgentDeploymentRepository<'a> {
                 SUM(CASE WHEN status = 'deployed' THEN 1 ELSE 0 END) as deployed,
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
                 SUM(CASE WHEN acknowledged_at IS NOT NULL THEN 1 ELSE 0 END) as acknowledged
-            FROM agent_deployments WHERE rollout_id = ?
+            FROM agent_deployments WHERE rollout_id = $1
             "#,
         )
         .bind(rollout_id.to_string())
@@ -247,7 +247,7 @@ impl<'a> AgentDeploymentRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE rollout_id = ? AND status = 'failed'
+                FROM agent_deployments WHERE rollout_id = $1 AND status = 'failed'
                 ORDER BY created_at
                 "#,
             )
@@ -336,7 +336,7 @@ impl<'a> RollbackConfigRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
-                FROM rollback_configs WHERE org_id = ? AND namespace_id = ?
+                FROM rollback_configs WHERE org_id = $1 AND namespace_id = $2
                 "#,
             )
             .bind(org_id.to_string())
@@ -347,7 +347,7 @@ impl<'a> RollbackConfigRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
-                FROM rollback_configs WHERE org_id = ? AND namespace_id IS NULL
+                FROM rollback_configs WHERE org_id = $1 AND namespace_id IS NULL
                 "#,
             )
             .bind(org_id.to_string())
@@ -369,7 +369,7 @@ impl<'a> RollbackConfigRepository<'a> {
             r#"
             INSERT INTO rollback_configs
                 (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT(org_id, namespace_id) DO UPDATE SET
                 is_enabled = excluded.is_enabled,
                 error_rate_threshold = excluded.error_rate_threshold,

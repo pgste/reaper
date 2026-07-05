@@ -40,7 +40,7 @@ impl<'a> PolicySourceRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO policy_sources (id, org_id, name, description, source_type, config, sync_interval_secs, sync_status, is_enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(id.to_string())
@@ -88,7 +88,7 @@ impl<'a> PolicySourceRepository<'a> {
                    sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
                    created_at, updated_at
             FROM policy_sources
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -118,7 +118,7 @@ impl<'a> PolicySourceRepository<'a> {
                    sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
                    created_at, updated_at
             FROM policy_sources
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -145,7 +145,7 @@ impl<'a> PolicySourceRepository<'a> {
                    sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
                    created_at, updated_at
             FROM policy_sources
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name ASC
             "#,
         )
@@ -177,7 +177,7 @@ impl<'a> PolicySourceRepository<'a> {
             FROM policy_sources
             WHERE is_enabled = 1
               AND sync_interval_secs > 0
-              AND sync_status != ?
+              AND sync_status != $1
             ORDER BY last_sync_at ASC NULLS FIRST
             "#,
         )
@@ -242,10 +242,10 @@ impl<'a> PolicySourceRepository<'a> {
         updates.push("updated_at = ?");
         bindings.push(Utc::now().to_rfc3339());
 
-        let sql = format!(
+        let sql = crate::db::numbered_placeholders(&format!(
             "UPDATE policy_sources SET {} WHERE id = ?",
             updates.join(", ")
-        );
+        ));
 
         let mut query = sqlx::query(&sql);
         for binding in &bindings {
@@ -275,8 +275,8 @@ impl<'a> PolicySourceRepository<'a> {
         let result = sqlx::query(
             r#"
             UPDATE policy_sources
-            SET sync_status = ?, last_sync_at = ?, last_sync_error = ?, last_sync_commit = ?, updated_at = ?
-            WHERE id = ?
+            SET sync_status = $1, last_sync_at = $2, last_sync_error = $3, last_sync_commit = $4, updated_at = $5
+            WHERE id = $6
             "#,
         )
         .bind(status.to_string())
@@ -298,7 +298,7 @@ impl<'a> PolicySourceRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM policy_sources WHERE id = ?")
+        let result = sqlx::query("DELETE FROM policy_sources WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;

@@ -496,7 +496,7 @@ mod tests {
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)"
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -518,7 +518,7 @@ mod tests {
         let content_hash = format!("{:x}", sha2::Sha256::digest(content.as_bytes()));
 
         sqlx::query(
-            "INSERT INTO policies (id, org_id, name, language, current_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO policies (id, org_id, name, language, current_version, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)"
         )
         .bind(policy_id.to_string())
         .bind(org_id.to_string())
@@ -532,7 +532,7 @@ mod tests {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6)"
         )
         .bind(version_id.to_string())
         .bind(policy_id.to_string())

@@ -341,7 +341,7 @@ impl<'a> AuditRepository<'a> {
             INSERT INTO audit_log (
                 id, org_id, actor_type, actor_id, action,
                 resource_type, resource_id, details, ip_address, user_agent, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(entry.id.to_string())
@@ -442,6 +442,8 @@ impl<'a> AuditRepository<'a> {
             query.push_str(&format!(" OFFSET {}", offset));
         }
 
+        let query = crate::db::numbered_placeholders(&query);
+
         // Execute with bindings
         let mut q = sqlx::query_as::<
             _,
@@ -534,6 +536,7 @@ impl<'a> AuditRepository<'a> {
             bindings.push(to.to_rfc3339());
         }
 
+        let query = crate::db::numbered_placeholders(&query);
         let mut q = sqlx::query_as::<_, (i64,)>(&query);
         for binding in &bindings {
             q = q.bind(binding);

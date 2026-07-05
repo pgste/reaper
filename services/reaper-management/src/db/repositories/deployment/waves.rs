@@ -33,7 +33,7 @@ impl<'a> WaveOps<'a> {
 
         let sql = r#"
             INSERT INTO rollout_waves (id, rollout_id, wave_number, target_agents, status, deployed_count, created_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
+            VALUES ($1, $2, $3, $4, $5, 0, $6)
         "#;
 
         sqlx::query(sql)
@@ -62,7 +62,7 @@ impl<'a> WaveOps<'a> {
             SELECT id, rollout_id, wave_number, target_agents, status, deployed_count,
                    started_at, completed_at, created_at
             FROM rollout_waves
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -87,7 +87,7 @@ impl<'a> WaveOps<'a> {
             SELECT id, rollout_id, wave_number, target_agents, status, deployed_count,
                    started_at, completed_at, created_at
             FROM rollout_waves
-            WHERE rollout_id = ?
+            WHERE rollout_id = $1
             ORDER BY wave_number ASC
         "#;
 
@@ -116,8 +116,8 @@ impl<'a> WaveOps<'a> {
             WaveStatus::Deploying => {
                 let sql = r#"
                     UPDATE rollout_waves
-                    SET status = ?, started_at = ?
-                    WHERE id = ?
+                    SET status = $1, started_at = $2
+                    WHERE id = $3
                 "#;
                 sqlx::query(sql)
                     .bind(status.to_string())
@@ -129,8 +129,8 @@ impl<'a> WaveOps<'a> {
             WaveStatus::Completed | WaveStatus::Failed => {
                 let sql = r#"
                     UPDATE rollout_waves
-                    SET status = ?, completed_at = ?
-                    WHERE id = ?
+                    SET status = $1, completed_at = $2
+                    WHERE id = $3
                 "#;
                 sqlx::query(sql)
                     .bind(status.to_string())
@@ -142,8 +142,8 @@ impl<'a> WaveOps<'a> {
             _ => {
                 let sql = r#"
                     UPDATE rollout_waves
-                    SET status = ?
-                    WHERE id = ?
+                    SET status = $1
+                    WHERE id = $2
                 "#;
                 sqlx::query(sql)
                     .bind(status.to_string())
@@ -171,8 +171,8 @@ impl<'a> WaveOps<'a> {
 
         let sql = r#"
             UPDATE rollout_waves
-            SET deployed_count = deployed_count + ?
-            WHERE id = ?
+            SET deployed_count = deployed_count + $1
+            WHERE id = $2
         "#;
 
         sqlx::query(sql)

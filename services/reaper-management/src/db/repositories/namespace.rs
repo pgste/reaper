@@ -41,7 +41,7 @@ impl<'a> NamespaceRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO namespaces (id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -82,7 +82,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -110,7 +110,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE org_id = ? AND slug = ?
+            WHERE org_id = $1 AND slug = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -135,7 +135,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY slug ASC
             "#,
         )
@@ -162,7 +162,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE org_id = ? AND parent_id IS NULL
+            WHERE org_id = $1 AND parent_id IS NULL
             ORDER BY slug ASC
             "#,
         )
@@ -189,7 +189,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE parent_id = ?
+            WHERE parent_id = $1
             ORDER BY slug ASC
             "#,
         )
@@ -246,7 +246,10 @@ impl<'a> NamespaceRepository<'a> {
         updates.push("updated_at = ?");
         bindings.push(Utc::now().to_rfc3339());
 
-        let sql = format!("UPDATE namespaces SET {} WHERE id = ?", updates.join(", "));
+        let sql = crate::db::numbered_placeholders(&format!(
+            "UPDATE namespaces SET {} WHERE id = ?",
+            updates.join(", ")
+        ));
 
         let mut query = sqlx::query(&sql);
         for binding in &bindings {
@@ -267,12 +270,12 @@ impl<'a> NamespaceRepository<'a> {
 
         // Delete child namespaces first (recursive via ON DELETE CASCADE or manually)
         // For safety, we'll delete subscriptions first
-        sqlx::query("DELETE FROM agent_subscriptions WHERE namespace_id = ?")
+        sqlx::query("DELETE FROM agent_subscriptions WHERE namespace_id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
 
-        let result = sqlx::query("DELETE FROM namespaces WHERE id = ?")
+        let result = sqlx::query("DELETE FROM namespaces WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -341,7 +344,7 @@ impl<'a> NamespaceRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO agent_subscriptions (agent_id, namespace_id, include_children, created_at)
-            VALUES (?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT(agent_id, namespace_id) DO UPDATE SET include_children = excluded.include_children
             "#,
         )
@@ -374,7 +377,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT agent_id, namespace_id, include_children, created_at
             FROM agent_subscriptions
-            WHERE agent_id = ?
+            WHERE agent_id = $1
             "#,
         )
         .bind(agent_id.to_string())
@@ -403,7 +406,7 @@ impl<'a> NamespaceRepository<'a> {
             r#"
             SELECT agent_id, namespace_id, include_children, created_at
             FROM agent_subscriptions
-            WHERE namespace_id = ?
+            WHERE namespace_id = $1
             "#,
         )
         .bind(namespace_id.to_string())
@@ -430,7 +433,7 @@ impl<'a> NamespaceRepository<'a> {
 
         let rows = sqlx::query(
             r#"
-            SELECT agent_id FROM agent_subscriptions WHERE namespace_id = ?
+            SELECT agent_id FROM agent_subscriptions WHERE namespace_id = $1
             "#,
         )
         .bind(namespace_id.to_string())
@@ -459,12 +462,13 @@ impl<'a> NamespaceRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result =
-            sqlx::query("DELETE FROM agent_subscriptions WHERE agent_id = ? AND namespace_id = ?")
-                .bind(agent_id.to_string())
-                .bind(namespace_id.to_string())
-                .execute(pool)
-                .await?;
+        let result = sqlx::query(
+            "DELETE FROM agent_subscriptions WHERE agent_id = $1 AND namespace_id = $2",
+        )
+        .bind(agent_id.to_string())
+        .bind(namespace_id.to_string())
+        .execute(pool)
+        .await?;
 
         Ok(result.rows_affected() > 0)
     }

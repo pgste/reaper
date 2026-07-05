@@ -121,7 +121,7 @@ impl<'a> ApiKeyRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO api_keys (id, org_id, name, key_prefix, key_hash, scopes, expires_at, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(id.to_string())
@@ -164,7 +164,7 @@ impl<'a> ApiKeyRepository<'a> {
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
-            WHERE key_hash = ? AND is_revoked = 0
+            WHERE key_hash = $1 AND is_revoked = 0
             "#,
         )
         .bind(&hash)
@@ -217,7 +217,7 @@ impl<'a> ApiKeyRepository<'a> {
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -241,7 +241,7 @@ impl<'a> ApiKeyRepository<'a> {
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
             "#,
         )
@@ -264,7 +264,7 @@ impl<'a> ApiKeyRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("UPDATE api_keys SET is_revoked = 1 WHERE id = ?")
+        let result = sqlx::query("UPDATE api_keys SET is_revoked = 1 WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -279,7 +279,7 @@ impl<'a> ApiKeyRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM api_keys WHERE id = ?")
+        let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -295,7 +295,7 @@ impl<'a> ApiKeyRepository<'a> {
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE id = ?")
+        sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE id = $2")
             .bind(&now)
             .bind(id.to_string())
             .execute(pool)

@@ -32,7 +32,7 @@ impl<'a> TeamRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO teams (id, org_id, name, slug, description, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(id.to_string())
@@ -61,7 +61,7 @@ impl<'a> TeamRepository<'a> {
             r#"
             SELECT id, org_id, name, slug, description, created_at, updated_at
             FROM teams
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -89,7 +89,7 @@ impl<'a> TeamRepository<'a> {
             r#"
             SELECT id, org_id, name, slug, description, created_at, updated_at
             FROM teams
-            WHERE org_id = ? AND slug = ?
+            WHERE org_id = $1 AND slug = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -122,9 +122,9 @@ impl<'a> TeamRepository<'a> {
             r#"
             SELECT id, org_id, name, slug, description, created_at, updated_at
             FROM teams
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(org_id.to_string())
@@ -148,7 +148,7 @@ impl<'a> TeamRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE org_id = ?")
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE org_id = $1")
             .bind(org_id.to_string())
             .fetch_one(pool)
             .await?;
@@ -176,8 +176,8 @@ impl<'a> TeamRepository<'a> {
         sqlx::query(
             r#"
             UPDATE teams
-            SET name = ?, description = ?, updated_at = ?
-            WHERE id = ?
+            SET name = $1, description = $2, updated_at = $3
+            WHERE id = $4
             "#,
         )
         .bind(&name)
@@ -197,7 +197,7 @@ impl<'a> TeamRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM teams WHERE id = ?")
+        let result = sqlx::query("DELETE FROM teams WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;

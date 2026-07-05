@@ -34,7 +34,7 @@ impl<'a> AgentRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO agents (id, org_id, name, hostname, version, status, labels, last_heartbeat_at, registered_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -76,7 +76,7 @@ impl<'a> AgentRepository<'a> {
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -104,7 +104,7 @@ impl<'a> AgentRepository<'a> {
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -129,7 +129,7 @@ impl<'a> AgentRepository<'a> {
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name ASC
             "#,
         )
@@ -160,7 +160,7 @@ impl<'a> AgentRepository<'a> {
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE org_id = ? AND status = ?
+            WHERE org_id = $1 AND status = $2
             ORDER BY name ASC
             "#,
         )
@@ -187,7 +187,7 @@ impl<'a> AgentRepository<'a> {
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
-            "UPDATE agents SET last_heartbeat_at = ?, status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE agents SET last_heartbeat_at = $1, status = $2, updated_at = $3 WHERE id = $4",
         )
         .bind(&now)
         .bind(AgentStatus::Active.to_string())
@@ -207,7 +207,7 @@ impl<'a> AgentRepository<'a> {
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
-        let result = sqlx::query("UPDATE agents SET status = ?, updated_at = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE agents SET status = $1, updated_at = $2 WHERE id = $3")
             .bind(AgentStatus::Inactive.to_string())
             .bind(&now)
             .bind(id.to_string())
@@ -229,7 +229,7 @@ impl<'a> AgentRepository<'a> {
 
         let now = Utc::now().to_rfc3339();
         let result = sqlx::query(
-            "UPDATE agents SET status = ?, updated_at = ? WHERE status = ? AND last_heartbeat_at < ?",
+            "UPDATE agents SET status = $1, updated_at = $2 WHERE status = $3 AND last_heartbeat_at < $4",
         )
         .bind(AgentStatus::Inactive.to_string())
         .bind(&now)
@@ -248,7 +248,7 @@ impl<'a> AgentRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM agents WHERE id = ?")
+        let result = sqlx::query("DELETE FROM agents WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -323,7 +323,7 @@ impl<'a> AgentRepository<'a> {
                 latency_p50_us, latency_p99_us, decisions_allow, decisions_deny,
                 memory_bytes, current_bundle_id, current_bundle_version, updated_at,
                 data_version, data_applied_seq, data_stale
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT(agent_id) DO UPDATE SET
                 requests_total = excluded.requests_total,
                 requests_per_second = excluded.requests_per_second,
@@ -377,7 +377,7 @@ impl<'a> AgentRepository<'a> {
                    current_bundle_id, current_bundle_version,
                    data_version, data_applied_seq, data_stale
             FROM agent_metrics_latest
-            WHERE agent_id = ?
+            WHERE agent_id = $1
         "#;
 
         let row = sqlx::query(sql)

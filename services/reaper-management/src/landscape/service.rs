@@ -383,7 +383,7 @@ mod tests {
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -404,7 +404,7 @@ mod tests {
         for i in 0..count {
             let agent_id = Uuid::new_v4();
             sqlx::query(
-                "INSERT INTO agents (id, org_id, name, status, labels, last_heartbeat_at, registered_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agents (id, org_id, name, status, labels, last_heartbeat_at, registered_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             )
             .bind(agent_id.to_string())
             .bind(org_id.to_string())

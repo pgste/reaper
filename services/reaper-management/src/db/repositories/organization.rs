@@ -33,7 +33,7 @@ impl<'a> OrganizationRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO organizations (id, name, slug, display_name, description, settings, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
         )
         .bind(id.to_string())
@@ -63,7 +63,7 @@ impl<'a> OrganizationRepository<'a> {
             r#"
             SELECT id, name, slug, display_name, description, settings, created_at, updated_at
             FROM organizations
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -87,7 +87,7 @@ impl<'a> OrganizationRepository<'a> {
             r#"
             SELECT id, name, slug, display_name, description, settings, created_at, updated_at
             FROM organizations
-            WHERE slug = ?
+            WHERE slug = $1
             "#,
         )
         .bind(slug)
@@ -119,7 +119,7 @@ impl<'a> OrganizationRepository<'a> {
             SELECT id, name, slug, display_name, description, settings, created_at, updated_at
             FROM organizations
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $1 OFFSET $2
             "#,
         )
         .bind(limit)
@@ -179,8 +179,8 @@ impl<'a> OrganizationRepository<'a> {
         sqlx::query(
             r#"
             UPDATE organizations
-            SET display_name = ?, description = ?, settings = ?, updated_at = ?
-            WHERE id = ?
+            SET display_name = $1, description = $2, settings = $3, updated_at = $4
+            WHERE id = $5
             "#,
         )
         .bind(&display_name)
@@ -201,7 +201,7 @@ impl<'a> OrganizationRepository<'a> {
             .sqlite_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM organizations WHERE id = ?")
+        let result = sqlx::query("DELETE FROM organizations WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
