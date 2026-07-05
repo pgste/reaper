@@ -87,10 +87,12 @@ async fn data_plane_replication_end_to_end() {
     };
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let db_path = tmp.path().join("mgmt.db");
     let storage = tmp.path().join("storage");
     std::fs::create_dir_all(&storage).unwrap();
-    let db_url = format!("sqlite:{}", db_path.display());
+    // SQLite by default; a fresh PostgreSQL database per run when
+    // REAPER_TEST_DATABASE_URL points at an admin database.
+    let db_config = reaper_management::db::ephemeral_test_config(tmp.path()).await;
+    let db_url = db_config.url.clone();
 
     // --- Bootstrap: migrations + org + API key via the library (mirrors
     // real ops bootstrap), BEFORE the server owns the file. ---
@@ -98,16 +100,9 @@ async fn data_plane_replication_end_to_end() {
     let org_id;
     {
         use reaper_management::auth::api_key::{ApiKeyRepository, CreateApiKey};
-        use reaper_management::config::DatabaseConfig;
         use reaper_management::db::Database;
 
-        let db = Database::new(&DatabaseConfig {
-            db_type: "sqlite".into(),
-            url: db_url.clone(),
-            max_connections: 2,
-        })
-        .await
-        .unwrap();
+        let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();
 
         let org_repo = reaper_management::db::repositories::OrganizationRepository::new(&db);
@@ -156,7 +151,7 @@ async fn data_plane_replication_end_to_end() {
         Command::new(&mgmt_bin)
             .env("REAPER_PORT", mgmt_port.to_string())
             .env("REAPER_BIND_ADDRESS", "127.0.0.1")
-            .env("REAPER_DATABASE_TYPE", "sqlite")
+            .env("REAPER_DATABASE_TYPE", &db_config.db_type)
             .env("REAPER_DATABASE_URL", &db_url)
             .env("REAPER_STORAGE_TYPE", "filesystem")
             .env("REAPER_STORAGE_PATH", storage.display().to_string())
