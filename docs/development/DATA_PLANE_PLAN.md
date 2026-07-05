@@ -1,6 +1,6 @@
 # The Reaper Data Plane — Managed Authorization Data
 
-**Status: D1 + D2 SHIPPED** (delta sync live; see the shipped sections below).
+**Status: D1 + D2 SHIPPED, PostgreSQL backend SHIPPED** (delta sync live; full suite green on SQLite and PostgreSQL 16 — see docs/development/POSTGRES_CLIENT_REVIEW.md).
 Companion to `DSL_V2_DESIGN.md` and `CORRECTNESS.md`.
 
 ## 1. The opportunity
