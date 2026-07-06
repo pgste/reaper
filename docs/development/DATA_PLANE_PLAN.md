@@ -221,6 +221,7 @@ never accidentally claim New-Enemy protection we don't have.
 | **D2** | Change log + SSE deltas + agent incremental apply + `remove_edge`/entity-remove + **delta≡rebuild differential suite** + data-version on decisions | Seconds-fresh data, provably correct |
 | **D3** | Kafka source (management-side) + Debezium CDC adapter + outbound webhooks + agent-side Kafka feature flag + bulk import UX | "Bring your own pipeline"; HR/IdP systems drive authz data |
 | **D4** | UI managers (roles/attributes/relationships + graph view) wired to D1 APIs; Policy Builder autocompletes from the LIVE model schema instead of sampled entities | The full loop, visual |
+| **D5** | Data Protection PEP: field advice + query plans (partial evaluation) + ReBAC set expansion + SDK conformance suite — full design in `DATA_PROTECTION_PEP_DESIGN.md` | PDP advice drives row filtering & field masking at the client's database; the regulated-industry play |
 | **Later** | consistency tokens (zookies), SCIM inbound, dedicated/self-hosted stores, temporal versioning & point-in-time restore | enterprise depth |
 
 D1 and D2 are each roughly the size of the decision-log arc. D4's design is
