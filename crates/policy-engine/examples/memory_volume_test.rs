@@ -142,7 +142,10 @@ impl TestResult {
             self.interned_strings
         );
         let per_entity = self.store_heap_bytes as f64 / self.entity_count.max(1) as f64;
-        println!("   • Memory per entity: {:.0} bytes (from store heap)", per_entity);
+        println!(
+            "   • Memory per entity: {:.0} bytes (from store heap)",
+            per_entity
+        );
         let store_ratio = self.store_heap_bytes as f64 / self.data_file_size.max(1) as f64;
         println!(
             "   • Store heap / JSON file: {:.2}x (typed + indexed in-memory form)",
