@@ -123,18 +123,17 @@ jobs:
 
     - name: Install Enterprise OPA
       run: |
-        # Resolve the Linux x86_64 asset from the latest release via the API:
-        # the hardcoded asset name drifted and 'latest/download/<name>' now
-        # 404s (curl without -f then saved the 'Not Found' page as the
-        # binary). -f + an explicit empty-URL check make failures loud.
-        URL=$(curl -fsSL https://api.github.com/repos/StyraInc/enterprise-opa/releases/latest \
-          | grep -oE '"browser_download_url": *"[^"]*Linux_x86_64[^"]*"' \
-          | grep -v sha256 | head -1 | cut -d'"' -f4)
-        if [ -z "$URL" ]; then
-          echo "::error::no eopa Linux_x86_64 asset found on the latest release"
-          exit 1
-        fi
-        curl -fL -o eopa "$URL"
+        # EOPA moved from StyraInc release binaries to the container image
+        # at ghcr.io/open-policy-agent/eopa. Extract the binary from the
+        # image (entrypoint tells us its path) so the rest of the workflow
+        # keeps managing a plain local process.
+        IMG=ghcr.io/open-policy-agent/eopa:latest
+        docker pull "$IMG"
+        BIN=$(docker inspect --format '{{if .Config.Entrypoint}}{{index .Config.Entrypoint 0}}{{else}}{{index .Config.Cmd 0}}{{end}}' "$IMG")
+        echo "eopa binary in image: $BIN"
+        CID=$(docker create "$IMG")
+        docker cp "$CID:$BIN" ./eopa
+        docker rm "$CID" >/dev/null
         chmod +x eopa
         sudo mv eopa /usr/local/bin/opa
         opa version
