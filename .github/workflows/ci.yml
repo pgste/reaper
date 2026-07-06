@@ -819,10 +819,25 @@ jobs:
 
           OVERALL="✅ PASSED"
           FAILING=""
-          for pair in "Unit:$R_UNIT" "eBPF:$R_EBPF" "Volume:$R_VOLUME" "Memory:$R_MEMORY" "Scale:$R_SCALE" "Integration:$R_INTEG" "BDD:$R_BDD"; do
+          # Required suites must actually SUCCEED. They have no `if:` guard, so a
+          # 'skipped' here means an upstream job (lint/build/unit) failed and
+          # cascaded — that is NOT a green build and must not read as PASSED.
+          for pair in "Unit:$R_UNIT" "Integration:$R_INTEG" "BDD:$R_BDD"; do
+            name=${pair%%:*}; res=${pair#*:}
+            if [ "$res" != "success" ]; then OVERALL="❌ FAILED"; FAILING="$FAILING $name($res)"; fi
+          done
+          # Informational suites are continue-on-error or conditional (scale-tests
+          # only runs on pull_request), so a legitimate 'skipped' is fine here —
+          # only a hard 'failure' counts against the build.
+          for pair in "eBPF:$R_EBPF" "Volume:$R_VOLUME" "Memory:$R_MEMORY" "Scale:$R_SCALE"; do
             name=${pair%%:*}; res=${pair#*:}
             if [ "$res" = "failure" ]; then OVERALL="❌ FAILED"; FAILING="$FAILING $name"; fi
           done
+          # Belt-and-suspenders: a genuinely green run always executes tests.
+          # Zero counted tests means the pipeline broke before tests ran.
+          if [ "$((TOTAL_PASS + TOTAL_FAIL))" -eq 0 ]; then
+            OVERALL="❌ FAILED"; FAILING="$FAILING no-tests-ran"
+          fi
 
           {
             echo "<!-- reaper-ci-report -->"
