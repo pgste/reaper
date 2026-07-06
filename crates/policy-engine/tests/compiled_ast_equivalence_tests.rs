@@ -37,14 +37,18 @@ fn dataset() -> serde_json::Value {
                     "tags": ["alpha", "beta", "beta", "gamma"],
                     "scores": [10, 40, 25],
                     "csv": "a,b,c",
-                    "profile": {"country": "US", "tier": "gold"}
+                    "profile": {"country": "US", "tier": "gold"},
+                    "any_true": [0, 0, 5],
+                    "all_true": [1, 2, 3]
                 }
             },
             {"id": "bob", "type": "user", "attributes": {
                 "level": 1, "name": "bob", "email": "bob@corp.example",
                 "role": "guest", "skills": ["rust"], "perms": ["read"],
                 "tags": ["alpha"], "scores": [1], "csv": "x",
-                "profile": {"country": "CA", "tier": "bronze"}
+                "profile": {"country": "CA", "tier": "bronze"},
+                "any_true": [0, 0, 0],
+                "all_true": [1, 0, 3]
             }},
             {"id": "res_count", "type": "resource", "attributes": {}},
             {"id": "res_scalar", "type": "resource", "attributes": {}},
@@ -57,7 +61,9 @@ fn dataset() -> serde_json::Value {
             {"id": "res_sum", "type": "resource", "attributes": {}},
             {"id": "res_max", "type": "resource", "attributes": {}},
             {"id": "res_min", "type": "resource", "attributes": {}},
-            {"id": "res_nested", "type": "resource", "attributes": {}}
+            {"id": "res_nested", "type": "resource", "attributes": {}},
+            {"id": "res_util", "type": "resource", "attributes": {}},
+            {"id": "res_regex", "type": "resource", "attributes": {}}
         ]
     })
 }
@@ -359,4 +365,246 @@ fn build_preferred_falls_back_to_ast() {
         preferred.evaluate(&request("alice", "res_sum")).unwrap(),
         PolicyAction::Allow
     );
+}
+
+// ===========================================================================
+// FULL DSL FUNCTION COVERAGE
+//
+// Every DSL method/function, exercised through build_preferred (the production
+// entry point). build_preferred runs the compiled DSL v2 evaluator when it can
+// and the AST evaluator otherwise; either way the decision must be correct.
+// When BOTH evaluators can run a policy, they must AGREE — assert_fn_is checks
+// that too, so this doubles as the equivalence guard for the compiled subset
+// (count/lower/upper/contains/startswith/endswith/regex) while giving the
+// AST-only methods (sum/max/min/any/all/trim/split/first/last/slice/reverse/
+// sort/unique/union/intersection/difference/keys/values/has_key) real
+// decision coverage.
+// ===========================================================================
+
+/// Evaluate `policy` via build_preferred and assert the decision. If the
+/// compiled path ALSO accepts the policy, assert it agrees with build_preferred
+/// (equivalence). Returns nothing; panics with context on any mismatch.
+fn assert_fn_is(policy_text: &str, principal: &str, resource: &str, expected: PolicyAction) {
+    let policy = ReaperPolicy::from_str(policy_text)
+        .unwrap_or_else(|e| panic!("parse failed: {e}\npolicy:\n{policy_text}"));
+
+    let preferred = policy
+        .clone()
+        .build_preferred(store_with_data())
+        .unwrap_or_else(|e| panic!("build_preferred failed: {e}\npolicy:\n{policy_text}"));
+    let got = preferred
+        .evaluate(&request(principal, resource))
+        .expect("preferred evaluate");
+    assert_eq!(
+        got, expected,
+        "build_preferred decision mismatch for {principal}/{resource}: got {got:?} \
+         expected {expected:?}\npolicy:\n{policy_text}"
+    );
+
+    // Equivalence: if the compiled path also builds, it must agree.
+    if let Ok(compiled) = policy.build(store_with_data()) {
+        let c: PolicyAction = compiled
+            .evaluate(&request(principal, resource))
+            .expect("compiled evaluate");
+        assert_eq!(
+            c, got,
+            "compiled and AST diverged for {principal}/{resource}\npolicy:\n{policy_text}"
+        );
+    }
+}
+
+// ---- Aggregate: sum / max / min ------------------------------------------
+// alice.scores = [10, 40, 25]  (sum 75, max 40, min 10)
+
+#[test]
+fn fn_sum() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_sum" && total := user.scores.sum() && total >= 70 } } }"#;
+    assert_fn_is(p, "alice", "res_sum", PolicyAction::Allow); // 75 >= 70
+    assert_fn_is(p, "bob", "res_sum", PolicyAction::Deny); // bob.scores=[1] sum 1
+}
+
+#[test]
+fn fn_max() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_max" && m := user.scores.max() && m >= 40 } } }"#;
+    assert_fn_is(p, "alice", "res_max", PolicyAction::Allow); // 40 >= 40
+    assert_fn_is(p, "bob", "res_max", PolicyAction::Deny);
+}
+
+#[test]
+fn fn_min() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_min" && m := user.scores.min() && m <= 10 } } }"#;
+    assert_fn_is(p, "alice", "res_min", PolicyAction::Allow); // 10 <= 10
+    assert_fn_is(p, "bob", "res_min", PolicyAction::Allow); // bob min 1 <= 10
+}
+
+// ---- Collection transforms: first / last / slice / reverse / sort / unique
+
+#[test]
+fn fn_first() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && f := user.skills.first() && f == "rust" } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_fn_is(p, "bob", "res_util", PolicyAction::Allow); // bob skills=[rust]
+}
+
+#[test]
+fn fn_last() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && l := user.skills.last() && l == "java" } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_fn_is(p, "bob", "res_util", PolicyAction::Deny); // bob last = rust
+}
+
+#[test]
+fn fn_slice() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && sl := user.scores.slice(0, 2) && c := sl.count() && c == 2 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_reverse() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && rv := user.skills.reverse() && f := rv.first() && f == "java" } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_sort() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && s := user.scores.sort() && f := s.first() && f <= 10 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow); // sorted first = 10
+}
+
+#[test]
+fn fn_unique() {
+    // alice.tags = [alpha, beta, beta, gamma] -> unique 3
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && u := user.tags.unique() && c := u.count() && c == 3 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+// ---- Set operations: union / intersection / difference -------------------
+
+#[test]
+fn fn_union() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && u := user.perms.union(user.skills) && "rust" in u } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_intersection() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && i := user.skills.intersection(["rust", "nope"]) && c := i.count() && c == 1 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_difference() {
+    // alice.skills - [rust] = [python, go, java] -> 3
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && d := user.skills.difference(["rust"]) && c := d.count() && c == 3 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+// ---- Object methods: keys / values / has_key -----------------------------
+// alice.profile = {country: US, tier: gold}
+
+#[test]
+fn fn_keys() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && k := user.profile.keys() && c := k.count() && c == 2 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_values() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && v := user.profile.values() && c := v.count() && c == 2 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_has_key() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && user.profile.has_key("tier") } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+// ---- String methods: trim / split ----------------------------------------
+
+#[test]
+fn fn_split() {
+    // alice.csv = "a,b,c" -> 3 parts
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && parts := user.csv.split(",") && c := parts.count() && c == 3 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_fn_is(p, "bob", "res_util", PolicyAction::Deny); // bob.csv="x" -> 1
+}
+
+#[test]
+fn fn_trim() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && t := user.name.trim() && t == "Alice" } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+}
+
+// ---- Aggregate predicates over a comprehension: any / all ----------------
+
+#[test]
+fn fn_any() {
+    // any_true: alice [0,0,5] has a truthy element; bob [0,0,0] does not.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && user.any_true.any() } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_fn_is(p, "bob", "res_util", PolicyAction::Deny);
+}
+
+#[test]
+fn fn_all() {
+    // all_true: alice [1,2,3] all truthy; bob [1,0,3] has a falsy element.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && user.all_true.all() } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_fn_is(p, "bob", "res_util", PolicyAction::Deny);
+}
+
+// ---- Regex: matches (compiled + AST, so also an equivalence check) --------
+
+#[test]
+fn fn_regex_matches() {
+    // alice.email starts with uppercase letters before '@'
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_regex" && regex::matches(user.email, "^[A-Z]+@") } } }"#;
+    assert_fn_is(p, "alice", "res_regex", PolicyAction::Allow); // ALICE@...
+    assert_fn_is(p, "bob", "res_regex", PolicyAction::Deny); // bob@... lowercase
+}
+
+// ---- Regex string methods: find / find_all / replace ---------------------
+
+#[test]
+fn fn_find() {
+    // first match of "corp" in alice's email
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_regex" && m := user.email.find("corp") && m == "corp" } } }"#;
+    assert_fn_is(p, "alice", "res_regex", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_find_all() {
+    // csv "a,b,c" -> three single-letter matches [a-c]
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_regex" && all := user.csv.find_all("[a-c]") && c := all.count() && c == 3 } } }"#;
+    assert_fn_is(p, "alice", "res_regex", PolicyAction::Allow);
+}
+
+#[test]
+fn fn_replace() {
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_regex" && rp := user.name.replace("Alice", "Bob") && rp == "Bob" } } }"#;
+    assert_fn_is(p, "alice", "res_regex", PolicyAction::Allow);
 }
