@@ -117,6 +117,20 @@ let evaluator = policy.build_ast_evaluator(store);  // Direct AST evaluation
 - `crates/policy-engine/tests/features/integration/time_based_policies.feature` - Integration tests (blocked)
 - `crates/policy-engine/examples/policies/time_policy.reap` - Example policy (cannot compile)
 
+## Tracked follow-up: complete compiled-mode function coverage
+
+Much of this document predates DSL v2. As of the equivalence work, the compiled
+evaluator handles **16 of 24** DSL functions on the fast path; 8 still fall back
+to AST (`intersection`, `difference`, `values`, `has_key`, `any`, `all`, `find`,
+`replace`). Closing that gap is tracked as a dedicated work item with the exact
+blockers and an incremental plan:
+
+**→ `COMPILED_FUNCTIONS_WORKITEM.md`**
+
+The AST fallback is decision-equivalent (guaranteed by
+`compiled_ast_equivalence_tests.rs`), so the remaining functions are a
+performance/coverage task, not a correctness one.
+
 ## Conclusion
 
 The compiled evaluator is currently suitable for:
