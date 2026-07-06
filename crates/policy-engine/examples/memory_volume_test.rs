@@ -43,6 +43,32 @@ fn get_memory_usage() -> Result<(usize, usize), Box<dyn std::error::Error>> {
     Ok((0, 0)) // Fallback for non-Linux systems
 }
 
+/// Peak resident set size (kernel high-water mark, `VmHWM`) in bytes.
+///
+/// Unlike the point-in-time `VmRSS`, this records the maximum RSS the process
+/// ever reached — so it captures the *transient* allocation spike during data
+/// load (the parsed JSON DOM held alongside the store before it is dropped),
+/// which steady-state RSS hides.
+#[cfg(target_os = "linux")]
+fn get_peak_rss() -> usize {
+    fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|line| {
+                line.strip_prefix("VmHWM:")
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .and_then(|kb| kb.parse::<usize>().ok())
+                    .map(|kb| kb * 1024)
+            })
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_peak_rss() -> usize {
+    0
+}
+
 struct MemorySnapshot {
     label: String,
     rss_bytes: usize,
@@ -85,6 +111,15 @@ struct TestResult {
     memory_baseline: MemorySnapshot,
     memory_after_load: MemorySnapshot,
     memory_after_eval: MemorySnapshot,
+    /// Actual live DataStore heap, self-reported by the store (interned strings
+    /// counted once, plus index overhead). This — not the process RSS delta —
+    /// is the number that reflects how efficiently data is stored.
+    store_heap_bytes: usize,
+    /// Unique interned strings (dedup evidence).
+    interned_strings: usize,
+    /// Peak process RSS during load (`VmHWM`): captures the transient parse
+    /// spike that steady-state RSS hides.
+    peak_rss_bytes: usize,
 }
 
 impl TestResult {
@@ -99,27 +134,36 @@ impl TestResult {
         println!("   • P99 eval: {:.0} ns", self.p99_eval_time.as_nanos());
 
         let (rss_load, _) = self.memory_after_load.diff(&self.memory_baseline);
-        let (rss_total, _) = self.memory_after_eval.diff(&self.memory_baseline);
 
+        // ── Actual stored data (the number that reflects storage efficiency) ──
         println!(
-            "   • Memory (data load): +{:.2} MB",
+            "   • DataStore heap (live): {:.2} MB   [{} unique interned strings]",
+            self.store_heap_bytes as f64 / 1_048_576.0,
+            self.interned_strings
+        );
+        let per_entity = self.store_heap_bytes as f64 / self.entity_count.max(1) as f64;
+        println!("   • Memory per entity: {:.0} bytes (from store heap)", per_entity);
+        let store_ratio = self.store_heap_bytes as f64 / self.data_file_size.max(1) as f64;
+        println!(
+            "   • Store heap / JSON file: {:.2}x (typed + indexed in-memory form)",
+            store_ratio
+        );
+
+        // ── Process footprint (transient + allocator retention, NOT the data) ──
+        println!(
+            "   • Peak RSS during load: {:.2} MB   <- transient (parsed JSON DOM held alongside store)",
+            self.peak_rss_bytes as f64 / 1_048_576.0
+        );
+        println!(
+            "   • Process RSS delta: +{:.2} MB   <- incl. freed-but-allocator-retained parse buffers",
             rss_load as f64 / 1_048_576.0
         );
-        println!(
-            "   • Memory (total): +{:.2} MB",
-            rss_total as f64 / 1_048_576.0
-        );
-
-        // Calculate memory per entity
-        let memory_per_entity = rss_load as f64 / self.entity_count as f64;
-        println!("   • Memory per entity: {:.0} bytes", memory_per_entity);
-
-        // Calculate data file compression ratio
-        let compression = (self.data_file_size as f64) / (rss_load as f64);
-        println!(
-            "   • Compression ratio: {:.2}x (JSON → DataStore)",
-            compression
-        );
+        if self.store_heap_bytes > 0 {
+            println!(
+                "   • RSS/store overhead: {:.1}x (parse spike + allocator arenas, not stored data)",
+                rss_load as f64 / self.store_heap_bytes as f64
+            );
+        }
     }
 }
 
@@ -154,10 +198,23 @@ fn run_test(
     let mem_after_load = MemorySnapshot::take("After data load");
     mem_after_load.print();
 
+    // Actual live store size (interned strings counted once) + transient peak.
+    let store_stats = store.stats();
+    let store_heap_bytes = store_stats.estimated_memory_bytes;
+    let interned_strings = store_stats.interner_stats.unique_strings;
+    let peak_rss_bytes = get_peak_rss();
+
     let (rss_increase, _) = mem_after_load.diff(&mem_baseline);
     println!(
-        "   💾 Memory increase: +{:.2} MB",
-        rss_increase as f64 / 1_048_576.0
+        "   💾 Process RSS increase: +{:.2} MB  (peak during load: {:.2} MB)",
+        rss_increase as f64 / 1_048_576.0,
+        peak_rss_bytes as f64 / 1_048_576.0
+    );
+    println!(
+        "   📦 Actual DataStore heap: {:.2} MB  ({} entities, {} interned strings)",
+        store_heap_bytes as f64 / 1_048_576.0,
+        loaded_count,
+        interned_strings
     );
 
     // Load policy
@@ -252,6 +309,9 @@ fn run_test(
         memory_baseline: mem_baseline,
         memory_after_load: mem_after_load,
         memory_after_eval: mem_after_eval,
+        store_heap_bytes,
+        interned_strings,
+        peak_rss_bytes,
     })
 }
 
@@ -309,18 +369,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             file_ratio
         );
 
-        // Memory usage
-        let (small_mem, _) = small.memory_after_load.diff(&small.memory_baseline);
-        let (large_mem, _) = large.memory_after_load.diff(&large.memory_baseline);
+        // Memory usage — ACTUAL store heap (interned), the storage-efficiency metric.
+        let small_mem = small.store_heap_bytes as i64;
+        let large_mem = large.store_heap_bytes as i64;
         let mem_ratio = large_mem as f64 / small_mem as f64;
         println!(
-            "│ Memory usage            │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
+            "│ Store heap (live)       │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
             small_mem as f64 / 1_048_576.0,
             large_mem as f64 / 1_048_576.0,
             mem_ratio
         );
 
-        // Memory per entity
+        // Process RSS delta — shown for contrast; inflated by transient parse.
+        let (small_rss, _) = small.memory_after_load.diff(&small.memory_baseline);
+        let (large_rss, _) = large.memory_after_load.diff(&large.memory_baseline);
+        println!(
+            "│ Process RSS (w/ parse)  │ {:>7.2} MB │ {:>7.2} MB │ {:>6.1}x │",
+            small_rss as f64 / 1_048_576.0,
+            large_rss as f64 / 1_048_576.0,
+            large_rss as f64 / small_rss.max(1) as f64
+        );
+
+        // Memory per entity — from actual store heap.
         let small_per_entity = small_mem as f64 / small.entity_count as f64;
         let large_per_entity = large_mem as f64 / large.entity_count as f64;
         println!(
@@ -363,24 +433,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("\n🔍 Analysis:");
 
-        // Memory efficiency
-        println!("\n   Memory Efficiency:");
-        if mem_ratio < 110.0 {
+        // Memory efficiency — judged on the ACTUAL store heap, not process RSS.
+        println!("\n   Memory Efficiency (live store heap):");
+        let entity_ratio = large.entity_count as f64 / small.entity_count as f64;
+        if mem_ratio <= entity_ratio * 1.1 {
             println!(
-                "   ✅ EXCELLENT: Memory scales linearly ({:.1}x for 100x data)",
-                mem_ratio
+                "   ✅ EXCELLENT: store heap scales ~linearly ({:.1}x heap for {:.0}x entities)",
+                mem_ratio, entity_ratio
             );
         } else {
-            println!("   ⚠️  Memory scaling: {:.1}x (expected ~100x)", mem_ratio);
+            println!(
+                "   ⚠️  Store heap scaling: {:.1}x for {:.0}x entities",
+                mem_ratio, entity_ratio
+            );
         }
 
-        let small_compression = small.data_file_size as f64 / small_mem as f64;
-        let large_compression = large.data_file_size as f64 / large_mem as f64;
-        println!("   • Compression (1k): {:.2}x", small_compression);
-        println!("   • Compression (100k): {:.2}x", large_compression);
+        // Store heap vs JSON text. This is >1x by design: the in-memory form is
+        // typed and multi-indexed, whereas JSON text is flat. Interning keeps it
+        // from ballooning — the ratio should *fall* as data grows and duplicate
+        // strings amortize.
+        let small_ratio = small_mem as f64 / small.data_file_size.max(1) as f64;
+        let large_ratio = large_mem as f64 / large.data_file_size.max(1) as f64;
+        println!("   • Store heap / JSON file (1k):   {:.2}x", small_ratio);
+        println!("   • Store heap / JSON file (100k): {:.2}x", large_ratio);
+        if large_ratio < small_ratio {
+            println!(
+                "   ✅ Interning working: ratio falls with scale ({:.2}x → {:.2}x) as strings dedup",
+                small_ratio, large_ratio
+            );
+        }
         println!(
-            "   • String interning saves ~{}% memory",
-            ((1.0 - 1.0 / large_compression) * 100.0) as i32
+            "   • Per-entity: {} interned strings at 100k (deduped across entities)",
+            large.interned_strings
+        );
+
+        // Transient-load footprint — the number that governs peak memory / OOM headroom.
+        println!("\n   Load-Time Footprint (peak, governs container sizing):");
+        println!(
+            "   • Peak RSS: {:.1} MB (1k) / {:.1} MB (100k) — transient parse spike",
+            small.peak_rss_bytes as f64 / 1_048_576.0,
+            large.peak_rss_bytes as f64 / 1_048_576.0
+        );
+        println!(
+            "   • Peak/live overhead at 100k: {:.1}x — held only during load, then freed",
+            large.peak_rss_bytes as f64 / large_mem.max(1) as f64
         );
 
         // Performance scaling
