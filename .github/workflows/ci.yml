@@ -480,35 +480,8 @@ jobs:
             scale-tests-output.txt
             scale-test-summary.md
 
-      - name: Comment PR with performance results
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-
-            let summary = '# 🚀 Scale & Performance Test Results\n\n';
-
-            try {
-              if (fs.existsSync('scale-test-summary.md')) {
-                summary = fs.readFileSync('scale-test-summary.md', 'utf8');
-              } else {
-                summary += '⚠️ Summary file not found. Check artifacts for full results.\n';
-              }
-            } catch (error) {
-              summary += `❌ Error reading summary: ${error.message}\n`;
-            }
-
-            summary += '\n\n---\n\n';
-            summary += '💡 **Note:** Scale tests run automatically on PRs to track performance changes.\n';
-            summary += 'Download artifacts for detailed metrics and full output.\n';
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: summary
-            });
+      # NOTE: scale results are folded into the single consolidated PR comment
+      # posted by the generate-report job — no separate comment here.
 
   # ============================================================
   # Stage 7: Integration & Comparison Tests
@@ -741,93 +714,112 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
-      - name: Generate combined summary
+      - name: Build consolidated summary
+        env:
+          R_UNIT: ${{ needs.unit-tests.result }}
+          R_EBPF: ${{ needs.ebpf-build.result }}
+          R_VOLUME: ${{ needs.volume-tests.result }}
+          R_MEMORY: ${{ needs.memory-scale-tests.result }}
+          R_SCALE: ${{ needs.scale-tests.result }}
+          R_INTEG: ${{ needs.integration-tests.result }}
+          R_BDD: ${{ needs.bdd-tests.result }}
         run: |
-          echo "# 🎯 Reaper CI Test Summary" > COMBINED_REPORT.md
-          echo "" >> COMBINED_REPORT.md
-          echo "## Pipeline Status" >> COMBINED_REPORT.md
-          echo "- Build Date: $(date)" >> COMBINED_REPORT.md
-          echo "- Commit: ${{ github.sha }}" >> COMBINED_REPORT.md
-          echo "" >> COMBINED_REPORT.md
+          # One row per suite: name | job result | test counts parsed from its
+          # artifact summary. A suite is a PASS unless its job result is
+          # 'failure' (skipped/success both count as not-failed).
+          icon() { case "$1" in success) echo "✅ pass";; skipped) echo "⏭️ skipped";; *) echo "❌ fail";; esac; }
 
-          # Unit Tests
-          echo "## ✅ Unit Tests" >> COMBINED_REPORT.md
-          if [ -f "unit-test-results/unit-test-summary.md" ]; then
-            cat unit-test-results/unit-test-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ Unit test results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+          # Parse "N passed" / "N failed" from a suite's own summary file(s)
+          # only — never the whole tree, so a prior REPORT.md or unrelated
+          # artifact can't inflate the totals.
+          suite_pass() { grep -rhoE '[0-9]+ passed' $1 2>/dev/null | awk '{s+=$1} END{print s+0}'; }
+          suite_fail() { grep -rhoE '[0-9]+ failed' $1 2>/dev/null | awk '{s+=$1} END{print s+0}'; }
+          counts() { local p f; p=$(suite_pass "$1"); f=$(suite_fail "$1"); echo "$p passed / $((p+f)) total"; }
 
-          # eBPF Build
-          echo "## ⚡ eBPF Compilation (x86_64)" >> COMBINED_REPORT.md
-          if [ -f "ebpf-build-results/ebpf-summary.md" ]; then
-            cat ebpf-build-results/ebpf-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ eBPF build results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+          U_P=$(suite_pass 'unit-test-results/*.md'); U_F=$(suite_fail 'unit-test-results/*.md')
+          I_P=$(suite_pass 'integration-test-results/*.md'); I_F=$(suite_fail 'integration-test-results/*.md')
+          B_P=$(suite_pass 'bdd-test-results/*.md'); B_F=$(suite_fail 'bdd-test-results/*.md')
+          TOTAL_PASS=$((U_P + I_P + B_P))
+          TOTAL_FAIL=$((U_F + I_F + B_F))
 
-          # Volume Tests
-          echo "## 🚀 Volume Tests (10k iterations)" >> COMBINED_REPORT.md
-          for policy in multilayer rbac abac rebac; do
-            if [ -f "volume-test-$policy/volume-summary-$policy.md" ]; then
-              cat "volume-test-$policy/volume-summary-$policy.md" >> COMBINED_REPORT.md
-              echo "" >> COMBINED_REPORT.md
-            fi
+          OVERALL="✅ PASSED"
+          FAILING=""
+          for pair in "Unit:$R_UNIT" "eBPF:$R_EBPF" "Volume:$R_VOLUME" "Memory:$R_MEMORY" "Scale:$R_SCALE" "Integration:$R_INTEG" "BDD:$R_BDD"; do
+            name=${pair%%:*}; res=${pair#*:}
+            if [ "$res" = "failure" ]; then OVERALL="❌ FAILED"; FAILING="$FAILING $name"; fi
           done
 
-          # Memory & Scale Test
-          echo "## 💾 Memory & Scale Tests (100k entities)" >> COMBINED_REPORT.md
-          if [ -f "memory-scale-tests/memory-volume-summary.md" ]; then
-            cat memory-scale-tests/memory-volume-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ Memory test results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+          {
+            echo "<!-- reaper-ci-report -->"
+            echo "# $OVERALL — Reaper CI"
+            echo ""
+            echo "Commit \`$(echo ${{ github.sha }} | cut -c1-8)\` · **$TOTAL_PASS passed / $((TOTAL_PASS+TOTAL_FAIL)) tests**"
+            echo ""
+            echo "| Suite | Status | Tests |"
+            echo "|-------|--------|-------|"
+            echo "| Unit | $(icon "$R_UNIT") | $(counts 'unit-test-results/*.md') |"
+            echo "| Integration & OPA comparison | $(icon "$R_INTEG") | $(counts 'integration-test-results/*.md') |"
+            echo "| BDD (Cucumber) | $(icon "$R_BDD") | $(counts 'bdd-test-results/*.md') |"
+            echo "| Volume (10k) | $(icon "$R_VOLUME") | 4 policies |"
+            echo "| Memory & Scale (100k) | $(icon "$R_MEMORY") | $(icon "$R_MEMORY") |"
+            echo "| eBPF | $(icon "$R_EBPF") | $(icon "$R_EBPF") |"
+            echo "| Scale & Performance | $(icon "$R_SCALE") | $(icon "$R_SCALE") |"
+            echo ""
 
-          # Scale Tests (PR only)
-          echo "## 🚀 Scale & Performance Tests (PR only)" >> COMBINED_REPORT.md
-          if [ -f "scale-test-results/scale-test-summary.md" ]; then
-            cat scale-test-results/scale-test-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⏭️  Scale tests only run on pull requests" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+            # Performance highlights — a few key numbers, not the full dump.
+            echo "### ⚡ Performance"
+            if [ -f "memory-scale-tests/memory-volume-summary.md" ]; then
+              NS=$(grep -oE '[0-9]+ ns' memory-scale-tests/memory-volume-summary.md | head -2 | awk 'NR==1{m=$0} NR==2{print m" / "$0}')
+              [ -n "$NS" ] && echo "- 100k-entity eval: ${NS} (mean / p99), memory scales linearly."
+            fi
+            for pol in rbac abac rebac multilayer; do
+              f="volume-test-$pol/volume-summary-$pol.md"
+              [ -f "$f" ] || continue
+              MEAN=$(grep -oE 'Mean latency:[[:space:]]*[0-9]+ ns' "$f" | head -1 | grep -oE '[0-9]+ ns')
+              P99=$(grep -oE 'P99 latency:[[:space:]]*[0-9]+ ns' "$f" | head -1 | grep -oE '[0-9]+ ns')
+              [ -n "$MEAN" ] && echo "- ${pol^^}: ${MEAN} mean, ${P99} p99 (10k iterations)"
+            done
+            echo ""
+            echo "_Reaper-vs-OPA parity & speedup run in the separate \`benchmark\` workflow; see its checks above._"
 
-          # Integration & Comparison Tests
-          echo "## 🔗 Integration & Comparison Tests" >> COMBINED_REPORT.md
-          if [ -f "integration-test-results/integration-summary.md" ]; then
-            cat integration-test-results/integration-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ Integration test results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+            if [ "$OVERALL" = "❌ FAILED" ]; then
+              echo ""
+              echo "### ❌ Failing suites:${FAILING}"
+              echo ""
+              echo "Failing test lines:"
+              echo '```'
+              grep -rhE 'test result: FAILED|[1-9][0-9]* failed|panicked|✘|failed:' . 2>/dev/null | grep -viE '0 failed' | head -15
+              echo '```'
+            fi
+            echo ""
+            echo "<sub>Full logs and metrics: workflow artifacts. This comment updates in place each run.</sub>"
+          } > REPORT.md
 
-          # BDD Tests
-          echo "## 🥒 BDD Tests (Cucumber)" >> COMBINED_REPORT.md
-          if [ -f "bdd-test-results/bdd-summary.md" ]; then
-            cat bdd-test-results/bdd-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ BDD test results not available" >> COMBINED_REPORT.md
-          fi
+          cat REPORT.md
 
-      - name: Upload combined report
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-test-report
-          path: COMBINED_REPORT.md
-
-      - name: Comment PR with results
+      - name: Upsert single PR comment
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
             const fs = require('fs');
-            const report = fs.readFileSync('COMBINED_REPORT.md', 'utf8');
-            github.rest.issues.createComment({
+            const body = fs.readFileSync('REPORT.md', 'utf8');
+            const marker = '<!-- reaper-ci-report -->';
+            const { data: comments } = await github.rest.issues.listComments({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: report
+              per_page: 100,
             });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner, repo: context.repo.repo, body,
+              });
+            }
