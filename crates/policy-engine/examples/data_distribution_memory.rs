@@ -141,7 +141,7 @@ fn main() {
     );
     println!("   VERDICT: steady-state memory BOUNDED (heap tracks live set).");
 
-    // ── C2. Delta stream, CHURNING keys (unbounded unique strings) ─────────
+    // ── C2. Delta stream, CHURNING keys (high-cardinality unique strings) ──
     println!("\nC2. Delta stream — CHURNING keys (upsert then delete, unique each time):");
     let store_c2 = DataStore::new();
     let loader_c2 = DataLoader::new(store_c2.clone());
@@ -149,9 +149,11 @@ fn main() {
     let heap_c2_start = store_c2.stats().estimated_memory_bytes;
     let interned_c2_start = store_c2.stats().interner_stats.unique_strings;
     report("baseline", &store_c2);
-    // Simulate a long-lived replica: repeatedly upsert a short-lived entity
-    // with a globally-unique id + unique attribute value, then delete it. The
-    // live set returns to N every cycle, but each cycle mints fresh strings.
+    // Simulate a long-lived replica: repeatedly upsert a short-lived entity with
+    // a globally-unique id + unique attribute values, then delete it. The live
+    // set returns to N every cycle, and each cycle mints fresh strings — the
+    // classic churn that used to grow the interner (and the attribute indexes)
+    // without bound. With refcounted eviction + index pruning it must stay flat.
     let churn = 10 * N;
     for k in 0..churn {
         let uniq = format!("ephemeral_{k}");
@@ -166,18 +168,19 @@ fn main() {
     let heap_c2_end = store_c2.stats().estimated_memory_bytes;
     let interned_c2_end = store_c2.stats().interner_stats.unique_strings;
     println!(
-        "   -> live entities back to {} but interner grew {} -> {} (+{} strings)",
+        "   -> live entities back to {}; interner {} -> {} (+{} strings)",
         store_c2.stats().total_entities,
         interned_c2_start,
         interned_c2_end,
-        interned_c2_end - interned_c2_start
+        interned_c2_end.saturating_sub(interned_c2_start)
     );
     println!(
-        "   -> heap {:+.2} MB despite flat live set  <-- APPEND-ONLY INTERNER GROWTH",
-        (heap_c2_end as f64 - heap_c2_start as f64) / 1_048_576.0
+        "   -> heap {:+.2} MB after {} churn cycles  <-- BOUNDED (evicted on delete)",
+        (heap_c2_end as f64 - heap_c2_start as f64) / 1_048_576.0,
+        churn
     );
     println!(
-        "   VERDICT: interner is append-only; churn leaks until a snapshot rebuild resets it."
+        "   VERDICT: refcounted interner + index pruning reclaim churned strings; steady state is flat."
     );
 
     // ── D. Atomic swap transient (build-new-then-swap) ─────────────────────
@@ -215,14 +218,19 @@ fn main() {
         (heap_c1_end as i64 - heap_c1_start as i64).unsigned_abs() < (heap_c1_start as u64 / 20),
         "stable-key delta heap must stay bounded (start={heap_c1_start}, end={heap_c1_end})"
     );
-    // Churning-key deltas are EXPECTED to grow the interner (documents the
-    // append-only leak); assert the demonstration actually reproduced it so the
-    // example can't silently stop exercising the path.
+    // Churning-key deltas must stay BOUNDED: refcounted eviction + index
+    // pruning reclaim every churned string, so after 10x-dataset churn with a
+    // flat live set the interner and heap must be within a small slack of the
+    // baseline (a few pinned residuals are allowed, not thousands).
+    let interner_growth = interned_c2_end.saturating_sub(interned_c2_start);
     assert!(
-        interned_c2_end > interned_c2_start * 2,
-        "churn demo should show interner growth (start={interned_c2_start}, end={interned_c2_end})"
+        interner_growth < N / 100,
+        "churn must not grow the interner unbounded (start={interned_c2_start}, \
+         end={interned_c2_end}, +{interner_growth} after {churn} cycles)"
     );
-    println!(
-        "\n✅ invariants hold (bundle≡JSON heap, stable deltas bounded, churn growth reproduced)"
+    assert!(
+        (heap_c2_end as i64 - heap_c2_start as i64).unsigned_abs() < (heap_c2_start as u64 / 10),
+        "churn heap must stay bounded (start={heap_c2_start}, end={heap_c2_end})"
     );
+    println!("\n✅ invariants hold (bundle≡JSON heap; stable AND churning deltas both bounded)");
 }

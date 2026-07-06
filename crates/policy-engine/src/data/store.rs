@@ -349,20 +349,28 @@ impl DataStore {
     pub fn remove(&self, id: EntityId) -> Option<Arc<Entity>> {
         let entity = self.entities.remove(&id).map(|(_, e)| e)?;
 
-        // Remove from type index
+        // Remove from type index, pruning the entry if it becomes empty so a
+        // churn of short-lived types cannot grow the index map without bound.
         if let Some(mut type_set) = self.type_index.get_mut(&entity.entity_type) {
             type_set.remove(&id);
         }
+        self.type_index
+            .remove_if(&entity.entity_type, |_, set| set.is_empty());
 
-        // Remove from secondary indexes (only if configured)
+        // Remove from secondary indexes (only if configured). Emptied entries
+        // are pruned: without this, a high-cardinality delta stream (unique
+        // attribute values) would grow attribute_index/composite_index with
+        // empty sets forever — the same unbounded-growth class the interner
+        // refcounting fixes, one layer down.
         if self.config.index_attributes {
             for (attr_key, attr_value) in &entity.attributes {
                 if let AttributeValue::String(value_id) = attr_value {
-                    if let Some(mut attr_set) =
-                        self.attribute_index.get_mut(&(*attr_key, *value_id))
-                    {
+                    let key = (*attr_key, *value_id);
+                    if let Some(mut attr_set) = self.attribute_index.get_mut(&key) {
                         attr_set.remove(&id);
                     }
+                    self.attribute_index
+                        .remove_if(&key, |_, set| set.is_empty());
                 }
             }
         }
@@ -374,11 +382,61 @@ impl DataStore {
                     if let Some(mut comp_set) = self.composite_index.get_mut(&composite_key) {
                         comp_set.remove(&id);
                     }
+                    self.composite_index
+                        .remove_if(&composite_key, |_, set| set.is_empty());
                 }
             }
         }
 
+        // Release the counted interned strings this entity owned. Indexes above
+        // are cleared first, so nothing references these ids by the time the
+        // last reference is released and the string is evicted. Balances the
+        // DataLoader's `intern_counted` on id/parent/string-values; pinned
+        // strings (type, keys, relations) are no-ops in `release`.
+        self.release_entity_strings(&entity);
+
         Some(entity)
+    }
+
+    /// Release the interned strings an entity owns, mirroring exactly what the
+    /// DataLoader counts (`intern_counted`): the id, the parent, and string
+    /// attribute values (recursively through lists/objects/sets). Object keys,
+    /// entity types, attribute keys, and relation strings are pinned, so they
+    /// are intentionally NOT released here — `release` is a no-op on them anyway.
+    fn release_entity_strings(&self, entity: &Entity) {
+        self.interner.release(entity.id);
+        if let Some(parent) = entity.parent {
+            self.interner.release(parent);
+        }
+        for value in entity.attributes.values() {
+            Self::release_attr_value(&self.interner, value);
+        }
+    }
+
+    fn release_attr_value(interner: &StringInterner, value: &AttributeValue) {
+        match value {
+            AttributeValue::String(id) => interner.release(*id),
+            AttributeValue::List(items) => {
+                for v in items {
+                    Self::release_attr_value(interner, v);
+                }
+            }
+            // Object keys are pinned (bounded schema vocabulary); release values.
+            AttributeValue::Object(map) => {
+                for v in map.values() {
+                    Self::release_attr_value(interner, v);
+                }
+            }
+            AttributeValue::Set(set) => {
+                for v in set {
+                    Self::release_attr_value(interner, v);
+                }
+            }
+            AttributeValue::Int(_)
+            | AttributeValue::Float(_)
+            | AttributeValue::Bool(_)
+            | AttributeValue::Null => {}
+        }
     }
 
     /// Get all entities
@@ -399,6 +457,10 @@ impl DataStore {
         if self.config.index_composite {
             self.composite_index.clear();
         }
+        // After clearing all entities, no counted string is referenced — drop
+        // them so a clear()+reload (snapshot deploy) doesn't accumulate stale
+        // interned strings. Pinned strings (policy literals, types) survive.
+        self.interner.reset_counted();
     }
 
     /// Get entity counts by type

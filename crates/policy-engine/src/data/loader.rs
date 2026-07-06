@@ -181,7 +181,9 @@ impl DataLoader {
         doc: EntityDocument,
         interner: &super::interning::StringInterner,
     ) -> Result<super::entity::Entity, ReaperError> {
-        let id = interner.intern(&doc.id);
+        // Counted (high-cardinality, released on entity removal): id, parent,
+        // string attribute values. Pinned (bounded vocabulary): type, keys.
+        let id = interner.intern_counted(&doc.id);
         let entity_type = interner.intern(&doc.entity_type);
 
         let mut builder = EntityBuilder::new(id, entity_type);
@@ -195,7 +197,7 @@ impl DataLoader {
 
         // Parent relationship (optional)
         if let Some(parent) = doc.parent {
-            let parent_id = interner.intern(&parent);
+            let parent_id = interner.intern_counted(&parent);
             builder = builder.with_parent(parent_id);
         }
 
@@ -208,7 +210,7 @@ impl DataLoader {
         let mut entities = Vec::with_capacity(doc.entities.len());
 
         for entity_doc in doc.entities {
-            let id = interner.intern(&entity_doc.id);
+            let id = interner.intern_counted(&entity_doc.id);
             let entity_type = interner.intern(&entity_doc.entity_type);
             let mut builder = EntityBuilder::new(id, entity_type);
 
@@ -219,7 +221,7 @@ impl DataLoader {
             }
 
             if let Some(parent) = entity_doc.parent {
-                let parent_id = interner.intern(&parent);
+                let parent_id = interner.intern_counted(&parent);
                 builder = builder.with_parent(parent_id);
             }
 
@@ -249,7 +251,7 @@ impl DataLoader {
         entity_doc: EntityDocument,
         interner: &super::interning::StringInterner,
     ) -> Result<(), ReaperError> {
-        let id = interner.intern(&entity_doc.id);
+        let id = interner.intern_counted(&entity_doc.id);
         let entity_type = interner.intern(&entity_doc.entity_type);
         let mut builder = EntityBuilder::new(id, entity_type);
 
@@ -260,7 +262,7 @@ impl DataLoader {
         }
 
         if let Some(parent) = entity_doc.parent {
-            builder = builder.with_parent(interner.intern(&parent));
+            builder = builder.with_parent(interner.intern_counted(&parent));
         }
 
         for (relation, subjects) in &entity_doc.relationships {
@@ -379,7 +381,10 @@ impl DataLoader {
                 reason: format!("invalid entity document: {e}"),
             })?;
         let interner = self.store.interner();
-        let id = interner.intern(&entity_doc.id);
+        // Counted before the upsert; store.upsert() then releases the OLD
+        // entity's counted strings via remove(). Building first keeps the count
+        // ≥ 1 across the swap so a shared string is never evicted mid-upsert.
+        let id = interner.intern_counted(&entity_doc.id);
         let entity_type = interner.intern(&entity_doc.entity_type);
 
         let mut builder = EntityBuilder::new(id, entity_type);
@@ -388,7 +393,7 @@ impl DataLoader {
             builder = builder.with_attribute(key_id, json_value_to_attribute(value, interner)?);
         }
         if let Some(parent) = entity_doc.parent {
-            builder = builder.with_parent(interner.intern(&parent));
+            builder = builder.with_parent(interner.intern_counted(&parent));
         }
 
         // upsert() detaches previously carried edges; re-add the current set.
@@ -406,8 +411,12 @@ impl DataLoader {
     /// DELETE one entity by id (delta-sync tombstone): idempotent, cascades
     /// through the relationship graph.
     pub fn delete_entity(&self, entity_id: &str) {
-        let id = self.store.interner().intern(entity_id);
-        self.store.remove_entity(id);
+        // Use lookup, not intern: deleting a non-existent entity must not
+        // create (and pin) its id string in the interner. If the id was never
+        // interned there is nothing to remove.
+        if let Some(id) = self.store.interner().lookup(entity_id) {
+            self.store.remove_entity(id);
+        }
     }
 
     /// Get the underlying data store
@@ -423,7 +432,11 @@ pub(crate) fn json_value_to_attribute(
 ) -> Result<AttributeValue, ReaperError> {
     match value {
         JsonValue::String(s) => {
-            let id = interner.intern(&s);
+            // Attribute string values are high-cardinality entity-owned data
+            // (tokens, ids, free-text) — count them so they are reclaimed when
+            // the owning entity is removed. Object keys below stay pinned
+            // (bounded schema vocabulary).
+            let id = interner.intern_counted(&s);
             Ok(AttributeValue::String(id))
         }
         JsonValue::Number(n) => {
