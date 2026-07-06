@@ -535,7 +535,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/decisions/stats", get(get_decision_stats))
         .route("/api/v1/decisions/export", post(export_decisions))
         .route("/api/v1/decisions/{decision_id}", get(get_decision_by_id))
-        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)) // 256MB: bulk data loads (100k+ entity benchmark datasets) exceed 100MB
         .with_state(state);
 
     // Clone router for UDS listener before the TCP server consumes it

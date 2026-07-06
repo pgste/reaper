@@ -36,6 +36,10 @@ pub struct JsonStreamReader {
     state: ReaderState,
     line_buffer: String,
     entities_started: bool,
+    /// Entities drained from a single-line `{"entities": [...]}` document
+    /// (compact serializers put the whole doc on one line, so it arrives
+    /// fully parsed at format-detection time).
+    pending: std::collections::VecDeque<JsonValue>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +79,7 @@ impl JsonStreamReader {
             state: ReaderState::Start,
             line_buffer: String::with_capacity(4096),
             entities_started: false,
+            pending: std::collections::VecDeque::new(),
         })
     }
 
@@ -86,6 +91,9 @@ impl JsonStreamReader {
     /// - `Err(...)` - Parse error
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<JsonValue>, ReaperError> {
+        if let Some(entity) = self.pending.pop_front() {
+            return Ok(Some(entity));
+        }
         match self.state {
             ReaderState::Done => Ok(None),
             ReaderState::Start => self.read_first_entity(),
@@ -118,12 +126,36 @@ impl JsonStreamReader {
                 continue;
             }
 
-            // Detect format
+            // Detect format. A '{' first line is ambiguous: NDJSON puts a
+            // COMPLETE entity object on the line, but a pretty-printed
+            // {"entities": [...]} document's first line is just "{" and a
+            // compact one is the entire document — both must route to the
+            // array reader, not be parsed as an entity ("missing field id").
             if trimmed.starts_with('{') {
-                // NDJSON format - first line is an entity
-                self.format = StreamFormat::Ndjson;
-                self.state = ReaderState::InArray;
-                return self.parse_entity(&self.line_buffer);
+                match serde_json::from_str::<JsonValue>(trimmed) {
+                    Ok(value) => {
+                        if let Some(entities) = value.get("entities").and_then(|e| e.as_array()) {
+                            // Whole compact document on one line: drain its
+                            // entities via the pending queue; nothing left
+                            // to read from the file.
+                            self.pending.extend(entities.iter().cloned());
+                            self.format = StreamFormat::JsonArray;
+                            self.state = ReaderState::Done;
+                            return Ok(self.pending.pop_front());
+                        }
+                        // Complete standalone object: NDJSON, one entity per line.
+                        self.format = StreamFormat::Ndjson;
+                        self.state = ReaderState::InArray;
+                        return Ok(Some(value));
+                    }
+                    Err(_) => {
+                        // Incomplete line ("{" of a pretty-printed document):
+                        // fall through to the brace-balancing array reader.
+                        self.format = StreamFormat::JsonArray;
+                        self.state = ReaderState::InArray;
+                        return self.skip_to_entities_array();
+                    }
+                }
             } else if trimmed.starts_with('[') || trimmed.contains("\"entities\"") {
                 // JSON array format - skip to entities array
                 self.format = StreamFormat::JsonArray;
@@ -521,6 +553,48 @@ mod tests {
 
         assert_eq!(count, 2);
         assert!(reader.is_done());
+    }
+
+    #[test]
+    fn test_stream_pretty_printed_document() {
+        // serde_json::to_writer_pretty output: first line is a bare "{",
+        // which the old detection misread as NDJSON ("missing field id").
+        let doc = serde_json::json!({"entities": [
+            {"id": "user_1", "type": "User", "attributes": {"role": "admin", "tags": ["a", "b"]}},
+            {"id": "user_2", "type": "User", "attributes": {"role": "viewer"}},
+            {"id": "res_1", "type": "Resource", "attributes": {"owner": "user_1"}},
+        ]});
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+        file.flush().unwrap();
+
+        let mut reader = JsonStreamReader::new(file.path()).unwrap();
+        let mut ids = Vec::new();
+        while let Some(entity) = reader.next().unwrap() {
+            ids.push(entity["id"].as_str().unwrap().to_string());
+        }
+        assert_eq!(ids, vec!["user_1", "user_2", "res_1"]);
+    }
+
+    #[test]
+    fn test_stream_compact_single_line_document() {
+        // Compact serializers (serde to_string, python json.dump) put the
+        // ENTIRE {"entities": [...]} document on one line.
+        let doc = serde_json::json!({"entities": [
+            {"id": "user_1", "type": "User", "attributes": {"role": "admin"}},
+            {"id": "user_2", "type": "User", "attributes": {}},
+        ]});
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", serde_json::to_string(&doc).unwrap()).unwrap();
+        file.flush().unwrap();
+
+        let mut reader = JsonStreamReader::new(file.path()).unwrap();
+        let mut count = 0;
+        while let Some(entity) = reader.next().unwrap() {
+            assert!(entity["id"].is_string());
+            count += 1;
+        }
+        assert_eq!(count, 2);
     }
 
     #[test]
