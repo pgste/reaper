@@ -364,16 +364,24 @@ async fn data_plane_replication_end_to_end() {
         .await
         .unwrap();
     assert!(resp.status().is_success(), "policy deploy on cold agent");
-    let ready_status = client
+    // 503 for the router, and a machine-readable WHY in the body — this
+    // is the contract SDK health indicators (Spring Actuator etc.) build
+    // on: map the status code to UP/DOWN, copy the body into details.
+    let resp = client
         .get(format!("{agent_url}/ready"))
         .send()
         .await
-        .unwrap()
-        .status();
+        .unwrap();
     assert_eq!(
-        ready_status.as_u16(),
+        resp.status().as_u16(),
         503,
         "gated agent must be NOT ready before its first verified sync"
+    );
+    let not_ready: Value = resp.json().await.unwrap();
+    assert_eq!(not_ready["status"], "not_ready");
+    assert_eq!(
+        not_ready["reason"], "awaiting_initial_data_sync",
+        "the 503 body must say it is starting up: {not_ready}"
     );
 
     engine.sync_datastore().await.expect("self-heal sync");
@@ -393,6 +401,8 @@ async fn data_plane_replication_end_to_end() {
         "first verified sync opens the readiness gate"
     );
     let ready: Value = ready.json().await.unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["reason"], Value::Null);
     assert_eq!(ready["data_version"], 1, "gate opened by the v1 snapshot");
     drop(agent);
 }
