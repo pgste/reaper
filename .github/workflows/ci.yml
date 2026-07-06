@@ -361,6 +361,13 @@ jobs:
         run: |
           cargo run -p policy-engine --example memory_volume_test --release 2>&1 | tee memory-volume-test.txt
 
+      - name: Run data-distribution memory profile
+        run: |
+          # Full hot load + bundle snapshot + delta streams (stable vs churning
+          # keys). Self-contained (generates its own data) and asserts the
+          # invariants, so a non-zero exit here is a real regression.
+          cargo run -p policy-engine --example data_distribution_memory --release 2>&1 | tee data-distribution-memory.txt
+
       - name: Extract memory metrics
         if: always()
         run: |
@@ -368,6 +375,11 @@ jobs:
           echo "" >> memory-volume-summary.md
           echo "## Comparison: 1k vs 100k Entities" >> memory-volume-summary.md
           grep -A 20 "COMPARISON ANALYSIS" memory-volume-test.txt >> memory-volume-summary.md || echo "Comparison not found" >> memory-volume-summary.md
+          echo "" >> memory-volume-summary.md
+          echo "## Data Distribution (full load / bundle snapshot / delta streams)" >> memory-volume-summary.md
+          # Pull the compact facts the report surfaces: bundle compactness, and
+          # the bounded-vs-churn delta memory behaviour.
+          grep -E "bundle bytes:|delta upserts applied;|despite flat live set" data-distribution-memory.txt >> memory-volume-summary.md || echo "distribution profile not found" >> memory-volume-summary.md
 
       - name: Upload memory test results
         uses: actions/upload-artifact@v4
@@ -377,6 +389,7 @@ jobs:
           path: |
             memory-volume-test.txt
             memory-volume-summary.md
+            data-distribution-memory.txt
             generate-huge-data.log
             generate-large-data.log
 
@@ -860,8 +873,14 @@ jobs:
             # Performance highlights — a few key numbers, not the full dump.
             echo "### ⚡ Performance"
             if [ -f "memory-scale-tests/memory-volume-summary.md" ]; then
-              NS=$(grep -oE '[0-9]+ ns' memory-scale-tests/memory-volume-summary.md | head -2 | awk 'NR==1{m=$0} NR==2{print m" / "$0}')
-              [ -n "$NS" ] && echo "- 100k-entity eval: ${NS} (mean / p99), memory scales linearly."
+              MEM_SUMMARY="memory-scale-tests/memory-volume-summary.md"
+              NS=$(grep -oE '[0-9]+ ns' "$MEM_SUMMARY" | head -2 | awk 'NR==1{m=$0} NR==2{print m" / "$0}')
+              [ -n "$NS" ] && echo "- 100k-entity eval: ${NS} (mean / p99), store heap scales linearly."
+              # Data distribution: bundle compactness + delta memory behaviour.
+              BND=$(grep -oE 'bundle bytes:[^)]*\)' "$MEM_SUMMARY" | head -1)
+              [ -n "$BND" ] && echo "- Data distribution: ${BND}; bundle snapshot loads to an identical store heap."
+              CHURN=$(grep -oE 'heap \+[0-9.]+ MB despite flat live set' "$MEM_SUMMARY" | head -1)
+              echo "- Deltas: stable-key stream bounded (0 interner growth); churning-key stream grows the append-only interner${CHURN:+ (}${CHURN}${CHURN:+)} — see docs/development/DATA_DISTRIBUTION_MEMORY.md."
             fi
             for pol in rbac abac rebac multilayer; do
               f="volume-test-$pol/volume-summary-$pol.md"
