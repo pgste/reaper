@@ -76,15 +76,36 @@ jobs:
 
       - name: Run unit tests
         run: |
+          # Library unit tests across the whole workspace (incl. reaper-management lib).
           cargo test --workspace --lib -- --nocapture 2>&1 | tee unit-test-results.txt
           echo "UNIT_TEST_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run management integration tests (SQLite)
+        run: |
+          # Control-plane HTTP/DB integration tests — SQLite backend, no
+          # external service needed.
+          cargo test -p reaper-management --test integration_tests 2>&1 | tee mgmt-integration-results.txt
+          echo "MGMT_INTEG_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run compiled-vs-AST equivalence suite
+        run: |
+          # DSL v2 differential: every function's compiled path must agree with AST.
+          cargo test -p policy-engine --test compiled_ast_equivalence_tests 2>&1 | tee equivalence-results.txt
+          echo "EQUIV_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
       - name: Generate unit test summary
         if: always()
         run: |
           echo "# Unit Test Results" > unit-test-summary.md
           echo "" >> unit-test-summary.md
+          echo "## Library unit tests" >> unit-test-summary.md
           grep -E "test result:|running [0-9]+ test" unit-test-results.txt >> unit-test-summary.md || echo "No summary found" >> unit-test-summary.md
+          echo "" >> unit-test-summary.md
+          echo "## Management integration (SQLite)" >> unit-test-summary.md
+          grep -E "test result:" mgmt-integration-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
+          echo "" >> unit-test-summary.md
+          echo "## Compiled≡AST equivalence" >> unit-test-summary.md
+          grep -E "test result:" equivalence-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
 
       - name: Upload unit test results
         uses: actions/upload-artifact@v4
@@ -95,9 +116,11 @@ jobs:
             unit-test-results.txt
             unit-test-summary.md
 
-      - name: Fail if unit tests failed
+      - name: Fail if any unit/integration/equivalence tests failed
         if: always()
-        run: exit ${{ env.UNIT_TEST_EXIT_CODE }}
+        run: |
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} ))
+          exit $rc
 
   # ============================================================
   # Stage 3: eBPF Compilation & Testing (x86_64 only)
@@ -566,6 +589,13 @@ jobs:
           echo '```' >> integration-reports/integration-summary.md
           echo "" >> integration-reports/integration-summary.md
 
+          # Process-level data-plane E2E (real binaries over HTTP, kill/respawn self-heal)
+          echo "## Process-Level Data-Plane E2E" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          grep -E "test result:|test .* \.\.\. (ok|FAILED)|SKIP" integration-reports/data-plane-e2e.txt >> integration-reports/integration-summary.md || echo "not available" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+
           # Extract test suite results
           echo "## Test Suites Executed" >> integration-reports/integration-summary.md
           echo "" >> integration-reports/integration-summary.md
@@ -703,12 +733,56 @@ jobs:
           path: bdd-reports/cucumber-report.json
 
   # ============================================================
+  # Stage 9b: Eval micro-benchmarks (criterion) — informational
+  # ============================================================
+  eval-microbench:
+    name: Eval Micro-Benchmarks (criterion)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run policy-evaluation criterion bench (bounded)
+        run: |
+          # Bounded measurement so this stays a quick PR signal, not a full
+          # perf run (regression gating lives in perf-tracking.yml).
+          cargo bench -p policy-engine --bench policy_evaluation_bench -- \
+            --measurement-time 2 --warm-up-time 1 2>&1 | tee eval-bench.txt || true
+
+      - name: Extract eval-latency summary
+        if: always()
+        run: |
+          echo "# Eval Micro-Benchmarks (criterion)" > eval-bench-summary.md
+          echo "" >> eval-bench-summary.md
+          echo "Median policy-evaluation latency (compiled engine):" >> eval-bench-summary.md
+          echo '```' >> eval-bench-summary.md
+          # Pair each "group/bench" id with its criterion "time: [lo median hi]" line.
+          awk '
+            /^[a-zA-Z0-9_]+\/[a-zA-Z0-9_]+/ { name=$1 }
+            /time:/ && name { gsub(/^ +/,"",$0); print name"  "$0; name="" }
+          ' eval-bench.txt | head -20 >> eval-bench-summary.md || echo "not available" >> eval-bench-summary.md
+          echo '```' >> eval-bench-summary.md
+
+      - name: Upload eval-bench results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-bench-results
+          path: |
+            eval-bench.txt
+            eval-bench-summary.md
+
+  # ============================================================
   # Stage 10: Generate Combined Test Report
   # ============================================================
   generate-report:
     name: Generate Combined Test Report
     runs-on: ubuntu-latest
-    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, integration-tests, bdd-tests]
+    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, integration-tests, bdd-tests, eval-microbench]
     if: always()
     steps:
       - name: Download all artifacts
@@ -723,6 +797,7 @@ jobs:
           R_SCALE: ${{ needs.scale-tests.result }}
           R_INTEG: ${{ needs.integration-tests.result }}
           R_BDD: ${{ needs.bdd-tests.result }}
+          R_EVAL: ${{ needs.eval-microbench.result }}
         run: |
           # One row per suite: name | job result | test counts parsed from its
           # artifact summary. A suite is a PASS unless its job result is
@@ -757,13 +832,14 @@ jobs:
             echo ""
             echo "| Suite | Status | Tests |"
             echo "|-------|--------|-------|"
-            echo "| Unit | $(icon "$R_UNIT") | $(counts 'unit-test-results/*.md') |"
-            echo "| Integration & OPA comparison | $(icon "$R_INTEG") | $(counts 'integration-test-results/*.md') |"
+            echo "| Unit + mgmt-integration + equivalence | $(icon "$R_UNIT") | $(counts 'unit-test-results/*.md') |"
+            echo "| Integration, E2E & OPA comparison | $(icon "$R_INTEG") | $(counts 'integration-test-results/*.md') |"
             echo "| BDD (Cucumber) | $(icon "$R_BDD") | $(counts 'bdd-test-results/*.md') |"
             echo "| Volume (10k) | $(icon "$R_VOLUME") | 4 policies |"
             echo "| Memory & Scale (100k) | $(icon "$R_MEMORY") | $(icon "$R_MEMORY") |"
             echo "| eBPF | $(icon "$R_EBPF") | $(icon "$R_EBPF") |"
             echo "| Scale & Performance | $(icon "$R_SCALE") | $(icon "$R_SCALE") |"
+            echo "| Eval micro-bench | $(icon "$R_EVAL") | criterion |"
             echo ""
 
             # Performance highlights — a few key numbers, not the full dump.
@@ -779,6 +855,10 @@ jobs:
               P99=$(grep -oE 'P99 latency:[[:space:]]*[0-9]+ ns' "$f" | head -1 | grep -oE '[0-9]+ ns')
               [ -n "$MEAN" ] && echo "- ${pol^^}: ${MEAN} mean, ${P99} p99 (10k iterations)"
             done
+            if [ -f "eval-bench-results/eval-bench-summary.md" ]; then
+              echo "- Eval micro-bench (criterion medians):"
+              grep -E '/' eval-bench-results/eval-bench-summary.md | head -4 | sed 's/^/    /'
+            fi
             echo ""
             echo "_Reaper-vs-OPA parity & speedup run in the separate \`benchmark\` workflow; see its checks above._"
 
