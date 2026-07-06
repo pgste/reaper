@@ -648,5 +648,18 @@ async fn then_subsequent_requests_return_not_found(world: &mut PolicyWorld) {
 
 #[tokio::main]
 async fn main() {
+    // These are INTEGRATION scenarios against live services. When the
+    // services aren't running (plain `cargo test`, unit-test CI lanes),
+    // skip the whole suite up front instead of panicking inside each
+    // scenario — a skip implemented as a panic reads as 7 failures in
+    // every CI summary. Start the services to run the real thing:
+    //   make platform (port 8081) && make agent (port 8080)
+    let mut world = PolicyWorld::new();
+    world.check_services().await;
+    if !world.services_available() {
+        eprintln!("SKIP platform BDD suite: live services not available.");
+        eprintln!("  start them with: make platform (8081) and make agent (8080)");
+        return;
+    }
     PolicyWorld::run("tests/features").await;
 }
