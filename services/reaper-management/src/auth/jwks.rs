@@ -219,7 +219,7 @@ impl JwksValidator {
         // Decode header to get kid
         let header = decode_header(token).map_err(|e| JwksError::TokenDecode(e.to_string()))?;
 
-        let kid = header.kid.as_ref().ok_or_else(|| JwksError::MissingKid)?;
+        let kid = header.kid.as_ref().ok_or(JwksError::MissingKid)?;
 
         // Get or fetch JWKS
         let keys = self.get_or_fetch_keys(config).await?;

@@ -31,7 +31,7 @@ pub struct LatencyStats {
 impl LatencyStats {
     /// Create stats from an HDR histogram
     pub fn from_histogram(histogram: &Histogram<u64>) -> Self {
-        if histogram.len() == 0 {
+        if histogram.is_empty() {
             return Self::empty();
         }
 

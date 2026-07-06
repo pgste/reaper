@@ -3,6 +3,9 @@
 //! Provides structured audit logging for all significant actions in the system.
 //! Audit logs are stored in the database and can be queried for compliance reporting.
 
+// sqlx rows decode into wide tuples by design; aliases would just move the noise.
+#![allow(clippy::type_complexity)]
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -333,7 +336,7 @@ impl<'a> AuditRepository<'a> {
         let details_json = entry
             .details
             .as_ref()
-            .map(|d| serde_json::to_string(d))
+            .map(serde_json::to_string)
             .transpose()?;
 
         sqlx::query(
@@ -564,16 +567,16 @@ impl<'a> AuditRepository<'a> {
     ) -> Result<AuditEntry, AuditError> {
         Ok(AuditEntry {
             id: Uuid::parse_str(&row.0).map_err(|e| sqlx::Error::Decode(e.into()))?,
-            org_id: row.1.map(|s| Uuid::parse_str(&s).ok()).flatten(),
+            org_id: row.1.and_then(|s| Uuid::parse_str(&s).ok()),
             actor_type: row
                 .2
                 .parse()
                 .map_err(|e: String| sqlx::Error::Decode(e.into()))?,
             actor_id: row.3,
             action: row.4,
-            resource_type: row.5.map(|s| s.parse().ok()).flatten(),
+            resource_type: row.5.and_then(|s| s.parse().ok()),
             resource_id: row.6,
-            details: row.7.map(|s| serde_json::from_str(&s).ok()).flatten(),
+            details: row.7.and_then(|s| serde_json::from_str(&s).ok()),
             ip_address: row.8,
             user_agent: row.9,
             created_at: chrono::DateTime::parse_from_rfc3339(&row.10)

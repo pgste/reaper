@@ -2,6 +2,10 @@
 //!
 //! These types define the JSON schemas for all API endpoints.
 
+// Wire-format request/response types mirror the HTTP contract; serde
+// deserializes every field even where handlers do not read all of them.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

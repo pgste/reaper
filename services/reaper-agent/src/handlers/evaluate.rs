@@ -179,7 +179,7 @@ pub async fn evaluate_policy(
     if let Some(reason) = state.data_sync.deny_reason() {
         ERRORS_TOTAL.with_label_values(&["data_stale"]).inc();
         let body = sonic_rs::to_vec(&EvalResponse {
-            decision_id: &decision_id,
+            decision_id,
             decision: "deny",
             policy_id: "",
             policy_version: 0,
@@ -211,7 +211,7 @@ pub async fn evaluate_policy(
                         // Policy not found - DENY by default for security
                         ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
                         let body = sonic_rs::to_vec(&EvalResponse {
-                            decision_id: &decision_id,
+                            decision_id,
                             decision: "deny",
                             policy_id: &id_str,
                             policy_version: 0,
@@ -241,7 +241,7 @@ pub async fn evaluate_policy(
                 CACHE_MISSES.with_label_values(&["policy"]).inc();
                 ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
                 let body = sonic_rs::to_vec(&EvalResponse {
-                    decision_id: &decision_id,
+                    decision_id,
                     decision: "deny",
                     policy_id: name,
                     policy_version: 0,
@@ -261,7 +261,7 @@ pub async fn evaluate_policy(
         if all_policies.is_empty() {
             ERRORS_TOTAL.with_label_values(&["no_policies"]).inc();
             let body = sonic_rs::to_vec(&EvalResponse {
-                decision_id: &decision_id,
+                decision_id,
                 decision: "deny",
                 policy_id: "",
                 policy_version: 0,
@@ -324,7 +324,7 @@ pub async fn evaluate_policy(
             };
 
             let body = sonic_rs::to_vec(&EvalResponse {
-                decision_id: &decision_id,
+                decision_id,
                 decision: decision_str,
                 policy_id: "cached",
                 policy_version: 0,
@@ -500,7 +500,7 @@ pub async fn evaluate_policy(
     let policy_id_str = matched_policy_id.to_string();
 
     let body = sonic_rs::to_vec(&EvalResponse {
-        decision_id: &decision_id,
+        decision_id,
         decision: decision_str,
         policy_id: &policy_id_str,
         policy_version: matched_policy_version,
@@ -748,9 +748,9 @@ pub async fn fast_evaluate_policy(
         .unwrap_or_default();
 
     let resp_body = sonic_rs::to_vec(&EvalResponse {
-        decision_id: &decision_id,
+        decision_id,
         decision: decision_str,
-        policy_id: &policy_id_str,
+        policy_id: policy_id_str,
         policy_version: matched_policy_version,
         evaluation_time_microseconds: total_eval_time_ns as f64 / 1000.0,
         total_time_microseconds: total_time.as_nanos() as f64 / 1000.0,

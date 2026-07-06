@@ -9,8 +9,10 @@ use uuid::Uuid;
 /// Policy source type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SourceType {
     /// Git repository source
+    #[default]
     Git,
     /// External HTTP API source
     Api,
@@ -18,12 +20,6 @@ pub enum SourceType {
     S3,
     /// Bundle URL source (webhook-triggered)
     BundleUrl,
-}
-
-impl Default for SourceType {
-    fn default() -> Self {
-        Self::Git
-    }
 }
 
 impl std::fmt::Display for SourceType {
@@ -54,8 +50,10 @@ impl std::str::FromStr for SourceType {
 /// Sync status for a policy source
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SyncStatus {
     /// Never synced
+    #[default]
     Pending,
     /// Currently syncing
     Syncing,
@@ -65,12 +63,6 @@ pub enum SyncStatus {
     Failed,
     /// Source is disabled
     Disabled,
-}
-
-impl Default for SyncStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for SyncStatus {

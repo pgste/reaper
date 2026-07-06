@@ -214,7 +214,7 @@ impl BundleUrlSyncer {
             let checksum_short = bundle
                 .checksum
                 .split(':')
-                .last()
+                .next_back()
                 .unwrap_or(&bundle.checksum)
                 .chars()
                 .take(8)

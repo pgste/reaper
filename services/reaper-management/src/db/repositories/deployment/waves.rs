@@ -96,7 +96,7 @@ impl<'a> WaveOps<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.iter().map(|r| row_to_wave(r)).collect()
+        rows.iter().map(row_to_wave).collect()
     }
 
     /// Update wave status

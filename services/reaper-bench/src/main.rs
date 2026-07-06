@@ -914,7 +914,7 @@ fn extract_policy_name(content: &str) -> Option<String> {
         if trimmed.starts_with("policy ") {
             // Extract name between "policy " and " {"
             let after_policy = trimmed.trim_start_matches("policy ");
-            if let Some(name_end) = after_policy.find(|c: char| c == ' ' || c == '{') {
+            if let Some(name_end) = after_policy.find([' ', '{']) {
                 let name = after_policy[..name_end].trim();
                 if !name.is_empty() {
                     return Some(name.to_string());

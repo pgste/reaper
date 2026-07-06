@@ -98,7 +98,7 @@ impl<'a> RolloutOps<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.iter().map(|r| row_to_rollout(r)).collect()
+        rows.iter().map(row_to_rollout).collect()
     }
 
     /// List rollouts for a namespace
@@ -148,7 +148,7 @@ impl<'a> RolloutOps<'a> {
                 .await?
         };
 
-        rows.iter().map(|r| row_to_rollout(r)).collect()
+        rows.iter().map(row_to_rollout).collect()
     }
 
     /// Update rollout status

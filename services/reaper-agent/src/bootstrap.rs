@@ -7,7 +7,7 @@ use policy_engine::{DataLoader, DataStore, EnhancedPolicy, PolicyEngine, ReaperP
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Bootstrap loading errors
 #[derive(Debug, Error)]

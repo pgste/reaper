@@ -5,6 +5,10 @@
 //! - OpenTelemetry integration for distributed tracing
 //! - Structured logging setup
 
+// Metric helpers form a complete recording API; the agent is a bin crate so
+// helpers not yet called at every site trip dead_code despite being public surface.
+#![allow(dead_code)]
+
 use lazy_static::lazy_static;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;

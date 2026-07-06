@@ -2,6 +2,9 @@
 //!
 //! Provides user accounts, sessions, and org membership for the SaaS control plane.
 
+// sqlx rows decode into wide tuples by design; aliases would just move the noise.
+#![allow(clippy::type_complexity)]
+
 pub mod password;
 pub mod types;
 
@@ -83,7 +86,7 @@ impl<'a> UserRepository<'a> {
         .fetch_optional(pool)
         .await?;
 
-        row.map(|r| Self::row_to_user(r)).transpose()
+        row.map(Self::row_to_user).transpose()
     }
 
     /// Find user by email
@@ -109,7 +112,7 @@ impl<'a> UserRepository<'a> {
         .fetch_optional(pool)
         .await?;
 
-        row.map(|r| Self::row_to_user(r)).transpose()
+        row.map(Self::row_to_user).transpose()
     }
 
     /// Update user's last login time
@@ -274,7 +277,7 @@ impl<'a> UserOrgRepository<'a> {
         .fetch_all(pool)
         .await?;
 
-        rows.into_iter().map(|r| Self::row_to_user_org(r)).collect()
+        rows.into_iter().map(Self::row_to_user_org).collect()
     }
 
     /// Get all members of an org
@@ -288,7 +291,7 @@ impl<'a> UserOrgRepository<'a> {
         .fetch_all(pool)
         .await?;
 
-        rows.into_iter().map(|r| Self::row_to_user_org(r)).collect()
+        rows.into_iter().map(Self::row_to_user_org).collect()
     }
 
     /// Update user's role in an org

@@ -9,8 +9,10 @@ use uuid::Uuid;
 /// Bundle status in the promotion workflow
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum BundleStatus {
     /// Initial state, policies being selected
+    #[default]
     Draft,
     /// .rpp bundle generated and stored
     Compiled,
@@ -20,12 +22,6 @@ pub enum BundleStatus {
     Promoted,
     /// Marked for removal
     Deprecated,
-}
-
-impl Default for BundleStatus {
-    fn default() -> Self {
-        Self::Draft
-    }
 }
 
 impl std::fmt::Display for BundleStatus {

@@ -2,6 +2,9 @@
 //!
 //! Database operations for tracking per-agent deployment status.
 
+// sqlx rows decode into wide tuples by design; aliases would just move the noise.
+#![allow(clippy::type_complexity)]
+
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 

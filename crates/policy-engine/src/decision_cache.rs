@@ -291,9 +291,7 @@ where
     // XOR of per-id hashes: commutative, so ordering does not matter.
     let mut acc: u64 = 0;
     for id in policy_ids {
-        let mut h = rustc_hash::FxBuildHasher.build_hasher();
-        id.hash(&mut h);
-        acc ^= h.finish().rotate_left(1);
+        acc ^= rustc_hash::FxBuildHasher.hash_one(&id).rotate_left(1);
     }
     acc
 }

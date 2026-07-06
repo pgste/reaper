@@ -443,6 +443,7 @@ impl ValidationService {
 }
 
 /// Validate multiple policies (e.g., all policies in a bundle)
+#[allow(dead_code)] // exercised by the bundle CLI path; kept as public surface
 pub async fn validate_bundle_policies(
     db: &Database,
     policy_ids: &[Uuid],

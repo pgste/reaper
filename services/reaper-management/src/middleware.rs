@@ -193,10 +193,10 @@ fn normalize_path_for_metrics(path: &str) -> String {
     let normalized: Vec<&str> = parts
         .iter()
         .map(|part| {
-            // Replace UUIDs with placeholder
-            if Uuid::parse_str(part).is_ok() {
-                "{id}"
-            } else if part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty() {
+            // Replace UUIDs and numeric ids with a placeholder
+            if Uuid::parse_str(part).is_ok()
+                || (!part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+            {
                 "{id}"
             } else {
                 *part

@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reaper_management::{
     api::build_api_router,
     auth::api_key::{ApiKeyRepository, CreateApiKey},
-    auth::jwks::{JwksConfig, JwksConfigRepository},
+    auth::jwks::JwksConfigRepository,
     config::{AuthConfig, Config},
     db::repositories::AgentRepository,
     db::Database,
@@ -1405,7 +1405,7 @@ async fn test_session_token_with_api_endpoints() {
 #[tokio::test]
 async fn test_data_plane_end_to_end() {
     use policy_engine::reap::ReaperPolicy;
-    use policy_engine::{DataLoader, DataStore, PolicyEvaluator, PolicyRequest};
+    use policy_engine::{DataLoader, DataStore, PolicyRequest};
     use std::collections::HashMap;
 
     let env = setup_test_env().await;
@@ -2078,7 +2078,7 @@ async fn measure_data_plane_save_latency() {
         pct(0.50),
         pct(0.95),
         pct(0.99),
-        pct(1.0) - 0
+        pct(1.0)
     );
 
     // Control: authed READ through the same stack — isolates auth+router

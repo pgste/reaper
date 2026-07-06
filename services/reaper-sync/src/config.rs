@@ -80,7 +80,7 @@ pub struct AuthConfig {
 }
 
 /// Scope configuration - what policies to sync
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct DatastoreSyncConfig {
     /// Enable data-plane replication (fetch published datastore versions
     /// and keep the agent's DataStore current with heartbeat staleness).
@@ -92,16 +92,6 @@ pub struct DatastoreSyncConfig {
     /// Namespace slug the datastore belongs to.
     #[serde(default)]
     pub namespace: String,
-}
-
-impl Default for DatastoreSyncConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            org: String::new(),
-            namespace: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -190,7 +190,7 @@ impl<'a> ApiKeyRepository<'a> {
                 // write per key per minute preserves it.
                 let needs_touch = api_key
                     .last_used_at
-                    .map_or(true, |t| Utc::now() - t > chrono::Duration::seconds(60));
+                    .is_none_or(|t| Utc::now() - t > chrono::Duration::seconds(60));
                 if needs_touch {
                     let db = self.db.clone();
                     let key_id = api_key.id;

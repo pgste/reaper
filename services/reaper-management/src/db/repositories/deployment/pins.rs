@@ -100,7 +100,7 @@ impl<'a> PinOps<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.iter().map(|r| row_to_pin(r)).collect()
+        rows.iter().map(row_to_pin).collect()
     }
 
     /// Delete a version pin

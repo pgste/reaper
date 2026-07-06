@@ -189,7 +189,10 @@ impl DataSyncState {
         None
     }
 
-    /// Whether evaluation must FAIL CLOSED right now.
+    /// Whether evaluation must FAIL CLOSED right now. Handlers use
+    /// `deny_reason()` (they need the why); this predicate is the
+    /// test/SDK-facing form.
+    #[allow(dead_code)]
     #[inline]
     pub fn must_deny(&self) -> bool {
         self.deny_reason().is_some()
@@ -349,7 +352,7 @@ impl AgentStats {
             return 0;
         }
         if let Some(histogram) = self.latency_histogram.try_lock() {
-            if histogram.len() > 0 {
+            if !histogram.is_empty() {
                 return histogram.value_at_percentile(percentile);
             }
         }
@@ -410,21 +413,25 @@ impl AgentStats {
     }
 
     /// Check if enhanced metrics are enabled.
+    #[allow(dead_code)] // stats accessor surface; not every build reads every getter
     pub fn enhanced_metrics_enabled(&self) -> bool {
         self.enhanced_metrics_enabled
     }
 
     /// Get total requests processed.
+    #[allow(dead_code)]
     pub fn get_requests_processed(&self) -> u64 {
         self.requests_processed.load(Ordering::Relaxed)
     }
 
     /// Get total evaluation time in nanoseconds.
+    #[allow(dead_code)]
     pub fn get_total_evaluation_time_ns(&self) -> u64 {
         self.total_evaluation_time_ns.load(Ordering::Relaxed)
     }
 
     /// Get average evaluation time in nanoseconds.
+    #[allow(dead_code)]
     pub fn get_avg_evaluation_time_ns(&self) -> f64 {
         let requests = self.get_requests_processed();
         if requests == 0 {

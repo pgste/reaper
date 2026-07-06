@@ -41,12 +41,13 @@ impl DatabaseConfig {
                     "SQLite URL must start with 'sqlite:'".to_string(),
                 ));
             }
-        } else if self.db_type == "postgres" || self.db_type == "postgresql" {
-            if !self.url.starts_with("postgres://") && !self.url.starts_with("postgresql://") {
-                return Err(ConfigError::InvalidDatabaseUrl(
-                    "PostgreSQL URL must start with 'postgres://' or 'postgresql://'".to_string(),
-                ));
-            }
+        } else if (self.db_type == "postgres" || self.db_type == "postgresql")
+            && !self.url.starts_with("postgres://")
+            && !self.url.starts_with("postgresql://")
+        {
+            return Err(ConfigError::InvalidDatabaseUrl(
+                "PostgreSQL URL must start with 'postgres://' or 'postgresql://'".to_string(),
+            ));
         }
 
         // Validate max connections

@@ -149,7 +149,7 @@ mod tests {
             .count();
 
         // Approximately 30% admin, 20% guest
-        assert!(admin_count >= 20 && admin_count <= 40);
-        assert!(guest_count >= 10 && guest_count <= 30);
+        assert!((20..=40).contains(&admin_count));
+        assert!((10..=30).contains(&guest_count));
     }
 }

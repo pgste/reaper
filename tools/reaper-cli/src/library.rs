@@ -90,7 +90,7 @@ fn read_manifest(dir: &Path) -> anyhow::Result<Manifest> {
 pub fn list(path: Option<&str>) -> anyhow::Result<()> {
     let root = root(path)?;
     println!("📚 Policy library ({})\n", root.display());
-    println!("{:<34} {:>5}  {}", "ID", "CASES", "NAME");
+    println!("{:<34} {:>5}  NAME", "ID", "CASES");
     for (id, dir) in scenarios(&root)? {
         let manifest = read_manifest(&dir)?;
         println!("{:<34} {:>5}  {}", id, manifest.cases.len(), manifest.name);

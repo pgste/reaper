@@ -115,7 +115,7 @@ impl<'a> StrategyOps<'a> {
                 .await?
         };
 
-        rows.iter().map(|r| row_to_strategy(r)).collect()
+        rows.iter().map(row_to_strategy).collect()
     }
 
     /// Get the default strategy for a namespace (or org-wide)

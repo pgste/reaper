@@ -16,32 +16,22 @@ mod uds;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use axum::{
-    body::Bytes,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::{Json, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use cache::PolicyCache;
 use clap::Parser;
 use policy_engine::{
-    cache_config::CacheConfig, create_shared_buffer, DecisionFilter, DecisionLogConfig,
-    DecisionLogEntry, EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine, PolicyRequest,
-    PolicyRule,
+    cache_config::CacheConfig, create_shared_buffer, DecisionLogConfig, EnhancedPolicy,
+    PolicyEngine,
 };
-use prometheus::{Encoder, TextEncoder};
 use reaper_core::{config::ReaperAgentConfig, endpoints, BUILD_INFO, VERSION};
 use serde::Deserialize;
-use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // Import from extracted modules
@@ -84,20 +74,9 @@ use handlers::{
     sync_data,
     upsert_entity_handler,
 };
-use observability::{
-    init_observability, record_decision, record_denial, set_active_policies, ACTIVE_POLICIES,
-    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISIONS_TOTAL, DECISION_DURATION,
-    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DENIALS_TOTAL,
-    ERRORS_TOTAL,
-};
-use opentelemetry::{global, trace::TraceContextExt, KeyValue};
+use observability::init_observability;
+use opentelemetry::global;
 use state::{AgentState, AgentStats, DataSyncState};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-use types::{
-    BatchEvaluateRequest, BatchRequestItem, BatchResponseItem, DecisionQuery, DeployBundleRequest,
-    DeployBundleResponse, DeployCompiledRequest, DeployPolicyRequest, EvaluateRequest,
-    EvaluateResponse, ExportDecisionsRequest, PackageEvaluateRequest,
-};
 
 // ============================================================================
 // CLI Arguments
@@ -135,6 +114,7 @@ struct Args {
 
 // Keep DeployPolicyRule here as it's used internally by deploy_policy handler
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // wire-format mirror; serde populates all fields
 struct DeployPolicyRule {
     pub action: String,
     pub resource: String,
@@ -329,13 +309,11 @@ async fn main() -> anyhow::Result<()> {
         ) {
             Ok(client) => {
                 let client = Arc::new(client);
-                let policy_engine_for_sync = policy_engine.clone();
 
                 // Create sync service with stats and start time for metrics
                 let (sync_service, mut update_rx) = management::SyncService::new(
                     client.clone(),
                     config.management.clone(),
-                    Arc::new(policy_engine_for_sync),
                     data_store.clone(),
                     stats.clone(),
                     started_at,

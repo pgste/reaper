@@ -3,6 +3,10 @@
 //! Uses the Reaper SDK for transport (TCP or Unix Domain Socket).
 //! Supports mTLS authentication via reqwest and UDS for same-host/pod deployments.
 
+// Benchmark harness: variants are wired up per-run, so not all paths/fields
+// are referenced in every build.
+#![allow(dead_code)]
+
 use reaper_sdk::ReaperClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

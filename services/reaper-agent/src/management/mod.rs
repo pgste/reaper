@@ -15,6 +15,5 @@ mod sync;
 mod types;
 
 pub use client::ManagementClient;
-pub use sse::{ManagementEvent, SseClient, SseConfig};
 pub use sync::SyncService;
 pub use types::*;

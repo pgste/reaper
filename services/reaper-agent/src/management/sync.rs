@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use policy_engine::{DataStore, PolicyEngine};
+use policy_engine::DataStore;
 use reaper_core::config::ManagementSettings;
 
 use super::client::ManagementClient;
@@ -33,7 +33,6 @@ pub struct BundleUpdate {
 pub struct SyncService {
     client: Arc<ManagementClient>,
     config: ManagementSettings,
-    policy_engine: Arc<PolicyEngine>,
     /// Shared DataStore for entity data updates via SSE
     data_store: Arc<DataStore>,
     /// Agent statistics for metrics collection
@@ -57,7 +56,6 @@ impl SyncService {
     pub fn new(
         client: Arc<ManagementClient>,
         config: ManagementSettings,
-        policy_engine: Arc<PolicyEngine>,
         data_store: Arc<DataStore>,
         stats: Arc<AgentStats>,
         started_at: Instant,
@@ -103,7 +101,6 @@ impl SyncService {
         let service = Self {
             client,
             config,
-            policy_engine,
             data_store,
             stats,
             started_at,
