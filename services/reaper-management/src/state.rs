@@ -130,6 +130,25 @@ pub enum ServerEvent {
         version: i64,
         checksum: String,
     },
+    /// An agent's replicated authorization data crossed its staleness
+    /// budget (self-reported via heartbeat; emitted on the transition,
+    /// not every heartbeat).
+    AgentDataStale {
+        agent_id: uuid::Uuid,
+        agent_name: String,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        data_version: i64,
+        data_applied_seq: i64,
+    },
+    /// The agent's data replica caught back up (stale → fresh transition).
+    AgentDataFresh {
+        agent_id: uuid::Uuid,
+        agent_name: String,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        data_version: i64,
+    },
 }
 
 impl ServerEvent {
@@ -151,6 +170,8 @@ impl ServerEvent {
             ServerEvent::RolloutWaveCompleted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutCompleted { org_id, .. } => Some(*org_id),
             ServerEvent::DatastorePublished { org_id, .. } => Some(*org_id),
+            ServerEvent::AgentDataStale { org_id, .. } => Some(*org_id),
+            ServerEvent::AgentDataFresh { org_id, .. } => Some(*org_id),
             ServerEvent::Ping { .. } => None,
         }
     }
@@ -173,6 +194,8 @@ impl ServerEvent {
             ServerEvent::RolloutWaveCompleted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutCompleted { namespace_id, .. } => *namespace_id,
             ServerEvent::DatastorePublished { namespace_id, .. } => *namespace_id,
+            ServerEvent::AgentDataStale { namespace_id, .. } => *namespace_id,
+            ServerEvent::AgentDataFresh { namespace_id, .. } => *namespace_id,
             ServerEvent::Ping { .. } => None,
         }
     }

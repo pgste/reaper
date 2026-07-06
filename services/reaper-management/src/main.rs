@@ -135,6 +135,43 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Change-log retention sweeper: publish-time compaction never bounds a
+    // datastore that churns without publishing, so age out old delta marks
+    // on a schedule. Pruning is always safe — a replica below the floor
+    // gets snapshot_required and self-heals — but retention should stay
+    // far above agent sync intervals so healthy followers never hit it.
+    // REAPER_CHANGE_LOG_RETENTION_SECS=0 disables (default 30 days).
+    {
+        let retention_secs: u64 = std::env::var("REAPER_CHANGE_LOG_RETENTION_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30 * 24 * 3600);
+        let sweep_secs: u64 = std::env::var("REAPER_CHANGE_LOG_SWEEP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3600);
+        if retention_secs > 0 {
+            let db = state.db.clone();
+            tokio::spawn(async move {
+                let mut tick =
+                    tokio::time::interval(std::time::Duration::from_secs(sweep_secs.max(60)));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    let cutoff = (chrono::Utc::now()
+                        - chrono::Duration::seconds(retention_secs as i64))
+                    .to_rfc3339();
+                    let repo = reaper_management::db::repositories::DatastoreRepository::new(&db);
+                    match repo.prune_change_log(&cutoff).await {
+                        Ok(0) => {}
+                        Ok(n) => info!(pruned = n, "change-log retention: aged out delta marks"),
+                        Err(e) => warn!("change-log retention sweep failed: {e}"),
+                    }
+                }
+            });
+        }
+    }
+
     // Create rate limiter
     let rate_limiter = rate_limit::create_rate_limiter(&config.rate_limit);
 

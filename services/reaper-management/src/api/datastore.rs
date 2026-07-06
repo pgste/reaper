@@ -543,10 +543,13 @@ async fn get_changes(
 
     // Replica older than the compaction floor: deltas can no longer bridge
     // the gap — self-heal via snapshot (min_available == 0 means an empty
-    // log, which is only a gap if the head has moved past `since`).
+    // log, which is only a gap if the head has moved past `since`). This
+    // must apply to since=0 followers too: time-based retention can prune
+    // the early log before a first publish, and telling such a follower
+    // "you're current" with an empty delta list would be a silent gap.
     let compacted_away = params.since < min_available.saturating_sub(1)
         || (min_available == 0 && head_seq > params.since && marks.is_empty());
-    if params.since > 0 && compacted_away {
+    if compacted_away {
         return Ok(Json(json!({
             "snapshot_required": true,
             "head_seq": head_seq,

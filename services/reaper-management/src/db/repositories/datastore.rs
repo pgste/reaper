@@ -254,6 +254,25 @@ impl<'a> DatastoreRepository<'a> {
         Ok((head, min_available, marks))
     }
 
+    /// Time-based retention for the change log, beyond publish-time
+    /// compaction (which only prunes behind the previous snapshot and so
+    /// never bounds a datastore that churns without publishing). Deletes
+    /// marks older than the cutoff across ALL datastores.
+    ///
+    /// Safe at any floor by construction: a replica whose position was
+    /// pruned gets `snapshot_required` from changes_since and self-heals
+    /// via a full verified snapshot — pruning can cost a redeploy, never
+    /// data. Retention must comfortably exceed agent sync intervals so
+    /// healthy followers never hit the floor.
+    pub async fn prune_change_log(&self, cutoff_rfc3339: &str) -> Result<u64, DatabaseError> {
+        let pool = self.pool()?;
+        let result = sqlx::query("DELETE FROM adm_changes WHERE created_at < $1")
+            .bind(cutoff_rfc3339)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Everything needed to materialize one entity's current doc: its
     /// record, its (unscoped) bindings, and every tuple touching it —
     /// three indexed point queries, never a dataset scan.

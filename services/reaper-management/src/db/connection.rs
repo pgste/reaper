@@ -25,11 +25,18 @@ use tracing::{info, warn};
 /// Embedded PostgreSQL migrations: (version, description, sql).
 /// APPEND-ONLY — never edit a shipped migration (the checksum guard will
 /// refuse to start against a database that applied the old text).
-const PG_MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "initial_schema",
-    include_str!("migrations_pg/0001_initial_schema.sql"),
-)];
+const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "initial_schema",
+        include_str!("migrations_pg/0001_initial_schema.sql"),
+    ),
+    (
+        2,
+        "change_log_retention",
+        include_str!("migrations_pg/0002_change_log_retention.sql"),
+    ),
+];
 
 static INSTALL_DRIVERS: Once = Once::new();
 
@@ -173,6 +180,7 @@ impl Database {
             include_str!("migrations/006_data_plane.sql"),
             include_str!("migrations/007_change_log.sql"),
             include_str!("migrations/008_agent_data_sync.sql"),
+            include_str!("migrations/009_change_log_retention.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

@@ -31,6 +31,8 @@ pub enum WebhookEventType {
     AgentUnhealthy,
     /// Agent went offline
     AgentOffline,
+    /// Agent's replicated authorization data exceeded its staleness budget
+    AgentDataStale,
     /// Policy validation failed
     PolicyValidationFailed,
 }
@@ -48,6 +50,7 @@ impl std::fmt::Display for WebhookEventType {
             WebhookEventType::AgentRegistered => write!(f, "agent.registered"),
             WebhookEventType::AgentUnhealthy => write!(f, "agent.unhealthy"),
             WebhookEventType::AgentOffline => write!(f, "agent.offline"),
+            WebhookEventType::AgentDataStale => write!(f, "agent.data_stale"),
             WebhookEventType::PolicyValidationFailed => write!(f, "policy.validation_failed"),
         }
     }
@@ -70,6 +73,7 @@ impl std::str::FromStr for WebhookEventType {
             "agent.registered" | "agent_registered" => Ok(WebhookEventType::AgentRegistered),
             "agent.unhealthy" | "agent_unhealthy" => Ok(WebhookEventType::AgentUnhealthy),
             "agent.offline" | "agent_offline" => Ok(WebhookEventType::AgentOffline),
+            "agent.data_stale" | "agent_data_stale" => Ok(WebhookEventType::AgentDataStale),
             "policy.validation_failed" | "policy_validation_failed" => {
                 Ok(WebhookEventType::PolicyValidationFailed)
             }

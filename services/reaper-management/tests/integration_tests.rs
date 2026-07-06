@@ -1747,6 +1747,91 @@ async fn test_data_plane_end_to_end() {
     assert_eq!(status["counts"]["role_bindings"], 1);
 }
 
+/// Time-based change-log retention: pruning aged delta marks must never
+/// strand a follower — a replica whose position fell below the pruned
+/// floor gets snapshot_required and self-heals via a full snapshot.
+#[tokio::test]
+async fn test_change_log_retention_prune_forces_snapshot() {
+    use reaper_management::db::repositories::DatastoreRepository;
+
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Retention Org", "slug": "retention-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    let base = "/orgs/retention-org/namespaces/prod/datastore";
+    let call = |method: &'static str, path: String, body: Option<Value>| {
+        let app = env.app.clone();
+        let key = key.clone();
+        async move {
+            let response = app
+                .oneshot(authed_request(method, &path, body, &key))
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = parse_body(response).await;
+            (status, body)
+        }
+    };
+
+    let (status, _) = call(
+        "POST",
+        "/orgs/retention-org/namespaces".to_string(),
+        Some(json!({"slug": "prod"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = call(
+        "POST",
+        base.to_string(),
+        Some(json!({"template": "combined"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Churn without publishing — exactly the growth publish-time
+    // compaction cannot bound.
+    for body in [
+        json!({"entity_id": "alice", "entity_type": "user", "attributes": {"mfa": true}}),
+        json!({"entity_id": "bob", "entity_type": "user", "attributes": {}}),
+    ] {
+        let (status, _) = call("POST", format!("{base}/entities"), Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // A follower at seq 0 sees ordinary deltas before the prune.
+    let (status, before) = call("GET", format!("{base}/changes?since=0"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(before["snapshot_required"], json!(false));
+    assert!(before["deltas"].as_array().unwrap().len() >= 2);
+
+    // Prune with a future cutoff (everything is "too old").
+    let cutoff = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+    let pruned = DatastoreRepository::new(&env.db)
+        .prune_change_log(&cutoff)
+        .await
+        .unwrap();
+    assert!(pruned >= 2, "expected marks pruned, got {pruned}");
+
+    // The same follower now falls below the floor and is told to
+    // full-sync — self-healing, no silent gap.
+    let (status, after) = call("GET", format!("{base}/changes?since=0"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        after["snapshot_required"],
+        json!(true),
+        "pruned follower must be redirected to a snapshot: {after}"
+    );
+}
+
 /// The durable delta loop, end-to-end against the real APIs: snapshot,
 /// then mutations (including a cascade delete), then a /changes pull
 /// applied INCREMENTALLY to a live policy-engine store — which must

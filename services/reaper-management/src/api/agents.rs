@@ -367,6 +367,16 @@ async fn heartbeat(
 
     // Store metrics if provided
     if let Some(ref metrics) = request.metrics {
+        // Read the previous stale flag BEFORE overwriting the row so
+        // stale/fresh transitions can be detected (alert on the edge,
+        // never on every heartbeat).
+        let previous_stale = agent_repo
+            .get_metrics(agent_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|m| m.data_stale);
+
         if let Err(e) = agent_repo.update_metrics(agent_id, metrics).await {
             tracing::warn!(
                 agent_id = %agent_id,
@@ -374,12 +384,80 @@ async fn heartbeat(
                 "Failed to store agent metrics"
             );
         }
+
+        match data_stale_transition(previous_stale, metrics.data_stale) {
+            Some(true) => {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    agent_name = %agent.name,
+                    data_version = metrics.data_version.unwrap_or(0),
+                    data_applied_seq = metrics.data_applied_seq.unwrap_or(0),
+                    "agent data replica exceeded its staleness budget"
+                );
+                let _ = state.event_tx.send(ServerEvent::AgentDataStale {
+                    agent_id,
+                    agent_name: agent.name.clone(),
+                    org_id: organization.id,
+                    namespace_id: None,
+                    data_version: metrics.data_version.unwrap_or(0),
+                    data_applied_seq: metrics.data_applied_seq.unwrap_or(0),
+                });
+                // Webhook delivery off the heartbeat path — an alert must
+                // never slow (or fail) the heartbeat that carries it.
+                let db = state.db.clone();
+                let org_id = organization.id;
+                let org_slug = organization.slug.clone();
+                let payload = serde_json::json!({
+                    "agent_id": agent_id,
+                    "agent_name": agent.name,
+                    "data_version": metrics.data_version,
+                    "data_applied_seq": metrics.data_applied_seq,
+                });
+                tokio::spawn(async move {
+                    crate::webhook::WebhookDeliveryService::new(db)
+                        .deliver_event(
+                            org_id,
+                            &org_slug,
+                            crate::domain::webhook::WebhookEventType::AgentDataStale,
+                            payload,
+                        )
+                        .await;
+                });
+            }
+            Some(false) => {
+                tracing::info!(
+                    agent_id = %agent_id,
+                    agent_name = %agent.name,
+                    "agent data replica caught back up"
+                );
+                let _ = state.event_tx.send(ServerEvent::AgentDataFresh {
+                    agent_id,
+                    agent_name: agent.name.clone(),
+                    org_id: organization.id,
+                    namespace_id: None,
+                    data_version: metrics.data_version.unwrap_or(0),
+                });
+            }
+            None => {}
+        }
     }
 
     Ok(Json(HeartbeatResponse {
         acknowledged: true,
         server_time: chrono::Utc::now(),
     }))
+}
+
+/// Stale-flag edge detection: `Some(true)` = became stale, `Some(false)` =
+/// recovered, `None` = no transition. An agent that never reported the
+/// flag (or reports None) is treated as fresh — absence of the data plane
+/// is not an alert condition.
+fn data_stale_transition(previous: Option<bool>, current: Option<bool>) -> Option<bool> {
+    match (previous.unwrap_or(false), current.unwrap_or(false)) {
+        (false, true) => Some(true),
+        (true, false) => Some(false),
+        _ => None,
+    }
 }
 
 /// Agent reports the bundle version it applied. Records the actual per-agent
@@ -431,4 +509,24 @@ async fn report_deployment(
         .map_err(|e| ApiError::Internal(format!("record deployment report: {e}")))?;
 
     Ok(Json(DeploymentReportResponse { acknowledged: true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::data_stale_transition;
+
+    #[test]
+    fn stale_transitions_fire_only_on_edges() {
+        // became stale
+        assert_eq!(data_stale_transition(None, Some(true)), Some(true));
+        assert_eq!(data_stale_transition(Some(false), Some(true)), Some(true));
+        // recovered
+        assert_eq!(data_stale_transition(Some(true), Some(false)), Some(false));
+        assert_eq!(data_stale_transition(Some(true), None), Some(false));
+        // steady state — no event spam
+        assert_eq!(data_stale_transition(Some(true), Some(true)), None);
+        assert_eq!(data_stale_transition(Some(false), Some(false)), None);
+        assert_eq!(data_stale_transition(None, None), None);
+        assert_eq!(data_stale_transition(None, Some(false)), None);
+    }
 }
