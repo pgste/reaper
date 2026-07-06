@@ -26,6 +26,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY services/ services/
 COPY tools/ tools/
+COPY tests/ tests/
 
 # Build only the management service in release mode
 RUN cargo build --release -p reaper-management

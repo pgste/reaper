@@ -123,7 +123,18 @@ jobs:
 
     - name: Install Enterprise OPA
       run: |
-        curl -L -o eopa https://github.com/StyraInc/enterprise-opa/releases/latest/download/eopa_Linux_x86_64
+        # Resolve the Linux x86_64 asset from the latest release via the API:
+        # the hardcoded asset name drifted and 'latest/download/<name>' now
+        # 404s (curl without -f then saved the 'Not Found' page as the
+        # binary). -f + an explicit empty-URL check make failures loud.
+        URL=$(curl -fsSL https://api.github.com/repos/StyraInc/enterprise-opa/releases/latest \
+          | grep -oE '"browser_download_url": *"[^"]*Linux_x86_64[^"]*"' \
+          | grep -v sha256 | head -1 | cut -d'"' -f4)
+        if [ -z "$URL" ]; then
+          echo "::error::no eopa Linux_x86_64 asset found on the latest release"
+          exit 1
+        fi
+        curl -fL -o eopa "$URL"
         chmod +x eopa
         sudo mv eopa /usr/local/bin/opa
         opa version
