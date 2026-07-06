@@ -115,6 +115,31 @@ impl ReaperPolicy {
         ReapAstEvaluator::new(store, self.ast)
     }
 
+    /// Build the PREFERRED evaluator: the compiled `ReaperDSLEvaluator` when
+    /// this policy compiles, otherwise the `ReapAstEvaluator` fallback.
+    ///
+    /// The compiled path is faster; the AST path supports every feature. They
+    /// are required to produce identical decisions for any policy both can
+    /// evaluate (pinned by the compiled-vs-AST equivalence differential), so
+    /// falling back never changes an authorization outcome — it only trades
+    /// speed for coverage on policies the compiler doesn't yet handle. This is
+    /// the entry point production code should use unless it specifically needs
+    /// one implementation.
+    pub fn build_preferred(
+        self,
+        store: Arc<DataStore>,
+    ) -> Result<Box<dyn crate::evaluators::PolicyEvaluator>, ReaperError> {
+        match compiler::compile_policy(self.clone().ast, store.clone()) {
+            Ok(compiled) => Ok(Box::new(compiled)),
+            Err(compile_err) => {
+                tracing::debug!(
+                    "policy did not compile ({compile_err}); falling back to AST evaluator"
+                );
+                Ok(Box::new(ReapAstEvaluator::new(store, self.ast)))
+            }
+        }
+    }
+
     /// Get the policy name
     pub fn name(&self) -> &str {
         &self.ast.name

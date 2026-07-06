@@ -205,19 +205,13 @@ impl EnhancedPolicy {
                             reason: format!("Failed to parse Reaper DSL policy: {}", e),
                         })?;
 
-                // Prefer the compiled evaluator; fall back to the AST interpreter
-                // for constructs the compiler does not yet support.
-                match reaper_policy.clone().build(store.clone()) {
-                    Ok(compiled) => Arc::new(compiled),
-                    Err(compile_err) => {
-                        tracing::info!(
-                            policy = %self.name,
-                            "Reaper DSL policy uses the AST evaluator (compile hint: {})",
-                            compile_err
-                        );
-                        Arc::new(reaper_policy.build_ast_evaluator(store))
-                    }
-                }
+                // Prefer the compiled DSL v2 evaluator; fall back to the AST
+                // interpreter for constructs the compiler does not yet support.
+                // The two are pinned to identical decisions by the
+                // compiled-vs-AST equivalence differential, so this selection
+                // never changes an authorization outcome. build_preferred is
+                // the single home of that contract.
+                Arc::from(reaper_policy.build_preferred(store)?)
             }
         };
 
