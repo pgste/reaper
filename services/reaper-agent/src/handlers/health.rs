@@ -71,6 +71,14 @@ pub async fn readiness_check(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    // Cold-start gate (REAPER_DATA_REQUIRE_SYNC): a fresh pod stays out
+    // of the load-balancer rotation until its first verified snapshot
+    // lands, so it never briefly denies requests it would allow with data.
+    if state.data_sync.awaiting_initial_sync() {
+        tracing::debug!("readiness gated: awaiting initial data sync");
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     Ok(Json(json!({
         "status": "ready",
         "policies_loaded": engine_stats.total_policies,

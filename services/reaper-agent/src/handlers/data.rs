@@ -709,9 +709,14 @@ mod deploy_version_tests {
             applied_seq: std::sync::atomic::AtomicI64::new(0),
             max_staleness_secs: 10,
             mode: StalenessMode::Enforce,
+            require_sync: false,
         };
         assert!(!s.is_stale(), "never-synced has no staleness clock");
         assert!(!s.must_deny());
+        assert!(
+            !s.awaiting_initial_sync(),
+            "gate must be off unless explicitly armed"
+        );
 
         // Synced long ago with a 10s budget: stale; behavior follows mode.
         s.record_sync(1, "sha256:abc".into());
@@ -736,5 +741,37 @@ mod deploy_version_tests {
             1,
             "heartbeat never changes the version"
         );
+    }
+
+    #[test]
+    fn require_sync_cold_start_gate() {
+        // Armed gate, never synced: fail closed with the cold-start
+        // reason, NOT the staleness reason (fresh pod != stale replica).
+        let s = DataSyncState {
+            version: std::sync::atomic::AtomicI64::new(0),
+            checksum: parking_lot::RwLock::new(String::new()),
+            last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
+            applied_seq: std::sync::atomic::AtomicI64::new(0),
+            max_staleness_secs: 0,
+            mode: StalenessMode::Monitor,
+            require_sync: true,
+        };
+        assert!(s.awaiting_initial_sync());
+        assert!(s.must_deny(), "armed gate fails closed before first sync");
+        assert_eq!(s.deny_reason(), Some("awaiting_initial_data_sync"));
+
+        // A heartbeat alone must NOT open the gate — only a VERIFIED
+        // snapshot (record_sync runs after checksum verification) counts.
+        s.record_heartbeat();
+        assert!(
+            s.awaiting_initial_sync(),
+            "heartbeat without a verified snapshot must not open the gate"
+        );
+
+        // First verified snapshot: gate opens permanently.
+        s.record_sync(1, "sha256:abc".into());
+        assert!(!s.awaiting_initial_sync());
+        assert!(!s.must_deny());
+        assert_eq!(s.deny_reason(), None);
     }
 }

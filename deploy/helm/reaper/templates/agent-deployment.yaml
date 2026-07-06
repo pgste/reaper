@@ -50,6 +50,16 @@ spec:
               value: "0.0.0.0"
             - name: REAPER_AGENT_PORT
               value: {{ .Values.agent.service.port | quote }}
+            {{- if .Values.agent.config.requireDataSync }}
+            - name: REAPER_DATA_REQUIRE_SYNC
+              value: "true"
+            {{- end }}
+            {{- if .Values.agent.config.dataMaxStalenessSecs }}
+            - name: REAPER_DATA_MAX_STALENESS_SECS
+              value: {{ .Values.agent.config.dataMaxStalenessSecs | quote }}
+            - name: REAPER_DATA_STALENESS_MODE
+              value: {{ .Values.agent.config.dataStalenessMode | quote }}
+            {{- end }}
             - name: PLATFORM_URL
               value: "http://{{ include "reaper.platform.fullname" . }}:{{ .Values.platform.service.port }}"
             {{- if .Values.agent.openTelemetry.enabled }}
@@ -101,7 +111,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -189,6 +199,16 @@ spec:
               value: "0.0.0.0"
             - name: REAPER_AGENT_PORT
               value: {{ .Values.agent.service.port | quote }}
+            {{- if .Values.agent.config.requireDataSync }}
+            - name: REAPER_DATA_REQUIRE_SYNC
+              value: "true"
+            {{- end }}
+            {{- if .Values.agent.config.dataMaxStalenessSecs }}
+            - name: REAPER_DATA_MAX_STALENESS_SECS
+              value: {{ .Values.agent.config.dataMaxStalenessSecs | quote }}
+            - name: REAPER_DATA_STALENESS_MODE
+              value: {{ .Values.agent.config.dataStalenessMode | quote }}
+            {{- end }}
             - name: REAPER_MANAGEMENT_ENABLED
               value: "true"
             - name: REAPER_MANAGEMENT_URL
@@ -254,7 +274,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5

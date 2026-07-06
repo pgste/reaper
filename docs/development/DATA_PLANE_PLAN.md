@@ -256,6 +256,13 @@ Implemented (management + agent, fully tested end-to-end):
     stop routing to the stale agent
   An agent that never synced (bootstrap-file/standalone) has no staleness
   clock — budgets apply only once the data plane is in use.
+- **Cold-start gate** (`REAPER_DATA_REQUIRE_SYNC=true`): until the FIRST
+  verified snapshot lands, `/ready` returns 503 (Kubernetes keeps the pod
+  out of rotation — the Helm chart's agent readiness probe targets
+  `/ready`, and `agent.config.requireDataSync` wires the env var) and
+  evaluation fails closed with matched_rule `awaiting_initial_data_sync`.
+  Off by default so standalone/bootstrap-file agents are unaffected; a
+  heartbeat alone never opens the gate, only a checksum-verified snapshot.
 - **Decision provenance**: every decision log entry now carries
   `data_version` + `data_checksum` (skipped when never synced) — audits pin
   exactly which data every decision saw.

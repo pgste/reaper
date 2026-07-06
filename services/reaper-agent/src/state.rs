@@ -99,6 +99,11 @@ pub struct DataSyncState {
     pub max_staleness_secs: u64,
     /// Behavior when the budget is exceeded.
     pub mode: StalenessMode,
+    /// Cold-start gate (REAPER_DATA_REQUIRE_SYNC): until the first
+    /// VERIFIED snapshot lands, /ready reports 503 (orchestrators keep the
+    /// pod out of rotation) and evaluation fails closed. Off by default —
+    /// standalone / bootstrap-file agents have no data plane to wait for.
+    pub require_sync: bool,
 }
 
 impl DataSyncState {
@@ -113,6 +118,9 @@ impl DataSyncState {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
             mode: StalenessMode::from_env(),
+            require_sync: std::env::var("REAPER_DATA_REQUIRE_SYNC")
+                .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false),
         }
     }
 
@@ -161,10 +169,30 @@ impl DataSyncState {
             .is_some_and(|s| s > self.max_staleness_secs)
     }
 
+    /// True while the cold-start gate is armed and no verified snapshot
+    /// has landed yet (version is only set after checksum verification).
+    #[inline]
+    pub fn awaiting_initial_sync(&self) -> bool {
+        self.require_sync && self.version.load(Ordering::Acquire) == 0
+    }
+
+    /// Why evaluation must FAIL CLOSED right now, if it must. Two relaxed
+    /// atomic loads on the hot path; None when healthy.
+    #[inline]
+    pub fn deny_reason(&self) -> Option<&'static str> {
+        if self.awaiting_initial_sync() {
+            return Some("awaiting_initial_data_sync");
+        }
+        if self.mode == StalenessMode::Enforce && self.is_stale() {
+            return Some("data_staleness_exceeded");
+        }
+        None
+    }
+
     /// Whether evaluation must FAIL CLOSED right now.
     #[inline]
     pub fn must_deny(&self) -> bool {
-        self.mode == StalenessMode::Enforce && self.is_stale()
+        self.deny_reason().is_some()
     }
 
     /// Whether decision entries should be flagged stale right now.

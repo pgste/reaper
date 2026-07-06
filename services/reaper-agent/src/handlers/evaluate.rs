@@ -170,11 +170,13 @@ pub async fn evaluate_policy(
     let mut decision_id_buf = [0u8; Hyphenated::LENGTH];
     let decision_id: &str = uuid.as_hyphenated().encode_lower(&mut decision_id_buf);
 
-    // DATA-PLANE STALENESS GUARD (enforce mode): when the operator set
-    // REAPER_DATA_STALENESS_MODE=enforce and the sync budget is exceeded,
-    // fail CLOSED — stale data must not mint allows. Two relaxed atomic
-    // loads on the hot path; zero cost when no budget is configured.
-    if state.data_sync.must_deny() {
+    // DATA-PLANE GUARD: fail CLOSED when the operator armed a gate and it
+    // is tripped — either the staleness budget is exceeded in enforce mode
+    // (stale data must not mint allows) or REAPER_DATA_REQUIRE_SYNC is set
+    // and the first verified snapshot hasn't landed yet (an empty replica
+    // must not answer as if it had data). matched_rule names which gate.
+    // Two relaxed atomic loads on the hot path; zero cost when unarmed.
+    if let Some(reason) = state.data_sync.deny_reason() {
         ERRORS_TOTAL.with_label_values(&["data_stale"]).inc();
         let body = sonic_rs::to_vec(&EvalResponse {
             decision_id: &decision_id,
@@ -183,7 +185,7 @@ pub async fn evaluate_policy(
             policy_version: 0,
             evaluation_time_microseconds: 0.0,
             total_time_microseconds: 0.0,
-            matched_rule: "data_staleness_exceeded",
+            matched_rule: reason,
             agent_id: &state.agent_id,
             cache_hit: false,
         })

@@ -288,6 +288,15 @@ agent:
 
   config:
     logLevel: info
+    # Data-plane cold-start gate: when true the agent's /ready stays 503
+    # until its first VERIFIED data snapshot lands, so Kubernetes keeps a
+    # fresh pod out of rotation until its authorization data is loaded.
+    # Leave false for agents that don't use the data plane.
+    requireDataSync: false
+    # Staleness budget for replicated authorization data (seconds; 0 = no
+    # budget) and the behavior when exceeded: monitor | flag | enforce.
+    dataMaxStalenessSecs: 0
+    dataStalenessMode: monitor
 
   # ---------------------------------------------------------------------------
   # Unix Domain Socket transport (lower-latency same-host IPC).

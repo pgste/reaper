@@ -66,17 +66,21 @@ async fn wait_healthy(client: &Client, url: &str) -> bool {
 }
 
 fn spawn_agent(port: u16) -> Proc {
+    spawn_agent_with(port, &[])
+}
+
+fn spawn_agent_with(port: u16, extra_env: &[(&str, &str)]) -> Proc {
     let path = bin("reaper-agent").expect("agent binary");
-    Proc(
-        Command::new(path)
-            .env("REAPER_PORT", port.to_string())
-            .env("REAPER_BIND_ADDRESS", "127.0.0.1")
-            .env("RUST_LOG", "warn")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn agent"),
-    )
+    let mut cmd = Command::new(path);
+    cmd.env("REAPER_PORT", port.to_string())
+        .env("REAPER_BIND_ADDRESS", "127.0.0.1")
+        .env("RUST_LOG", "warn")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    Proc(cmd.spawn().expect("spawn agent"))
 }
 
 #[tokio::test]
@@ -336,13 +340,41 @@ async fn data_plane_replication_end_to_end() {
         "agent advanced through the change stream: {ready}"
     );
 
-    // --- Self-healing: kill the agent, respawn cold, ONE sync step must
-    // fully recover it (confirm 409 -> snapshot v1 -> delta catch-up). ---
+    // --- Self-healing + cold-start gate: kill the agent, respawn cold
+    // with REAPER_DATA_REQUIRE_SYNC armed. Until the first verified
+    // snapshot lands the pod must report NOT ready — this is what keeps a
+    // fresh Kubernetes pod out of rotation while its replica is empty —
+    // and ONE sync step must both recover the data (confirm 409 ->
+    // snapshot v1 -> delta catch-up) and open the gate. ---
     drop(agent);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    agent = spawn_agent(agent_port);
+    agent = spawn_agent_with(agent_port, &[("REAPER_DATA_REQUIRE_SYNC", "true")]);
     assert!(wait_healthy(&client, &agent_url).await, "agent respawn");
     assert_eq!(agent_stats(&client).await, 0, "cold agent is empty");
+
+    // Load a policy so the ONLY readiness blocker left is the data gate.
+    let resp = client
+        .post(format!("{agent_url}/api/v1/policies/deploy"))
+        .json(&json!({
+            "policy_id": uuid::Uuid::new_v4().to_string(),
+            "name": "e2e-probe-2", "description": "",
+            "rules": [{"action": "allow", "resource": "*", "conditions": null}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "policy deploy on cold agent");
+    let ready_status = client
+        .get(format!("{agent_url}/ready"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(
+        ready_status.as_u16(),
+        503,
+        "gated agent must be NOT ready before its first verified sync"
+    );
 
     engine.sync_datastore().await.expect("self-heal sync");
     assert_eq!(
@@ -350,5 +382,17 @@ async fn data_plane_replication_end_to_end() {
         1,
         "one sync step after restart: snapshot + delta catch-up to head"
     );
+    let ready = client
+        .get(format!("{agent_url}/ready"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        ready.status().as_u16(),
+        200,
+        "first verified sync opens the readiness gate"
+    );
+    let ready: Value = ready.json().await.unwrap();
+    assert_eq!(ready["data_version"], 1, "gate opened by the v1 snapshot");
     drop(agent);
 }
