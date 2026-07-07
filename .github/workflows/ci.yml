@@ -93,6 +93,13 @@ jobs:
           cargo test -p policy-engine --test compiled_ast_equivalence_tests 2>&1 | tee equivalence-results.txt
           echo "EQUIV_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run context interner-leak regression
+        run: |
+          # Eval-path guard: context.* comparisons must not intern per-request
+          # values (a novel token per request must leave the interner flat).
+          cargo test -p policy-engine --test context_interner_leak_tests 2>&1 | tee ctx-leak-results.txt
+          echo "CTX_LEAK_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
       - name: Generate unit test summary
         if: always()
         run: |
@@ -106,6 +113,9 @@ jobs:
           echo "" >> unit-test-summary.md
           echo "## Compiled≡AST equivalence" >> unit-test-summary.md
           grep -E "test result:" equivalence-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
+          echo "" >> unit-test-summary.md
+          echo "## Context interner-leak regression" >> unit-test-summary.md
+          grep -E "test result:" ctx-leak-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
 
       - name: Upload unit test results
         uses: actions/upload-artifact@v4
@@ -119,7 +129,7 @@ jobs:
       - name: Fail if any unit/integration/equivalence tests failed
         if: always()
         run: |
-          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} ))
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} ))
           exit $rc
 
   # ============================================================
