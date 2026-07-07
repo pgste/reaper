@@ -328,11 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     let num_tests = (passed + failed) as u128;
-    let avg_eval_time = if num_tests > 0 {
-        total_eval_time / num_tests
-    } else {
-        0
-    };
+    let avg_eval_time = total_eval_time.checked_div(num_tests).unwrap_or(0);
 
     println!("\nTest Results:");
     println!("  Passed: {}/{}", passed, passed + failed);

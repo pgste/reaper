@@ -570,7 +570,7 @@ impl LearningEngine {
             .map(|entry| (entry.key().clone(), entry.value().count))
             .collect();
 
-        resources.sort_by(|a, b| b.1.cmp(&a.1));
+        resources.sort_by_key(|b| std::cmp::Reverse(b.1));
         resources.truncate(n);
         resources
     }

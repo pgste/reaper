@@ -355,7 +355,7 @@ impl DecisionTreeBuilder {
             }
         }
 
-        best_attr.and_then(|attr| best_splits.map(|splits| (attr, splits)))
+        best_attr.zip(best_splits)
     }
 
     /// Partition rules by attribute value
