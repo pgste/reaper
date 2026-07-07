@@ -1,0 +1,29 @@
+// The OPA classic: "employees can read their own salary; their managers can
+// read it too" — plus an ABAC guard (HR only for compensation edits during
+// review season would need time functions; kept to attributes here).
+policy payroll {
+    default: deny,
+
+    rule read_own_salary {
+        allow if {
+            context.action == "read" &&
+            context.principal == resource.employee
+        }
+    }
+
+    // manager chain via ReBAC (manages edges), up to 2 levels
+    rule manager_reads_reports_salary {
+        allow if {
+            context.action == "read" &&
+            rebac::reachable(user, "subject", resource, "manages", 2)
+        }
+    }
+
+    rule hr_edits_compensation {
+        allow if {
+            context.action == "update" &&
+            user.department == "hr" &&
+            user.level >= 3
+        }
+    }
+}

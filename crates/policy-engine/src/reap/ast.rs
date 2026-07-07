@@ -18,6 +18,11 @@ pub struct Rule {
     pub name: String,
     pub decision: Decision,
     pub condition: Condition,
+    /// Optional human-readable violation message (`with message <expr>`),
+    /// evaluated with the rule's bound variables when the rule matches in
+    /// check mode. Decision-mode evaluation ignores it (zero cost).
+    #[serde(default)]
+    pub message: Option<Expr>,
 }
 
 /// Decision type
@@ -111,6 +116,10 @@ pub enum Entity {
     User,
     Resource,
     Context,
+    /// The structured request document (`input`): arbitrary nested JSON
+    /// supplied per-request, for OPA-style document policies (Terraform
+    /// plans, K8s admission requests, config checks).
+    Input,
 }
 
 /// Comparison operator
@@ -317,6 +326,7 @@ impl From<&str> for Entity {
             "user" => Entity::User,
             "resource" => Entity::Resource,
             "context" => Entity::Context,
+            "input" => Entity::Input,
             _ => panic!("Invalid entity type: {}", s),
         }
     }

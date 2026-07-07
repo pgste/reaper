@@ -1,0 +1,15 @@
+{
+  "name": "GitHub org/team/repo (RBAC + ABAC + ReBAC composed)",
+  "source": "GitHub permission semantics; contrast with Rego graph-walk implementations",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "team member with MFA pushes private repo", "principal": "dev-sam", "action": "push", "resource": "repo-payments", "expect": "allow"},
+    {"name": "same team, NO MFA: push denied (ABAC gate)", "principal": "contractor-cody", "action": "push", "resource": "repo-payments", "expect": "deny"},
+    {"name": "no-MFA member still reads via org grant (ReBAC)", "principal": "contractor-cody", "action": "read", "resource": "repo-payments", "expect": "allow"},
+    {"name": "org admin bypasses grants (RBAC)", "principal": "boss-bea", "action": "push", "resource": "repo-payments", "expect": "allow"},
+    {"name": "bot in team with MFA cannot force-push (deny wins)", "principal": "ci-bot", "action": "force-push", "resource": "repo-payments", "expect": "deny"},
+    {"name": "bot can still push normally", "principal": "ci-bot", "action": "push", "resource": "repo-payments", "expect": "allow"},
+    {"name": "anyone reads public repo", "principal": "contractor-cody", "action": "read", "resource": "repo-docs", "expect": "allow"}
+  ]
+}

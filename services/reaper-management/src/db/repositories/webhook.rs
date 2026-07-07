@@ -28,7 +28,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<WebhookSubscription, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let id = Uuid::new_v4();
@@ -42,7 +42,7 @@ impl<'a> WebhookRepository<'a> {
             r#"
             INSERT INTO webhook_subscriptions
             (id, org_id, name, url, secret, events, is_active, failure_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, 1, 0, $7, $8)
             "#,
         )
         .bind(id.to_string())
@@ -75,7 +75,7 @@ impl<'a> WebhookRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let row: Option<WebhookRow> = sqlx::query_as(
@@ -83,7 +83,7 @@ impl<'a> WebhookRepository<'a> {
             SELECT id, org_id, name, url, secret, events, is_active,
                    last_triggered_at, failure_count, created_at, updated_at
             FROM webhook_subscriptions
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -101,7 +101,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Option<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let row: Option<WebhookRow> = sqlx::query_as(
@@ -109,7 +109,7 @@ impl<'a> WebhookRepository<'a> {
             SELECT id, org_id, name, url, secret, events, is_active,
                    last_triggered_at, failure_count, created_at, updated_at
             FROM webhook_subscriptions
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -128,7 +128,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Vec<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let query = if active_only {
@@ -136,7 +136,7 @@ impl<'a> WebhookRepository<'a> {
             SELECT id, org_id, name, url, secret, events, is_active,
                    last_triggered_at, failure_count, created_at, updated_at
             FROM webhook_subscriptions
-            WHERE org_id = ? AND is_active = 1
+            WHERE org_id = $1 AND is_active = 1
             ORDER BY name
             "#
         } else {
@@ -144,7 +144,7 @@ impl<'a> WebhookRepository<'a> {
             SELECT id, org_id, name, url, secret, events, is_active,
                    last_triggered_at, failure_count, created_at, updated_at
             FROM webhook_subscriptions
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name
             "#
         };
@@ -165,7 +165,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Vec<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         // SQLite JSON contains check
@@ -176,7 +176,7 @@ impl<'a> WebhookRepository<'a> {
             SELECT id, org_id, name, url, secret, events, is_active,
                    last_triggered_at, failure_count, created_at, updated_at
             FROM webhook_subscriptions
-            WHERE org_id = ? AND is_active = 1 AND events LIKE '%' || ? || '%'
+            WHERE org_id = $1 AND is_active = 1 AND events LIKE '%' || $2 || '%'
             ORDER BY name
             "#,
         )
@@ -203,7 +203,7 @@ impl<'a> WebhookRepository<'a> {
     ) -> Result<Option<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let now = Utc::now();
@@ -237,10 +237,10 @@ impl<'a> WebhookRepository<'a> {
             has_active = true;
         }
 
-        let query = format!(
+        let query = crate::db::numbered_placeholders(&format!(
             "UPDATE webhook_subscriptions SET {} WHERE id = ?",
             updates.join(", ")
-        );
+        ));
 
         let mut query_builder = sqlx::query(&query).bind(now.to_rfc3339());
 
@@ -279,7 +279,7 @@ impl<'a> WebhookRepository<'a> {
     pub async fn record_trigger(&self, id: Uuid, success: bool) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
         let now = Utc::now();
@@ -288,8 +288,8 @@ impl<'a> WebhookRepository<'a> {
             sqlx::query(
                 r#"
                 UPDATE webhook_subscriptions
-                SET last_triggered_at = ?, failure_count = 0, updated_at = ?
-                WHERE id = ?
+                SET last_triggered_at = $1, failure_count = 0, updated_at = $2
+                WHERE id = $3
                 "#,
             )
             .bind(now.to_rfc3339())
@@ -301,8 +301,8 @@ impl<'a> WebhookRepository<'a> {
             sqlx::query(
                 r#"
                 UPDATE webhook_subscriptions
-                SET last_triggered_at = ?, failure_count = failure_count + 1, updated_at = ?
-                WHERE id = ?
+                SET last_triggered_at = $1, failure_count = failure_count + 1, updated_at = $2
+                WHERE id = $3
                 "#,
             )
             .bind(now.to_rfc3339())
@@ -319,10 +319,10 @@ impl<'a> WebhookRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
-        let result = sqlx::query("DELETE FROM webhook_subscriptions WHERE id = ?")
+        let result = sqlx::query("DELETE FROM webhook_subscriptions WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;

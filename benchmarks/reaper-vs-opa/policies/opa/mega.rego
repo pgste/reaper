@@ -8,8 +8,8 @@ import rego.v1
 # Default deny
 default allow := false
 
-# Entity lookup — .attributes shorthand
-user := data.entities[input.principal.id].attributes
+# Entity lookup — the map value IS the attributes object (see deploy-opa.sh)
+user := data.entities[input.principal]
 
 # ===== MATH OPERATIONS (Rules 1-15) =====
 

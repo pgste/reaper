@@ -1,0 +1,15 @@
+{"entities":[
+  {"id":"dev-sam","type":"User","attributes":{"role":"member","account_type":"user","mfa_enabled":true},
+   "relationships":{"member_of":["team-payments"]}},
+  {"id":"contractor-cody","type":"User","attributes":{"role":"member","account_type":"user","mfa_enabled":false},
+   "relationships":{"member_of":["team-payments"]}},
+  {"id":"boss-bea","type":"User","attributes":{"role":"org_admin","account_type":"user","mfa_enabled":true}},
+  {"id":"ci-bot","type":"User","attributes":{"role":"member","account_type":"bot","mfa_enabled":true},
+   "relationships":{"member_of":["team-payments"]}},
+  {"id":"team-payments","type":"Team","attributes":{},"relationships":{"member_of":["org-eng"]}},
+  {"id":"org-eng","type":"Team","attributes":{}},
+  {"id":"repo-payments","type":"Repo","attributes":{"visibility":"private"},
+   "relationships":{"write":["team-payments"],"read":["org-eng"]}},
+  {"id":"repo-docs","type":"Repo","attributes":{"visibility":"public"},
+   "relationships":{"write":["team-payments"]}}
+]}

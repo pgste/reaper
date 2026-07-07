@@ -34,6 +34,9 @@ pub enum ApiError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
     #[error("Database error: {0}")]
     Database(#[from] crate::db::DatabaseError),
 }
@@ -65,6 +68,11 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone()),
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone()),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone()),
+            ApiError::ServiceUnavailable(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service_unavailable",
+                msg.clone(),
+            ),
             ApiError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
                 (

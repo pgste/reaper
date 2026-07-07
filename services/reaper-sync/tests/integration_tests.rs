@@ -10,6 +10,7 @@ mod test_config {
     pub fn sync_config(server_url: &str, agent_url: &str) -> reaper_sync::config::SyncConfig {
         reaper_sync::config::SyncConfig {
             sync: reaper_sync::config::SyncSettings {
+                datastore: Default::default(),
                 server: reaper_sync::config::ServerConfig {
                     url: server_url.to_string(),
                     api_version: "v1".to_string(),

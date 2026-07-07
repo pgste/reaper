@@ -1,0 +1,9 @@
+{"request":{"operation":"CREATE","object":{
+  "metadata":{"name":"bad-pod","labels":{"app":"demo"}},
+  "spec":{"containers":[
+    {"name":"web","image":"registry.corp.internal/web:latest",
+     "securityContext":{"privileged":true},
+     "resources":{"limits":{"cpu":"1"}}},
+    {"name":"sidecar","image":"docker.io/random/sidecar:1.2",
+     "resources":{}}
+  ]}}}}

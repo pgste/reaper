@@ -69,7 +69,7 @@ struct BenchmarkResult {
     memory_mb: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Decision {
     Allow,
     Deny,
@@ -218,6 +218,17 @@ async fn main() -> Result<()> {
         validate_policy_logic(&args.opa_url, "OPA", scenario).await?;
     }
     eprintln!("{}", "  ✓ All validation tests passed!".green());
+    eprintln!();
+
+    // Decision-parity gate: both engines must agree on the actual decisions
+    // across a representative sample before any speedup is measured. A benchmark
+    // that compares latency over non-equivalent decisions is meaningless, so a
+    // divergence aborts the run rather than producing a misleading number.
+    eprintln!("{}", "⚖️  Enforcing cross-engine decision parity...".bold());
+    let parity_sample = args.requests.min(2000).max(200);
+    for scenario in &scenarios {
+        enforce_decision_parity(&args.reaper_url, &args.opa_url, scenario, parity_sample).await?;
+    }
     eprintln!();
 
     // Run benchmarks
@@ -1016,37 +1027,85 @@ async fn send_reaper_request(
     })
 }
 
+/// Cross-engine decision-parity gate.
+///
+/// Sends an identical sample of generated requests to both Reaper and OPA and
+/// verifies they produce the same allow/deny decision on every one. Returns an
+/// error (aborting the benchmark) on any divergence: a speedup measured over
+/// requests where the engines disagree is not a valid comparison.
+async fn enforce_decision_parity(
+    reaper_url: &str,
+    opa_url: &str,
+    scenario: &str,
+    sample_size: usize,
+) -> Result<()> {
+    let client = reqwest::Client::new();
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    for i in 0..sample_size {
+        let request = generate_request(scenario, i);
+        let principal = request.principal.id.clone();
+        let action = request.action.clone();
+        let resource = request.resource.clone();
+
+        let reaper = send_reaper_request(&client, reaper_url, scenario, request.clone()).await?;
+        let opa = send_opa_request(&client, opa_url, scenario, request).await?;
+        checked += 1;
+
+        if reaper.decision != opa.decision && mismatches.len() < 10 {
+            mismatches.push(format!(
+                "      principal={principal} action={action} resource={resource} → Reaper={:?}, OPA={:?}",
+                reaper.decision, opa.decision
+            ));
+        }
+    }
+
+    if mismatches.is_empty() {
+        eprintln!(
+            "  {} {} ({checked} sampled requests agree)",
+            "✓ decision parity:".green(),
+            scenario
+        );
+        Ok(())
+    } else {
+        eprintln!(
+            "  {} {} — {} of {checked} sampled requests disagree:",
+            "✗ decision parity FAILED:".red().bold(),
+            scenario,
+            mismatches.len()
+        );
+        for m in &mismatches {
+            eprintln!("{}", m.red());
+        }
+        anyhow::bail!(
+            "Reaper and OPA disagree on scenario '{scenario}'. A speedup over non-equivalent \
+             decisions is not a valid comparison — align the rego policy and OPA data mapping \
+             with the Reaper policy before benchmarking."
+        )
+    }
+}
+
 async fn send_opa_request(
     client: &reqwest::Client,
     url: &str,
     scenario: &str,
     request: PolicyRequest,
 ) -> Result<DecisionResult> {
-    // Most scenarios expect just the principal ID string, not the full Principal object
-    // because they do entity lookups: user := data.entities[input.principal]
-    let payload = match scenario {
-        // RBAC sends the full Principal object (no entity lookup)
-        "rbac" => json!({
-            "input": request
-        }),
-        // All other scenarios use entity lookup - send just the principal ID
-        _ => json!({
-            "input": {
-                "principal": request.principal.id,
-                "action": request.action,
-                "resource": request.resource,
-                "context": request.context,
-            }
-        }),
-    };
+    // Uniform input shape for EVERY scenario: the principal is sent as its id
+    // string (all rego resolve the entity via `data.entities[input.principal]`),
+    // alongside action, resource, and context. This matches how Reaper receives
+    // the request and keeps the two engines evaluating the same thing.
+    let payload = json!({
+        "input": {
+            "principal": request.principal.id,
+            "action": request.action,
+            "resource": request.resource,
+            "context": request.context,
+        }
+    });
 
-    let policy_path = match scenario {
-        "rbac" => "reaper/rbac/allow".to_string(),
-        "abac" => "reaper/abac/allow".to_string(),
-        "rebac" => "reaper/rebac/allow".to_string(),
-        "multilayer" => "reaper/multilayer/allow".to_string(),
-        _ => format!("reaper/{}/allow", scenario), // Generic fallback for any scenario
-    };
+    let policy_path = format!("reaper/{}/allow", scenario);
 
     let resp = client
         .post(format!("{}/v1/data/{}", url, policy_path))

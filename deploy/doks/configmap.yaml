@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/part-of: reaper-platform
 data:
   RUST_LOG: "info,reaper_agent=info"
-  REAPER_BIND_ADDR: "0.0.0.0:8080"
+  REAPER_AGENT_BIND_ADDRESS: "0.0.0.0"
+  REAPER_AGENT_PORT: "8080"
   REAPER_UDS_ENABLED: "true"
   REAPER_UDS_PATH: "/var/run/reaper/agent.sock"

@@ -110,7 +110,7 @@ impl<'a> ApiKeyRepository<'a> {
     ) -> Result<ApiKeyCreated, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let (full_key, prefix, hash) = ApiKeyGenerator::generate();
@@ -121,7 +121,7 @@ impl<'a> ApiKeyRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO api_keys (id, org_id, name, key_prefix, key_hash, scopes, expires_at, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(id.to_string())
@@ -155,7 +155,7 @@ impl<'a> ApiKeyRepository<'a> {
 
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let hash = ApiKeyGenerator::hash_key(key);
@@ -164,7 +164,7 @@ impl<'a> ApiKeyRepository<'a> {
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
-            WHERE key_hash = ? AND is_revoked = 0
+            WHERE key_hash = $1 AND is_revoked = 0
             "#,
         )
         .bind(&hash)
@@ -182,8 +182,23 @@ impl<'a> ApiKeyRepository<'a> {
                     }
                 }
 
-                // Update last_used_at
-                let _ = self.update_last_used(api_key.id).await;
+                // Touch last_used_at OFF the request path, and only when
+                // it's actually stale: the previous synchronous UPDATE put
+                // a write commit inside EVERY authenticated request —
+                // measured at ~75% of control-plane save latency. Audit
+                // freshness of "last used" is minutes-granularity; one
+                // write per key per minute preserves it.
+                let needs_touch = api_key
+                    .last_used_at
+                    .is_none_or(|t| Utc::now() - t > chrono::Duration::seconds(60));
+                if needs_touch {
+                    let db = self.db.clone();
+                    let key_id = api_key.id;
+                    tokio::spawn(async move {
+                        let repo = ApiKeyRepository::new(&db);
+                        let _ = repo.update_last_used(key_id).await;
+                    });
+                }
 
                 Ok(Some(api_key))
             }
@@ -195,14 +210,14 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<ApiKey>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -219,14 +234,14 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<ApiKey>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
             "#,
         )
@@ -246,10 +261,10 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn revoke(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("UPDATE api_keys SET is_revoked = 1 WHERE id = ?")
+        let result = sqlx::query("UPDATE api_keys SET is_revoked = 1 WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -261,10 +276,10 @@ impl<'a> ApiKeyRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM api_keys WHERE id = ?")
+        let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -276,11 +291,11 @@ impl<'a> ApiKeyRepository<'a> {
     async fn update_last_used(&self, id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE id = ?")
+        sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE id = $2")
             .bind(&now)
             .bind(id.to_string())
             .execute(pool)
@@ -290,7 +305,7 @@ impl<'a> ApiKeyRepository<'a> {
     }
 
     /// Convert database row to ApiKey
-    fn row_to_api_key(&self, row: sqlx::sqlite::SqliteRow) -> Result<ApiKey, DatabaseError> {
+    fn row_to_api_key(&self, row: sqlx::any::AnyRow) -> Result<ApiKey, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -337,21 +352,14 @@ impl<'a> ApiKeyRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

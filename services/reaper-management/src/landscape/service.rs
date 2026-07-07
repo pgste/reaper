@@ -359,19 +359,12 @@ impl LandscapeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Arc<Database>) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();
@@ -379,11 +372,11 @@ mod tests {
     }
 
     async fn create_test_org(db: &Database) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -397,14 +390,14 @@ mod tests {
     }
 
     async fn create_test_agents(db: &Database, org_id: Uuid, count: usize) -> Vec<Uuid> {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let mut agent_ids = Vec::new();
         let now = chrono::Utc::now().to_rfc3339();
 
         for i in 0..count {
             let agent_id = Uuid::new_v4();
             sqlx::query(
-                "INSERT INTO agents (id, org_id, name, status, labels, last_heartbeat_at, registered_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agents (id, org_id, name, status, labels, last_heartbeat_at, registered_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             )
             .bind(agent_id.to_string())
             .bind(org_id.to_string())

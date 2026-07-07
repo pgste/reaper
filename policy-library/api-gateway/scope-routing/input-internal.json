@@ -1,0 +1,5 @@
+{
+ "path": "/internal/metrics",
+ "method": "GET",
+ "token": "eyJhbGciOiAiUlMyNTYifQ.eyJzdWIiOiAicm9vdCIsICJzY29wZSI6ICJhZG1pbiBwcm9maWxlIn0.s"
+}

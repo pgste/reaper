@@ -13,7 +13,7 @@ use crate::evaluators::reaper_dsl::{
     StringOperationCondition,
 };
 use crate::reap::ast::{ComparisonRight, Expr, MethodName, Operator, Value};
-use crate::reap::compiler::helpers::extract_entity_attr;
+use crate::reap::compiler::helpers::{extract_entity_attr, parse_entity_type};
 use reaper_core::ReaperError;
 
 /// Compile expression comparison: user.skills.count() >= 5, user.name.lower() == "admin"
@@ -29,10 +29,21 @@ pub fn compile_expr_comparison(
         args: _,
     } = expr
     {
-        // First, check if receiver is a simple variable (e.g., all_skills.count())
+        // Check if receiver is a simple variable (e.g., all_skills.count()).
+        // A dotted name whose prefix is a real entity type (user.skills,
+        // resource.tags) is NOT a bound variable — it's an entity-attribute
+        // path, and the parser emits it as `Variable("user.skills")`. Route
+        // those to the entity-attribute handling below so `.count()` compiles
+        // to a CountOp; only genuine bound variables (comprehension results
+        // like `all_skills`) go to the variable-method path.
         if let Expr::Variable(var_name) = &*receiver {
-            // This is a method call on a variable, handle specially
-            return compile_variable_method_comparison(var_name.clone(), method, op, right);
+            let is_entity_path = var_name
+                .split_once('.')
+                .map(|(prefix, _)| parse_entity_type(prefix).is_ok())
+                .unwrap_or(false);
+            if !is_entity_path {
+                return compile_variable_method_comparison(var_name.clone(), method, op, right);
+            }
         }
 
         // Check if receiver is a method call on a variable (e.g., t.trim().count())
@@ -125,14 +136,15 @@ pub fn compile_expr_comparison(
                     op: StringOp::LowerEquals,
                     value,
                 })),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringOp(
-                    StringOperationCondition {
-                        entity_type,
-                        attribute,
-                        op: StringOp::LowerEquals,
-                        value,
-                    },
-                )))),
+                // NotEqual compiles NATIVELY, never as Not(Equal): a missing
+                // attribute must fail the guard (fail closed), and Not() would
+                // invert that miss into a pass.
+                Operator::NotEqual => Ok(DslCondition::StringOp(StringOperationCondition {
+                    entity_type,
+                    attribute,
+                    op: StringOp::LowerNotEquals,
+                    value,
+                })),
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!(
                         "Operator {:?} not supported for .lower() comparisons. Use == or !=",
@@ -161,14 +173,13 @@ pub fn compile_expr_comparison(
                     op: StringOp::UpperEquals,
                     value,
                 })),
-                Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::StringOp(
-                    StringOperationCondition {
-                        entity_type,
-                        attribute,
-                        op: StringOp::UpperEquals,
-                        value,
-                    },
-                )))),
+                // Native NotEqual — see the .lower() arm for why.
+                Operator::NotEqual => Ok(DslCondition::StringOp(StringOperationCondition {
+                    entity_type,
+                    attribute,
+                    op: StringOp::UpperNotEquals,
+                    value,
+                })),
                 _ => Err(ReaperError::InvalidPolicy {
                     reason: format!(
                         "Operator {:?} not supported for .upper() comparisons. Use == or !=",
@@ -240,12 +251,11 @@ pub fn compile_expr_comparison(
                 variable: var_name,
                 value,
             }),
-            Operator::NotEqual => Ok(DslCondition::Not(Box::new(
-                DslCondition::VariableEqualsLiteral {
-                    variable: var_name,
-                    value,
-                },
-            ))),
+            // Native NotEqual: an unbound variable must fail the guard.
+            Operator::NotEqual => Ok(DslCondition::VariableNotEqualsLiteral {
+                variable: var_name,
+                value,
+            }),
             Operator::GreaterEqual => Ok(DslCondition::VariableCompare {
                 variable: var_name,
                 op: AttrCompareOp::GreaterEqual,

@@ -1,0 +1,15 @@
+{
+  "name": "Role-based access (OPA RBAC tutorial)",
+  "source": "https://www.openpolicyagent.org/docs/latest/#rbac",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "engineer can deploy", "principal": "alice", "action": "deploy", "resource": "server-1", "expect": "allow"},
+    {"name": "engineer can read", "principal": "alice", "action": "read", "resource": "server-1", "expect": "allow"},
+    {"name": "engineer cannot delete", "principal": "alice", "action": "delete", "resource": "server-1", "expect": "deny"},
+    {"name": "webdev can read", "principal": "bob", "action": "read", "resource": "server-1", "expect": "allow"},
+    {"name": "webdev cannot deploy", "principal": "bob", "action": "deploy", "resource": "server-1", "expect": "deny"},
+    {"name": "admin can delete", "principal": "root", "action": "delete", "resource": "server-1", "expect": "allow"},
+    {"name": "suspended admin denied (deny wins)", "principal": "mallory", "action": "read", "resource": "server-1", "expect": "deny"}
+  ]
+}

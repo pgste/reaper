@@ -36,6 +36,57 @@ helm install reaper reaper/reaper -f values.yaml
 helm install reaper oci://ghcr.io/pgste/reaper/charts/reaper --version 0.1.0
 ```
 
+## Deployment models
+
+The chart ships ready-made **profiles** under [`profiles/`](profiles/) so you can
+pick a shape instead of hand-assembling `enabled` flags. Two audiences:
+
+- **Give to consumers** — a self-contained enforcement agent they run themselves.
+- **Managed stack** — the multi-tenant control plane *you* operate.
+
+| Profile | For | What's deployed | Install |
+|---------|-----|-----------------|---------|
+| `engine` | consumers | Agent only (HTTP enforcement) | `-f profiles/engine.yaml` |
+| `engine-uds-sharded` | consumers | Agent only + thread-per-core UDS (highest throughput) | `-f profiles/engine-uds-sharded.yaml` |
+| `platform` | single team | Agent + Platform (basic mgmt, no DB) | `-f profiles/platform.yaml` |
+| `managed-stack` | **you (SaaS)** | Management + PostgreSQL + managed agents + audit pipeline (ClickHouse/Vector) | `-f profiles/managed-stack.yaml` |
+| `full` | demo/staging | Everything + metrics + audit pipeline | `-f profiles/full.yaml` |
+
+The `managed-stack` and `full` profiles enable the **decision-log audit
+pipeline** (`decisionLogs.enabled=true`): every agent pod writes decision
+NDJSON to a pod-shared file, a Vector sidecar ships it (disk WAL, end-to-end
+acks) into a bundled single-node ClickHouse, and the management query API
+(`GET /api/v1/orgs/{org}/decisions`, `/stats`, `/timeseries`, `/facets`,
+`/{id}`) is auto-wired to that store. Required at install:
+`--set decisionLogs.clickhouse.password=$(openssl rand -hex 24)`. To bring
+your own ClickHouse/ClickHouse Cloud set `decisionLogs.clickhouse.enabled=false`
+and `decisionLogs.clickhouse.url` (+ credentials via
+`decisionLogs.clickhouse.existingSecret`). Multi-tenant: set
+`decisionLogs.tenantId` to the org UUID the agents serve. Data protection
+(masking/pseudonymization/encryption) via `decisionLogs.hashPrincipal`,
+`maskKeys`, `encryptInputData` + `protectionExistingSecret` (generate secrets
+with `reaper-cli decisions keygen`).
+
+```bash
+# Consumer: drop-in enforcement agent
+helm install reaper ./deploy/helm/reaper -f ./deploy/helm/reaper/profiles/engine.yaml
+
+# You: the managed multi-tenant control plane
+helm install reaper ./deploy/helm/reaper -f ./deploy/helm/reaper/profiles/managed-stack.yaml \
+    --set management.secrets.jwtSecret=$(openssl rand -hex 32) \
+    --set postgresql.auth.password=$(openssl rand -hex 24)
+```
+
+### Sidecar (UDS) for consumers
+
+To run the agent as a **sidecar** next to a consumer app and talk over a Unix
+domain socket (no network hop), see
+[`deploy/kubernetes/agent-sidecar-example.yaml`](../../kubernetes/agent-sidecar-example.yaml)
+and [`docs/deployment/UDS_DEPLOYMENT.md`](../../../docs/deployment/UDS_DEPLOYMENT.md).
+Enable UDS on any agent via `agent.uds.*` (see parameters below); pick the
+**shared** model (`shards: 0`) for best tail latency or the **sharded**
+thread-per-core model (`shards: N`) for peak throughput.
+
 ## Architecture
 
 The chart deploys the following components:
@@ -185,6 +236,12 @@ metrics:
 | `agent.autoscaling.enabled` | Enable HPA | `true` |
 | `agent.autoscaling.minReplicas` | Minimum replicas | `3` |
 | `agent.autoscaling.maxReplicas` | Maximum replicas | `20` |
+| `agent.uds.enabled` | Serve over a Unix domain socket (adds a pod-local emptyDir) | `false` |
+| `agent.uds.shards` | `0`/`1` = shared socket; `N>1` = sharded thread-per-core | `0` |
+| `agent.uds.pinCores` | Pin each shard runtime to a core (needs Guaranteed QoS + static CPU manager) | `true` |
+| `agent.uds.socketDir` | Socket directory (mounted as emptyDir) | `/run/reaper` |
+| `agent.uds.socketName` | Socket file name (base name in sharded mode) | `agent.sock` |
+| `agent.uds.permissions` | Socket file mode (octal string) | `"0660"` |
 
 ### PostgreSQL Parameters (Bitnami subchart)
 

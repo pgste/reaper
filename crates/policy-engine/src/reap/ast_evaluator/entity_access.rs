@@ -36,10 +36,27 @@ impl ReapAstEvaluator {
             }
         }
 
+        // `input` is the structured request document, not a DataStore entity:
+        // navigate the converted JSON tree directly. Missing document or path
+        // yields Null (existence checks are the policy's job, like OPA's
+        // undefined — but total: comparisons against Null are just false).
+        if attr.entity == Entity::Input {
+            let Some(ref doc) = context.input else {
+                return Ok(EvalValue::Null);
+            };
+            let value = navigate_eval_path(doc, &attr.attribute);
+            return if let Some(index) = &attr.index {
+                self.apply_index(&value, index)
+            } else {
+                Ok(value)
+            };
+        }
+
         let entity_id = match attr.entity {
             Entity::User => context.user_id,
             Entity::Resource => context.resource_id,
             Entity::Context => unreachable!("Context entity handled above"),
+            Entity::Input => unreachable!("Input entity handled above"),
         };
 
         // Get entity from DataStore
@@ -130,11 +147,10 @@ impl ReapAstEvaluator {
         })?;
 
         match var_value {
-            EvalValue::Object(map) => {
-                let value = map
-                    .get(&var_attr.attribute)
-                    .cloned()
-                    .unwrap_or(EvalValue::Null);
+            EvalValue::Object(_) => {
+                // Navigate the full dotted path (v.change.after.acl), not just
+                // one level — document policies bind deeply nested objects.
+                let value = navigate_eval_path(var_value, &var_attr.attribute);
 
                 if let Some(index) = &var_attr.index {
                     self.apply_index(&value, index)
@@ -263,4 +279,22 @@ impl ReapAstEvaluator {
             }
         }
     }
+}
+
+/// Walk a dotted attribute path ("change.after.acl") through nested
+/// `EvalValue` objects. A missing key or non-object mid-path yields Null —
+/// document policies existence-check rather than error, so a malformed or
+/// partial document can never crash evaluation (it just fails the rule).
+pub(super) fn navigate_eval_path(value: &EvalValue, dotted_path: &str) -> EvalValue {
+    let mut current = value.clone();
+    for part in dotted_path.split('.') {
+        current = match current {
+            EvalValue::Object(ref map) => map.get(part).cloned().unwrap_or(EvalValue::Null),
+            _ => EvalValue::Null,
+        };
+        if matches!(current, EvalValue::Null) {
+            return EvalValue::Null;
+        }
+    }
+    current
 }

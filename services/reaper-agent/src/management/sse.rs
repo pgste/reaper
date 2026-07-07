@@ -10,14 +10,16 @@
 
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use futures::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 
-/// Management events received via SSE
+/// Management events received via SSE. Fields mirror the server's wire
+/// format; not every consumer reads every field.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ManagementEvent {
     /// A bundle was promoted and is ready for deployment
     BundlePromoted {

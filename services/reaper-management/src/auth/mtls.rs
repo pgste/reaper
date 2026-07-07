@@ -141,7 +141,7 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<ClientCertificate, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -152,7 +152,7 @@ impl<'a> ClientCertificateRepository<'a> {
                 id, org_id, agent_id, fingerprint, subject, issuer,
                 not_before, not_after, is_revoked, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10)
         "#;
 
         sqlx::query(sql)
@@ -181,7 +181,7 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<Option<ClientCertificate>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -189,7 +189,7 @@ impl<'a> ClientCertificateRepository<'a> {
                    not_before, not_after, is_revoked, revoked_at, revocation_reason,
                    created_at, updated_at
             FROM client_certificates
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -207,7 +207,7 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<Option<ClientCertificate>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -215,7 +215,7 @@ impl<'a> ClientCertificateRepository<'a> {
                    not_before, not_after, is_revoked, revoked_at, revocation_reason,
                    created_at, updated_at
             FROM client_certificates
-            WHERE fingerprint = ?
+            WHERE fingerprint = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -233,7 +233,7 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<Vec<ClientCertificate>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -241,7 +241,7 @@ impl<'a> ClientCertificateRepository<'a> {
                    not_before, not_after, is_revoked, revoked_at, revocation_reason,
                    created_at, updated_at
             FROM client_certificates
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
         "#;
 
@@ -260,7 +260,7 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<Vec<ClientCertificate>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -268,7 +268,7 @@ impl<'a> ClientCertificateRepository<'a> {
                    not_before, not_after, is_revoked, revoked_at, revocation_reason,
                    created_at, updated_at
             FROM client_certificates
-            WHERE agent_id = ?
+            WHERE agent_id = $1
             ORDER BY created_at DESC
         "#;
 
@@ -288,7 +288,7 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -296,10 +296,10 @@ impl<'a> ClientCertificateRepository<'a> {
         let sql = r#"
             UPDATE client_certificates
             SET is_revoked = 1,
-                revoked_at = ?,
-                revocation_reason = ?,
-                updated_at = ?
-            WHERE id = ? AND is_revoked = 0
+                revoked_at = $1,
+                revocation_reason = $2,
+                updated_at = $3
+            WHERE id = $4 AND is_revoked = 0
         "#;
 
         let result = sqlx::query(sql)
@@ -321,16 +321,16 @@ impl<'a> ClientCertificateRepository<'a> {
     ) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
 
         let sql = r#"
             UPDATE client_certificates
-            SET agent_id = ?,
-                updated_at = ?
-            WHERE id = ?
+            SET agent_id = $1,
+                updated_at = $2
+            WHERE id = $3
         "#;
 
         let result = sqlx::query(sql)
@@ -347,7 +347,7 @@ impl<'a> ClientCertificateRepository<'a> {
     pub async fn unbind_from_agent(&self, cert_id: Uuid) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -355,8 +355,8 @@ impl<'a> ClientCertificateRepository<'a> {
         let sql = r#"
             UPDATE client_certificates
             SET agent_id = NULL,
-                updated_at = ?
-            WHERE id = ?
+                updated_at = $1
+            WHERE id = $2
         "#;
 
         let result = sqlx::query(sql)
@@ -372,10 +372,10 @@ impl<'a> ClientCertificateRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM client_certificates WHERE id = ?")
+        let result = sqlx::query("DELETE FROM client_certificates WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -385,7 +385,7 @@ impl<'a> ClientCertificateRepository<'a> {
 
     fn row_to_certificate(
         &self,
-        row: &sqlx::sqlite::SqliteRow,
+        row: &sqlx::any::AnyRow,
     ) -> Result<ClientCertificate, crate::db::DatabaseError> {
         let id: String = row.get("id");
         let org_id: String = row.get("org_id");

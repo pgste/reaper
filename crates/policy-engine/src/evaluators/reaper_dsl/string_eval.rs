@@ -44,15 +44,16 @@ pub fn eval_string_operation(
         }
     };
 
-    let attr_name = interner
-        .resolve(op.attribute)
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "?".to_string());
-
+    // NOTE: do not resolve the attribute name here — it was previously computed
+    // (a DashMap lookup + String allocation) on every string op purely for the
+    // debug logs below, which are compiled out at runtime unless debug logging
+    // is enabled. The interned id (`?op.attribute`) is logged instead at zero cost.
     match entity.get_attribute(op.attribute) {
         Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                let result = match op.op {
+            // Borrow the resolved attribute value (no Arc clone) for the
+            // comparison — the string is only needed for the duration of the op.
+            interner
+                .with_resolved(*s, |resolved| match op.op {
                     StringOp::Contains => {
                         memmem::find(resolved.as_bytes(), op.value.as_bytes()).is_some()
                     }
@@ -60,35 +61,12 @@ pub fn eval_string_operation(
                     StringOp::EndsWith => resolved.ends_with(&op.value),
                     StringOp::LowerEquals => resolved.to_lowercase() == op.value,
                     StringOp::UpperEquals => resolved.to_uppercase() == op.value,
-                };
-                tracing::debug!(
-                    entity_type = ?op.entity_type,
-                    attribute = %attr_name,
-                    attr_value = %resolved,
-                    op = ?op.op,
-                    op_value = %op.value,
-                    result = result,
-                    "StringOp evaluation"
-                );
-                result
-            } else {
-                tracing::debug!(
-                    entity_type = ?op.entity_type,
-                    attribute = %attr_name,
-                    "StringOp: could not resolve interned string"
-                );
-                false
-            }
+                    StringOp::LowerNotEquals => resolved.to_lowercase() != op.value,
+                    StringOp::UpperNotEquals => resolved.to_uppercase() != op.value,
+                })
+                .unwrap_or(false)
         }
-        other => {
-            tracing::debug!(
-                entity_type = ?op.entity_type,
-                attribute = %attr_name,
-                attr_value = ?other,
-                "StringOp: attribute not a string or missing"
-            );
-            false
-        }
+        _ => false,
     }
 }
 
@@ -110,6 +88,8 @@ pub fn eval_variable_string_operation(
                     StringOp::EndsWith => resolved.ends_with(&op.value),
                     StringOp::LowerEquals => resolved.to_lowercase() == op.value,
                     StringOp::UpperEquals => resolved.to_uppercase() == op.value,
+                    StringOp::LowerNotEquals => resolved.to_lowercase() != op.value,
+                    StringOp::UpperNotEquals => resolved.to_uppercase() != op.value,
                 };
             }
         }
@@ -131,13 +111,11 @@ pub fn eval_regex_match(
     };
 
     match entity.get_attribute(m.attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                crate::regex_cache::matches(&m.pattern, &resolved)
-            } else {
-                false
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| {
+                crate::regex_cache::matches(&m.pattern, resolved)
+            })
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -162,13 +140,11 @@ pub fn eval_string_contains(
     };
 
     match entity.get_attribute(attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| {
                 memmem::find(resolved.as_bytes(), substring.as_bytes()).is_some()
-            } else {
-                false
-            }
-        }
+            })
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -189,13 +165,9 @@ pub fn eval_string_starts_with(
     };
 
     match entity.get_attribute(attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                resolved.starts_with(prefix)
-            } else {
-                false
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| resolved.starts_with(prefix))
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -216,13 +188,9 @@ pub fn eval_string_ends_with(
     };
 
     match entity.get_attribute(attribute) {
-        Some(AttributeValue::String(s)) => {
-            if let Some(resolved) = interner.resolve(*s) {
-                resolved.ends_with(suffix)
-            } else {
-                false
-            }
-        }
+        Some(AttributeValue::String(s)) => interner
+            .with_resolved(*s, |resolved| resolved.ends_with(suffix))
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -603,6 +571,54 @@ mod tests {
             &EntityType::User,
             name_key,
             "Alice Smith",
+            &user,
+            &resource,
+            &interner
+        ));
+    }
+
+    #[test]
+    fn lower_not_equals_fails_closed_on_missing_attribute() {
+        let interner = create_test_interner();
+        let user = create_test_user(&interner);
+        let resource = create_test_resource(&interner);
+
+        let missing = interner.intern("nonexistent");
+        let name_key = interner.intern("name");
+
+        // Missing attribute: `.lower() != "x"` must FAIL (absence never
+        // satisfies an inequality guard), and `.lower() == "x"` fails too.
+        let op_ne = CompiledStringOperation {
+            entity_type: EntityType::User,
+            attribute: missing,
+            op: StringOp::LowerNotEquals,
+            value: "admin".to_string(),
+        };
+        assert!(!eval_string_operation(&op_ne, &user, &resource, &interner));
+
+        // Present and different after lowercasing → true.
+        let op_ne_present = CompiledStringOperation {
+            entity_type: EntityType::User,
+            attribute: name_key,
+            op: StringOp::LowerNotEquals,
+            value: "bob".to_string(),
+        };
+        assert!(eval_string_operation(
+            &op_ne_present,
+            &user,
+            &resource,
+            &interner
+        ));
+
+        // Present and equal after lowercasing ("Alice Smith") → false.
+        let op_ne_equal = CompiledStringOperation {
+            entity_type: EntityType::User,
+            attribute: name_key,
+            op: StringOp::LowerNotEquals,
+            value: "alice smith".to_string(),
+        };
+        assert!(!eval_string_operation(
+            &op_ne_equal,
             &user,
             &resource,
             &interner

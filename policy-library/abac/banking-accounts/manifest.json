@@ -1,0 +1,15 @@
+{
+  "name": "Attribute-based banking access (OPA ABAC tutorial)",
+  "source": "https://www.openpolicyagent.org/docs/latest/#abac",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "teller reads account in own branch", "principal": "tina", "action": "read", "resource": "acct-north-1", "expect": "allow"},
+    {"name": "teller cannot read other branch", "principal": "tina", "action": "read", "resource": "acct-south-9", "expect": "deny"},
+    {"name": "senior manager reads any branch", "principal": "sam", "action": "read", "resource": "acct-north-1", "expect": "allow"},
+    {"name": "owner reads own account", "principal": "carla", "action": "read", "resource": "acct-north-1", "expect": "allow"},
+    {"name": "owner cannot withdraw via policy", "principal": "carla", "action": "withdraw", "resource": "acct-north-1", "expect": "deny"},
+    {"name": "senior withdraws high-value", "principal": "sam", "action": "withdraw", "resource": "acct-south-9", "expect": "allow"},
+    {"name": "senior cannot withdraw low-value account", "principal": "sam", "action": "withdraw", "resource": "acct-north-1", "expect": "deny"}
+  ]
+}

@@ -68,12 +68,17 @@ services:
       - "3000:3000"
     environment:
       - RUST_LOG=info,reaper_management=debug
-      - REAPER_PORT=3000
-      - REAPER_BIND_ADDRESS=0.0.0.0
+      - REAPER_MANAGEMENT_PORT=3000
+      - REAPER_MANAGEMENT_BIND_ADDRESS=0.0.0.0
       - REAPER_DATABASE_URL=postgres://reaper:${POSTGRES_PASSWORD:-reaper_secret}@postgres:5432/reaper_management
       - REAPER_JWT_SECRET=${JWT_SECRET:-development-jwt-secret-change-in-production}
       - REAPER_STORAGE_TYPE=filesystem
       - REAPER_STORAGE_PATH=/var/lib/reaper/storage
+      # Decision-log query API (enable after `docker compose -f deploy/decision-logs/docker-compose.yml up`)
+      - REAPER_CLICKHOUSE_URL=${REAPER_CLICKHOUSE_URL:-}
+      - REAPER_CLICKHOUSE_DATABASE=${REAPER_CLICKHOUSE_DATABASE:-reaper_audit}
+      - REAPER_CLICKHOUSE_USER=${REAPER_CLICKHOUSE_USER:-}
+      - REAPER_CLICKHOUSE_PASSWORD=${REAPER_CLICKHOUSE_PASSWORD:-}
     volumes:
       - management-storage:/var/lib/reaper/storage
     networks:
@@ -106,7 +111,8 @@ services:
       - "8081:8081"
     environment:
       - RUST_LOG=info,reaper_platform=debug
-      - REAPER_BIND_ADDR=0.0.0.0:8081
+      - REAPER_PLATFORM_BIND_ADDRESS=0.0.0.0
+      - REAPER_PLATFORM_PORT=8081
     volumes:
       - platform-data:/data
     networks:
@@ -136,7 +142,8 @@ services:
       - "8080:8080"
     environment:
       - RUST_LOG=info,reaper_agent=debug
-      - REAPER_BIND_ADDR=0.0.0.0:8080
+      - REAPER_AGENT_BIND_ADDRESS=0.0.0.0
+      - REAPER_AGENT_PORT=8080
       # Platform connection (for platform profile)
       - PLATFORM_URL=http://platform:8081
       # Management connection (for management profile) - configure as needed
@@ -146,6 +153,7 @@ services:
       - REAPER_MANAGEMENT_API_KEY=${MANAGEMENT_API_KEY:-}
       # Decision logging
       - REAPER_DECISION_LOG_ENABLED=${DECISION_LOG_ENABLED:-false}
+      - REAPER_DECISION_LOG_MODE=${DECISION_LOG_MODE:-full}
       - REAPER_DECISION_LOG_CAPACITY=${DECISION_LOG_CAPACITY:-10000}
       - REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson
       # OpenTelemetry (enabled when observability profile is used)
@@ -358,12 +366,62 @@ services:
       - "com.reaper.service=promtail"
       - "com.reaper.profile=observability"
 
+  # ==========================================================================
+  # Decision-log audit pipeline (audit profile): agent NDJSON -> Vector -> ClickHouse
+  #   docker compose --profile engine --profile audit up -d
+  #   DECISION_LOG_ENABLED=true            # turn capture on for the agent
+  #   REAPER_CLICKHOUSE_URL=http://clickhouse:8123   # for the management query API
+  # ==========================================================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: reaper-clickhouse
+    profiles: ["audit"]
+    ports:
+      - "8123:8123"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - ./deploy/decision-logs/clickhouse-schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - reaper-net
+    labels:
+      - "com.reaper.service=audit-store"
+      - "com.reaper.profile=audit"
+
+  vector:
+    image: timberio/vector:0.41.1-debian
+    container_name: reaper-vector
+    profiles: ["audit"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - REAPER_TENANT_ID=${REAPER_TENANT_ID:-}
+    volumes:
+      - ./deploy/decision-logs/vector-file.toml:/etc/vector/vector.toml:ro
+      - agent-logs:/var/log/reaper:ro
+      - vector-buffer:/var/lib/vector
+    networks:
+      - reaper-net
+    labels:
+      - "com.reaper.service=audit-shipper"
+      - "com.reaper.profile=audit"
+
 networks:
   reaper-net:
     driver: bridge
     name: reaper-network
 
+
 volumes:
+  clickhouse-data:
+  vector-buffer:
   reaper-sockets:
     name: reaper-sockets
   postgres-data:

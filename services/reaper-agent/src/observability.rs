@@ -5,6 +5,10 @@
 //! - OpenTelemetry integration for distributed tracing
 //! - Structured logging setup
 
+// Metric helpers form a complete recording API; the agent is a bin crate so
+// helpers not yet called at every site trip dead_code despite being public surface.
+#![allow(dead_code)]
+
 use lazy_static::lazy_static;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
@@ -45,10 +49,16 @@ lazy_static! {
     .expect("Failed to register DECISION_DURATION metric");
 
     /// Total denials (security events).
+    ///
+    /// Labeled by `policy_name` and `action` only. `resource` is deliberately
+    /// NOT a label: resources are effectively unbounded (URLs, object IDs), so
+    /// including them creates an unbounded number of Prometheus time series —
+    /// a memory leak in the agent and the scrape backend. Per-resource denial
+    /// detail belongs in the decision log, not in metric cardinality.
     pub static ref DENIALS_TOTAL: CounterVec = register_counter_vec!(
         "reaper_denials_total",
         "Total policy denials",
-        &["policy_name", "resource", "action"]
+        &["policy_name", "action"]
     )
     .expect("Failed to register DENIALS_TOTAL metric");
 
@@ -110,6 +120,20 @@ lazy_static! {
         "Total decision log file flushes"
     )
     .expect("Failed to register DECISION_LOG_FLUSHES metric");
+
+    /// Allow decisions dropped by sampling (deny-priority `sample_allow_rate`).
+    pub static ref DECISION_LOG_SAMPLED_OUT: Gauge = register_gauge!(
+        "reaper_decision_log_sampled_out_total",
+        "Allow decisions dropped by sampling before logging"
+    )
+    .expect("Failed to register DECISION_LOG_SAMPLED_OUT metric");
+
+    /// Entries dropped because the background file-writer queue was full.
+    pub static ref DECISION_LOG_WRITER_DROPPED: Gauge = register_gauge!(
+        "reaper_decision_log_writer_dropped_total",
+        "Decision log entries dropped because the writer queue was full"
+    )
+    .expect("Failed to register DECISION_LOG_WRITER_DROPPED metric");
 }
 
 /// Record a policy decision in Prometheus metrics.
@@ -122,10 +146,12 @@ pub fn record_decision(decision: &str, policy_name: &str, _policy_id: &str, dura
         .observe(duration_secs);
 }
 
-/// Record a denial with resource and action context.
-pub fn record_denial(policy_name: &str, resource: &str, action: &str) {
+/// Record a denial. `resource` is accepted for call-site compatibility but is
+/// intentionally not used as a metric label (unbounded cardinality — see
+/// `DENIALS_TOTAL`); it remains available in the decision log.
+pub fn record_denial(policy_name: &str, _resource: &str, action: &str) {
     DENIALS_TOTAL
-        .with_label_values(&[policy_name, resource, action])
+        .with_label_values(&[policy_name, action])
         .inc();
 }
 

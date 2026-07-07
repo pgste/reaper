@@ -126,3 +126,92 @@ PostgreSQL connection URL
 {{- .Values.externalDatabase.url }}
 {{- end }}
 {{- end }}
+
+{{/*
+Decision-log pipeline names and endpoints
+*/}}
+{{- define "reaper.clickhouse.fullname" -}}
+{{- printf "%s-clickhouse" (include "reaper.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* Effective ClickHouse HTTP URL: explicit override, else the bundled service */}}
+{{- define "reaper.decisionlogs.clickhouseUrl" -}}
+{{- if .Values.decisionLogs.clickhouse.url -}}
+{{- .Values.decisionLogs.clickhouse.url -}}
+{{- else -}}
+{{- printf "http://%s:8123" (include "reaper.clickhouse.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{/* Secret holding REAPER_CLICKHOUSE_USER / REAPER_CLICKHOUSE_PASSWORD */}}
+{{- define "reaper.decisionlogs.credsSecret" -}}
+{{- .Values.decisionLogs.clickhouse.existingSecret | default (printf "%s-creds" (include "reaper.clickhouse.fullname" .)) -}}
+{{- end }}
+
+{{/* Agent env vars for decision-log capture (include under `env:`) */}}
+{{- define "reaper.decisionlogs.agentEnv" -}}
+- name: REAPER_DECISION_LOG_ENABLED
+  value: "true"
+- name: REAPER_DECISION_LOG_FILE
+  value: /var/log/reaper/decisions.ndjson
+- name: REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE
+  value: {{ .Values.decisionLogs.sampleAllowRate | quote }}
+{{- with .Values.decisionLogs.mode }}
+- name: REAPER_DECISION_LOG_MODE
+  value: {{ . | quote }}
+{{- end }}
+{{- if .Values.decisionLogs.inputData }}
+- name: REAPER_DECISION_LOG_INPUT_DATA
+  value: "true"
+{{- end }}
+{{- if .Values.decisionLogs.hashPrincipal }}
+- name: REAPER_DECISION_LOG_HASH_PRINCIPAL
+  value: "true"
+{{- end }}
+{{- with .Values.decisionLogs.maskKeys }}
+- name: REAPER_DECISION_LOG_MASK_KEYS
+  value: {{ . | quote }}
+{{- end }}
+{{- if .Values.decisionLogs.encryptInputData }}
+- name: REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA
+  value: "true"
+{{- end }}
+{{- end }}
+
+{{/* Vector shipper sidecar container (include under `containers:`) */}}
+{{- define "reaper.decisionlogs.vectorSidecar" -}}
+- name: vector
+  image: {{ .Values.decisionLogs.vector.image }}
+  args: ["--config", "/etc/vector/vector.toml"]
+  env:
+    - name: CLICKHOUSE_URL
+      value: {{ include "reaper.decisionlogs.clickhouseUrl" . | quote }}
+    - name: REAPER_TENANT_ID
+      value: {{ .Values.decisionLogs.tenantId | quote }}
+  envFrom:
+    - secretRef:
+        name: {{ include "reaper.decisionlogs.credsSecret" . }}
+  volumeMounts:
+    - name: decision-logs
+      mountPath: /var/log/reaper
+      readOnly: true
+    - name: vector-config
+      mountPath: /etc/vector
+      readOnly: true
+    - name: vector-data
+      mountPath: /var/lib/vector
+  resources:
+    {{- toYaml .Values.decisionLogs.vector.resources | nindent 4 }}
+{{- end }}
+
+{{/* Pod volumes for the decision-log pipeline (include under `volumes:`) */}}
+{{- define "reaper.decisionlogs.volumes" -}}
+- name: decision-logs
+  emptyDir: {}
+- name: vector-config
+  configMap:
+    name: {{ include "reaper.agent.fullname" . }}-vector
+- name: vector-data
+  emptyDir:
+    sizeLimit: 2Gi
+{{- end }}

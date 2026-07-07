@@ -16,6 +16,19 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use uuid::Uuid;
 
+/// Fixed namespace for deriving stable policy ids from names (UUIDv5).
+const POLICY_ID_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x72, 0x65, 0x61, 0x70, 0x65, 0x72, 0x2d, 0x70, 0x6f, 0x6c, 0x69, 0x63, 0x79, 0x2d, 0x69, 0x64,
+]);
+
+/// Derive a deterministic policy id from a policy name.
+///
+/// Same name -> same id, always. Makes bundle deploys idempotent: re-deploying a
+/// policy overwrites the existing entry instead of inserting a new random-id copy.
+pub fn stable_policy_id(name: &str) -> Uuid {
+    Uuid::new_v5(&POLICY_ID_NAMESPACE, name.as_bytes())
+}
+
 /// Bundle format metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleFormat {
@@ -177,6 +190,15 @@ impl PolicyBundle {
     /// # Arguments
     /// * `store` - DataStore containing entity data for the evaluator
     ///
+    /// Derive a stable policy id from a policy name.
+    ///
+    /// Uses UUIDv5 over a fixed namespace so the same name always maps to the
+    /// same id across processes and redeploys — making bundle deploys idempotent
+    /// (same-named policy overwrites in place).
+    pub fn stable_policy_id_for(name: &str) -> Uuid {
+        stable_policy_id(name)
+    }
+
     /// # Returns
     /// EnhancedPolicy with the compiled evaluator attached
     pub fn to_enhanced_policy_with_store(
@@ -189,17 +211,23 @@ impl PolicyBundle {
         // Serialize the original policy content for the EnhancedPolicy
         let content = serde_json::to_string(&self.policy).unwrap_or_default();
 
-        // Create EnhancedPolicy with the compiled evaluator
+        // Create EnhancedPolicy with the compiled evaluator.
+        //
+        // The id is a STABLE UUIDv5 derived from the policy name (not a random
+        // v4). Re-deploying a bundle for the same policy therefore overwrites the
+        // existing entry rather than inserting a new random-id copy — the old bug
+        // where redeploys silently accumulated duplicate policies and the version
+        // guard never matched.
         let now = chrono::Utc::now();
         let policy = EnhancedPolicy {
-            id: Uuid::new_v4(),
+            id: stable_policy_id(&self.policy.name),
             version: 1,
             name: self.policy.name.clone(),
             description: format!(
                 "Deployed from bundle version {}",
                 self.metadata.policy_version.as_deref().unwrap_or("unknown")
             ),
-            language: PolicyLanguage::Custom,
+            language: PolicyLanguage::ReaperDsl,
             content,
             rules: vec![], // Rules are in the compiled evaluator
             metadata: {
@@ -748,6 +776,7 @@ mod tests {
             metadata: HashMap::new(),
             default_decision: Decision::Deny,
             rules: vec![Rule {
+                message: None,
                 name: "admin".to_string(),
                 decision: Decision::Allow,
                 condition: Condition::True,

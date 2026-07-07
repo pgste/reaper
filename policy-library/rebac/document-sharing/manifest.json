@@ -1,0 +1,13 @@
+{
+  "name": "Drive-style document sharing (Zanzibar model)",
+  "source": "Google Zanzibar paper (2019); openfga.dev modeling guides",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "editor group member writes", "principal": "bob", "action": "write", "resource": "doc-design", "expect": "allow"},
+    {"name": "org-wide viewer reads (2-hop group nest)", "principal": "alice", "action": "read", "resource": "doc-design", "expect": "allow"},
+    {"name": "viewer cannot write", "principal": "alice", "action": "write", "resource": "doc-design", "expect": "deny"},
+    {"name": "root-folder owner inherits into nested doc", "principal": "eve", "action": "delete", "resource": "doc-design", "expect": "allow"},
+    {"name": "non-member denied", "principal": "mallet", "action": "read", "resource": "doc-design", "expect": "deny"}
+  ]
+}

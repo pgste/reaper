@@ -241,7 +241,7 @@ impl PartialEvaluator {
         match &policy.language {
             PolicyLanguage::Simple => self.evaluate_simple_policy(policy, static_context),
             PolicyLanguage::Cedar => self.evaluate_cedar_policy(policy, static_context),
-            PolicyLanguage::Custom => self.evaluate_custom_policy(policy, static_context),
+            PolicyLanguage::ReaperDsl => self.evaluate_custom_policy(policy, static_context),
         }
     }
 

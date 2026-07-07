@@ -1,0 +1,39 @@
+// Release gates over ENTITY data comprehensions — the counterpart to the
+// terraform/kubernetes scenarios (which run comprehensions over `input`
+// documents). Here the comprehensions filter lists of objects stored ON the
+// resource entity: CI checks and human approvals.
+//
+// Comprehension semantics showcased (all pinned by tests):
+//   - array comprehension with a filter:   [c.name | c := resource.checks[_]; c.status == "failed"]
+//   - count() guard on the result:         bad.count() > 0
+//   - TOTAL ITERATION: a service with NO `checks` attribute iterates as an
+//     empty list — the deny rule simply doesn't match; absence never errors
+//     and never satisfies a guard.
+policy release_gates {
+    default: deny,
+
+    // Any failed CI check freezes the release (deny wins over any allow).
+    rule failed_checks_block_release {
+        deny if {
+            bad := [c.name | c := resource.checks[_]; c.status == "failed"] &&
+            bad.count() > 0
+        }
+    }
+
+    // Two lead approvals ship it.
+    rule two_lead_approvals {
+        allow if {
+            leads := [a.name | a := resource.approvals[_]; a.role == "lead"] &&
+            leads.count() >= 2
+        }
+    }
+
+    // Release managers can ship with a single lead approval.
+    rule release_manager_fast_path {
+        allow if {
+            user.role == "release-manager" &&
+            leads := [a.name | a := resource.approvals[_]; a.role == "lead"] &&
+            leads.count() >= 1
+        }
+    }
+}

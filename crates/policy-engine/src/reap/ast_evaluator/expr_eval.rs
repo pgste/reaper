@@ -28,6 +28,7 @@ impl ReapAstEvaluator {
                 if var_name.starts_with("user.")
                     || var_name.starts_with("resource.")
                     || var_name.starts_with("context.")
+                    || var_name.starts_with("input.")
                 {
                     // Parse the entity and attribute
                     let parts: Vec<&str> = var_name.splitn(2, '.').collect();
@@ -72,10 +73,21 @@ impl ReapAstEvaluator {
                         self.get_entity_attr_by_name(context.resource_id, attribute)
                     }
                     "context" => {
-                        // Context entity not yet fully supported in AST evaluator
-                        // For now, return null
-                        Ok(EvalValue::Null)
+                        // Request context values are flat strings.
+                        Ok(context
+                            .request_context
+                            .get(attribute)
+                            .map(|s| EvalValue::String(s.clone()))
+                            .unwrap_or(EvalValue::Null))
                     }
+                    // The structured request document: navigate without
+                    // cloning the whole tree (expressions like
+                    // jwt::decode(input.token) hit this path).
+                    "input" => Ok(context
+                        .input
+                        .as_ref()
+                        .map(|doc| super::entity_access::navigate_eval_path(doc, attribute))
+                        .unwrap_or(EvalValue::Null)),
                     _ => {
                         // Regular variable attribute access
                         let var_value = context.variables.get(variable).ok_or_else(|| {

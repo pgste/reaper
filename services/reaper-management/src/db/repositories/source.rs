@@ -30,7 +30,7 @@ impl<'a> PolicySourceRepository<'a> {
     ) -> Result<PolicySource, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -40,7 +40,7 @@ impl<'a> PolicySourceRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO policy_sources (id, org_id, name, description, source_type, config, sync_interval_secs, sync_status, is_enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(id.to_string())
@@ -51,7 +51,7 @@ impl<'a> PolicySourceRepository<'a> {
         .bind(&config_json)
         .bind(input.sync_interval_secs as i64)
         .bind(SyncStatus::Pending.to_string())
-        .bind(true)
+        .bind(1i64)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(pool)
@@ -79,7 +79,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -88,7 +88,7 @@ impl<'a> PolicySourceRepository<'a> {
                    sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
                    created_at, updated_at
             FROM policy_sources
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -109,7 +109,7 @@ impl<'a> PolicySourceRepository<'a> {
     ) -> Result<Option<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
@@ -118,7 +118,7 @@ impl<'a> PolicySourceRepository<'a> {
                    sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
                    created_at, updated_at
             FROM policy_sources
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -136,7 +136,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
@@ -145,7 +145,7 @@ impl<'a> PolicySourceRepository<'a> {
                    sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
                    created_at, updated_at
             FROM policy_sources
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name ASC
             "#,
         )
@@ -165,7 +165,7 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn list_due_for_sync(&self) -> Result<Vec<PolicySource>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get all enabled sources with sync_interval > 0
@@ -177,7 +177,7 @@ impl<'a> PolicySourceRepository<'a> {
             FROM policy_sources
             WHERE is_enabled = 1
               AND sync_interval_secs > 0
-              AND sync_status != ?
+              AND sync_status != $1
             ORDER BY last_sync_at ASC NULLS FIRST
             "#,
         )
@@ -200,52 +200,50 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn update(&self, id: Uuid, input: UpdatePolicySource) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let mut updates = Vec::new();
+        let mut updates: Vec<String> = Vec::new();
         let mut bindings: Vec<String> = Vec::new();
 
         if let Some(name) = &input.name {
-            updates.push("name = ?");
+            updates.push("name = ?".to_string());
             bindings.push(name.clone());
         }
 
         if let Some(description) = &input.description {
-            updates.push("description = ?");
+            updates.push("description = ?".to_string());
             bindings.push(description.clone());
         }
 
         if let Some(config) = &input.config {
-            updates.push("config = ?");
+            updates.push("config = ?".to_string());
             bindings.push(serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()));
         }
 
+        // Numeric columns are inlined: binding a text param into an INTEGER
+        // column works on SQLite (type affinity) but is a type error on
+        // PostgreSQL, and this builder's bindings are all strings. Both
+        // values are numeric literals, so no injection surface.
         if let Some(sync_interval) = input.sync_interval_secs {
-            updates.push("sync_interval_secs = ?");
-            bindings.push(sync_interval.to_string());
+            updates.push(format!("sync_interval_secs = {}", sync_interval));
         }
 
         if let Some(is_enabled) = input.is_enabled {
-            updates.push("is_enabled = ?");
-            bindings.push(if is_enabled {
-                "1".to_string()
-            } else {
-                "0".to_string()
-            });
+            updates.push(format!("is_enabled = {}", if is_enabled { 1 } else { 0 }));
         }
 
         if updates.is_empty() {
             return Ok(false);
         }
 
-        updates.push("updated_at = ?");
+        updates.push("updated_at = ?".to_string());
         bindings.push(Utc::now().to_rfc3339());
 
-        let sql = format!(
+        let sql = crate::db::numbered_placeholders(&format!(
             "UPDATE policy_sources SET {} WHERE id = ?",
             updates.join(", ")
-        );
+        ));
 
         let mut query = sqlx::query(&sql);
         for binding in &bindings {
@@ -267,7 +265,7 @@ impl<'a> PolicySourceRepository<'a> {
     ) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -275,8 +273,8 @@ impl<'a> PolicySourceRepository<'a> {
         let result = sqlx::query(
             r#"
             UPDATE policy_sources
-            SET sync_status = ?, last_sync_at = ?, last_sync_error = ?, last_sync_commit = ?, updated_at = ?
-            WHERE id = ?
+            SET sync_status = $1, last_sync_at = $2, last_sync_error = $3, last_sync_commit = $4, updated_at = $5
+            WHERE id = $6
             "#,
         )
         .bind(status.to_string())
@@ -295,10 +293,10 @@ impl<'a> PolicySourceRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM policy_sources WHERE id = ?")
+        let result = sqlx::query("DELETE FROM policy_sources WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -307,7 +305,7 @@ impl<'a> PolicySourceRepository<'a> {
     }
 
     /// Convert database row to PolicySource
-    fn row_to_source(&self, row: sqlx::sqlite::SqliteRow) -> Result<PolicySource, DatabaseError> {
+    fn row_to_source(&self, row: sqlx::any::AnyRow) -> Result<PolicySource, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -346,7 +344,8 @@ impl<'a> PolicySourceRepository<'a> {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
 
-        let is_enabled: bool = row.get("is_enabled");
+        let is_enabled: i64 = row.get("is_enabled");
+        let is_enabled = is_enabled != 0;
 
         Ok(PolicySource {
             id,
@@ -370,21 +369,14 @@ impl<'a> PolicySourceRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

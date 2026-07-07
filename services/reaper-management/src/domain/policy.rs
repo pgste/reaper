@@ -9,16 +9,12 @@ use uuid::Uuid;
 /// Policy language type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PolicyLanguage {
     Simple,
     Cedar,
+    #[default]
     Reaper,
-}
-
-impl Default for PolicyLanguage {
-    fn default() -> Self {
-        Self::Reaper
-    }
 }
 
 impl std::fmt::Display for PolicyLanguage {

@@ -456,3 +456,140 @@ fn test_comprehension_deduplication() {
     assert!(matches!(decision, PolicyAction::Allow));
     // Note: Set should have only 1 unique department, but we can't easily verify that from outside
 }
+
+// ============================================================================
+// Semantics pins: comprehension edge cases the policies in the library rely
+// on, asserted on BOTH evaluators (parity is a contract, not a hope).
+// ============================================================================
+
+/// Run a policy through the AST evaluator AND, when it compiles, the
+/// compiled evaluator — both must produce the expected decision.
+fn assert_both_evaluators(
+    policy_text: &str,
+    store: Arc<DataStore>,
+    expected: PolicyAction,
+    label: &str,
+) {
+    use policy_engine::PolicyEvaluator as _;
+
+    let policy = ReaperPolicy::from_str(policy_text).unwrap();
+    let mut context = HashMap::new();
+    context.insert("principal".to_string(), "test_user".to_string());
+    let request = PolicyRequest {
+        resource: "resource1".to_string(),
+        action: "read".to_string(),
+        context,
+    };
+
+    let ast = policy.clone().build_ast_evaluator(store.clone());
+    let ast_decision = ast.evaluate(&request).unwrap();
+    assert_eq!(
+        format!("{ast_decision:?}"),
+        format!("{expected:?}"),
+        "{label}: AST decision mismatch"
+    );
+
+    if let Ok(compiled) = policy.build(store) {
+        let compiled_decision = compiled.evaluate(&request).unwrap();
+        assert_eq!(
+            format!("{compiled_decision:?}"),
+            format!("{ast_decision:?}"),
+            "{label}: compiled/AST parity break"
+        );
+    }
+}
+
+fn store_with_empty_and_lists() -> Arc<DataStore> {
+    let store = Arc::new(DataStore::new());
+    let interner = store.interner();
+
+    let user_type = interner.intern("User");
+    let user_id = interner.intern("test_user");
+    let items_key = interner.intern("items");
+    let empty_key = interner.intern("empty_list");
+    let name_key = interner.intern("name");
+
+    let mut obj = HashMap::new();
+    obj.insert(name_key, AttributeValue::String(interner.intern("thing")));
+
+    let user = EntityBuilder::new(user_id, user_type)
+        .with_attribute(
+            items_key,
+            AttributeValue::List(vec![AttributeValue::Object(obj)]),
+        )
+        .with_attribute(empty_key, AttributeValue::List(vec![]))
+        .build();
+    store.insert(user);
+
+    let resource_type = interner.intern("Resource");
+    let resource_id = interner.intern("resource1");
+    store.insert(EntityBuilder::new(resource_id, resource_type).build());
+    store
+}
+
+#[test]
+fn comprehension_over_missing_attribute_is_empty_not_failure() {
+    // TOTAL ITERATION: a missing source is an EMPTY collection. The
+    // assignment still binds (assignments always succeed), so a rule whose
+    // only condition is the assignment ALLOWS.
+    assert_both_evaluators(
+        r#"policy p { default: deny,
+            rule r { allow if xs := [u.name | u := user.nonexistent[_]] } }"#,
+        store_with_empty_and_lists(),
+        PolicyAction::Allow,
+        "missing-source assignment",
+    );
+}
+
+#[test]
+fn comprehension_missing_source_count_guard_fails_closed() {
+    // The conftest pattern the policy library uses everywhere:
+    // bad := [...missing...] && bad.count() > 0  -> no match, rule fails.
+    assert_both_evaluators(
+        r#"policy p { default: deny,
+            rule r { allow if { bad := [u.name | u := user.nonexistent[_]] && bad.count() > 0 } } }"#,
+        store_with_empty_and_lists(),
+        PolicyAction::Deny,
+        "missing-source count guard",
+    );
+}
+
+#[test]
+fn comprehension_over_empty_list_binds_empty() {
+    assert_both_evaluators(
+        r#"policy p { default: deny,
+            rule r { allow if xs := [u.name | u := user.empty_list[_]] } }"#,
+        store_with_empty_and_lists(),
+        PolicyAction::Allow,
+        "empty-source assignment",
+    );
+    assert_both_evaluators(
+        r#"policy p { default: deny,
+            rule r { allow if { xs := [u.name | u := user.empty_list[_]] && xs.count() > 0 } } }"#,
+        store_with_empty_and_lists(),
+        PolicyAction::Deny,
+        "empty-source count guard",
+    );
+}
+
+#[test]
+fn comprehension_filter_excluding_everything_yields_empty() {
+    assert_both_evaluators(
+        r#"policy p { default: deny,
+            rule r { allow if { xs := [u.name | u := user.items[_]; u.name == "no-such"] && xs.count() > 0 } } }"#,
+        store_with_empty_and_lists(),
+        PolicyAction::Deny,
+        "filter-excludes-all count guard",
+    );
+}
+
+#[test]
+fn comprehension_count_positive_path_matches() {
+    assert_both_evaluators(
+        r#"policy p { default: deny,
+            rule r { allow if { xs := [u.name | u := user.items[_]; u.name == "thing"] && xs.count() > 0 } } }"#,
+        store_with_empty_and_lists(),
+        PolicyAction::Allow,
+        "filter-matches count guard",
+    );
+}

@@ -204,6 +204,10 @@ impl ReapAstEvaluator {
 
         match collection {
             EvalValue::Array(arr) | EvalValue::Set(arr) => Ok(arr),
+            // Total iteration: a missing document path (Null) is an empty
+            // collection, so document policies over absent/partial input fail
+            // their rules instead of erroring the whole evaluation.
+            EvalValue::Null => Ok(Vec::new()),
             _ => Err(ReaperError::InvalidPolicy {
                 reason: "Iterator collection must be an array or set".to_string(),
             }),

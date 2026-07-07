@@ -1,0 +1,186 @@
+{{- if and .Values.decisionLogs.enabled .Values.decisionLogs.clickhouse.enabled }}
+{{- $ch := .Values.decisionLogs.clickhouse }}
+# Bundled single-node ClickHouse for the decision-log store. Suitable for the
+# managed stack's starting point and self-host; for serious volume move to your
+# own ClickHouse/ClickHouse Cloud and set decisionLogs.clickhouse.enabled=false
+# + url. Schema matches deploy/decision-logs/clickhouse-schema.sql minus the
+# S3-tier TTL (single-disk here; retention via retentionDays DELETE).
+{{- if not $ch.existingSecret }}
+{{- if not $ch.password }}
+{{- fail "decisionLogs.clickhouse.password (or existingSecret) is required with the bundled ClickHouse" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "reaper.clickhouse.fullname" . }}-creds
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+type: Opaque
+stringData:
+  # Key names double as env-var names so consumers can envFrom this secret.
+  REAPER_CLICKHOUSE_USER: {{ $ch.username | quote }}
+  REAPER_CLICKHOUSE_PASSWORD: {{ $ch.password | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "reaper.clickhouse.fullname" . }}-schema
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+data:
+  # Runs on first start via /docker-entrypoint-initdb.d.
+  schema.sql: |
+    CREATE DATABASE IF NOT EXISTS {{ $ch.database }};
+
+    CREATE TABLE IF NOT EXISTS {{ $ch.database }}.decisions
+    (
+        tenant_id        LowCardinality(String) DEFAULT '',
+        timestamp        DateTime64(3)          CODEC(DoubleDelta, ZSTD(1)),
+        decision_id      UUID                   CODEC(ZSTD(1)),
+        trace_id         String                 CODEC(ZSTD(1)),
+        principal        String                 CODEC(ZSTD(3)),
+        action           LowCardinality(String),
+        resource         String                 CODEC(ZSTD(3)),
+        decision         LowCardinality(String),
+        policy_id        LowCardinality(String),
+        policy_name      LowCardinality(String),
+        policy_version   LowCardinality(String) DEFAULT '',
+        matched_rule     LowCardinality(String) DEFAULT '',
+        evaluation_time_ns UInt64               CODEC(T64, ZSTD(1)),
+        cache_hit        UInt8                  DEFAULT 0,
+        agent_id         LowCardinality(String) DEFAULT '',
+        context          String                 CODEC(ZSTD(3)) DEFAULT '{}',
+        input_data       String                 CODEC(ZSTD(3)) DEFAULT '',
+        ingested_at      DateTime               DEFAULT now()  CODEC(DoubleDelta, ZSTD(1))
+    )
+    ENGINE = ReplacingMergeTree(ingested_at)
+    PARTITION BY (tenant_id, toYYYYMM(timestamp))
+    ORDER BY (tenant_id, toStartOfHour(timestamp), action, resource, principal, decision_id)
+    TTL toDateTime(timestamp) + INTERVAL {{ int $ch.retentionDays }} DAY DELETE
+    SETTINGS index_granularity = 8192;
+
+    CREATE VIEW IF NOT EXISTS {{ $ch.database }}.decisions_deduped AS
+    SELECT * FROM {{ $ch.database }}.decisions FINAL;
+
+    CREATE MATERIALIZED VIEW IF NOT EXISTS {{ $ch.database }}.decisions_per_minute
+    ENGINE = SummingMergeTree
+    PARTITION BY toYYYYMM(minute)
+    ORDER BY (tenant_id, policy_name, decision, minute)
+    AS SELECT
+        tenant_id,
+        toStartOfMinute(timestamp) AS minute,
+        policy_name,
+        decision,
+        count() AS decisions,
+        sum(evaluation_time_ns) AS eval_time_ns_sum
+    FROM {{ $ch.database }}.decisions
+    GROUP BY tenant_id, minute, policy_name, decision;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "reaper.clickhouse.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8123
+      targetPort: http
+    - name: native
+      port: 9000
+      targetPort: native
+  selector:
+    {{- include "reaper.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "reaper.clickhouse.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "reaper.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+spec:
+  serviceName: {{ include "reaper.clickhouse.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "reaper.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: clickhouse
+  template:
+    metadata:
+      labels:
+        {{- include "reaper.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: clickhouse
+    spec:
+      securityContext:
+        fsGroup: 101   # clickhouse gid in the official image
+      containers:
+        - name: clickhouse
+          image: {{ $ch.image }}
+          ports:
+            - name: http
+              containerPort: 8123
+            - name: native
+              containerPort: 9000
+          env:
+            - name: CLICKHOUSE_DB
+              value: {{ $ch.database | quote }}
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "reaper.decisionlogs.credsSecret" . }}
+                  key: REAPER_CLICKHOUSE_USER
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "reaper.decisionlogs.credsSecret" . }}
+                  key: REAPER_CLICKHOUSE_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: schema
+              mountPath: /docker-entrypoint-initdb.d
+          resources:
+            {{- toYaml $ch.resources | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /ping, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /ping, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: schema
+          configMap:
+            name: {{ include "reaper.clickhouse.fullname" . }}-schema
+        {{- if not $ch.persistence.enabled }}
+        # persistence disabled: data lives in an emptyDir (dev only)
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if $ch.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $ch.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $ch.persistence.size }}
+  {{- end }}
+{{- end }}

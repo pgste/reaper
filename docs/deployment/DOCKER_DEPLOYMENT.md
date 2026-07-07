@@ -130,15 +130,24 @@ docker-compose logs -f agent
 ```yaml
 environment:
   - RUST_LOG=info,reaper_agent=debug
-  - REAPER_BIND_ADDR=0.0.0.0:8080
+  - REAPER_AGENT_BIND_ADDRESS=0.0.0.0
+  - REAPER_AGENT_PORT=8080
   - PLATFORM_URL=http://platform:8081
 ```
+
+All Reaper services resolve their bind address the same way, highest
+precedence first: service-specific (`REAPER_AGENT_PORT`,
+`REAPER_PLATFORM_PORT`, `REAPER_MANAGEMENT_PORT` + matching
+`*_BIND_ADDRESS`), then generic `REAPER_PORT`/`REAPER_BIND_ADDRESS`
+(handy for single-service containers), then the combined
+`REAPER_BIND_ADDR=host:port` form (legacy, still supported).
 
 **Platform Configuration**:
 ```yaml
 environment:
   - RUST_LOG=info,reaper_platform=debug
-  - REAPER_BIND_ADDR=0.0.0.0:8081
+  - REAPER_PLATFORM_BIND_ADDRESS=0.0.0.0
+  - REAPER_PLATFORM_PORT=8081
 ```
 
 ### Volume Mounts

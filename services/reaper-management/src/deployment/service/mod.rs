@@ -10,13 +10,18 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::db::repositories::{AgentRepository, BundleRepository, DeploymentRepository};
+use chrono::Utc;
+
+use crate::db::repositories::{
+    AgentDeploymentRepository, AgentRepository, BundleRepository, DeploymentRepository,
+};
 use crate::db::Database;
 use crate::domain::agent::AgentStatus;
+use crate::domain::agent_deployment::{AgentDeployment, AgentDeploymentStatus};
 use crate::domain::bundle::BundleStatus;
 use crate::domain::deployment::{
     CreateDeploymentStrategy, CreateVersionPin, DeploymentStrategy, Rollout, RolloutStatus,
-    RolloutWave, StartRollout, StrategyConfig, StrategyType, VersionPin,
+    RolloutWave, StartRollout, StrategyConfig, StrategyType, VersionPin, WaveStatus,
 };
 use crate::state::{AppState, ServerEvent};
 
@@ -24,15 +29,173 @@ pub use types::{
     AgentInfo, DeploymentError, DryRunResult, RolloutResult, SkippedAgent, StrategyInfo,
 };
 
+/// Whether rollout waves wait for agents to confirm their applied version
+/// before completing (default true). Set `REAPER_REQUIRE_AGENT_CONFIRMATION=false`
+/// to keep the old optimistic behavior (useful for fleets whose agents don't
+/// report yet).
+fn confirmation_required() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("REAPER_REQUIRE_AGENT_CONFIRMATION")
+            .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
+            .unwrap_or(true)
+    })
+}
+
+/// Seconds after which an unconfirmed (still-pending) agent deployment is
+/// treated as settled (timed out) for wave-completion purposes, so a crashed or
+/// non-reporting agent cannot wedge a rollout forever.
+fn confirmation_timeout_secs() -> i64 {
+    static V: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("REAPER_DEPLOY_CONFIRMATION_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300)
+    })
+}
+
 /// Service for managing deployments and rollouts
 pub struct DeploymentService {
     pub(super) db: Arc<Database>,
+    /// When true, waves complete only after agents confirm their applied
+    /// version (see `record_agent_report`); when false, waves complete
+    /// optimistically as soon as the bundle-promoted event is broadcast.
+    pub(super) require_agent_confirmation: bool,
 }
 
 impl DeploymentService {
     /// Create a new deployment service
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self {
+            db,
+            require_agent_confirmation: confirmation_required(),
+        }
+    }
+
+    /// Record an agent's report of its applied bundle version, updating that
+    /// agent's deployment record (fail-closed truth) and, when confirmation is
+    /// required and the deployment belongs to a rollout, advancing rollout/wave
+    /// completion based on real confirmations rather than optimism.
+    pub async fn record_agent_report(
+        &self,
+        agent_id: Uuid,
+        bundle_id: Uuid,
+        status: AgentDeploymentStatus,
+        error: Option<String>,
+        state: &AppState,
+    ) -> Result<(), DeploymentError> {
+        let dep_repo = AgentDeploymentRepository::new(&self.db);
+
+        let rollout_id = match dep_repo
+            .get_latest_for_agent_bundle(agent_id, bundle_id)
+            .await?
+        {
+            Some(dep) => {
+                if !dep.is_terminal() {
+                    dep_repo
+                        .update_status(dep.id, status, error.as_deref())
+                        .await?;
+                    dep_repo.acknowledge(dep.id).await?;
+                }
+                dep.rollout_id
+            }
+            None => {
+                // Report for a deployment we weren't tracking (e.g. a direct
+                // promote outside a rollout) — still record the actual state.
+                let mut dep = AgentDeployment::new(agent_id, bundle_id, None);
+                match status {
+                    AgentDeploymentStatus::Deployed => dep.mark_deployed(),
+                    AgentDeploymentStatus::Failed => {
+                        dep.mark_failed(error.clone().unwrap_or_default())
+                    }
+                    _ => {}
+                }
+                dep.acknowledge();
+                dep_repo.create(&dep).await?;
+                None
+            }
+        };
+
+        info!(agent_id = %agent_id, bundle_id = %bundle_id, status = %status,
+            "Recorded agent deployment report");
+
+        if self.require_agent_confirmation {
+            if let Some(rollout_id) = rollout_id {
+                self.try_advance_on_confirmation(rollout_id, state).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Complete any wave whose target agents have all settled (confirmed
+    /// terminal or timed out), and complete the rollout when all waves are done.
+    /// Does not auto-advance to the next wave — multi-wave progression stays with
+    /// the existing approval flow.
+    async fn try_advance_on_confirmation(
+        &self,
+        rollout_id: Uuid,
+        state: &AppState,
+    ) -> Result<(), DeploymentError> {
+        let repo = DeploymentRepository::new(&self.db);
+        let dep_repo = AgentDeploymentRepository::new(&self.db);
+
+        let Some(rollout) = repo.get_rollout_by_id(rollout_id).await? else {
+            return Ok(());
+        };
+        if rollout.status == RolloutStatus::Completed {
+            return Ok(());
+        }
+
+        let waves = repo.get_waves_for_rollout(rollout_id).await?;
+        let deps = dep_repo.get_by_rollout(rollout_id).await?;
+        let timeout = confirmation_timeout_secs();
+        let now = Utc::now();
+
+        // An agent is "settled" for completion once its latest deployment for
+        // this rollout is terminal, or has been pending past the timeout.
+        let settled = |agent_id: &Uuid| -> bool {
+            deps.iter()
+                .filter(|d| d.agent_id == *agent_id)
+                .max_by_key(|d| d.created_at)
+                .map(|d| d.is_terminal() || (now - d.created_at).num_seconds() >= timeout)
+                .unwrap_or(false)
+        };
+
+        for wave in waves.iter().filter(|w| w.status == WaveStatus::Deploying) {
+            if !wave.target_agents.is_empty() && wave.target_agents.iter().all(&settled) {
+                repo.update_wave_status(wave.id, WaveStatus::Completed)
+                    .await?;
+                repo.increment_deployed_count(rollout_id, wave.target_agents.len() as u32)
+                    .await?;
+                info!(rollout_id = %rollout_id, wave = wave.wave_number,
+                    "Wave confirmed complete by agents");
+            }
+        }
+
+        let waves = repo.get_waves_for_rollout(rollout_id).await?;
+        if !waves.is_empty() && waves.iter().all(|w| w.status == WaveStatus::Completed) {
+            repo.update_rollout_status(rollout_id, RolloutStatus::Completed, None)
+                .await?;
+            let any_failed = deps
+                .iter()
+                .any(|d| d.status == AgentDeploymentStatus::Failed);
+            if let Some(bundle) = BundleRepository::new(&self.db)
+                .get_by_id(rollout.bundle_id)
+                .await?
+            {
+                state.broadcast_event(ServerEvent::RolloutCompleted {
+                    rollout_id,
+                    bundle_id: rollout.bundle_id,
+                    org_id: bundle.org_id,
+                    namespace_id: rollout.namespace_id,
+                    success: !any_failed,
+                });
+            }
+            info!(rollout_id = %rollout_id, success = !any_failed,
+                "Rollout completed (agent-confirmed)");
+        }
+        Ok(())
     }
 
     // ==================== Strategy Operations ====================
@@ -533,22 +696,16 @@ impl DeploymentService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::storage::FilesystemStorage;
     use std::collections::HashMap;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, Arc<Database>, AppState) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
         let storage_path = temp_dir.path().join("storage");
         std::fs::create_dir_all(&storage_path).unwrap();
 
-        let db_config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url: format!("sqlite:{}", db_path.display()),
-            max_connections: 5,
-        };
+        let db_config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();
@@ -562,11 +719,11 @@ mod tests {
     }
 
     async fn create_test_org(db: &Database) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -580,11 +737,11 @@ mod tests {
     }
 
     async fn create_test_bundle(db: &Database, org_id: Uuid) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let bundle_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(bundle_id.to_string())
         .bind(org_id.to_string())
@@ -601,7 +758,7 @@ mod tests {
     }
 
     async fn create_test_agents(db: &Database, org_id: Uuid, count: usize) -> Vec<Uuid> {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         let mut agent_ids = Vec::new();
 
@@ -614,7 +771,7 @@ mod tests {
             };
 
             sqlx::query(
-                "INSERT INTO agents (id, org_id, name, status, labels, registered_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agents (id, org_id, name, status, labels, registered_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(agent_id.to_string())
             .bind(org_id.to_string())
@@ -675,6 +832,105 @@ mod tests {
         let result = service.start_rollout(org_id, &input, &state).await.unwrap();
         assert_eq!(result.waves.len(), 1);
         assert_eq!(result.target_agents.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_rollout_waits_for_and_completes_on_agent_confirmation() {
+        let (_temp_dir, db, state) = setup().await;
+        let org_id = create_test_org(&db).await;
+        let bundle_id = create_test_bundle(&db, org_id).await;
+        let agents = create_test_agents(&db, org_id, 3).await;
+
+        let service = DeploymentService::new(db.clone());
+        // Default behavior: wait for agent confirmations.
+        assert!(service.require_agent_confirmation);
+
+        let input = StartRollout {
+            bundle_id,
+            strategy_id: None,
+            namespace_id: None,
+        };
+        let result = service.start_rollout(org_id, &input, &state).await.unwrap();
+        let rollout_id = result.rollout.id;
+
+        // The wave is deploying (NOT optimistically completed) and a pending
+        // deployment row exists per target agent.
+        let repo = DeploymentRepository::new(&db);
+        let waves = repo.get_waves_for_rollout(rollout_id).await.unwrap();
+        assert_eq!(waves.len(), 1);
+        assert_eq!(waves[0].status, WaveStatus::Deploying);
+
+        let dep_repo = AgentDeploymentRepository::new(&db);
+        let summary = dep_repo.get_summary(rollout_id).await.unwrap();
+        assert_eq!(summary.total_agents, 3);
+        assert_eq!(summary.pending, 3);
+
+        // Two of three confirm — rollout stays in progress.
+        for a in &agents[..2] {
+            service
+                .record_agent_report(*a, bundle_id, AgentDeploymentStatus::Deployed, None, &state)
+                .await
+                .unwrap();
+        }
+        let rollout = repo.get_rollout_by_id(rollout_id).await.unwrap().unwrap();
+        assert_ne!(rollout.status, RolloutStatus::Completed);
+        assert_eq!(
+            repo.get_waves_for_rollout(rollout_id).await.unwrap()[0].status,
+            WaveStatus::Deploying
+        );
+
+        // Final agent confirms — the wave and the rollout complete.
+        service
+            .record_agent_report(
+                agents[2],
+                bundle_id,
+                AgentDeploymentStatus::Deployed,
+                None,
+                &state,
+            )
+            .await
+            .unwrap();
+
+        let rollout = repo.get_rollout_by_id(rollout_id).await.unwrap().unwrap();
+        assert_eq!(rollout.status, RolloutStatus::Completed);
+        assert_eq!(
+            repo.get_waves_for_rollout(rollout_id).await.unwrap()[0].status,
+            WaveStatus::Completed
+        );
+
+        let summary = dep_repo.get_summary(rollout_id).await.unwrap();
+        assert_eq!(summary.deployed, 3);
+    }
+
+    #[tokio::test]
+    async fn test_report_records_untracked_deployment() {
+        // A report for a bundle the plane wasn't tracking (e.g. direct promote)
+        // still records the agent's actual applied state.
+        let (_temp_dir, db, state) = setup().await;
+        let org_id = create_test_org(&db).await;
+        let bundle_id = create_test_bundle(&db, org_id).await;
+        let agents = create_test_agents(&db, org_id, 1).await;
+
+        let service = DeploymentService::new(db.clone());
+        service
+            .record_agent_report(
+                agents[0],
+                bundle_id,
+                AgentDeploymentStatus::Deployed,
+                None,
+                &state,
+            )
+            .await
+            .unwrap();
+
+        let dep_repo = AgentDeploymentRepository::new(&db);
+        let dep = dep_repo
+            .get_latest_for_agent_bundle(agents[0], bundle_id)
+            .await
+            .unwrap()
+            .expect("deployment recorded");
+        assert_eq!(dep.status, AgentDeploymentStatus::Deployed);
+        assert!(dep.acknowledged_at.is_some());
     }
 
     #[tokio::test]

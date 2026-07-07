@@ -426,10 +426,10 @@ fn validate_source_config(
         SourceType::BundleUrl => {
             // BundleUrl can work without base_url (webhook-only mode)
             // But if checksum verification is enabled, it needs the algorithm
-            if config.get("verify_checksum") == Some(&serde_json::Value::Bool(true)) {
-                if config.get("checksum_algorithm").is_none() {
-                    // Default is sha256, so this is fine
-                }
+            if config.get("verify_checksum") == Some(&serde_json::Value::Bool(true))
+                && config.get("checksum_algorithm").is_none()
+            {
+                // Default is sha256, so this is fine
             }
         }
     }

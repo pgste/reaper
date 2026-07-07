@@ -40,9 +40,10 @@ pub enum PolicyLanguage {
     Simple,
     /// AWS Cedar policy language (rich ABAC, schema validation)
     Cedar,
-    /// Future: Custom Reaper DSL (compile-time optimization)
+    /// Native Reaper DSL — compiled to a fast evaluator, with AST-interpreter
+    /// fallback for constructs the compiler does not yet support.
     #[serde(rename = "reaper")]
-    Custom,
+    ReaperDsl,
 }
 
 impl std::fmt::Display for PolicyLanguage {
@@ -50,7 +51,7 @@ impl std::fmt::Display for PolicyLanguage {
         match self {
             PolicyLanguage::Simple => write!(f, "simple"),
             PolicyLanguage::Cedar => write!(f, "cedar"),
-            PolicyLanguage::Custom => write!(f, "custom"),
+            PolicyLanguage::ReaperDsl => write!(f, "reaper"),
         }
     }
 }

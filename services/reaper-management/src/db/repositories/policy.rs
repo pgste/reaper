@@ -23,7 +23,7 @@ impl<'a> PolicyRepository<'a> {
     pub async fn create(&self, org_id: Uuid, input: CreatePolicy) -> Result<Policy, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -33,7 +33,7 @@ impl<'a> PolicyRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO policies (id, org_id, team_id, source_id, name, description, language, source_path, current_version, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 1, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -56,7 +56,7 @@ impl<'a> PolicyRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at)
-            VALUES (?, ?, 1, ?, ?, ?)
+            VALUES ($1, $2, 1, $3, $4, $5)
             "#,
         )
         .bind(version_id.to_string())
@@ -76,14 +76,14 @@ impl<'a> PolicyRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
             FROM policies
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -104,14 +104,14 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
             FROM policies
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -134,7 +134,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Vec<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let limit = limit.unwrap_or(100);
@@ -144,9 +144,9 @@ impl<'a> PolicyRepository<'a> {
             r#"
             SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
             FROM policies
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(org_id.to_string())
@@ -167,10 +167,10 @@ impl<'a> PolicyRepository<'a> {
     pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM policies WHERE org_id = ?")
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM policies WHERE org_id = $1")
             .bind(org_id.to_string())
             .fetch_one(pool)
             .await?;
@@ -186,7 +186,7 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current policy
@@ -210,7 +210,7 @@ impl<'a> PolicyRepository<'a> {
             sqlx::query(
                 r#"
                 INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
             )
             .bind(version_id.to_string())
@@ -226,13 +226,13 @@ impl<'a> PolicyRepository<'a> {
             sqlx::query(
                 r#"
                 UPDATE policies
-                SET name = ?, description = ?, is_active = ?, current_version = ?, updated_at = ?
-                WHERE id = ?
+                SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
+                WHERE id = $6
                 "#,
             )
             .bind(&name)
             .bind(&description)
-            .bind(is_active)
+            .bind(is_active as i64)
             .bind(new_version)
             .bind(&now)
             .bind(id.to_string())
@@ -243,13 +243,13 @@ impl<'a> PolicyRepository<'a> {
             sqlx::query(
                 r#"
                 UPDATE policies
-                SET name = ?, description = ?, is_active = ?, updated_at = ?
-                WHERE id = ?
+                SET name = $1, description = $2, is_active = $3, updated_at = $4
+                WHERE id = $5
                 "#,
             )
             .bind(&name)
             .bind(&description)
-            .bind(is_active)
+            .bind(is_active as i64)
             .bind(&now)
             .bind(id.to_string())
             .execute(pool)
@@ -263,10 +263,10 @@ impl<'a> PolicyRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM policies WHERE id = ?")
+        let result = sqlx::query("DELETE FROM policies WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -278,11 +278,11 @@ impl<'a> PolicyRepository<'a> {
     async fn get_current_version(&self, policy_id: Uuid) -> Result<i32, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i32,) = sqlx::query_as(
-            "SELECT COALESCE(MAX(version), 0) FROM policy_versions WHERE policy_id = ?",
+            "SELECT COALESCE(MAX(version), 0) FROM policy_versions WHERE policy_id = $1",
         )
         .bind(policy_id.to_string())
         .fetch_one(pool)
@@ -295,14 +295,14 @@ impl<'a> PolicyRepository<'a> {
     pub async fn get_versions(&self, policy_id: Uuid) -> Result<Vec<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, policy_id, version, content, content_hash, source_commit, created_at
             FROM policy_versions
-            WHERE policy_id = ?
+            WHERE policy_id = $1
             ORDER BY version DESC
             "#,
         )
@@ -326,14 +326,14 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, policy_id, version, content, content_hash, source_commit, created_at
             FROM policy_versions
-            WHERE policy_id = ? AND version = ?
+            WHERE policy_id = $1 AND version = $2
             "#,
         )
         .bind(policy_id.to_string())
@@ -354,14 +354,14 @@ impl<'a> PolicyRepository<'a> {
     ) -> Result<Option<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, policy_id, version, content, content_hash, source_commit, created_at
             FROM policy_versions
-            WHERE policy_id = ?
+            WHERE policy_id = $1
             ORDER BY version DESC
             LIMIT 1
             "#,
@@ -377,7 +377,7 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// Convert a database row to a Policy
-    fn row_to_policy(&self, row: sqlx::sqlite::SqliteRow) -> Result<Policy, DatabaseError> {
+    fn row_to_policy(&self, row: sqlx::any::AnyRow) -> Result<Policy, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -431,7 +431,7 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// Convert a database row to a PolicyVersion
-    fn row_to_version(&self, row: sqlx::sqlite::SqliteRow) -> Result<PolicyVersion, DatabaseError> {
+    fn row_to_version(&self, row: sqlx::any::AnyRow) -> Result<PolicyVersion, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -460,21 +460,14 @@ impl<'a> PolicyRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

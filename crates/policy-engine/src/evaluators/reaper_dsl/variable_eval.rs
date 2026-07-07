@@ -42,6 +42,39 @@ pub fn eval_variable_equals_literal(
     }
 }
 
+/// Evaluate variable not-equals literal: var != "value".
+///
+/// NULL SEMANTICS: an UNBOUND variable fails the guard — `!=` is only
+/// satisfied by a bound value that differs. (Not(VariableEqualsLiteral)
+/// would let unbound variables pass every `!=` filter: fail-open.)
+/// A bound value of a different type differs by definition (matches the
+/// AST's !values_equal semantics for present values).
+#[inline]
+pub fn eval_variable_not_equals_literal(
+    variable: InternedString,
+    value: &CompiledLiteralValue,
+    variables: &HashMap<String, AttributeValue>,
+    interner: &StringInterner,
+) -> bool {
+    let var_name = match interner.resolve(variable) {
+        Some(name) => name,
+        None => return false,
+    };
+
+    let var_val = match variables.get(&*var_name) {
+        Some(val) => val,
+        None => return false,
+    };
+
+    match (var_val, value) {
+        (AttributeValue::String(s), CompiledLiteralValue::String(expected)) => *s != *expected,
+        (AttributeValue::Int(i), CompiledLiteralValue::Int(expected)) => *i != *expected,
+        (AttributeValue::Bool(b), CompiledLiteralValue::Bool(expected)) => *b != *expected,
+        // Bound but different type: the values necessarily differ.
+        _ => true,
+    }
+}
+
 /// Evaluate variable comparison: var >= N, var > N, etc.
 #[inline]
 pub fn eval_variable_compare(
@@ -380,6 +413,46 @@ pub fn eval_variable_attr_equals_literal(
         (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected)) => *i == *expected,
         (Some(AttributeValue::Bool(b)), CompiledLiteralValue::Bool(expected)) => *b == *expected,
         _ => false,
+    }
+}
+
+/// Evaluate variable attribute not-equals literal: var.attr != "value".
+///
+/// NULL SEMANTICS: a MISSING attribute (or unbound/non-object variable)
+/// fails the guard — absence never satisfies `!=` (fail closed). A present
+/// value of a different type differs by definition.
+#[inline]
+pub fn eval_variable_attr_not_equals_literal(
+    variable: InternedString,
+    attribute: InternedString,
+    value: &CompiledLiteralValue,
+    variables: &HashMap<String, AttributeValue>,
+    interner: &StringInterner,
+) -> bool {
+    let var_name = match interner.resolve(variable) {
+        Some(name) => name,
+        None => return false,
+    };
+
+    let var_val = match variables.get(&*var_name) {
+        Some(val) => val,
+        None => return false,
+    };
+
+    let attr_val = match var_val {
+        AttributeValue::Object(obj) => obj.get(&attribute).cloned(),
+        _ => None,
+    };
+
+    match (attr_val.as_ref(), value) {
+        (None, _) => false,
+        (Some(AttributeValue::String(s)), CompiledLiteralValue::String(expected)) => {
+            *s != *expected
+        }
+        (Some(AttributeValue::Int(i)), CompiledLiteralValue::Int(expected)) => *i != *expected,
+        (Some(AttributeValue::Bool(b)), CompiledLiteralValue::Bool(expected)) => *b != *expected,
+        // Present but different type: the values necessarily differ.
+        _ => true,
     }
 }
 
@@ -880,5 +953,72 @@ mod tests {
         let result =
             eval_variable_attr_equals_literal(var_r, value_key, &value_200, &variables, &interner);
         assert!(!result, "r.value == 200 should be false");
+    }
+
+    #[test]
+    fn variable_not_equals_literal_fails_closed_when_unbound() {
+        let interner = setup_interner();
+        let var = interner.intern("role");
+        let variables: HashMap<String, AttributeValue> = HashMap::new();
+
+        // Unbound variable: `role != "guest"` must FAIL, not pass.
+        let guest = CompiledLiteralValue::String(interner.intern("guest"));
+        assert!(!eval_variable_not_equals_literal(
+            var, &guest, &variables, &interner
+        ));
+
+        // Bound and different → true; bound and equal → false.
+        let mut bound = HashMap::new();
+        let admin_val = interner.intern("admin");
+        bound.insert("role".to_string(), AttributeValue::String(admin_val));
+        assert!(eval_variable_not_equals_literal(
+            var, &guest, &bound, &interner
+        ));
+        let admin = CompiledLiteralValue::String(interner.intern("admin"));
+        assert!(!eval_variable_not_equals_literal(
+            var, &admin, &bound, &interner
+        ));
+    }
+
+    #[test]
+    fn variable_attr_not_equals_literal_fails_closed_when_missing() {
+        let interner = setup_interner();
+        let value_key = interner.intern("value");
+        let missing_key = interner.intern("nonexistent");
+        let var_r = interner.intern("r");
+
+        let mut obj_map: std::collections::HashMap<crate::data::InternedString, AttributeValue> =
+            std::collections::HashMap::new();
+        obj_map.insert(value_key, AttributeValue::Int(100));
+        let mut variables = HashMap::new();
+        variables.insert("r".to_string(), AttributeValue::Object(obj_map));
+
+        let hundred = CompiledLiteralValue::Int(100);
+        let two_hundred = CompiledLiteralValue::Int(200);
+
+        // Missing attribute: `r.nonexistent != 100` must FAIL (fail closed).
+        assert!(!eval_variable_attr_not_equals_literal(
+            var_r,
+            missing_key,
+            &hundred,
+            &variables,
+            &interner
+        ));
+        // Present and different → true; present and equal → false.
+        assert!(eval_variable_attr_not_equals_literal(
+            var_r,
+            value_key,
+            &two_hundred,
+            &variables,
+            &interner
+        ));
+        assert!(!eval_variable_attr_not_equals_literal(
+            var_r, value_key, &hundred, &variables, &interner
+        ));
+        // Unbound variable entirely: fail closed.
+        let empty: HashMap<String, AttributeValue> = HashMap::new();
+        assert!(!eval_variable_attr_not_equals_literal(
+            var_r, value_key, &hundred, &empty, &interner
+        ));
     }
 }

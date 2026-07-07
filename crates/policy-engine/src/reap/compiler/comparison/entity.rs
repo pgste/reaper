@@ -13,11 +13,15 @@ use crate::reap::ast::{Entity, EntityAttr, Index, Operator, Value};
 use reaper_core::ReaperError;
 
 /// Convert AST Entity to DSL EntityType
-fn entity_to_type(entity: &Entity) -> EntityType {
+fn entity_to_type(entity: &Entity) -> Result<EntityType, ReaperError> {
     match entity {
-        Entity::User => EntityType::User,
-        Entity::Resource => EntityType::Resource,
-        Entity::Context => EntityType::Context,
+        Entity::User => Ok(EntityType::User),
+        Entity::Resource => Ok(EntityType::Resource),
+        Entity::Context => Ok(EntityType::Context),
+        Entity::Input => Err(ReaperError::InvalidPolicy {
+            reason: "`input` document access is not compiled yet; policy runs on the AST evaluator"
+                .to_string(),
+        }),
     }
 }
 
@@ -42,7 +46,7 @@ pub fn compile_value_comparison(
     op: Operator,
     value: Value,
 ) -> Result<DslCondition, ReaperError> {
-    let entity_type = entity_to_type(&left.entity);
+    let entity_type = entity_to_type(&left.entity)?;
 
     // Handle null comparisons
     if matches!(value, Value::Null) {
@@ -116,17 +120,12 @@ pub fn compile_value_comparison(
 
     let attr_op = operator_to_numeric_op(&op)?;
 
-    // Handle NotEqual specially - wrap in Not
-    if op == Operator::NotEqual {
-        return Ok(DslCondition::Not(Box::new(DslCondition::AttributeCompare(
-            AttributeComparison {
-                entity_type,
-                attribute: left.attribute,
-                op: NumericOp::Equal,
-                target,
-            },
-        ))));
-    }
+    // NOTE: NotEqual must compile NATIVELY, never as Not(Equal). A missing
+    // attribute fails Equal (correct), and negating that made absence satisfy
+    // every != guard — fail-open, caught by the differential oracle. The
+    // evaluator's native NotEqual arm fails closed on missing values, giving
+    // the specified semantics (missing satisfies no comparison except
+    // explicit null presence checks).
 
     Ok(DslCondition::AttributeCompare(AttributeComparison {
         entity_type,
@@ -142,8 +141,8 @@ pub fn compile_attr_comparison(
     op: Operator,
     right: EntityAttr,
 ) -> Result<DslCondition, ReaperError> {
-    let left_type = entity_to_type(&left.entity);
-    let right_type = entity_to_type(&right.entity);
+    let left_type = entity_to_type(&left.entity)?;
+    let right_type = entity_to_type(&right.entity)?;
     let left_has_wildcard = matches!(left.index, Some(Index::Wildcard));
     let right_has_wildcard = matches!(right.index, Some(Index::Wildcard));
 
@@ -191,15 +190,15 @@ pub fn compile_attr_comparison(
             right_attr: right.attribute,
         })),
 
-        Operator::NotEqual => Ok(DslCondition::Not(Box::new(
-            DslCondition::CrossEntityCompare(CrossEntityComparison {
-                left_entity: left_type,
-                left_attr: left.attribute,
-                op: NumericOp::Equal,
-                right_entity: right_type,
-                right_attr: right.attribute,
-            }),
-        ))),
+        // Native NotEqual (never Not(Equal)): missing attributes must fail !=
+        // guards, not satisfy them via negation (differential-oracle finding).
+        Operator::NotEqual => Ok(DslCondition::CrossEntityCompare(CrossEntityComparison {
+            left_entity: left_type,
+            left_attr: left.attribute,
+            op: NumericOp::NotEqual,
+            right_entity: right_type,
+            right_attr: right.attribute,
+        })),
 
         Operator::GreaterThan => Ok(DslCondition::CrossEntityCompare(CrossEntityComparison {
             left_entity: left_type,
@@ -277,34 +276,36 @@ fn compile_wildcard_comparison(
     // Determine which side has the collection (wildcard) and which has the scalar
     let (collection_entity, collection_attr, scalar_entity, scalar_attr) = if left_has_wildcard {
         (
-            entity_to_type(&left.entity),
+            entity_to_type(&left.entity)?,
             left.attribute,
-            entity_to_type(&right.entity),
+            entity_to_type(&right.entity)?,
             right.attribute,
         )
     } else {
         (
-            entity_to_type(&right.entity),
+            entity_to_type(&right.entity)?,
             right.attribute,
-            entity_to_type(&left.entity),
+            entity_to_type(&left.entity)?,
             left.attribute,
         )
     };
 
-    let comparison = WildcardComparison {
+    // NotEqual is a NEGATED flag, not Not(..): a missing collection or scalar
+    // attribute must fail the guard under BOTH == and != (fail closed).
+    let negated = match op {
+        Operator::Equal => false,
+        Operator::NotEqual => true,
+        _ => {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!("Wildcard comparisons only support == and !=, got {:?}", op),
+            })
+        }
+    };
+    Ok(DslCondition::WildcardCompare(WildcardComparison {
         collection_entity,
         collection_attr,
         scalar_entity,
         scalar_attr,
-    };
-
-    match op {
-        Operator::Equal => Ok(DslCondition::WildcardCompare(comparison)),
-        Operator::NotEqual => Ok(DslCondition::Not(Box::new(DslCondition::WildcardCompare(
-            comparison,
-        )))),
-        _ => Err(ReaperError::InvalidPolicy {
-            reason: format!("Wildcard comparisons only support == and !=, got {:?}", op),
-        }),
-    }
+        negated,
+    }))
 }

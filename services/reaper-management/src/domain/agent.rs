@@ -9,8 +9,10 @@ use uuid::Uuid;
 /// Agent status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AgentStatus {
     /// Agent has registered but not yet connected
+    #[default]
     Pending,
     /// Agent is actively connected
     Active,
@@ -18,12 +20,6 @@ pub enum AgentStatus {
     Inactive,
     /// Agent has been manually disabled
     Disabled,
-}
-
-impl Default for AgentStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for AgentStatus {
@@ -79,16 +75,12 @@ pub struct AgentBundle {
 /// Deployment status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DeploymentStatus {
+    #[default]
     Pending,
     Deployed,
     Failed,
-}
-
-impl Default for DeploymentStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 /// Input for registering a new agent
@@ -137,6 +129,15 @@ pub struct AgentMetrics {
     pub current_bundle_id: Option<Uuid>,
     /// Current bundle version
     pub current_bundle_version: Option<String>,
+    /// Data-plane replica state reported by the agent (two-way sync
+    /// visibility: which datastore version it serves, where it is in the
+    /// change stream, and whether its staleness budget is exceeded).
+    #[serde(default)]
+    pub data_version: Option<i64>,
+    #[serde(default)]
+    pub data_applied_seq: Option<i64>,
+    #[serde(default)]
+    pub data_stale: Option<bool>,
 }
 
 impl Agent {

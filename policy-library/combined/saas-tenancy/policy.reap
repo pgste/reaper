@@ -1,0 +1,46 @@
+// Multi-tenant SaaS — the other canonical "you need all three" case:
+//   ABAC:  hard tenant isolation (attribute equality) is non-negotiable
+//   ReBAC: project membership + manager chains within the tenant
+//   RBAC:  tenant-admin role, support-staff break-glass (read-only)
+policy saas_tenancy {
+    default: deny,
+
+    // ABAC wall: no rule below can leak across tenants because this deny
+    // fires first for any cross-tenant access by non-support users.
+    rule tenant_isolation {
+        deny if {
+            user.tenant != resource.tenant &&
+            user.role != "support"
+        }
+    }
+
+    rule tenant_admin_manages_tenant {
+        allow if {
+            user.role == "tenant_admin" &&
+            user.tenant == resource.tenant
+        }
+    }
+
+    rule project_members_work {
+        allow if {
+            user.tenant == resource.tenant &&
+            rebac::reachable(user, "member", resource, "member_of", 2)
+        }
+    }
+
+    rule project_watchers_read {
+        allow if {
+            context.action == "read" &&
+            user.tenant == resource.tenant &&
+            rebac::related(user, "watcher", resource)
+        }
+    }
+
+    rule support_reads_with_ticket {
+        allow if {
+            user.role == "support" &&
+            context.action == "read" &&
+            context.ticket != null
+        }
+    }
+}

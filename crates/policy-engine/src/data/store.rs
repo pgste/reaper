@@ -84,6 +84,9 @@ pub struct DataStore {
 
     /// Materialized view manager (Phase 6A-1)
     view_manager: Arc<ViewManager>,
+
+    /// ReBAC relationship graph (named directed edges, forward+reverse indexed)
+    relationships: Arc<crate::data::relationships::RelationshipGraph>,
 }
 
 impl DataStore {
@@ -97,6 +100,7 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
         }
     }
 
@@ -110,6 +114,7 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
         }
     }
 
@@ -126,10 +131,21 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
         }
     }
 
     /// Get the string interner
+    /// ReBAC relationship graph (edges declared in entity `relationships`).
+    pub fn relationships(&self) -> &crate::data::relationships::RelationshipGraph {
+        &self.relationships
+    }
+
+    /// Record `from #relation @to` in the relationship graph.
+    pub fn add_relationship(&self, from: EntityId, relation: InternedString, to: EntityId) {
+        self.relationships.add_edge(from, relation, to);
+    }
+
     pub fn interner(&self) -> &StringInterner {
         &self.interner
     }
@@ -229,6 +245,26 @@ impl DataStore {
         self.entities.get(&id).map(|entry| entry.value().clone())
     }
 
+    /// Snapshot an entity's attributes as a JSON object, resolving interned
+    /// strings. Read-only: uses a lookup that does NOT intern `id`, so it never
+    /// pollutes the interner with transient request strings.
+    ///
+    /// This backs the decision-log "explain" tier — capturing the resolved
+    /// entity attributes a decision branched on, so a denial is reproducible. It
+    /// runs on the LOG path (after evaluation), never inside the sub-µs eval loop.
+    /// Returns `None` if `id` is not a known entity.
+    pub fn entity_attributes_json(&self, id: &str) -> Option<serde_json::Value> {
+        let interned = self.interner().lookup(id)?;
+        let entity = self.get(interned)?;
+        let mut map = serde_json::Map::with_capacity(entity.attributes.len());
+        for (k, v) in entity.attributes.iter() {
+            if let Some(key) = self.interner().resolve(*k) {
+                map.insert(key.to_string(), v.to_json(self.interner()));
+            }
+        }
+        Some(serde_json::Value::Object(map))
+    }
+
     /// Get all entities of a specific type
     ///
     /// # Performance
@@ -290,23 +326,51 @@ impl DataStore {
     }
 
     /// Remove an entity by ID
+    /// UPSERT: replace an entity, cleaning the indexes its OLD attribute
+    /// values occupied (a plain insert leaves stale attribute/composite
+    /// index entries pointing at the previous values) and dropping the
+    /// relationship edges it previously carried. The delta-sync primitive —
+    /// applying the same upsert twice converges (idempotent).
+    pub fn upsert(&self, entity: Entity) {
+        let id = entity.id;
+        self.remove(id);
+        self.relationships().detach_carried(id);
+        self.insert(entity);
+    }
+
+    /// DELETE with cascade: the entity leaves the store AND the graph —
+    /// both edges it carried and edges pointing at it. A deleted entity
+    /// must not linger as anyone's owner/viewer/member (fail closed).
+    pub fn remove_entity(&self, id: EntityId) -> Option<Arc<Entity>> {
+        self.relationships().detach(id);
+        self.remove(id)
+    }
+
     pub fn remove(&self, id: EntityId) -> Option<Arc<Entity>> {
         let entity = self.entities.remove(&id).map(|(_, e)| e)?;
 
-        // Remove from type index
+        // Remove from type index, pruning the entry if it becomes empty so a
+        // churn of short-lived types cannot grow the index map without bound.
         if let Some(mut type_set) = self.type_index.get_mut(&entity.entity_type) {
             type_set.remove(&id);
         }
+        self.type_index
+            .remove_if(&entity.entity_type, |_, set| set.is_empty());
 
-        // Remove from secondary indexes (only if configured)
+        // Remove from secondary indexes (only if configured). Emptied entries
+        // are pruned: without this, a high-cardinality delta stream (unique
+        // attribute values) would grow attribute_index/composite_index with
+        // empty sets forever — the same unbounded-growth class the interner
+        // refcounting fixes, one layer down.
         if self.config.index_attributes {
             for (attr_key, attr_value) in &entity.attributes {
                 if let AttributeValue::String(value_id) = attr_value {
-                    if let Some(mut attr_set) =
-                        self.attribute_index.get_mut(&(*attr_key, *value_id))
-                    {
+                    let key = (*attr_key, *value_id);
+                    if let Some(mut attr_set) = self.attribute_index.get_mut(&key) {
                         attr_set.remove(&id);
                     }
+                    self.attribute_index
+                        .remove_if(&key, |_, set| set.is_empty());
                 }
             }
         }
@@ -318,11 +382,61 @@ impl DataStore {
                     if let Some(mut comp_set) = self.composite_index.get_mut(&composite_key) {
                         comp_set.remove(&id);
                     }
+                    self.composite_index
+                        .remove_if(&composite_key, |_, set| set.is_empty());
                 }
             }
         }
 
+        // Release the counted interned strings this entity owned. Indexes above
+        // are cleared first, so nothing references these ids by the time the
+        // last reference is released and the string is evicted. Balances the
+        // DataLoader's `intern_counted` on id/parent/string-values; pinned
+        // strings (type, keys, relations) are no-ops in `release`.
+        self.release_entity_strings(&entity);
+
         Some(entity)
+    }
+
+    /// Release the interned strings an entity owns, mirroring exactly what the
+    /// DataLoader counts (`intern_counted`): the id, the parent, and string
+    /// attribute values (recursively through lists/objects/sets). Object keys,
+    /// entity types, attribute keys, and relation strings are pinned, so they
+    /// are intentionally NOT released here — `release` is a no-op on them anyway.
+    fn release_entity_strings(&self, entity: &Entity) {
+        self.interner.release(entity.id);
+        if let Some(parent) = entity.parent {
+            self.interner.release(parent);
+        }
+        for value in entity.attributes.values() {
+            Self::release_attr_value(&self.interner, value);
+        }
+    }
+
+    fn release_attr_value(interner: &StringInterner, value: &AttributeValue) {
+        match value {
+            AttributeValue::String(id) => interner.release(*id),
+            AttributeValue::List(items) => {
+                for v in items {
+                    Self::release_attr_value(interner, v);
+                }
+            }
+            // Object keys are pinned (bounded schema vocabulary); release values.
+            AttributeValue::Object(map) => {
+                for v in map.values() {
+                    Self::release_attr_value(interner, v);
+                }
+            }
+            AttributeValue::Set(set) => {
+                for v in set {
+                    Self::release_attr_value(interner, v);
+                }
+            }
+            AttributeValue::Int(_)
+            | AttributeValue::Float(_)
+            | AttributeValue::Bool(_)
+            | AttributeValue::Null => {}
+        }
     }
 
     /// Get all entities
@@ -343,6 +457,10 @@ impl DataStore {
         if self.config.index_composite {
             self.composite_index.clear();
         }
+        // After clearing all entities, no counted string is referenced — drop
+        // them so a clear()+reload (snapshot deploy) doesn't accumulate stale
+        // interned strings. Pinned strings (policy literals, types) survive.
+        self.interner.reset_counted();
     }
 
     /// Get entity counts by type
@@ -683,6 +801,37 @@ mod tests {
 
         let retrieved = store.get(user_id).unwrap();
         assert_eq!(retrieved.id, user_id);
+    }
+
+    #[test]
+    fn test_entity_attributes_json_snapshot() {
+        let store = DataStore::new();
+        let interner = store.interner();
+
+        let alice = interner.intern("alice");
+        let user_type = interner.intern("User");
+        let role_key = interner.intern("role");
+        let clearance_key = interner.intern("clearance_level");
+        store.insert(
+            EntityBuilder::new(alice, user_type)
+                .with_attribute(role_key, AttributeValue::from_string("admin", interner))
+                .with_attribute(clearance_key, AttributeValue::Int(5))
+                .build(),
+        );
+
+        // Known entity -> resolved attributes as JSON.
+        let json = store
+            .entity_attributes_json("alice")
+            .expect("entity exists");
+        assert_eq!(json["role"], serde_json::json!("admin"));
+        assert_eq!(json["clearance_level"], serde_json::json!(5));
+
+        // Unknown id -> None, and (crucially) the lookup did NOT intern it.
+        assert!(store.entity_attributes_json("ghost").is_none());
+        assert!(
+            interner.lookup("ghost").is_none(),
+            "explain snapshot must not pollute the interner"
+        );
     }
 
     #[test]

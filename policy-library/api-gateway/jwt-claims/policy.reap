@@ -1,0 +1,41 @@
+// API gateway: JWT claims validation — issuer pinning, expiry, audience,
+// scope checks — the OPA io.jwt.decode pattern. The gateway forwards the
+// request as `input` ({token, path, method}); signature verification happens
+// at the TLS/JWKS boundary, the policy interprets the authenticated artifact.
+policy gateway_jwt {
+    default: deny,
+
+    rule valid_token_with_read_scope {
+        allow if {
+            claims := jwt::decode(input.token) &&
+            claims.iss == "https://issuer.corp" &&
+            claims.aud == "orders-api" &&
+            now := time::now_secs() &&
+            claims.exp > now &&
+            scopes := claims.scope.split(" ") &&
+            input.method == "GET" &&
+            "orders:read" in scopes
+        }
+    }
+
+    rule valid_token_with_write_scope {
+        allow if {
+            claims := jwt::decode(input.token) &&
+            claims.iss == "https://issuer.corp" &&
+            claims.aud == "orders-api" &&
+            now := time::now_secs() &&
+            claims.exp > now &&
+            scopes := claims.scope.split(" ") &&
+            (input.method == "POST" || input.method == "PUT") &&
+            "orders:write" in scopes
+        }
+    }
+
+    // tokens signed with alg=none are an attack artifact -> hard deny
+    rule reject_alg_none {
+        deny with message "JWT uses alg=none" if {
+            hdr := jwt::header(input.token) &&
+            hdr.alg == "none"
+        }
+    }
+}

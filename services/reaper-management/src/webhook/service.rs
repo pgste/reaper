@@ -233,10 +233,8 @@ impl WebhookDeliveryService {
                     last_error = Some(e.to_string());
 
                     // Connection errors may be retried
-                    if e.is_connect() || e.is_timeout() {
-                        if attempt < self.config.max_retries {
-                            continue;
-                        }
+                    if (e.is_connect() || e.is_timeout()) && attempt < self.config.max_retries {
+                        continue;
                     }
 
                     break;

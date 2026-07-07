@@ -307,6 +307,23 @@ fn event_to_sse(event: ServerEvent) -> Event {
             }))
             .unwrap_or_else(|_| Event::default().data("error")),
 
+        ServerEvent::DatastorePublished {
+            datastore_id,
+            org_id,
+            namespace_id,
+            version,
+            checksum,
+        } => Event::default()
+            .event("datastore_published")
+            .json_data(serde_json::json!({
+                "datastore_id": datastore_id,
+                "org_id": org_id,
+                "namespace_id": namespace_id,
+                "version": version,
+                "checksum": checksum
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
+
         ServerEvent::SyncStarted {
             source_id,
             source_name,
@@ -402,6 +419,42 @@ fn event_to_sse(event: ServerEvent) -> Event {
                 "agent_name": agent_name,
                 "org_id": org_id,
                 "namespace_id": namespace_id
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
+
+        ServerEvent::AgentDataStale {
+            agent_id,
+            agent_name,
+            org_id,
+            namespace_id,
+            data_version,
+            data_applied_seq,
+        } => Event::default()
+            .event("agent_data_stale")
+            .json_data(serde_json::json!({
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "org_id": org_id,
+                "namespace_id": namespace_id,
+                "data_version": data_version,
+                "data_applied_seq": data_applied_seq
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
+
+        ServerEvent::AgentDataFresh {
+            agent_id,
+            agent_name,
+            org_id,
+            namespace_id,
+            data_version,
+        } => Event::default()
+            .event("agent_data_fresh")
+            .json_data(serde_json::json!({
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "org_id": org_id,
+                "namespace_id": namespace_id,
+                "data_version": data_version
             }))
             .unwrap_or_else(|_| Event::default().data("error")),
     }

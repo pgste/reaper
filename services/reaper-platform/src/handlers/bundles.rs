@@ -64,6 +64,7 @@ pub async fn create_bundle(
                 _ => Decision::Deny,
             },
             condition: ReapCondition::True, // Simplified: all rules unconditional
+            message: None,
         })
         .collect();
 

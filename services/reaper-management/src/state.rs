@@ -3,7 +3,7 @@
 //! Holds shared state accessible to all request handlers.
 
 use crate::auth::JwksValidator;
-use crate::bundle::BundleService;
+use crate::bundle::{BundleService, BundleSigner};
 use crate::config::Config;
 use crate::db::Database;
 use crate::graceful::ShutdownSignal;
@@ -121,6 +121,34 @@ pub enum ServerEvent {
         namespace_id: Option<uuid::Uuid>,
         success: bool,
     },
+    /// A datastore version was published (data plane): agents fetch the
+    /// materialized document for `version` and hot-swap their DataStore.
+    DatastorePublished {
+        datastore_id: uuid::Uuid,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        version: i64,
+        checksum: String,
+    },
+    /// An agent's replicated authorization data crossed its staleness
+    /// budget (self-reported via heartbeat; emitted on the transition,
+    /// not every heartbeat).
+    AgentDataStale {
+        agent_id: uuid::Uuid,
+        agent_name: String,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        data_version: i64,
+        data_applied_seq: i64,
+    },
+    /// The agent's data replica caught back up (stale → fresh transition).
+    AgentDataFresh {
+        agent_id: uuid::Uuid,
+        agent_name: String,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        data_version: i64,
+    },
 }
 
 impl ServerEvent {
@@ -141,6 +169,9 @@ impl ServerEvent {
             ServerEvent::RolloutStarted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutWaveCompleted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutCompleted { org_id, .. } => Some(*org_id),
+            ServerEvent::DatastorePublished { org_id, .. } => Some(*org_id),
+            ServerEvent::AgentDataStale { org_id, .. } => Some(*org_id),
+            ServerEvent::AgentDataFresh { org_id, .. } => Some(*org_id),
             ServerEvent::Ping { .. } => None,
         }
     }
@@ -162,6 +193,9 @@ impl ServerEvent {
             ServerEvent::RolloutStarted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutWaveCompleted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutCompleted { namespace_id, .. } => *namespace_id,
+            ServerEvent::DatastorePublished { namespace_id, .. } => *namespace_id,
+            ServerEvent::AgentDataStale { namespace_id, .. } => *namespace_id,
+            ServerEvent::AgentDataFresh { namespace_id, .. } => *namespace_id,
             ServerEvent::Ping { .. } => None,
         }
     }
@@ -198,6 +232,8 @@ pub struct AppState {
     pub started_at: chrono::DateTime<chrono::Utc>,
     /// JWKS validator for external IdP tokens
     pub jwks_validator: Option<Arc<JwksValidator>>,
+    /// ClickHouse-backed decision-log store (None until REAPER_CLICKHOUSE_URL is set)
+    pub decision_store: Option<Arc<crate::decisions::DecisionStore>>,
     /// Shutdown signal for graceful shutdown
     shutdown_signal: ShutdownSignal,
     /// Flag indicating server is shutting down
@@ -208,8 +244,40 @@ impl AppState {
     /// Create new application state
     pub fn new(db: Arc<Database>, config: Config, storage: Arc<dyn BundleStorage>) -> Self {
         let (event_tx, _) = broadcast::channel(1024);
-        let bundle_service = Arc::new(BundleService::new(db.clone(), storage.clone()));
+        // Build the bundle signer from config; an invalid key is logged and
+        // signing stays off (compiled bundles will be unsigned, which agents
+        // that require signatures will reject).
+        let signer = match BundleSigner::from_config(&config.bundles) {
+            Ok(Some(s)) => {
+                tracing::info!(
+                    key_id = %config.bundles.signing_key_id,
+                    algorithm = %config.bundles.signing_algorithm,
+                    "Bundle signing enabled"
+                );
+                Some(s)
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "No bundle signing key configured (REAPER_BUNDLE_SIGNING_KEY); \
+                     compiled bundles will be UNSIGNED"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Invalid bundle signing key/algorithm; \
+                    compiled bundles will be UNSIGNED");
+                None
+            }
+        };
+        let bundle_service =
+            Arc::new(BundleService::new(db.clone(), storage.clone()).with_signer(signer));
         let jwks_validator = Arc::new(JwksValidator::new());
+        let decision_store = crate::decisions::DecisionStore::from_env().map(Arc::new);
+        if decision_store.is_some() {
+            tracing::info!("Decision-log query API enabled (ClickHouse)");
+        } else {
+            tracing::info!("Decision-log query API disabled (set REAPER_CLICKHOUSE_URL to enable)");
+        }
 
         Self {
             db,
@@ -219,6 +287,7 @@ impl AppState {
             event_tx,
             started_at: chrono::Utc::now(),
             jwks_validator: Some(jwks_validator),
+            decision_store,
             shutdown_signal: ShutdownSignal::new(),
             is_shutting_down: Arc::new(AtomicBool::new(false)),
         }
@@ -273,22 +342,15 @@ impl std::fmt::Debug for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::storage::FilesystemStorage;
 
     #[tokio::test]
     async fn test_event_broadcast() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
         let storage_path = temp_dir.path().join("storage");
         std::fs::create_dir_all(&storage_path).unwrap();
-        let url = format!("sqlite:{}", db_path.display());
 
-        let db_config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let db_config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();

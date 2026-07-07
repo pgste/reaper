@@ -1,0 +1,30 @@
+// API keys as first-class entities (ABAC on the key itself): tier gating,
+// environment scoping, and revocation — the "API key middleware" pattern
+// with the key's attributes resolved from the data plane, not the request.
+// The gateway passes the key id as the principal.
+policy api_key_tiers {
+    default: deny,
+
+    rule revoked_keys_never {
+        deny if user.status == "revoked"
+    }
+
+    rule free_tier_reads_only {
+        allow if {
+            user.tier == "free" &&
+            context.action == "read" &&
+            user.environment == resource.environment
+        }
+    }
+
+    rule paid_tiers_read_write {
+        allow if {
+            (user.tier == "pro" || user.tier == "enterprise") &&
+            user.environment == resource.environment
+        }
+    }
+
+    rule enterprise_crosses_environments {
+        allow if user.tier == "enterprise"
+    }
+}

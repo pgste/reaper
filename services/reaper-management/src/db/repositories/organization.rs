@@ -23,7 +23,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn create(&self, input: CreateOrganization) -> Result<Organization, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -33,7 +33,7 @@ impl<'a> OrganizationRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO organizations (id, name, slug, display_name, description, settings, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
         )
         .bind(id.to_string())
@@ -56,14 +56,14 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, name, slug, display_name, description, settings, created_at, updated_at
             FROM organizations
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -80,14 +80,14 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn get_by_slug(&self, slug: &str) -> Result<Option<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, name, slug, display_name, description, settings, created_at, updated_at
             FROM organizations
-            WHERE slug = ?
+            WHERE slug = $1
             "#,
         )
         .bind(slug)
@@ -108,7 +108,7 @@ impl<'a> OrganizationRepository<'a> {
     ) -> Result<Vec<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let limit = limit.unwrap_or(100);
@@ -119,7 +119,7 @@ impl<'a> OrganizationRepository<'a> {
             SELECT id, name, slug, display_name, description, settings, created_at, updated_at
             FROM organizations
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $1 OFFSET $2
             "#,
         )
         .bind(limit)
@@ -139,7 +139,7 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn count(&self) -> Result<i64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM organizations")
@@ -157,7 +157,7 @@ impl<'a> OrganizationRepository<'a> {
     ) -> Result<Option<Organization>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current org to merge updates
@@ -179,8 +179,8 @@ impl<'a> OrganizationRepository<'a> {
         sqlx::query(
             r#"
             UPDATE organizations
-            SET display_name = ?, description = ?, settings = ?, updated_at = ?
-            WHERE id = ?
+            SET display_name = $1, description = $2, settings = $3, updated_at = $4
+            WHERE id = $5
             "#,
         )
         .bind(&display_name)
@@ -198,10 +198,10 @@ impl<'a> OrganizationRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM organizations WHERE id = ?")
+        let result = sqlx::query("DELETE FROM organizations WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -210,10 +210,7 @@ impl<'a> OrganizationRepository<'a> {
     }
 
     /// Convert a database row to an Organization
-    fn row_to_organization(
-        &self,
-        row: sqlx::sqlite::SqliteRow,
-    ) -> Result<Organization, DatabaseError> {
+    fn row_to_organization(&self, row: sqlx::any::AnyRow) -> Result<Organization, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -248,19 +245,12 @@ impl<'a> OrganizationRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

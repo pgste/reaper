@@ -217,10 +217,11 @@ impl PolicyEngine {
             })
             .collect();
 
-        // Move names to active
+        // Move names to active (into the current active snapshot).
+        let active = self.active.load();
         for policy_name in &staged.staged_policy_names {
             if let Some((_, policy_id)) = self.staged_names.remove(policy_name) {
-                self.policy_names.insert(policy_name.clone(), policy_id);
+                active.names.insert(policy_name.clone(), policy_id);
             }
         }
 
@@ -234,7 +235,7 @@ impl PolicyEngine {
                 .unwrap_or_else(|| format!("v{}", policy.version));
 
             // Insert into active policies
-            self.active_policies.insert(policy_id, policy.clone());
+            active.policies.insert(policy_id, policy.clone());
 
             // Create version metadata
             let bundle_hash = {

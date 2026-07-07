@@ -1,0 +1,5 @@
+{
+ "path": "/api/v1/admin/users",
+ "method": "GET",
+ "token": "eyJhbGciOiAiUlMyNTYifQ.eyJzdWIiOiAicm9vdCIsICJzY29wZSI6ICJhZG1pbiBwcm9maWxlIn0.s"
+}

@@ -123,7 +123,17 @@ jobs:
 
     - name: Install Enterprise OPA
       run: |
-        curl -L -o eopa https://github.com/StyraInc/enterprise-opa/releases/latest/download/eopa_Linux_x86_64
+        # EOPA moved from StyraInc release binaries to the container image
+        # at ghcr.io/open-policy-agent/eopa. Extract the binary from the
+        # image (entrypoint tells us its path) so the rest of the workflow
+        # keeps managing a plain local process.
+        IMG=ghcr.io/open-policy-agent/eopa:latest
+        docker pull "$IMG"
+        BIN=$(docker inspect --format '{{if .Config.Entrypoint}}{{index .Config.Entrypoint 0}}{{else}}{{index .Config.Cmd 0}}{{end}}' "$IMG")
+        echo "eopa binary in image: $BIN"
+        CID=$(docker create "$IMG")
+        docker cp "$CID:$BIN" ./eopa
+        docker rm "$CID" >/dev/null
         chmod +x eopa
         sudo mv eopa /usr/local/bin/opa
         opa version

@@ -237,21 +237,14 @@ impl<'a> DeploymentRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::domain::deployment::{StrategyConfig, StrategyType};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, std::sync::Arc<Database>) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();
@@ -260,11 +253,11 @@ mod tests {
 
     async fn create_test_org(db: &Database) -> Uuid {
         use chrono::Utc;
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -279,11 +272,11 @@ mod tests {
 
     async fn create_test_bundle(db: &Database, org_id: Uuid) -> Uuid {
         use chrono::Utc;
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let bundle_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(bundle_id.to_string())
         .bind(org_id.to_string())
@@ -301,11 +294,11 @@ mod tests {
 
     async fn create_test_agent(db: &Database, org_id: Uuid) -> Uuid {
         use chrono::Utc;
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let agent_id = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO agents (id, org_id, name, status, registered_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agents (id, org_id, name, status, registered_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(agent_id.to_string())
         .bind(org_id.to_string())

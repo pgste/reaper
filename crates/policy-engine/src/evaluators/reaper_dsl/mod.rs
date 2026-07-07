@@ -95,6 +95,9 @@ pub struct ReaperDSLEvaluator {
     compiled_allow_rules: Vec<CompiledRule>,
     /// Default decision if no rules match
     default_decision: PolicyAction,
+    /// Interned "resource" type id, precomputed so the synthetic-resource path
+    /// doesn't re-intern the constant on every request.
+    resource_type_id: crate::data::InternedString,
     /// Pre-compiled regex patterns for O(1) lookup during evaluation
     #[allow(dead_code)]
     regex_cache: Arc<FxHashMap<String, regex::Regex>>,
@@ -141,11 +144,14 @@ impl ReaperDSLEvaluator {
             }
         }
 
+        let resource_type_id = interner.intern("resource");
+
         Self {
             store,
             compiled_deny_rules,
             compiled_allow_rules,
             default_decision,
+            resource_type_id,
             regex_cache: Arc::new(regex_cache),
             membership_cache: Arc::new(membership_cache),
         }
@@ -168,6 +174,45 @@ impl ReaperDSLEvaluator {
 
         match condition {
             CompiledCondition::Always => true,
+
+            // ReBAC: pure interned graph lookups. Direct = one DashMap get +
+            // binary search (~100ns); traversals are bounded BFS.
+            CompiledCondition::RebacCheck {
+                kind,
+                subject,
+                relation,
+                object,
+                via,
+                max_depth,
+            } => {
+                use crate::evaluators::reaper_dsl::CompiledRebacRef;
+                use crate::evaluators::reaper_dsl::RebacKind;
+                let resolve = |r: &CompiledRebacRef| match r {
+                    CompiledRebacRef::Principal => user.id,
+                    CompiledRebacRef::ResourceId => resource.id,
+                    CompiledRebacRef::Literal(id) => *id,
+                };
+                let subject_id = resolve(subject);
+                let object_id = resolve(object);
+                let graph = self.store.relationships();
+                match kind {
+                    RebacKind::Direct => graph.has_relation(object_id, *relation, subject_id),
+                    RebacKind::Reachable => graph.has_relation_reachable(
+                        object_id,
+                        *relation,
+                        subject_id,
+                        via.expect("reachable always compiles with via"),
+                        *max_depth as usize,
+                    ),
+                    RebacKind::Inherited => graph.has_relation_inherited(
+                        object_id,
+                        *relation,
+                        subject_id,
+                        via.expect("inherited always compiles with via"),
+                        *max_depth as usize,
+                    ),
+                }
+            }
 
             CompiledCondition::ActionEquals { value } => _context
                 .get("action")
@@ -204,7 +249,81 @@ impl ReaperDSLEvaluator {
             CompiledCondition::TimeOp(cond) => time_eval::eval_time_operation(cond, user, resource),
 
             CompiledCondition::CrossEntityCompare(comp) => {
-                comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                // context.* on either side resolves from the REQUEST, not an
+                // entity. It must NOT intern the request value: interning a
+                // per-request string (a principal, a token) would pin it in the
+                // shared interner forever — an unbounded eval-path memory leak
+                // under high request cardinality. A request value that is
+                // already interned reuses its id (compares by id, exactly as an
+                // entity value would); a novel one is carried as raw text and
+                // compared by content, matching the AST evaluator (which returns
+                // context values as owned strings and never interns them).
+                let needs_ctx = matches!(comp.left_entity, EntityType::Context)
+                    || matches!(comp.right_entity, EntityType::Context);
+                if !needs_ctx {
+                    comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                } else {
+                    // Ok(v)  = a concrete AttributeValue (entity attr, parsed
+                    //          number, or an already-interned request string).
+                    // Err(s) = a request string that is not interned, so it
+                    //          content-matches nothing already in the store.
+                    let resolve = |etype: &EntityType,
+                                   attr: crate::data::InternedString|
+                     -> Option<Result<AttributeValue, Arc<str>>> {
+                        if matches!(etype, EntityType::Context) {
+                            let name = interner.resolve(attr)?;
+                            // EvalContext::get special-cases "action"/"resource".
+                            let raw: &str = _context.get(name.as_ref())?;
+                            if let Ok(n) = raw.parse::<f64>() {
+                                Some(Ok(AttributeValue::Float(n)))
+                            } else if let Some(id) = interner.lookup(raw) {
+                                Some(Ok(AttributeValue::String(id)))
+                            } else {
+                                Some(Err(Arc::from(raw)))
+                            }
+                        } else {
+                            entity_helpers::get_nested_attr(etype, attr, user, resource, interner)
+                                .map(Ok)
+                        }
+                    };
+                    let op: AttrCompareOp = comp.op.into();
+                    match (
+                        resolve(&comp.left_entity, comp.left_attr),
+                        resolve(&comp.right_entity, comp.right_attr),
+                    ) {
+                        // Both concrete: identical to the pre-existing comparator.
+                        (Some(Ok(l)), Some(Ok(r))) => {
+                            comparison_eval::compare_attr_values(Some(&l), Some(&r), &op)
+                        }
+                        // Two novel request strings: compare by content.
+                        (Some(Err(a)), Some(Err(b))) => match op {
+                            AttrCompareOp::Equal => a == b,
+                            AttrCompareOp::NotEqual => a != b,
+                            _ => false,
+                        },
+                        // A novel request string vs a resolved value. It was not
+                        // interned, so it content-matches nothing in the store —
+                        // unequal to everything. compare_attr_values only
+                        // compares scalars (List/Set/Object/Null -> false), so
+                        // mirror its type-strict NotEqual: != is true iff the
+                        // other side is a present scalar.
+                        (Some(Err(_)), Some(Ok(other))) | (Some(Ok(other)), Some(Err(_))) => {
+                            match op {
+                                AttrCompareOp::Equal => false,
+                                AttrCompareOp::NotEqual => matches!(
+                                    other,
+                                    AttributeValue::String(_)
+                                        | AttributeValue::Int(_)
+                                        | AttributeValue::Float(_)
+                                        | AttributeValue::Bool(_)
+                                ),
+                                _ => false,
+                            }
+                        }
+                        // A Null / missing side satisfies neither == nor !=.
+                        _ => false,
+                    }
+                }
             }
 
             CompiledCondition::WildcardCompare(comp) => {
@@ -529,6 +648,12 @@ impl ReaperDSLEvaluator {
                 variable_eval::eval_variable_equals_literal(*variable, value, variables, interner)
             }
 
+            CompiledCondition::VariableNotEqualsLiteral { variable, value } => {
+                variable_eval::eval_variable_not_equals_literal(
+                    *variable, value, variables, interner,
+                )
+            }
+
             CompiledCondition::VariableCompare {
                 variable,
                 op,
@@ -729,6 +854,14 @@ impl ReaperDSLEvaluator {
                 *variable, *attribute, value, variables, interner,
             ),
 
+            CompiledCondition::VariableAttrNotEqualsLiteral {
+                variable,
+                attribute,
+                value,
+            } => variable_eval::eval_variable_attr_not_equals_literal(
+                *variable, *attribute, value, variables, interner,
+            ),
+
             CompiledCondition::VariableAttrCompare {
                 variable,
                 attribute,
@@ -836,8 +969,23 @@ impl ReaperDSLEvaluator {
             None => return false,
         };
 
+        // Null checks compare PRESENCE (absent context key == null), so they
+        // must be handled before requiring a value — previously they fell into
+        // the catch-all and always returned false (`context.ticket != null`
+        // denied on the fast path while the AST evaluator allowed; caught by
+        // the policy-library parity suite).
+        let ctx_val_opt = context.get(&attr_name);
+        if matches!(&comp.target, CompiledCompareTarget::LiteralNull) {
+            let is_null = ctx_val_opt.is_none();
+            return match comp.op {
+                NumericOp::Equal => is_null,
+                NumericOp::NotEqual => !is_null,
+                _ => false,
+            };
+        }
+
         // Get the context value
-        let ctx_val = match context.get(&attr_name) {
+        let ctx_val = match ctx_val_opt {
             Some(v) => v,
             None => return false,
         };
@@ -920,7 +1068,12 @@ impl ReaperDSLEvaluator {
                 match entity.get_attribute(*attribute) {
                     Some(AttributeValue::List(items)) => items.clone(),
                     Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
-                    _ => return None,
+                    // TOTAL ITERATION (matches the AST contract): a missing
+                    // or non-collection source is an EMPTY collection, so
+                    // the comprehension yields empty and the assignment
+                    // still binds — returning None here made the rule fail
+                    // where the AST evaluator continued with an empty list.
+                    _ => Vec::new(),
                 }
             }
             CompiledIterationSource::Variable { variable } => {
@@ -929,10 +1082,12 @@ impl ReaperDSLEvaluator {
                         match attr_val {
                             AttributeValue::List(items) => items.clone(),
                             AttributeValue::Set(items) => items.iter().cloned().collect(),
-                            _ => return None,
+                            // Total iteration: non-collection = empty.
+                            _ => Vec::new(),
                         }
                     } else {
-                        return None;
+                        // Total iteration: unbound variable = empty.
+                        Vec::new()
                     }
                 } else {
                     return None;
@@ -1250,18 +1405,25 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             );
         }
 
-        // Resource lookup - if entity doesn't exist, create a temporary entity
-        // This allows simple `resource == "value"` checks to work even without resource entities
+        // Resource lookup. If the resource isn't a registered entity we still
+        // want simple `resource == "value"` checks to work, so we synthesize a
+        // minimal entity holding just the id. Crucially this is a STACK local
+        // (borrowed below), not an `Arc::new(Entity)` — the previous code
+        // heap-allocated an Arc + Entity on every request for any policy whose
+        // resource is a bare id (e.g. RBAC over URL paths).
         let resource_found = self.store.get(resource_id);
-        let resource = resource_found.clone().unwrap_or_else(|| {
-            // Create a minimal entity with just the resource ID for simple resource matching
-            let resource_type = interner.intern("resource");
-            Arc::new(Entity::new(
-                resource_id,
-                resource_type,
-                std::collections::HashMap::new(),
-            ))
-        });
+        let temp_resource;
+        let resource: &Entity = match &resource_found {
+            Some(entity) => entity,
+            None => {
+                temp_resource = Entity::new(
+                    resource_id,
+                    self.resource_type_id,
+                    std::collections::HashMap::new(),
+                );
+                &temp_resource
+            }
+        };
 
         // Log resource entity info at trace level
         #[cfg(debug_assertions)]
@@ -1295,7 +1457,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             if self.evaluate_compiled_condition(
                 &rule.condition,
                 &user,
-                &resource,
+                resource,
                 &eval_context,
                 &mut variables,
             ) {
@@ -1311,7 +1473,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             let matches = self.evaluate_compiled_condition(
                 &rule.condition,
                 &user,
-                &resource,
+                resource,
                 &eval_context,
                 &mut variables,
             );

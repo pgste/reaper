@@ -24,8 +24,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::{fmt::Hyphenated, Uuid};
 
 use crate::observability::{
-    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISIONS_TOTAL, DECISION_DURATION,
-    DENIALS_TOTAL, ERRORS_TOTAL,
+    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DENIALS_TOTAL, ERRORS_TOTAL,
 };
 use crate::state::AgentState;
 use crate::types::EvaluateRequest;
@@ -45,23 +44,115 @@ struct EvalResponse<'a> {
     cache_hit: bool,
 }
 
-/// Standard policy evaluation with full OpenTelemetry tracing.
+/// Build the "explain" input-data snapshot: the resolved principal/resource
+/// entity attributes the decision branched on, as
+/// `{"principal": {...}, "resource": {...}}`. Read-only DataStore lookups on the
+/// LOG path (never the eval loop); returns `None` if neither is a known entity.
+fn capture_input_data(
+    data_store: &policy_engine::DataStore,
+    principal: &str,
+    resource: &str,
+) -> Option<Value> {
+    let mut input = serde_json::Map::new();
+    if let Some(p) = data_store.entity_attributes_json(principal) {
+        input.insert("principal".to_string(), p);
+    }
+    if let Some(r) = data_store.entity_attributes_json(resource) {
+        input.insert("resource".to_string(), r);
+    }
+    (!input.is_empty()).then_some(Value::Object(input))
+}
+
+/// Outcome of evaluating a request against a set of policies.
+struct EvalOutcome {
+    decision: PolicyAction,
+    policy_id: Uuid,
+    policy_name: String,
+    policy_version: u64,
+    matched_rule: Option<usize>,
+    total_eval_time_ns: u64,
+    /// Set when an evaluator errored; the request is denied (fail closed).
+    error: Option<String>,
+}
+
+/// Evaluate `request` against every policy in `policy_ids` and combine the
+/// results with a single, fail-closed rule shared by every endpoint:
+///
+/// - **Default deny.** A request is allowed only if at least one policy
+///   explicitly allows it *and* no policy denies it.
+/// - **Deny overrides.** The first policy that denies wins and short-circuits.
+/// - **Errors deny.** Any evaluation error denies (fail closed).
+///
+/// Both `evaluate_policy` and `fast_evaluate_policy` route through this so their
+/// decisions can never diverge for the same input.
+fn evaluate_policy_set(
+    engine: &policy_engine::PolicyEngine,
+    policy_ids: &[Uuid],
+    request: &PolicyRequest,
+) -> EvalOutcome {
+    let mut outcome = EvalOutcome {
+        decision: PolicyAction::Deny,
+        policy_id: Uuid::nil(),
+        policy_name: String::new(),
+        policy_version: 0,
+        matched_rule: None,
+        total_eval_time_ns: 0,
+        error: None,
+    };
+    let mut any_allow = false;
+
+    for policy_id in policy_ids {
+        match engine.evaluate(policy_id, request) {
+            Ok(d) => {
+                outcome.total_eval_time_ns += d.evaluation_time_ns;
+                match d.decision {
+                    PolicyAction::Deny => {
+                        // Deny overrides everything — fail closed and stop.
+                        outcome.decision = PolicyAction::Deny;
+                        outcome.policy_id = d.policy_id;
+                        outcome.policy_name = d.policy_name;
+                        outcome.policy_version = d.policy_version;
+                        outcome.matched_rule = d.matched_rule;
+                        return outcome;
+                    }
+                    PolicyAction::Allow => {
+                        // First allow sets the decision; a later deny can still
+                        // override it above.
+                        if !any_allow {
+                            any_allow = true;
+                            outcome.decision = PolicyAction::Allow;
+                            outcome.policy_id = d.policy_id;
+                            outcome.policy_name = d.policy_name;
+                            outcome.policy_version = d.policy_version;
+                            outcome.matched_rule = d.matched_rule;
+                        }
+                    }
+                    PolicyAction::Log => {}
+                }
+            }
+            Err(e) => {
+                outcome.decision = PolicyAction::Deny;
+                outcome.error = Some(e.to_string());
+                return outcome;
+            }
+        }
+    }
+
+    outcome
+}
+
+/// Standard policy evaluation.
 ///
 /// Supports:
 /// - Policy lookup by UUID, name, or evaluate all policies
 /// - Decision caching
-/// - Full tracing with span attributes
+/// - OpenTelemetry attributes when the trace is sampled
 /// - Decision logging (OPA-style audit)
-#[instrument(
-    skip(state, payload),
-    fields(
-        resource = %payload.resource,
-        action = %payload.action,
-        policy_name = tracing::field::Empty,
-        decision = tracing::field::Empty,
-        latency_ns = tracing::field::Empty,
-    )
-)]
+///
+/// Note: no `#[instrument]` — building a span with `%`-formatted fields on every
+/// request costs ~200-800ns, which is a large fraction of the sub-µs budget (the
+/// engine dropped it for the same reason). Tracing attributes are attached to
+/// the ambient span only when the trace is actually sampled.
 pub async fn evaluate_policy(
     State(state): State<Arc<AgentState>>,
     Json(mut payload): Json<EvaluateRequest>,
@@ -78,6 +169,29 @@ pub async fn evaluate_policy(
     let uuid = Uuid::new_v4();
     let mut decision_id_buf = [0u8; Hyphenated::LENGTH];
     let decision_id: &str = uuid.as_hyphenated().encode_lower(&mut decision_id_buf);
+
+    // DATA-PLANE GUARD: fail CLOSED when the operator armed a gate and it
+    // is tripped — either the staleness budget is exceeded in enforce mode
+    // (stale data must not mint allows) or REAPER_DATA_REQUIRE_SYNC is set
+    // and the first verified snapshot hasn't landed yet (an empty replica
+    // must not answer as if it had data). matched_rule names which gate.
+    // Two relaxed atomic loads on the hot path; zero cost when unarmed.
+    if let Some(reason) = state.data_sync.deny_reason() {
+        ERRORS_TOTAL.with_label_values(&["data_stale"]).inc();
+        let body = sonic_rs::to_vec(&EvalResponse {
+            decision_id,
+            decision: "deny",
+            policy_id: "",
+            policy_version: 0,
+            evaluation_time_microseconds: 0.0,
+            total_time_microseconds: 0.0,
+            matched_rule: reason,
+            agent_id: &state.agent_id,
+            cache_hit: false,
+        })
+        .unwrap_or_default();
+        return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+    }
 
     // Determine which policy/policies to evaluate
     // Can specify: UUID, policy name, or nothing (evaluate all)
@@ -97,7 +211,7 @@ pub async fn evaluate_policy(
                         // Policy not found - DENY by default for security
                         ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
                         let body = sonic_rs::to_vec(&EvalResponse {
-                            decision_id: &decision_id,
+                            decision_id,
                             decision: "deny",
                             policy_id: &id_str,
                             policy_version: 0,
@@ -127,7 +241,7 @@ pub async fn evaluate_policy(
                 CACHE_MISSES.with_label_values(&["policy"]).inc();
                 ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
                 let body = sonic_rs::to_vec(&EvalResponse {
-                    decision_id: &decision_id,
+                    decision_id,
                     decision: "deny",
                     policy_id: name,
                     policy_version: 0,
@@ -147,7 +261,7 @@ pub async fn evaluate_policy(
         if all_policies.is_empty() {
             ERRORS_TOTAL.with_label_values(&["no_policies"]).inc();
             let body = sonic_rs::to_vec(&EvalResponse {
-                decision_id: &decision_id,
+                decision_id,
                 decision: "deny",
                 policy_id: "",
                 policy_version: 0,
@@ -175,9 +289,22 @@ pub async fn evaluate_policy(
         context,
     };
 
+    // Scope the cache to the exact policy set being evaluated so decisions for
+    // different policies never collide on the same (principal, action, resource).
+    let cache_scope = policy_engine::scope_hash(policy_ids.iter().copied());
+
+    // Capture the cache generation BEFORE evaluating. If a deploy/data-change
+    // races with this evaluation, the generation will have advanced by the time
+    // we insert, and the stale decision is dropped rather than cached.
+    let cache_generation = state
+        .decision_cache
+        .as_ref()
+        .map(|c| c.generation())
+        .unwrap_or(0);
+
     // Check decision cache first (if enabled)
     if let Some(ref cache) = state.decision_cache {
-        if let Some(cached_decision) = cache.get(&request) {
+        if let Some(cached_decision) = cache.get(&request, cache_scope) {
             // Cache hit - return cached decision immediately
             state.stats.record_decision_cache_hit();
             CACHE_HITS.with_label_values(&["decision"]).inc();
@@ -197,7 +324,7 @@ pub async fn evaluate_policy(
             };
 
             let body = sonic_rs::to_vec(&EvalResponse {
-                decision_id: &decision_id,
+                decision_id,
                 decision: decision_str,
                 policy_id: "cached",
                 policy_version: 0,
@@ -214,57 +341,25 @@ pub async fn evaluate_policy(
         CACHE_MISSES.with_label_values(&["decision"]).inc();
     }
 
-    // Evaluate all policies in policy_ids (may be 1 or many)
-    // If ANY policy denies, return deny (security first)
-    let mut final_decision = PolicyAction::Allow;
-    let mut total_eval_time_ns = 0u64;
-    let mut matched_policy_id = Uuid::nil();
-    let mut matched_policy_name = String::new();
-    let mut matched_policy_version = 0u64;
-    let mut matched_rule = String::from("default_allow");
+    // Evaluate all policies with the shared fail-closed core (default deny,
+    // deny-overrides). This is identical to the fast endpoint's semantics.
+    let outcome = evaluate_policy_set(&state.policy_engine, &policy_ids, &request);
 
-    for policy_id in &policy_ids {
-        match state.policy_engine.evaluate(policy_id, &request) {
-            Ok(decision) => {
-                total_eval_time_ns += decision.evaluation_time_ns;
-
-                // Use policy_name from PolicyDecision (no re-lookup needed)
-                if matched_policy_name.is_empty() {
-                    matched_policy_name.clone_from(&decision.policy_name);
-                }
-
-                // If this policy denies, override the final decision
-                if matches!(decision.decision, PolicyAction::Deny) {
-                    final_decision = PolicyAction::Deny;
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_name.clone_from(&decision.policy_name);
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision
-                        .matched_rule
-                        .map(|idx| format!("rule_{}", idx))
-                        .unwrap_or_else(|| "no_rule".to_string());
-
-                    // Break early on deny (security first)
-                    break;
-                } else if matches!(final_decision, PolicyAction::Allow) {
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision
-                        .matched_rule
-                        .map(|idx| format!("rule_{}", idx))
-                        .unwrap_or_else(|| "no_rule".to_string());
-                }
-            }
-            Err(e) => {
-                // On error, deny for security (fail closed)
-                error!("Policy evaluation error for {}: {}", policy_id, e);
-                ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
-                final_decision = PolicyAction::Deny;
-                matched_rule = format!("evaluation_error: {}", e);
-                break;
-            }
-        }
-    }
+    let final_decision = outcome.decision.clone();
+    let total_eval_time_ns = outcome.total_eval_time_ns;
+    let matched_policy_id = outcome.policy_id;
+    let matched_policy_name = outcome.policy_name;
+    let matched_policy_version = outcome.policy_version;
+    let matched_rule = if let Some(ref e) = outcome.error {
+        error!("Policy evaluation error: {}", e);
+        ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
+        format!("evaluation_error: {}", e)
+    } else {
+        outcome
+            .matched_rule
+            .map(|idx| format!("rule_{}", idx))
+            .unwrap_or_else(|| "default_deny".to_string())
+    };
 
     let total_time = start_time.elapsed();
     state.stats.record_evaluation(total_eval_time_ns);
@@ -282,24 +377,17 @@ pub async fn evaluate_policy(
         PolicyAction::Log => "log",
     };
 
-    // Record Prometheus metrics — no UUID in labels (high-cardinality anti-pattern)
-    DECISIONS_TOTAL
-        .with_label_values(&[decision_str, &matched_policy_name])
-        .inc();
-
-    // Record latency (convert ns to seconds for Prometheus)
+    // Record Prometheus metrics via cached per-policy handles — no UUID in
+    // labels (high-cardinality anti-pattern), and no per-request label hashing.
     let latency_seconds = total_eval_time_ns as f64 / 1_000_000_000.0;
-    DECISION_DURATION
-        .with_label_values(&[&matched_policy_name])
-        .observe(latency_seconds);
+    let metrics = state.decision_metrics.for_policy(&matched_policy_name);
+    metrics.counter(&final_decision).inc();
+    metrics.duration.observe(latency_seconds);
 
-    // Record span attributes for distributed tracing
+    // Attach OpenTelemetry attributes only when the trace is sampled. The
+    // context/span-context lookup and all the KeyValue allocations are skipped
+    // entirely on the common unsampled request.
     let span = tracing::Span::current();
-    span.record("policy_name", matched_policy_name.as_str());
-    span.record("decision", decision_str);
-    span.record("latency_ns", total_eval_time_ns);
-
-    // Add OpenTelemetry span attributes only when sampled
     let cx = span.context();
     let otel_span = cx.span();
     let span_context = otel_span.span_context();
@@ -319,8 +407,9 @@ pub async fn evaluate_policy(
 
     // Log decisions — allow at debug, deny at warn
     if decision_str == "deny" {
+        // resource is intentionally not a label (unbounded cardinality).
         DENIALS_TOTAL
-            .with_label_values(&[&matched_policy_name, &payload.resource, &payload.action])
+            .with_label_values(&[&matched_policy_name, &payload.action])
             .inc();
 
         warn!(
@@ -346,50 +435,72 @@ pub async fn evaluate_policy(
 
     // Log to decision buffer only when enabled (gate all work inside the check)
     if let Some(ref buffer) = state.decision_buffer {
-        let trace_id = if span_context.is_valid() {
-            format!("{:032x}", span_context.trace_id())
-        } else {
-            String::new()
-        };
+        // Deny-priority sampling gate BEFORE building the entry, so sampled-out
+        // or disabled decisions cost nothing (no alloc, no formatting).
+        if buffer.should_log(decision_str == "allow") {
+            let trace_id = if span_context.is_valid() {
+                format!("{:032x}", span_context.trace_id())
+            } else {
+                String::new()
+            };
 
-        let mut context_values: HashMap<String, serde_json::Value> = HashMap::new();
-        if let Some(ref ctx) = payload.context {
-            for (k, v) in ctx {
-                context_values.insert(k.clone(), serde_json::Value::String(v.clone()));
+            let mut context_values: HashMap<String, serde_json::Value> = HashMap::new();
+            if let Some(ref ctx) = payload.context {
+                for (k, v) in ctx {
+                    context_values.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
             }
+
+            let mut entry = DecisionLogEntry::new(
+                payload.principal.clone(),
+                payload.action.clone(),
+                payload.resource.clone(),
+                decision_str.to_string(),
+                matched_policy_id.to_string(),
+                matched_policy_name.clone(),
+            )
+            .with_trace_id(trace_id)
+            .with_context(context_values)
+            .with_evaluation_time_ns(total_eval_time_ns)
+            .with_cache_hit(false)
+            .with_agent_id(state.agent_id.clone())
+            .with_policy_version(matched_policy_version.to_string())
+            .with_matched_rule(matched_rule.clone());
+            // Data-plane provenance: which datastore version/checksum this
+            // decision saw, and whether it ran past the staleness budget.
+            let (data_version, data_checksum) = state.data_sync.provenance();
+            entry = entry.with_data_sync(data_version, data_checksum, state.data_sync.flag_stale());
+
+            // "Explain" tier (opt-in, typically denies-only): snapshot the
+            // resolved principal/resource attributes the decision branched on.
+            // Gated + off the eval path.
+            if buffer.should_capture_input(decision_str == "allow") {
+                entry.input_data =
+                    capture_input_data(&state.data_store, &payload.principal, &payload.resource);
+            }
+
+            // Use the same decision_id across response, logs, and audit trail
+            entry.decision_id = decision_id.to_string();
+
+            buffer.log(entry);
         }
-
-        let mut entry = DecisionLogEntry::new(
-            payload.principal.clone(),
-            payload.action.clone(),
-            payload.resource.clone(),
-            decision_str.to_string(),
-            matched_policy_id.to_string(),
-            matched_policy_name.clone(),
-        )
-        .with_trace_id(trace_id)
-        .with_context(context_values)
-        .with_evaluation_time_ns(total_eval_time_ns)
-        .with_cache_hit(false)
-        .with_agent_id(state.agent_id.clone())
-        .with_matched_rule(matched_rule.clone());
-
-        // Use the same decision_id across response, logs, and audit trail
-        entry.decision_id = decision_id.to_string();
-
-        buffer.log(entry);
     }
 
     // Cache the decision for future requests (if caching enabled)
     if let Some(ref cache) = state.decision_cache {
-        cache.insert(&request, final_decision.clone());
+        cache.insert(
+            &request,
+            cache_scope,
+            final_decision.clone(),
+            cache_generation,
+        );
     }
 
     // Pre-format the policy_id string to avoid allocation in the response struct
     let policy_id_str = matched_policy_id.to_string();
 
     let body = sonic_rs::to_vec(&EvalResponse {
-        decision_id: &decision_id,
+        decision_id,
         decision: decision_str,
         policy_id: &policy_id_str,
         policy_version: matched_policy_version,
@@ -412,7 +523,9 @@ pub async fn evaluate_policy(
 /// Performance characteristics:
 /// - JSON parsing: ~2-3µs (vs ~8-10µs with serde_json)
 /// - Total request overhead: ~5-10µs less than standard endpoint
-#[instrument(skip(state, body))]
+///
+/// No `#[instrument]`: this is the latency-critical path, so we do not pay for
+/// per-request span construction (see `evaluate_policy`).
 pub async fn fast_evaluate_policy(
     State(state): State<Arc<AgentState>>,
     body: Bytes,
@@ -537,43 +650,21 @@ pub async fn fast_evaluate_policy(
         context,
     };
 
-    // Evaluate policies
-    let mut final_decision = PolicyAction::Deny;
-    let mut matched_policy_id = Uuid::nil();
-    let mut matched_policy_version = 0u64;
-    let mut matched_rule: Option<usize> = None;
-    let mut total_eval_time_ns = 0u64;
+    // Evaluate policies with the shared fail-closed core (default deny,
+    // deny-overrides) — identical semantics to the standard endpoint.
+    let outcome = evaluate_policy_set(&state.policy_engine, &policy_ids, &request);
+    if let Some(ref e) = outcome.error {
+        error!("Policy evaluation error: {}", e);
+        ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
+    }
 
-    for policy_id in &policy_ids {
-        let eval_start = std::time::Instant::now();
-
-        match state.policy_engine.evaluate(policy_id, &request) {
-            Ok(decision) => {
-                let eval_time_ns = eval_start.elapsed().as_nanos() as u64;
-                total_eval_time_ns += eval_time_ns;
-
-                // Use policy_name from PolicyDecision (no re-lookup needed)
-                if policy_name_resolved.is_empty() {
-                    policy_name_resolved.clone_from(&decision.policy_name);
-                }
-
-                if decision.decision == PolicyAction::Allow {
-                    final_decision = PolicyAction::Allow;
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision.matched_rule;
-                    break;
-                } else if decision.decision == PolicyAction::Deny {
-                    final_decision = PolicyAction::Deny;
-                    matched_policy_id = decision.policy_id;
-                    matched_policy_version = decision.policy_version;
-                    matched_rule = decision.matched_rule;
-                }
-            }
-            Err(_) => {
-                ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
-            }
-        }
+    let final_decision = outcome.decision.clone();
+    let matched_policy_id = outcome.policy_id;
+    let matched_policy_version = outcome.policy_version;
+    let matched_rule: Option<usize> = outcome.matched_rule;
+    let total_eval_time_ns = outcome.total_eval_time_ns;
+    if policy_name_resolved.is_empty() && !outcome.policy_name.is_empty() {
+        policy_name_resolved = outcome.policy_name;
     }
 
     let total_time = start_time.elapsed();
@@ -594,23 +685,72 @@ pub async fn fast_evaluate_policy(
         PolicyAction::Log => "log",
     };
 
-    // Record metrics — no UUID in labels
-    DECISIONS_TOTAL
-        .with_label_values(&[decision_str, &policy_name_resolved])
-        .inc();
-    DECISION_DURATION
-        .with_label_values(&[&policy_name_resolved])
-        .observe(total_time.as_secs_f64());
+    // Record metrics via cached per-policy handles — avoids re-hashing the
+    // label values and re-locking the metric vecs on every request.
+    let metrics = state.decision_metrics.for_policy(&policy_name_resolved);
+    metrics.counter(&final_decision).inc();
+    metrics.duration.observe(total_time.as_secs_f64());
 
-    let policy_id_str = matched_policy_id.to_string();
+    // Audit: capture the decision (deny-priority sampled). The fast path was
+    // previously not logged at all, so fast-endpoint decisions went unaudited —
+    // a real gap for an audit system. Gated by should_log so sampled-out/disabled
+    // decisions cost nothing.
+    if let Some(ref buffer) = state.decision_buffer {
+        if buffer.should_log(decision_str == "allow") {
+            let principal = request
+                .context
+                .get("principal")
+                .cloned()
+                .unwrap_or_default();
+            let mut entry = DecisionLogEntry::new(
+                principal,
+                request.action.clone(),
+                request.resource.clone(),
+                decision_str.to_string(),
+                matched_policy_id.to_string(),
+                policy_name_resolved.clone(),
+            )
+            .with_evaluation_time_ns(total_eval_time_ns)
+            .with_cache_hit(false)
+            .with_agent_id(state.agent_id.clone())
+            .with_policy_version(matched_policy_version.to_string())
+            .with_matched_rule(
+                matched_rule
+                    .map(|r| format!("rule_{}", r))
+                    .unwrap_or_default(),
+            );
+            let (data_version, data_checksum) = state.data_sync.provenance();
+            entry = entry.with_data_sync(data_version, data_checksum, state.data_sync.flag_stale());
+            if buffer.should_capture_input(decision_str == "allow") {
+                entry.input_data = capture_input_data(
+                    &state.data_store,
+                    &request
+                        .context
+                        .get("principal")
+                        .cloned()
+                        .unwrap_or_default(),
+                    &request.resource,
+                );
+            }
+            entry.decision_id = decision_id.to_string();
+            buffer.log(entry);
+        }
+    }
+
+    // Encode the policy UUID into a stack buffer — no heap allocation, same
+    // trick as decision_id.
+    let mut policy_id_buf = [0u8; Hyphenated::LENGTH];
+    let policy_id_str: &str = matched_policy_id
+        .as_hyphenated()
+        .encode_lower(&mut policy_id_buf);
     let matched_rule_str = matched_rule
         .map(|r| format!("rule_{}", r))
         .unwrap_or_default();
 
     let resp_body = sonic_rs::to_vec(&EvalResponse {
-        decision_id: &decision_id,
+        decision_id,
         decision: decision_str,
-        policy_id: &policy_id_str,
+        policy_id: policy_id_str,
         policy_version: matched_policy_version,
         evaluation_time_microseconds: total_eval_time_ns as f64 / 1000.0,
         total_time_microseconds: total_time.as_nanos() as f64 / 1000.0,
@@ -683,6 +823,17 @@ pub async fn batch_evaluate_policy(
 
     let request_count = requests.len();
 
+    // Resolve the per-policy metric handles once for the whole batch.
+    let metrics = state.decision_metrics.for_policy(&policy_name);
+
+    // Scope the cache to this policy and capture the generation before evaluating.
+    let cache_scope = policy_engine::scope_hash(std::iter::once(policy_id));
+    let cache_generation = state
+        .decision_cache
+        .as_ref()
+        .map(|c| c.generation())
+        .unwrap_or(0);
+
     // Evaluate requests with decision cache support
     let results: Vec<Value> = requests
         .iter()
@@ -692,7 +843,7 @@ pub async fn batch_evaluate_policy(
 
             // Check decision cache first
             let (decision, cache_hit) = if let Some(ref cache) = state.decision_cache {
-                if let Some(cached) = cache.get(req) {
+                if let Some(cached) = cache.get(req, cache_scope) {
                     state.stats.record_decision_cache_hit();
                     CACHE_HITS.with_label_values(&["decision"]).inc();
                     (cached, true)
@@ -706,7 +857,7 @@ pub async fn batch_evaluate_policy(
                         Ok(d) => d.decision,
                         Err(_) => PolicyAction::Deny,
                     };
-                    cache.insert(req, decision.clone());
+                    cache.insert(req, cache_scope, decision.clone(), cache_generation);
                     (decision, false)
                 }
             } else {
@@ -726,10 +877,8 @@ pub async fn batch_evaluate_policy(
                 PolicyAction::Log => "log",
             };
 
-            // Record metrics — no UUID in labels
-            DECISIONS_TOTAL
-                .with_label_values(&[decision_str, &policy_name])
-                .inc();
+            // Record metrics via the cached per-policy handle.
+            metrics.counter(&decision).inc();
 
             json!({
                 "index": i,

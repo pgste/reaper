@@ -98,6 +98,10 @@ pub struct SyncEngine {
     /// Statistics
     total_syncs: u64,
     total_policies_deployed: u64,
+    /// Last (version, checksum) replicated to the agent (data plane).
+    datastore_state: Option<(i64, String)>,
+    /// Our position in the control plane's change stream.
+    datastore_seq: i64,
 }
 
 impl SyncEngine {
@@ -113,6 +117,8 @@ impl SyncEngine {
             last_synced: HashMap::new(),
             total_syncs: 0,
             total_policies_deployed: 0,
+            datastore_state: None,
+            datastore_seq: 0,
         })
     }
 
@@ -282,6 +288,118 @@ impl SyncEngine {
         }
     }
 
+    /// One data-plane replication step (read-replica loop):
+    /// - poll the control plane's current_version (COUNT-cheap status call)
+    /// - version changed (or first run) -> fetch + deploy the full verified
+    ///   document; the agent re-verifies the checksum before loading
+    /// - unchanged -> lightweight confirm heartbeat so the agent's
+    ///   staleness clock reflects "current", not "no recent publishes";
+    ///   a 409 (agent behind / diverged, e.g. after restart) triggers a
+    ///   full re-deploy in the SAME step — self-healing, no wait
+    pub async fn sync_datastore(&mut self) -> Result<(), SyncError> {
+        let ds = self.config.sync.datastore.clone();
+        if !ds.enabled {
+            return Ok(());
+        }
+
+        let status = self
+            .server_client
+            .get_datastore_status(&ds.org, &ds.namespace)
+            .await?;
+
+        if status.current_version == 0 {
+            debug!("datastore has no published versions yet");
+            return Ok(());
+        }
+
+        let needs_deploy = match &self.datastore_state {
+            Some((version, checksum)) if *version == status.current_version => {
+                // Heartbeat; false = agent behind/diverged -> full deploy.
+                !self
+                    .agent_client
+                    .confirm_data_version(*version, checksum)
+                    .await?
+            }
+            _ => true,
+        };
+
+        if needs_deploy {
+            let bundle = self
+                .server_client
+                .get_datastore_version(&ds.org, &ds.namespace, status.current_version)
+                .await?;
+            self.agent_client
+                .deploy_data_version(
+                    bundle.version,
+                    &bundle.checksum,
+                    bundle.change_seq,
+                    &bundle.document,
+                )
+                .await?;
+            info!(
+                version = bundle.version,
+                checksum = %bundle.checksum,
+                seq = bundle.change_seq,
+                "✓ data version replicated to agent"
+            );
+            self.datastore_state = Some((bundle.version, bundle.checksum));
+            self.datastore_seq = bundle.change_seq;
+        }
+
+        // DELTA PATH (durable, self-retrying): pull everything after our
+        // seq from the change log and push it as a contiguous batch. The
+        // log is the source — a lost notification can never lose data,
+        // the next poll pulls the same range. On a 409 the agent tells us
+        // where it actually is (restart, competing syncer) and we re-pull
+        // from THERE; on compaction the control plane says
+        // snapshot_required and we fall back to a full verified deploy.
+        let changes = self
+            .server_client
+            .get_datastore_changes(&ds.org, &ds.namespace, self.datastore_seq)
+            .await?;
+        if changes.snapshot_required {
+            info!(
+                since = self.datastore_seq,
+                "change log compacted past our position — full snapshot resync"
+            );
+            self.datastore_state = None; // force deploy next step
+            return Ok(());
+        }
+        if changes.head_seq > self.datastore_seq {
+            match self
+                .agent_client
+                .apply_data_deltas(self.datastore_seq, changes.head_seq, &changes.deltas)
+                .await?
+            {
+                Ok(applied) => {
+                    info!(
+                        from = self.datastore_seq,
+                        to = applied,
+                        deltas = changes.deltas.len(),
+                        "✓ delta batch replicated"
+                    );
+                    self.datastore_seq = applied;
+                }
+                Err(agent_seq) => {
+                    // Agent is elsewhere in the stream: adopt ITS position
+                    // (>=0) and let the next poll pull the right range; a
+                    // fresh agent (seq unknown) gets a full snapshot.
+                    if agent_seq >= 0 {
+                        info!(
+                            ours = self.datastore_seq,
+                            agents = agent_seq,
+                            "seq mismatch — adopting agent position"
+                        );
+                        self.datastore_seq = agent_seq;
+                    } else {
+                        self.datastore_state = None;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run continuous synchronization
     #[instrument(skip(self))]
     pub async fn run_continuous(&mut self) -> Result<(), SyncError> {
@@ -299,6 +417,9 @@ impl SyncEngine {
             if !result.success {
                 warn!("Initial sync failed: {:?}", result.error);
             }
+            if let Err(e) = self.sync_datastore().await {
+                warn!("Initial data-plane replication failed: {e}");
+            }
         }
 
         // Continuous polling
@@ -306,6 +427,12 @@ impl SyncEngine {
             tokio::time::sleep(poll_interval).await;
 
             let result = self.sync_once().await;
+
+            // Data-plane replication rides the same poll: deploy on new
+            // versions, heartbeat otherwise (keeps agent staleness honest).
+            if let Err(e) = self.sync_datastore().await {
+                warn!("data-plane replication failed: {e}");
+            }
 
             if !result.success {
                 warn!("Sync iteration failed: {:?}", result.error);
@@ -343,6 +470,7 @@ mod tests {
     fn test_config() -> SyncConfig {
         SyncConfig {
             sync: crate::config::SyncSettings {
+                datastore: Default::default(),
                 server: crate::config::ServerConfig {
                     url: "http://localhost:8081".to_string(),
                     api_version: "v1".to_string(),

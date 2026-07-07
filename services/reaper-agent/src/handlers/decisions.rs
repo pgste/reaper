@@ -16,7 +16,10 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::instrument;
 
-use crate::observability::{DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES};
+use crate::observability::{
+    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DECISION_LOG_SAMPLED_OUT,
+    DECISION_LOG_WRITER_DROPPED,
+};
 use crate::state::AgentState;
 
 // ============================================================================
@@ -108,6 +111,27 @@ pub async fn get_decisions(
     })))
 }
 
+/// Explain a single decision by `decision_id` — returns the full record
+/// including the `input_data` snapshot (the resolved principal/resource
+/// attributes the decision branched on) when the explain tier was enabled.
+#[instrument(skip(state))]
+pub async fn get_decision_by_id(
+    State(state): State<Arc<AgentState>>,
+    axum::extract::Path(decision_id): axum::extract::Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let Some(buffer) = &state.decision_buffer else {
+        return Ok(Json(json!({
+            "enabled": false,
+            "message": "Decision logging is not enabled. Set REAPER_DECISION_LOG_ENABLED=true"
+        })));
+    };
+
+    match buffer.find_by_decision_id(&decision_id) {
+        Some(entry) => Ok(Json(json!({ "enabled": true, "decision": entry }))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
 /// Get decision buffer statistics.
 #[instrument(skip(state))]
 pub async fn get_decision_stats(
@@ -126,6 +150,8 @@ pub async fn get_decision_stats(
     DECISION_LOG_ENTRIES.set(stats.total_entries as f64);
     DECISION_LOG_BUFFER_SIZE.set(stats.buffer_size as f64);
     DECISION_LOG_FLUSHES.set(stats.flush_count as f64);
+    DECISION_LOG_SAMPLED_OUT.set(stats.sampled_out as f64);
+    DECISION_LOG_WRITER_DROPPED.set(stats.writer_dropped as f64);
 
     Ok(Json(json!({
         "enabled": true,
@@ -133,6 +159,8 @@ pub async fn get_decision_stats(
         "buffer_size": stats.buffer_size,
         "buffer_capacity": stats.buffer_capacity,
         "dropped_entries": stats.dropped_entries,
+        "writer_dropped": stats.writer_dropped,
+        "sampled_out": stats.sampled_out,
         "flush_count": stats.flush_count,
         "allow_count": stats.allow_count,
         "deny_count": stats.deny_count,

@@ -201,9 +201,14 @@ where
     fn evaluate_one(&self, index: usize, request: &PolicyRequest) -> BatchResult {
         let start = Instant::now();
 
+        // A BatchEvaluator wraps a single evaluator, so all entries share one
+        // cache scope. Capture the generation before evaluating so a concurrent
+        // invalidation cannot cache a stale decision.
+        let cache_gen = self.cache.as_ref().map(|c| c.generation()).unwrap_or(0);
+
         // Check cache first if available
         if let Some(ref cache) = self.cache {
-            if let Some(decision) = cache.get(request) {
+            if let Some(decision) = cache.get(request, 0) {
                 return BatchResult {
                     index,
                     result: Ok(decision),
@@ -218,7 +223,7 @@ where
 
         // Cache result if successful
         if let (Some(ref cache), Ok(ref decision)) = (&self.cache, &result) {
-            cache.insert(request, decision.clone());
+            cache.insert(request, 0, decision.clone(), cache_gen);
         }
 
         BatchResult {

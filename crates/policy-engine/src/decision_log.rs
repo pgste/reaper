@@ -58,6 +58,28 @@ pub struct DecisionLogEntry {
     /// Matched rule name (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_rule: Option<String>,
+
+    /// "Explain" snapshot: the resolved principal/resource entity attributes the
+    /// decision branched on (e.g. `{"principal": {...}, "resource": {...}}`).
+    /// Present only when the explain tier is enabled (heavier; opt-in, typically
+    /// denies-only). Makes a decision reproducible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_data: Option<serde_json::Value>,
+
+    /// Data-plane provenance: the datastore version this decision evaluated
+    /// against (audits can pin exactly what data a decision saw).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_version: Option<i64>,
+
+    /// Checksum of the data version (sha256:… as published by the control
+    /// plane; verified by the agent on load).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_checksum: Option<String>,
+
+    /// True when the agent's data exceeded its configured staleness budget
+    /// at evaluation time (REAPER_DATA_MAX_STALENESS_SECS, mode=flag).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub data_stale: bool,
 }
 
 impl DecisionLogEntry {
@@ -86,7 +108,17 @@ impl DecisionLogEntry {
             cache_hit: false,
             agent_id: None,
             matched_rule: None,
+            input_data: None,
+            data_version: None,
+            data_checksum: None,
+            data_stale: false,
         }
+    }
+
+    /// Attach the "explain" input-data snapshot.
+    pub fn with_input_data(mut self, input: serde_json::Value) -> Self {
+        self.input_data = Some(input);
+        self
     }
 
     /// Set the trace ID for OpenTelemetry correlation
@@ -131,9 +163,32 @@ impl DecisionLogEntry {
         self
     }
 
-    /// Convert to NDJSON line (for file export)
-    pub fn to_ndjson(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
+    /// Stamp data-plane sync provenance (version 0 = never synced: skipped).
+    pub fn with_data_sync(mut self, version: i64, checksum: Option<String>, stale: bool) -> Self {
+        if version > 0 {
+            self.data_version = Some(version);
+            self.data_checksum = checksum;
+        }
+        self.data_stale = stale;
+        self
+    }
+
+    /// Convert to an NDJSON line.
+    ///
+    /// This runs on the background writer thread (never the eval hot path), but
+    /// serialization speed still sets how fast the shipper drains the queue at
+    /// high volume — so use SIMD `sonic-rs` on native targets (same serde struct,
+    /// same output), falling back to `serde_json` on wasm where sonic-rs isn't
+    /// available.
+    pub fn to_ndjson(&self) -> Result<String, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            sonic_rs::to_string(self).map_err(|e| e.to_string())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            serde_json::to_string(self).map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -149,6 +204,12 @@ pub struct DecisionLogConfig {
     /// Path to NDJSON file for persistent logging (optional)
     pub file_path: Option<String>,
 
+    /// Emit each decision as an NDJSON line to stdout (container-native
+    /// collection: a log agent — Vector/Fluent Bit/OTel Collector — scrapes
+    /// stdout and ships to the central store). Can be combined with `file_path`.
+    #[serde(default)]
+    pub emit_stdout: bool,
+
     /// Flush interval in milliseconds (for file logging)
     pub flush_interval_ms: u64,
 
@@ -158,8 +219,77 @@ pub struct DecisionLogConfig {
     /// Whether to log deny decisions
     pub log_denies: bool,
 
+    /// Fraction of *allow* decisions to keep, in [0.0, 1.0] (default 1.0 = all).
+    /// Denies are never sampled — they're the security-relevant events. This is
+    /// the cheapest volume-control knob: sampled-out allows are dropped before
+    /// the log entry is even built. e.g. 0.01 keeps 1% of allows + 100% of denies.
+    pub sample_allow_rate: f64,
+
     /// Whether to include context in logs (can be disabled for privacy)
     pub include_context: bool,
+
+    /// "Explain" tier: snapshot the resolved principal/resource entity attributes
+    /// the decision branched on into `input_data`, so a decision is reproducible.
+    /// Off by default — it's heavier (DataStore lookups + JSON on the log path,
+    /// never on the eval path). Combine with `input_data_denies_only` to pay it
+    /// only where it matters most.
+    #[serde(default)]
+    pub include_input_data: bool,
+
+    /// When `include_input_data` is on, capture the snapshot for denies only
+    /// (default true) — denials are what you most need to explain, and this keeps
+    /// the cost off the allow firehose.
+    #[serde(default = "default_true")]
+    pub input_data_denies_only: bool,
+
+    /// Number of ring shards. Each request thread maps to a stable shard, so
+    /// concurrent producers take disjoint, uncontended locks. 0 = auto (detected
+    /// parallelism, clamped 1..=64). Set to 1 to force a single shard
+    /// (deterministic ordering, tests).
+    #[serde(default)]
+    pub capture_shards: usize,
+
+    // ---- Data protection (masking / pseudonymization / encryption) ----
+    // Applied once at capture, so the query API, file/stdout sinks, and exports
+    // all see only protected data.
+    /// Pseudonymize `principal` with HMAC-SHA-256 (requires `hash_salt`): the
+    /// logged value becomes `sha256:<hex>` — stable across entries (joinable
+    /// for investigations) but not reversible and not dictionary-attackable
+    /// without the salt.
+    #[serde(default)]
+    pub hash_principal: bool,
+
+    /// Secret HMAC key for `hash_principal`. Never serialized (won't appear in
+    /// the `/decisions/stats` config echo or any export).
+    #[serde(skip_serializing, default)]
+    pub hash_salt: Option<String>,
+
+    /// If set, only these request-context keys are kept; all others are dropped
+    /// at capture. `None` keeps everything (subject to `mask_keys`).
+    #[serde(default)]
+    pub context_allowlist: Option<Vec<String>>,
+
+    /// Keys to mask (value replaced with `"***"`) in the request context AND in
+    /// the explain-tier `input_data` attribute maps. Case-insensitive.
+    #[serde(default)]
+    pub mask_keys: Vec<String>,
+
+    /// Encrypt the explain-tier `input_data` snapshot at rest with AES-256-GCM
+    /// (requires `encryption_key`). The logged value becomes an envelope
+    /// `{"enc":"aes256gcm","nonce":...,"ciphertext":...}` that only the key
+    /// holder (e.g. the control plane, per tenant) can open. Fail-closed:
+    /// enabling this without a valid key makes buffer creation error —
+    /// plaintext is never logged by mistake.
+    #[serde(default)]
+    pub encrypt_input_data: bool,
+
+    /// 32-byte hex AES-256-GCM key for `encrypt_input_data`. Never serialized.
+    #[serde(skip_serializing, default)]
+    pub encryption_key: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DecisionLogConfig {
@@ -168,10 +298,21 @@ impl Default for DecisionLogConfig {
             enabled: false,
             buffer_capacity: 10_000,
             file_path: None,
+            emit_stdout: false,
             flush_interval_ms: 5_000,
             log_allows: true,
             log_denies: true,
+            sample_allow_rate: 1.0,
             include_context: true,
+            include_input_data: false,
+            input_data_denies_only: true,
+            capture_shards: 0,
+            hash_principal: false,
+            hash_salt: None,
+            context_allowlist: None,
+            mask_keys: Vec::new(),
+            encrypt_input_data: false,
+            encryption_key: None,
         }
     }
 }
@@ -179,7 +320,7 @@ impl Default for DecisionLogConfig {
 impl DecisionLogConfig {
     /// Create from environment variables
     pub fn from_env() -> Self {
-        Self {
+        let mut config = Self {
             enabled: std::env::var("REAPER_DECISION_LOG_ENABLED")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
@@ -188,6 +329,9 @@ impl DecisionLogConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10_000),
             file_path: std::env::var("REAPER_DECISION_LOG_FILE").ok(),
+            emit_stdout: std::env::var("REAPER_DECISION_LOG_STDOUT")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
             flush_interval_ms: std::env::var("REAPER_DECISION_LOG_FLUSH_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -198,11 +342,90 @@ impl DecisionLogConfig {
             log_denies: std::env::var("REAPER_DECISION_LOG_DENIES")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
+            sample_allow_rate: std::env::var("REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|r| r.clamp(0.0, 1.0))
+                .unwrap_or(1.0),
             include_context: std::env::var("REAPER_DECISION_LOG_CONTEXT")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
+            include_input_data: std::env::var("REAPER_DECISION_LOG_INPUT_DATA")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            input_data_denies_only: std::env::var("REAPER_DECISION_LOG_INPUT_DATA_DENIES_ONLY")
+                .map(|v| v.to_lowercase() != "false")
+                .unwrap_or(true),
+            capture_shards: std::env::var("REAPER_DECISION_LOG_SHARDS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            hash_principal: std::env::var("REAPER_DECISION_LOG_HASH_PRINCIPAL")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            hash_salt: std::env::var("REAPER_DECISION_LOG_HASH_SALT").ok(),
+            context_allowlist: std::env::var("REAPER_DECISION_LOG_CONTEXT_ALLOWLIST")
+                .ok()
+                .map(|v| csv_list(&v)),
+            mask_keys: std::env::var("REAPER_DECISION_LOG_MASK_KEYS")
+                .ok()
+                .map(|v| csv_list(&v))
+                .unwrap_or_default(),
+            encrypt_input_data: std::env::var("REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            encryption_key: std::env::var("REAPER_DECISION_LOG_ENCRYPTION_KEY").ok(),
+        };
+
+        // REAPER_DECISION_LOG_MODE: a one-word intent knob applied on top of
+        // the fine-grained vars (mode wins — it's the explicit statement of
+        // what must reach the store):
+        //   full    -> EVERY decision ships: allows + denies, sampling forced
+        //              off. The complete-audit mode for compliance/central
+        //              ClickHouse capture.
+        //   sampled -> denies always; allows kept at SAMPLE_ALLOW_RATE.
+        //   denies  -> denies only (minimal volume).
+        if let Ok(mode) = std::env::var("REAPER_DECISION_LOG_MODE") {
+            config.apply_mode(&mode);
+        }
+        config
+    }
+
+    /// Apply a named capture mode preset (see `from_env`). Unknown modes are
+    /// ignored (fine-grained settings stay as-is) with a warning.
+    pub fn apply_mode(&mut self, mode: &str) {
+        match mode.to_lowercase().trim() {
+            "full" | "all" => {
+                self.log_allows = true;
+                self.log_denies = true;
+                self.sample_allow_rate = 1.0;
+            }
+            "sampled" => {
+                self.log_allows = true;
+                self.log_denies = true;
+                // sample_allow_rate stays as configured
+            }
+            "denies" | "denies-only" | "deny" => {
+                self.log_allows = false;
+                self.log_denies = true;
+            }
+            "" => {}
+            other => {
+                tracing::warn!(
+                    mode = other,
+                    "unknown REAPER_DECISION_LOG_MODE (use full|sampled|denies); ignoring"
+                );
+            }
         }
     }
+}
+
+/// Split a comma-separated env value into trimmed, non-empty items.
+fn csv_list(v: &str) -> Vec<String> {
+    v.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -271,5 +494,59 @@ mod tests {
         assert_eq!(config.buffer_capacity, 10_000);
         assert!(config.log_allows);
         assert!(config.log_denies);
+    }
+
+    #[test]
+    fn test_mode_full_forces_complete_capture() {
+        // Even with sampling configured down and allows off, mode=full wins:
+        // every decision (allows included) must reach the store.
+        let mut config = DecisionLogConfig {
+            log_allows: false,
+            sample_allow_rate: 0.01,
+            ..Default::default()
+        };
+        config.apply_mode("full");
+        assert!(config.log_allows);
+        assert!(config.log_denies);
+        assert_eq!(config.sample_allow_rate, 1.0);
+
+        // "all" is an accepted alias.
+        let mut config = DecisionLogConfig {
+            sample_allow_rate: 0.5,
+            ..Default::default()
+        };
+        config.apply_mode("ALL");
+        assert_eq!(config.sample_allow_rate, 1.0);
+    }
+
+    #[test]
+    fn test_mode_sampled_keeps_configured_rate() {
+        let mut config = DecisionLogConfig {
+            log_allows: false,
+            sample_allow_rate: 0.25,
+            ..Default::default()
+        };
+        config.apply_mode("sampled");
+        assert!(config.log_allows, "sampled mode re-enables allows");
+        assert_eq!(config.sample_allow_rate, 0.25, "rate untouched");
+    }
+
+    #[test]
+    fn test_mode_denies_only() {
+        let mut config = DecisionLogConfig::default();
+        config.apply_mode("denies");
+        assert!(!config.log_allows);
+        assert!(config.log_denies);
+    }
+
+    #[test]
+    fn test_mode_unknown_is_ignored() {
+        let mut config = DecisionLogConfig {
+            sample_allow_rate: 0.5,
+            ..Default::default()
+        };
+        config.apply_mode("bogus");
+        assert_eq!(config.sample_allow_rate, 0.5);
+        assert!(config.log_allows);
     }
 }

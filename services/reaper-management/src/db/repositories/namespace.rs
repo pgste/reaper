@@ -30,7 +30,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Namespace, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -41,7 +41,7 @@ impl<'a> NamespaceRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO namespaces (id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -51,7 +51,7 @@ impl<'a> NamespaceRepository<'a> {
         .bind(input.parent_id.map(|p| p.to_string()))
         .bind(&input.description)
         .bind(&settings_json)
-        .bind(true)
+        .bind(1i64)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(pool)
@@ -75,14 +75,14 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -103,14 +103,14 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Option<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE org_id = ? AND slug = ?
+            WHERE org_id = $1 AND slug = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -128,14 +128,14 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY slug ASC
             "#,
         )
@@ -155,14 +155,14 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn list_roots(&self, org_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE org_id = ? AND parent_id IS NULL
+            WHERE org_id = $1 AND parent_id IS NULL
             ORDER BY slug ASC
             "#,
         )
@@ -182,14 +182,14 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn list_children(&self, parent_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
             FROM namespaces
-            WHERE parent_id = ?
+            WHERE parent_id = $1
             ORDER BY slug ASC
             "#,
         )
@@ -209,7 +209,7 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn update(&self, id: Uuid, input: UpdateNamespace) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let mut updates = Vec::new();
@@ -231,11 +231,13 @@ impl<'a> NamespaceRepository<'a> {
         }
 
         if let Some(is_active) = input.is_active {
-            updates.push("is_active = ?");
-            bindings.push(if is_active {
-                "1".to_string()
+            // Inline the flag: binding a text param into an INTEGER column
+            // works on SQLite (type affinity) but is a type error on
+            // PostgreSQL, and this builder's bindings are all strings.
+            updates.push(if is_active {
+                "is_active = 1"
             } else {
-                "0".to_string()
+                "is_active = 0"
             });
         }
 
@@ -246,7 +248,10 @@ impl<'a> NamespaceRepository<'a> {
         updates.push("updated_at = ?");
         bindings.push(Utc::now().to_rfc3339());
 
-        let sql = format!("UPDATE namespaces SET {} WHERE id = ?", updates.join(", "));
+        let sql = crate::db::numbered_placeholders(&format!(
+            "UPDATE namespaces SET {} WHERE id = ?",
+            updates.join(", ")
+        ));
 
         let mut query = sqlx::query(&sql);
         for binding in &bindings {
@@ -262,17 +267,17 @@ impl<'a> NamespaceRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Delete child namespaces first (recursive via ON DELETE CASCADE or manually)
         // For safety, we'll delete subscriptions first
-        sqlx::query("DELETE FROM agent_subscriptions WHERE namespace_id = ?")
+        sqlx::query("DELETE FROM agent_subscriptions WHERE namespace_id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
 
-        let result = sqlx::query("DELETE FROM namespaces WHERE id = ?")
+        let result = sqlx::query("DELETE FROM namespaces WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -281,7 +286,7 @@ impl<'a> NamespaceRepository<'a> {
     }
 
     /// Convert database row to Namespace
-    fn row_to_namespace(&self, row: sqlx::sqlite::SqliteRow) -> Result<Namespace, DatabaseError> {
+    fn row_to_namespace(&self, row: sqlx::any::AnyRow) -> Result<Namespace, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -297,7 +302,10 @@ impl<'a> NamespaceRepository<'a> {
         let settings =
             serde_json::from_str(&settings_str).unwrap_or_else(|_| serde_json::json!({}));
 
-        let is_active: bool = row.get("is_active");
+        // Flags are INTEGER 0/1 in both backends; sqlx::Any surfaces them
+        // as integers, never bool.
+        let is_active: i64 = row.get("is_active");
+        let is_active = is_active != 0;
 
         let created_at_str: String = row.get("created_at");
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
@@ -333,7 +341,7 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<AgentSubscription, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -341,13 +349,13 @@ impl<'a> NamespaceRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO agent_subscriptions (agent_id, namespace_id, include_children, created_at)
-            VALUES (?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT(agent_id, namespace_id) DO UPDATE SET include_children = excluded.include_children
             "#,
         )
         .bind(agent_id.to_string())
         .bind(input.namespace_id.to_string())
-        .bind(input.include_children)
+        .bind(input.include_children as i64)
         .bind(now.to_rfc3339())
         .execute(pool)
         .await?;
@@ -367,14 +375,14 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Vec<AgentSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT agent_id, namespace_id, include_children, created_at
             FROM agent_subscriptions
-            WHERE agent_id = ?
+            WHERE agent_id = $1
             "#,
         )
         .bind(agent_id.to_string())
@@ -396,14 +404,14 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Vec<AgentSubscription>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT agent_id, namespace_id, include_children, created_at
             FROM agent_subscriptions
-            WHERE namespace_id = ?
+            WHERE namespace_id = $1
             "#,
         )
         .bind(namespace_id.to_string())
@@ -425,12 +433,12 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<Vec<Uuid>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
-            SELECT agent_id FROM agent_subscriptions WHERE namespace_id = ?
+            SELECT agent_id FROM agent_subscriptions WHERE namespace_id = $1
             "#,
         )
         .bind(namespace_id.to_string())
@@ -456,15 +464,16 @@ impl<'a> NamespaceRepository<'a> {
     ) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result =
-            sqlx::query("DELETE FROM agent_subscriptions WHERE agent_id = ? AND namespace_id = ?")
-                .bind(agent_id.to_string())
-                .bind(namespace_id.to_string())
-                .execute(pool)
-                .await?;
+        let result = sqlx::query(
+            "DELETE FROM agent_subscriptions WHERE agent_id = $1 AND namespace_id = $2",
+        )
+        .bind(agent_id.to_string())
+        .bind(namespace_id.to_string())
+        .execute(pool)
+        .await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -472,7 +481,7 @@ impl<'a> NamespaceRepository<'a> {
     /// Convert database row to AgentSubscription
     fn row_to_subscription(
         &self,
-        row: sqlx::sqlite::SqliteRow,
+        row: sqlx::any::AnyRow,
     ) -> Result<AgentSubscription, DatabaseError> {
         let agent_id_str: String = row.get("agent_id");
         let agent_id = Uuid::parse_str(&agent_id_str)
@@ -482,7 +491,8 @@ impl<'a> NamespaceRepository<'a> {
         let namespace_id = Uuid::parse_str(&namespace_id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid namespace UUID: {}", e)))?;
 
-        let include_children: bool = row.get("include_children");
+        let include_children: i64 = row.get("include_children");
+        let include_children = include_children != 0;
 
         let created_at_str: String = row.get("created_at");
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
@@ -501,21 +511,14 @@ impl<'a> NamespaceRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

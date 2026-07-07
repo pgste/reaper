@@ -41,6 +41,31 @@ pub use super::collect::{collect_membership_values, collect_regex_patterns};
 pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> CompiledCondition {
     match condition {
         Condition::Always => CompiledCondition::Always,
+
+        Condition::RebacCheck {
+            kind,
+            subject,
+            relation,
+            object,
+            via,
+            max_depth,
+        } => {
+            use crate::evaluators::reaper_dsl::CompiledRebacRef;
+            use crate::evaluators::reaper_dsl::RebacRef;
+            let compile_ref = |r: &RebacRef| match r {
+                RebacRef::Principal => CompiledRebacRef::Principal,
+                RebacRef::ResourceId => CompiledRebacRef::ResourceId,
+                RebacRef::Literal(s) => CompiledRebacRef::Literal(interner.intern(s)),
+            };
+            CompiledCondition::RebacCheck {
+                kind: *kind,
+                subject: compile_ref(subject),
+                relation: interner.intern(relation),
+                object: compile_ref(object),
+                via: via.as_ref().map(|v| interner.intern(v)),
+                max_depth: *max_depth,
+            }
+        }
         Condition::ActionEquals { value } => CompiledCondition::ActionEquals {
             value: interner.intern(value),
         },
@@ -233,6 +258,12 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
                 value: compile_literal(value, interner),
             }
         }
+        Condition::VariableNotEqualsLiteral { variable, value } => {
+            CompiledCondition::VariableNotEqualsLiteral {
+                variable: interner.intern(variable),
+                value: compile_literal(value, interner),
+            }
+        }
         Condition::VariableCompare {
             variable,
             op,
@@ -342,6 +373,15 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
             attribute,
             value,
         } => CompiledCondition::VariableAttrEqualsLiteral {
+            variable: interner.intern(variable),
+            attribute: interner.intern(attribute),
+            value: compile_literal(value, interner),
+        },
+        Condition::VariableAttrNotEqualsLiteral {
+            variable,
+            attribute,
+            value,
+        } => CompiledCondition::VariableAttrNotEqualsLiteral {
             variable: interner.intern(variable),
             attribute: interner.intern(attribute),
             value: compile_literal(value, interner),
@@ -627,6 +667,7 @@ mod tests {
             collection_attr: "roles".to_string(),
             scalar_entity: EntityType::Resource,
             scalar_attr: "required_role".to_string(),
+            negated: false,
         });
 
         let compiled = compile_condition(&cond, &interner);

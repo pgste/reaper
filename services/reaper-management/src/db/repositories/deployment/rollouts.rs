@@ -22,7 +22,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -31,7 +31,7 @@ impl<'a> RolloutOps<'a> {
         let sql = r#"
             INSERT INTO rollouts (id, bundle_id, strategy_id, namespace_id, status, current_wave,
                                   target_agent_count, deployed_agent_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
         "#;
 
         sqlx::query(sql)
@@ -55,7 +55,7 @@ impl<'a> RolloutOps<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Rollout>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -63,7 +63,7 @@ impl<'a> RolloutOps<'a> {
                    target_agent_count, deployed_agent_count, started_at, completed_at,
                    error, created_at, updated_at
             FROM rollouts
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -81,7 +81,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Vec<Rollout>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
@@ -89,7 +89,7 @@ impl<'a> RolloutOps<'a> {
                    target_agent_count, deployed_agent_count, started_at, completed_at,
                    error, created_at, updated_at
             FROM rollouts
-            WHERE bundle_id = ? AND status NOT IN ('completed', 'failed', 'rolled_back', 'cancelled')
+            WHERE bundle_id = $1 AND status NOT IN ('completed', 'failed', 'rolled_back', 'cancelled')
             ORDER BY created_at DESC
         "#;
 
@@ -98,7 +98,7 @@ impl<'a> RolloutOps<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.iter().map(|r| row_to_rollout(r)).collect()
+        rows.iter().map(row_to_rollout).collect()
     }
 
     /// List rollouts for a namespace
@@ -110,7 +110,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Vec<Rollout>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = if let Some(ns_id) = namespace_id {
@@ -120,9 +120,9 @@ impl<'a> RolloutOps<'a> {
                        r.error, r.created_at, r.updated_at
                 FROM rollouts r
                 INNER JOIN bundles b ON r.bundle_id = b.id
-                WHERE b.org_id = ? AND r.namespace_id = ?
+                WHERE b.org_id = $1 AND r.namespace_id = $2
                 ORDER BY r.created_at DESC
-                LIMIT ?
+                LIMIT $3
             "#;
             sqlx::query(sql)
                 .bind(org_id.to_string())
@@ -137,9 +137,9 @@ impl<'a> RolloutOps<'a> {
                        r.error, r.created_at, r.updated_at
                 FROM rollouts r
                 INNER JOIN bundles b ON r.bundle_id = b.id
-                WHERE b.org_id = ?
+                WHERE b.org_id = $1
                 ORDER BY r.created_at DESC
-                LIMIT ?
+                LIMIT $2
             "#;
             sqlx::query(sql)
                 .bind(org_id.to_string())
@@ -148,7 +148,7 @@ impl<'a> RolloutOps<'a> {
                 .await?
         };
 
-        rows.iter().map(|r| row_to_rollout(r)).collect()
+        rows.iter().map(row_to_rollout).collect()
     }
 
     /// Update rollout status
@@ -160,7 +160,7 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
@@ -169,8 +169,8 @@ impl<'a> RolloutOps<'a> {
             RolloutStatus::InProgress => {
                 let sql = r#"
                     UPDATE rollouts
-                    SET status = ?, started_at = COALESCE(started_at, ?), updated_at = ?
-                    WHERE id = ?
+                    SET status = $1, started_at = COALESCE(started_at, $2), updated_at = $3
+                    WHERE id = $4
                 "#;
                 sqlx::query(sql)
                     .bind(status.to_string())
@@ -186,8 +186,8 @@ impl<'a> RolloutOps<'a> {
             | RolloutStatus::Cancelled => {
                 let sql = r#"
                     UPDATE rollouts
-                    SET status = ?, completed_at = ?, error = ?, updated_at = ?
-                    WHERE id = ?
+                    SET status = $1, completed_at = $2, error = $3, updated_at = $4
+                    WHERE id = $5
                 "#;
                 sqlx::query(sql)
                     .bind(status.to_string())
@@ -201,8 +201,8 @@ impl<'a> RolloutOps<'a> {
             _ => {
                 let sql = r#"
                     UPDATE rollouts
-                    SET status = ?, error = ?, updated_at = ?
-                    WHERE id = ?
+                    SET status = $1, error = $2, updated_at = $3
+                    WHERE id = $4
                 "#;
                 sqlx::query(sql)
                     .bind(status.to_string())
@@ -227,15 +227,15 @@ impl<'a> RolloutOps<'a> {
     ) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
 
         let sql = r#"
             UPDATE rollouts
-            SET deployed_agent_count = deployed_agent_count + ?, updated_at = ?
-            WHERE id = ?
+            SET deployed_agent_count = deployed_agent_count + $1, updated_at = $2
+            WHERE id = $3
         "#;
 
         sqlx::query(sql)
@@ -254,15 +254,15 @@ impl<'a> RolloutOps<'a> {
     pub async fn advance_wave(&self, id: Uuid) -> Result<Rollout, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
 
         let sql = r#"
             UPDATE rollouts
-            SET current_wave = current_wave + 1, updated_at = ?
-            WHERE id = ?
+            SET current_wave = current_wave + 1, updated_at = $1
+            WHERE id = $2
         "#;
 
         sqlx::query(sql)

@@ -9,8 +9,16 @@ metadata:
     app.kubernetes.io/component: management
 data:
   RUST_LOG: "info,reaper_management={{ .Values.management.config.logLevel }}"
-  REAPER_PORT: "3000"
-  REAPER_BIND_ADDRESS: "0.0.0.0"
+  REAPER_MANAGEMENT_PORT: {{ .Values.management.service.port | quote }}
+  REAPER_MANAGEMENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_STORAGE_TYPE: {{ .Values.management.config.storageType | quote }}
   REAPER_STORAGE_PATH: {{ .Values.management.config.storagePath | quote }}
+  {{- if .Values.management.decisionLogs.clickhouseUrl }}
+  REAPER_CLICKHOUSE_URL: {{ .Values.management.decisionLogs.clickhouseUrl | quote }}
+  REAPER_CLICKHOUSE_DATABASE: {{ .Values.management.decisionLogs.clickhouseDatabase | default "reaper_audit" | quote }}
+  {{- else if .Values.decisionLogs.enabled }}
+  # Auto-wired to the chart's decision-log pipeline store.
+  REAPER_CLICKHOUSE_URL: {{ include "reaper.decisionlogs.clickhouseUrl" . | quote }}
+  REAPER_CLICKHOUSE_DATABASE: {{ .Values.decisionLogs.clickhouse.database | quote }}
+  {{- end }}
 {{- end }}

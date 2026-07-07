@@ -1,0 +1,7 @@
+{"entities":[
+  {"id":"emp-jo","type":"User","attributes":{"department":"eng","level":2}},
+  {"id":"mgr-max","type":"User","attributes":{"department":"eng","level":4},"relationships":{"manages":["emp-jo"]}},
+  {"id":"dir-dana","type":"User","attributes":{"department":"eng","level":6},"relationships":{"manages":["mgr-max"]}},
+  {"id":"hr-pat","type":"User","attributes":{"department":"hr","level":4}},
+  {"id":"salary-jo","type":"Salary","attributes":{"employee":"emp-jo"},"relationships":{"subject":["emp-jo"]}}
+]}

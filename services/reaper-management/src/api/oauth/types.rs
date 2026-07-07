@@ -1,9 +1,13 @@
 //! OAuth types and domain models
 
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// OAuth connection stored in database
 #[derive(Debug, Clone, Serialize)]
@@ -43,20 +47,48 @@ impl OAuthState {
         }
     }
 
-    pub fn encode(&self) -> String {
+    /// Encode as `base64(payload).base64(HMAC-SHA256(payload))`.
+    ///
+    /// The HMAC binds the state to the server secret so a client cannot forge a
+    /// state naming another user/org — the callback only trusts a state whose
+    /// signature verifies (CSRF / connection-hijack protection).
+    pub fn encode(&self, secret: &[u8]) -> String {
         let json = serde_json::to_string(self).unwrap_or_default();
-        base64::Engine::encode(
+        let payload = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
             json.as_bytes(),
-        )
+        );
+
+        let sig = Self::sign(&payload, secret);
+        format!("{payload}.{sig}")
     }
 
-    pub fn decode(encoded: &str) -> Option<Self> {
+    /// Decode and verify the HMAC. Returns `None` if the signature is missing,
+    /// malformed, or does not verify — i.e. the state was tampered with or forged.
+    pub fn decode(encoded: &str, secret: &[u8]) -> Option<Self> {
+        let (payload, sig) = encoded.split_once('.')?;
+
+        // Constant-time verification via HMAC verify.
+        let mut mac = HmacSha256::new_from_slice(secret).ok()?;
+        mac.update(payload.as_bytes());
+        let expected =
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, sig).ok()?;
+        mac.verify_slice(&expected).ok()?;
+
         let bytes =
-            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, encoded)
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload)
                 .ok()?;
         let json = String::from_utf8(bytes).ok()?;
         serde_json::from_str(&json).ok()
+    }
+
+    fn sign(payload: &str, secret: &[u8]) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+        mac.update(payload.as_bytes());
+        base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            mac.finalize().into_bytes(),
+        )
     }
 
     pub fn is_valid(&self) -> bool {
@@ -148,12 +180,34 @@ mod tests {
 
     #[test]
     fn test_oauth_state_encode_decode() {
+        let secret = b"server-secret";
         let state = OAuthState::new("acme", "user-123");
-        let encoded = state.encode();
-        let decoded = OAuthState::decode(&encoded).unwrap();
+        let encoded = state.encode(secret);
+        let decoded = OAuthState::decode(&encoded, secret).unwrap();
 
         assert_eq!(decoded.org_slug, "acme");
         assert_eq!(decoded.user_id, "user-123");
         assert!(decoded.is_valid());
+    }
+
+    #[test]
+    fn test_oauth_state_rejects_forged_or_tampered() {
+        let secret = b"server-secret";
+        let encoded = OAuthState::new("acme", "user-123").encode(secret);
+
+        // Wrong secret (attacker does not know it) must fail.
+        assert!(OAuthState::decode(&encoded, b"wrong-secret").is_none());
+
+        // Tampering with the payload to name a different user must fail.
+        let (_payload, sig) = encoded.split_once('.').unwrap();
+        let forged_payload = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            br#"{"org_slug":"victim","user_id":"attacker","nonce":"x","created_at":0}"#,
+        );
+        let forged = format!("{forged_payload}.{sig}");
+        assert!(OAuthState::decode(&forged, secret).is_none());
+
+        // Missing signature must fail.
+        assert!(OAuthState::decode("justpayload", secret).is_none());
     }
 }

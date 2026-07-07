@@ -18,18 +18,16 @@ POLICY_FILE="policies/reaper/${SCENARIO}.reap"
 
 echo -e "${YELLOW}Deploying to Reaper: ${SCENARIO} @ ${SCALE}${NC}"
 
-# Load entities
-TEMP_PAYLOAD=$(mktemp)
-python3 -c "import json, sys; data=json.load(open('$DATA_FILE')); print(json.dumps({'data': json.dumps(data)}))" > "$TEMP_PAYLOAD"
-
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${REAPER_URL}/api/v1/data" \
+# Load entities via the streaming endpoint: it takes the raw JSON file as
+# the request body (no {"data": "<escaped copy>"} double-encoding, which
+# inflated large datasets past the agent's body limit) and chunk-loads
+# server-side — built for exactly this scale.
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${REAPER_URL}/api/v1/data/stream" \
     -H "Content-Type: application/json" \
-    --data @"$TEMP_PAYLOAD")
+    --data-binary @"$DATA_FILE")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | head -n -1)
-
-rm -f "$TEMP_PAYLOAD"
 
 if [ "$HTTP_CODE" -ne 200 ]; then
     echo -e "${RED}✗ Data load failed (HTTP $HTTP_CODE): $BODY${NC}" >&2

@@ -41,6 +41,8 @@ fn handle_analyze_policy(
     anyhow::bail!("eBPF commands are only available on Linux")
 }
 
+mod library;
+
 #[derive(Parser)]
 #[command(name = "reaper")]
 #[command(about = "Reaper CLI - High-Performance Policy Management")]
@@ -118,6 +120,62 @@ enum Commands {
         /// Show detailed parse tree
         #[arg(long)]
         verbose: bool,
+    },
+
+    /// Check a JSON document against a policy (CI mode): evaluates EVERY deny
+    /// rule and reports all violations with messages; exit code 1 on failure.
+    /// The conftest workflow: `reaper-cli check -p tf.reap -i plan.json`
+    Check {
+        /// Path to policy file (.reap, .yaml, .yml, or .json)
+        #[arg(short, long)]
+        policy: String,
+
+        /// Path to the JSON input document ('-' for stdin)
+        #[arg(short, long)]
+        input: String,
+
+        /// Optional entity data file (for policies that also use user/resource)
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Principal id (optional; document checks usually have none)
+        #[arg(long)]
+        principal: Option<String>,
+
+        /// Action (default: "check")
+        #[arg(long, default_value = "check")]
+        action: String,
+
+        /// Resource (default: the input file name)
+        #[arg(long)]
+        resource: Option<String>,
+
+        /// Output format: text (default) or json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
+    /// Generate a bundle signing keypair (Ed25519 or ECDSA P-256)
+    Keygen {
+        /// Signature algorithm: ed25519-sha256 or ecdsa-p256-sha256
+        #[arg(long, default_value = "ed25519-sha256")]
+        algorithm: String,
+
+        /// Key id advertised in signatures (for rotation)
+        #[arg(long, default_value = "default")]
+        key_id: String,
+    },
+
+    /// Decision-log data protection utilities (keys, decryption)
+    Decisions {
+        #[command(subcommand)]
+        action: DecisionsAction,
+    },
+
+    /// Browse and run the bundled policy examples library
+    Library {
+        #[command(subcommand)]
+        action: LibraryAction,
     },
 
     /// Policy management commands (platform/agent)
@@ -296,6 +354,46 @@ enum BundleAction {
         /// Package version
         #[arg(short, long, default_value = "1.0.0")]
         version: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DecisionsAction {
+    /// Generate secrets for decision-log data protection (HMAC salt + AES key)
+    Keygen,
+    /// Decrypt an encrypted input_data envelope from a decision log entry
+    Decrypt {
+        /// 64-hex-char AES-256-GCM key (REAPER_DECISION_LOG_ENCRYPTION_KEY)
+        #[arg(long)]
+        key: String,
+        /// The envelope JSON ({"enc":"aes256gcm",...}) or a full decision
+        /// entry / NDJSON line containing an "input_data" field. Use '-' to
+        /// read from stdin (e.g. pipe a line from decisions.ndjson).
+        input: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryAction {
+    /// List all scenarios (id, name, models, cases)
+    List {
+        /// Path to the policy library (default: ./policy-library or $REAPER_LIBRARY_PATH)
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Show a scenario: its walkthrough (README) and the policy source
+    Show {
+        /// Scenario id as printed by `library list` (e.g. combined/saas-tenancy)
+        id: String,
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Run a scenario's manifest cases and report PASS/FAIL (exit 1 on failure)
+    Run {
+        /// Scenario id, or omit to run the entire library
+        id: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
     },
 }
 
@@ -680,6 +778,156 @@ fn handle_compile(
 }
 
 /// Handle: reaper validate
+fn handle_keygen(algorithm: &str, key_id: &str) -> anyhow::Result<()> {
+    use reaper_core::bundle_signing::{SigAlgorithm, SigningKey};
+
+    let alg = SigAlgorithm::parse(algorithm)
+        .map_err(|e| anyhow::anyhow!("{e} (use ed25519-sha256 or ecdsa-p256-sha256)"))?;
+    let key = SigningKey::generate(alg);
+
+    println!("🔑 Reaper bundle signing keypair ({algorithm}), key_id={key_id}\n");
+    println!("── Control plane (reaper-management) — KEEP THE PRIVATE KEY SECRET ──");
+    println!("REAPER_BUNDLE_SIGNING_KEY={}", key.private_key_hex());
+    println!("REAPER_BUNDLE_SIGNING_KEY_ID={key_id}");
+    println!("REAPER_BUNDLE_SIGNING_ALGORITHM={algorithm}");
+    println!("\n── Agents (reaper-agent) — distribute the PUBLIC key ──");
+    println!(
+        "REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY={}",
+        key.public_key_hex()
+    );
+    println!("REAPER_MANAGEMENT_BUNDLE_SIGNATURE_ALGORITHM={algorithm}");
+    println!("REAPER_MANAGEMENT_BUNDLE_KEY_ID={key_id}");
+    println!("REAPER_MANAGEMENT_REQUIRE_SIGNED_BUNDLES=true");
+    Ok(())
+}
+
+/// Handle: reaper decisions keygen
+fn handle_decisions_keygen() -> anyhow::Result<()> {
+    // A random 32-byte salt is plenty for HMAC-SHA-256 pseudonymization; reuse
+    // the AES key generator since it produces exactly that.
+    let salt = policy_engine::generate_encryption_key_hex();
+    let key = policy_engine::generate_encryption_key_hex();
+
+    println!("🔑 Decision-log data protection secrets — KEEP THESE SECRET\n");
+    println!("── Agent (reaper-agent) ──");
+    println!("REAPER_DECISION_LOG_HASH_PRINCIPAL=true");
+    println!("REAPER_DECISION_LOG_HASH_SALT={salt}");
+    println!("REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA=true");
+    println!("REAPER_DECISION_LOG_ENCRYPTION_KEY={key}");
+    println!("\n── Optional masking (comma-separated, case-insensitive) ──");
+    println!("# REAPER_DECISION_LOG_MASK_KEYS=ssn,password,token");
+    println!("# REAPER_DECISION_LOG_CONTEXT_ALLOWLIST=request_id,ip");
+    println!("\nStore the encryption key with whoever must read explain data");
+    println!("(e.g. the control plane, per tenant). Decrypt with:");
+    println!("  reaper-cli decisions decrypt --key <hex> '<input_data JSON>'");
+    Ok(())
+}
+
+/// Handle: reaper decisions decrypt
+fn handle_decisions_decrypt(key: &str, input: &str) -> anyhow::Result<()> {
+    let raw = if input == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        buf
+    } else {
+        input.to_string()
+    };
+
+    let value: serde_json::Value = serde_json::from_str(raw.trim())
+        .map_err(|e| anyhow::anyhow!("input is not valid JSON: {e}"))?;
+    // Accept either the bare envelope or a full entry containing input_data.
+    let envelope = if value.get("ciphertext").is_some() {
+        &value
+    } else {
+        value
+            .get("input_data")
+            .ok_or_else(|| anyhow::anyhow!("no input_data field in the given entry"))?
+    };
+
+    let opened = policy_engine::decrypt_input_data(envelope, key)
+        .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
+    println!("{}", serde_json::to_string_pretty(&opened)?);
+    Ok(())
+}
+
+/// Handle: reaper check — evaluate a JSON document against a policy and
+/// report every violation (CI gate: exit 1 when not allowed).
+fn handle_check(
+    policy_path: &str,
+    input_path: &str,
+    data_path: Option<&str>,
+    principal: Option<&str>,
+    action: &str,
+    resource: Option<&str>,
+    format: &str,
+) -> anyhow::Result<()> {
+    use policy_engine::PolicyRequest;
+
+    let policy = ReaperPolicy::from_file_auto(policy_path)
+        .map_err(|e| anyhow::anyhow!("failed to load policy {policy_path}: {e}"))?;
+
+    let store = std::sync::Arc::new(DataStore::new());
+    if let Some(data) = data_path {
+        let json = std::fs::read_to_string(data)
+            .map_err(|e| anyhow::anyhow!("failed to read data file {data}: {e}"))?;
+        DataLoader::new((*store).clone())
+            .load_json(&json)
+            .map_err(|e| anyhow::anyhow!("failed to load data: {e}"))?;
+    }
+
+    let raw = if input_path == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(input_path)
+            .map_err(|e| anyhow::anyhow!("failed to read input {input_path}: {e}"))?
+    };
+    let input: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("input is not valid JSON: {e}"))?;
+
+    let mut context = std::collections::HashMap::new();
+    if let Some(pr) = principal {
+        context.insert("principal".to_string(), pr.to_string());
+    }
+    let request = PolicyRequest {
+        resource: resource.unwrap_or(input_path).to_string(),
+        action: action.to_string(),
+        context,
+    };
+
+    let evaluator = policy.build_ast_evaluator(store);
+    let result = evaluator
+        .check_with_input(&request, Some(&input))
+        .map_err(|e| anyhow::anyhow!("check failed: {e}"))?;
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&result)?),
+        _ => {
+            if result.violations.is_empty() {
+                println!("PASS: no violations");
+            } else {
+                for v in &result.violations {
+                    match &v.message {
+                        Some(msg) => println!("FAIL [{}]: {}", v.rule, msg),
+                        None => println!("FAIL [{}]", v.rule),
+                    }
+                }
+                println!("\n{} violation(s)", result.violations.len());
+            }
+            if !result.allowed && result.violations.is_empty() {
+                println!("DENIED: no allow rule matched (default deny)");
+            }
+        }
+    }
+
+    if !result.allowed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn handle_validate(
     policy_path: &str,
     data_path: Option<&str>,
@@ -1031,6 +1279,40 @@ async fn main() -> anyhow::Result<()> {
             ref data,
             verbose,
         } => handle_validate(policy, data.as_deref(), verbose)?,
+
+        Commands::Check {
+            ref policy,
+            ref input,
+            ref data,
+            ref principal,
+            ref action,
+            ref resource,
+            ref format,
+        } => handle_check(
+            policy,
+            input,
+            data.as_deref(),
+            principal.as_deref(),
+            action,
+            resource.as_deref(),
+            format,
+        )?,
+
+        Commands::Keygen {
+            ref algorithm,
+            ref key_id,
+        } => handle_keygen(algorithm, key_id)?,
+
+        Commands::Decisions { ref action } => match action {
+            DecisionsAction::Keygen => handle_decisions_keygen()?,
+            DecisionsAction::Decrypt { key, input } => handle_decisions_decrypt(key, input)?,
+        },
+
+        Commands::Library { ref action } => match action {
+            LibraryAction::List { path } => library::list(path.as_deref())?,
+            LibraryAction::Show { id, path } => library::show(id, path.as_deref())?,
+            LibraryAction::Run { id, path } => library::run(id.as_deref(), path.as_deref())?,
+        },
 
         Commands::Policy { ref action } => handle_policy_action(action, &cli, &client).await?,
         Commands::Agent { ref action } => handle_agent_action(action, &cli, &client).await?,

@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Build
 # -----------------------------------------------------------------------------
-FROM rust:1.83-slim-bookworm AS builder
+FROM rust:1.94-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -25,6 +25,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY services/ services/
 COPY tools/ tools/
+COPY tests/ tests/
 
 # Build only the platform service in release mode
 RUN cargo build --release -p reaper-platform

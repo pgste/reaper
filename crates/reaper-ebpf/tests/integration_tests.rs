@@ -112,6 +112,7 @@ async fn test_bundle_deployment_routing() {
                 name: "allow_all".to_string(),
                 decision: Decision::Allow,
                 condition: Condition::True,
+                message: None,
             },
             // Complex rule - should stay in userspace
             // (using False as a stand-in for more complex conditions that would require
@@ -120,6 +121,7 @@ async fn test_bundle_deployment_routing() {
                 name: "deny_all".to_string(),
                 decision: Decision::Deny,
                 condition: Condition::False,
+                message: None,
             },
         ],
     };

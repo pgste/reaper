@@ -23,14 +23,14 @@ impl<'a> PinOps<'a> {
     ) -> Result<VersionPin, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
 
         let sql = r#"
             INSERT INTO version_pins (agent_id, bundle_id, pinned_by, reason, expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT(agent_id) DO UPDATE SET
                 bundle_id = excluded.bundle_id,
                 pinned_by = excluded.pinned_by,
@@ -58,13 +58,13 @@ impl<'a> PinOps<'a> {
     pub async fn get(&self, agent_id: Uuid) -> Result<Option<VersionPin>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT agent_id, bundle_id, pinned_by, reason, expires_at, created_at
             FROM version_pins
-            WHERE agent_id = ?
+            WHERE agent_id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -85,14 +85,14 @@ impl<'a> PinOps<'a> {
     pub async fn list(&self, org_id: Uuid) -> Result<Vec<VersionPin>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT vp.agent_id, vp.bundle_id, vp.pinned_by, vp.reason, vp.expires_at, vp.created_at
             FROM version_pins vp
             INNER JOIN agents a ON vp.agent_id = a.id
-            WHERE a.org_id = ?
+            WHERE a.org_id = $1
         "#;
 
         let rows = sqlx::query(sql)
@@ -100,17 +100,17 @@ impl<'a> PinOps<'a> {
             .fetch_all(pool)
             .await?;
 
-        rows.iter().map(|r| row_to_pin(r)).collect()
+        rows.iter().map(row_to_pin).collect()
     }
 
     /// Delete a version pin
     pub async fn delete(&self, agent_id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let sql = "DELETE FROM version_pins WHERE agent_id = ?";
+        let sql = "DELETE FROM version_pins WHERE agent_id = $1";
         let result = sqlx::query(sql)
             .bind(agent_id.to_string())
             .execute(pool)
@@ -130,12 +130,12 @@ impl<'a> PinOps<'a> {
     pub async fn delete_expired(&self) -> Result<u64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
 
-        let sql = "DELETE FROM version_pins WHERE expires_at IS NOT NULL AND expires_at < ?";
+        let sql = "DELETE FROM version_pins WHERE expires_at IS NOT NULL AND expires_at < $1";
         let result = sqlx::query(sql)
             .bind(now.to_rfc3339())
             .execute(pool)

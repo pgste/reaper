@@ -6,9 +6,10 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use reaper_core::bundle_signing::{BundleSignature, SIGNATURE_HEADER as BUNDLE_SIGNATURE_HEADER};
 use reaper_core::config::ManagementSettings;
 
 use super::types::*;
@@ -219,6 +220,61 @@ impl ManagementClient {
         Ok(result)
     }
 
+    /// Report the bundle version this agent just applied (or failed to apply)
+    /// so the control plane can confirm the actually-applied version.
+    pub async fn report_deployment(
+        &self,
+        bundle_id: Uuid,
+        checksum: &str,
+        success: bool,
+        error: Option<&str>,
+    ) -> ManagementResult<()> {
+        let state = self.state.read().await;
+        let agent_id = state.agent_id.ok_or(ManagementError::NotRegistered)?;
+        let token = state
+            .token
+            .as_ref()
+            .ok_or(ManagementError::NotRegistered)?
+            .clone();
+        drop(state);
+
+        let url = format!(
+            "{}/orgs/{}/agents/{}/deployments/report",
+            self.base_url, self.org, agent_id
+        );
+
+        let request = DeploymentReportRequest {
+            bundle_id,
+            checksum: Some(checksum.to_string()),
+            status: if success { "deployed" } else { "failed" }.to_string(),
+            error: error.map(|s| s.to_string()),
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ManagementError::AuthFailed("Token expired".to_string()));
+        }
+        if !status.is_success() {
+            let message = response.text().await.unwrap_or_default();
+            return Err(ManagementError::ServerError {
+                status: status.as_u16(),
+                message,
+            });
+        }
+
+        debug!(bundle_id = %bundle_id, success, "Reported deployment status");
+        Ok(())
+    }
+
     /// Get the currently promoted bundle info
     pub async fn get_promoted_bundle(&self) -> ManagementResult<Option<BundleInfo>> {
         let state = self.state.read().await;
@@ -308,6 +364,20 @@ impl ManagementClient {
             });
         }
 
+        // Parse the detached signature envelope from the response header BEFORE
+        // consuming the body, so we can verify authenticity before applying.
+        let signature = response
+            .headers()
+            .get(BUNDLE_SIGNATURE_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| match serde_json::from_str::<BundleSignature>(s) {
+                Ok(sig) => Some(sig),
+                Err(e) => {
+                    warn!(error = %e, "Ignoring malformed {} header", BUNDLE_SIGNATURE_HEADER);
+                    None
+                }
+            });
+
         let data = response.bytes().await?.to_vec();
 
         // Calculate checksum
@@ -319,6 +389,7 @@ impl ManagementClient {
             bundle_id = %bundle_id,
             size_bytes = data.len(),
             checksum = %checksum,
+            signed = signature.is_some(),
             "Bundle downloaded successfully"
         );
 
@@ -326,6 +397,7 @@ impl ManagementClient {
             data,
             bundle_id,
             checksum,
+            signature,
         })
     }
 

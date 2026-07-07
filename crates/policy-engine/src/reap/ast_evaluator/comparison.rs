@@ -8,7 +8,7 @@
 
 use super::types::{EvalContext, EvalValue};
 use super::ReapAstEvaluator;
-use crate::reap::ast::{ComparisonLeft, ComparisonRight, Operator};
+use crate::reap::ast::{ComparisonLeft, ComparisonRight, Operator, Value};
 use reaper_core::ReaperError;
 
 impl ReapAstEvaluator {
@@ -41,6 +41,29 @@ impl ReapAstEvaluator {
             }
             ComparisonRight::Expr(expr) => self.evaluate_expr(expr, context)?,
         };
+
+        // NULL SEMANTICS (specified; enforced by the differential oracle):
+        // a missing attribute/path evaluates to Null, and Null satisfies NO
+        // comparison except an EXPLICIT presence check against a null literal
+        // (`x == null` / `x != null`). In particular `missing != "admin"` is
+        // FALSE — absence must never satisfy an inequality guard (that would
+        // be default-open: entities lacking the attribute would pass every
+        // `!=` filter). Matches OPA's undefined-propagation behavior.
+        let right_is_null_literal = matches!(right, ComparisonRight::Value(Value::Null));
+        if right_is_null_literal {
+            let is_null = matches!(left_value, EvalValue::Null);
+            return match op {
+                Operator::Equal => Ok(is_null),
+                Operator::NotEqual => Ok(!is_null),
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: "null comparisons support only == and !=".to_string(),
+                }),
+            };
+        }
+        if matches!(left_value, EvalValue::Null) || matches!(right_value, EvalValue::Null) {
+            // Any other comparison involving Null fails the rule (never errors).
+            return Ok(false);
+        }
 
         // Perform comparison based on operator
         match op {
@@ -117,24 +140,20 @@ impl ReapAstEvaluator {
     where
         F: Fn(f64, f64) -> bool,
     {
+        // TOTAL-COMPARISON CONTRACT: ordering over a non-numeric value is
+        // FALSE, never an error. A live policy must degrade toward deny,
+        // not fail the request — and the compiled evaluator and the
+        // differential oracle already answer false here.
         let a_num = match a {
             EvalValue::Integer(i) => *i as f64,
             EvalValue::Float(f) => *f,
-            _ => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "Numeric comparison requires integer or float".to_string(),
-                })
-            }
+            _ => return Ok(false),
         };
 
         let b_num = match b {
             EvalValue::Integer(i) => *i as f64,
             EvalValue::Float(f) => *f,
-            _ => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "Numeric comparison requires integer or float".to_string(),
-                })
-            }
+            _ => return Ok(false),
         };
 
         Ok(cmp(a_num, b_num))

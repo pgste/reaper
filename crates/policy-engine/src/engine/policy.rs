@@ -147,8 +147,27 @@ impl EnhancedPolicy {
         Ok(policy)
     }
 
-    /// Build the evaluator from content and language
+    /// Build the evaluator from content and language.
+    ///
+    /// Reaper-DSL policies are rebuilt without entity data (an empty
+    /// `DataStore`), which is correct for policies that do not read entity
+    /// attributes. Callers that have a populated store — the agent restoring
+    /// policies on restart — should use [`EnhancedPolicy::build_evaluator_with_data`]
+    /// so attribute-based rules evaluate against real data.
     pub fn build_evaluator(&mut self) -> Result<()> {
+        self.build_evaluator_with_data(None)
+    }
+
+    /// Build the evaluator, supplying a `DataStore` for Reaper-DSL policies.
+    ///
+    /// For `ReaperDsl`, the content is compiled to the fast evaluator; if a
+    /// construct is not yet supported by the compiler it falls back to the AST
+    /// interpreter (same policy as bootstrap loading) rather than failing. This
+    /// is what makes a compiled `.reap` policy survive an agent restart.
+    pub fn build_evaluator_with_data(
+        &mut self,
+        data_store: Option<Arc<crate::data::DataStore>>,
+    ) -> Result<()> {
         let evaluator: Arc<dyn PolicyEvaluator> = match &self.language {
             PolicyLanguage::Simple => {
                 let rules: Vec<PolicyRule> = serde_json::from_str(&self.content).map_err(|e| {
@@ -177,10 +196,22 @@ impl EnhancedPolicy {
                 let evaluator = CedarPolicyEvaluator::new(self.content.clone())?;
                 Arc::new(evaluator)
             }
-            PolicyLanguage::Custom => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: "Custom policy language not yet implemented".to_string(),
-                });
+            PolicyLanguage::ReaperDsl => {
+                let store = data_store.unwrap_or_else(|| Arc::new(crate::data::DataStore::new()));
+                let reaper_policy: crate::reap::ReaperPolicy =
+                    self.content
+                        .parse()
+                        .map_err(|e| ReaperError::InvalidPolicy {
+                            reason: format!("Failed to parse Reaper DSL policy: {}", e),
+                        })?;
+
+                // Prefer the compiled DSL v2 evaluator; fall back to the AST
+                // interpreter for constructs the compiler does not yet support.
+                // The two are pinned to identical decisions by the
+                // compiled-vs-AST equivalence differential, so this selection
+                // never changes an authorization outcome. build_preferred is
+                // the single home of that contract.
+                Arc::from(reaper_policy.build_preferred(store)?)
             }
         };
 

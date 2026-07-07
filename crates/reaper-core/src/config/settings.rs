@@ -296,6 +296,34 @@ pub struct ManagementSettings {
     /// This is a fallback to catch any events missed during SSE reconnection
     #[serde(default = "default_poll_interval_with_sse")]
     pub poll_interval_with_sse_secs: u64,
+
+    // ========================================================================
+    // Bundle Signature Verification
+    // ========================================================================
+    /// Pinned public key (lowercase hex) used to verify every bundle the control
+    /// plane serves. When set, downloaded bundles must carry a valid signature
+    /// over their bytes or they are rejected (fail closed) — this makes policy
+    /// distribution trustworthy independent of the transport.
+    #[serde(default)]
+    pub bundle_public_key: Option<String>,
+
+    /// Signature algorithm for `bundle_public_key`: `ed25519-sha256` (default)
+    /// or `ecdsa-p256-sha256` (FIPS 186 P-256). Must match how the control plane
+    /// signs.
+    #[serde(default)]
+    pub bundle_signature_algorithm: Option<String>,
+
+    /// Optional key id to pin (rotation). When set, a bundle signature whose
+    /// `key_id` differs is rejected even if the signature itself is valid.
+    #[serde(default)]
+    pub bundle_key_id: Option<String>,
+
+    /// Require every applied bundle to be signed and verified. Defaults to true:
+    /// if `bundle_public_key` is set, unsigned/invalid bundles are rejected; if
+    /// no key is set, the agent refuses to apply *any* management bundle (safe
+    /// default). Set to false only for trusted dev/test setups.
+    #[serde(default = "default_true")]
+    pub require_signed_bundles: bool,
 }
 
 impl Default for ManagementSettings {
@@ -314,6 +342,12 @@ impl Default for ManagementSettings {
             sse_reconnect_initial_secs: default_sse_reconnect_initial(),
             sse_reconnect_max_secs: default_sse_reconnect_max(),
             poll_interval_with_sse_secs: default_poll_interval_with_sse(),
+            // Secure by default: require signed bundles. With no key configured
+            // this makes managed mode fail closed until signing is set up.
+            bundle_public_key: None,
+            bundle_signature_algorithm: None,
+            bundle_key_id: None,
+            require_signed_bundles: true,
         }
     }
 }
@@ -351,19 +385,58 @@ fn default_poll_interval_with_sse() -> u64 {
 /// When enabled, the agent listens on a Unix socket in addition to TCP.
 /// UDS bypasses the TCP/IP stack for lower latency same-host IPC.
 /// Only applicable on Unix-like systems (Linux, macOS).
+///
+/// # Deployment models
+///
+/// - **Shared** (`shards = 0` or `1`, the default): one socket served by the
+///   agent's shared multi-threaded runtime. Simple, work-stealing across all
+///   cores, best tail latency. Recommended default.
+/// - **Sharded / thread-per-core** (`shards = N > 1`): N sockets
+///   (`agent-0.sock … agent-{N-1}.sock`), each served by its own single-thread
+///   runtime pinned to a core (share-nothing). ~12–17% higher throughput and
+///   lower median latency under saturation, at the cost of worse p99 (no
+///   cross-core rebalancing). UDS has no `SO_REUSEPORT`, so multiple socket
+///   files is how a thread-per-core UDS server is sharded; clients round-robin
+///   connections across the sockets.
+///
+/// # Security
+///
+/// UDS has **no application-layer authentication** — filesystem permissions are
+/// the access-control boundary. The agent creates the socket's parent directory
+/// owner-only (`0700`) and chmods every socket to `socket_permissions`
+/// (default `0o660`). In sharded mode all N sockets live in that one `0700`
+/// directory, so a single directory boundary secures every mount.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdsSettings {
     /// Enable UDS listener (default: false)
     #[serde(default)]
     pub enabled: bool,
 
-    /// Path to the Unix socket file
+    /// Path to the Unix socket file.
+    ///
+    /// In sharded mode this is the base path; a shard index is inserted before
+    /// the extension, e.g. `/run/reaper/agent.sock` → `agent-0.sock`,
+    /// `agent-1.sock`, …
     #[serde(default = "default_uds_path")]
     pub socket_path: PathBuf,
 
     /// Socket file permissions (octal, e.g. 0o660)
     #[serde(default = "default_socket_permissions")]
     pub socket_permissions: u32,
+
+    /// Number of thread-per-core shards.
+    ///
+    /// `0` or `1` = shared single-socket model (default). `N > 1` = sharded
+    /// thread-per-core model with N pinned single-thread runtimes, each owning
+    /// its own socket file.
+    #[serde(default)]
+    pub shards: usize,
+
+    /// Pin each shard's runtime thread to a CPU core in sharded mode (default:
+    /// true). Disable if the agent shares a host with other latency-sensitive
+    /// processes and you'd rather let the scheduler balance.
+    #[serde(default = "default_true")]
+    pub pin_cores: bool,
 }
 
 impl Default for UdsSettings {
@@ -372,6 +445,41 @@ impl Default for UdsSettings {
             enabled: false,
             socket_path: default_uds_path(),
             socket_permissions: default_socket_permissions(),
+            shards: 0,
+            pin_cores: true,
+        }
+    }
+}
+
+impl UdsSettings {
+    /// Whether the sharded (thread-per-core) model is requested.
+    pub fn is_sharded(&self) -> bool {
+        self.shards > 1
+    }
+
+    /// Effective shard count: 1 for the shared model, else `shards`.
+    pub fn effective_shards(&self) -> usize {
+        self.shards.max(1)
+    }
+
+    /// Socket path for shard `i` in sharded mode: inserts `-i` before the file
+    /// extension (`agent.sock` → `agent-0.sock`). For the shared model callers
+    /// use `socket_path` directly.
+    pub fn shard_socket_path(&self, i: usize) -> PathBuf {
+        let stem = self
+            .socket_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "agent".to_string());
+        let ext = self
+            .socket_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let file = format!("{stem}-{i}{ext}");
+        match self.socket_path.parent() {
+            Some(parent) => parent.join(file),
+            None => PathBuf::from(file),
         }
     }
 }
@@ -469,5 +577,42 @@ mod tests {
             PathBuf::from("/var/run/reaper/agent.sock")
         );
         assert_eq!(settings.socket_permissions, 0o660);
+        // Shared model by default.
+        assert_eq!(settings.shards, 0);
+        assert!(!settings.is_sharded());
+        assert_eq!(settings.effective_shards(), 1);
+        assert!(settings.pin_cores);
+    }
+
+    #[test]
+    fn test_uds_shard_socket_paths() {
+        let settings = UdsSettings {
+            socket_path: PathBuf::from("/run/reaper/agent.sock"),
+            shards: 4,
+            ..UdsSettings::default()
+        };
+        assert!(settings.is_sharded());
+        assert_eq!(settings.effective_shards(), 4);
+        assert_eq!(
+            settings.shard_socket_path(0),
+            PathBuf::from("/run/reaper/agent-0.sock")
+        );
+        assert_eq!(
+            settings.shard_socket_path(3),
+            PathBuf::from("/run/reaper/agent-3.sock")
+        );
+    }
+
+    #[test]
+    fn test_uds_shard_socket_path_no_extension() {
+        let settings = UdsSettings {
+            socket_path: PathBuf::from("/run/reaper/agent"),
+            shards: 2,
+            ..UdsSettings::default()
+        };
+        assert_eq!(
+            settings.shard_socket_path(1),
+            PathBuf::from("/run/reaper/agent-1")
+        );
     }
 }

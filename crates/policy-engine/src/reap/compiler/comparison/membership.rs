@@ -40,6 +40,11 @@ pub fn compile_membership_test(
                 Entity::User => EntityType::User,
                 Entity::Resource => EntityType::Resource,
                 Entity::Context => EntityType::Context,
+                Entity::Input => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),
+                    })
+                },
             };
             Ok(DslCondition::MembershipTest {
                 value: literal_value,

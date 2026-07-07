@@ -1,0 +1,107 @@
+# Nightly mutation testing over the policy DECISION LOGIC.
+#
+# cargo-mutants injects bugs (flip ==/!=, delete match arms, return
+# true/false, ...) into the evaluators/compiler and re-runs the test
+# suites. Every SURVIVING (missed) mutant is a bug the suites would not
+# catch — the direct measure of whether the correctness program
+# (docs/development/CORRECTNESS.md) actually has teeth.
+#
+# Scope: both evaluators, the reap compiler, and the ReBAC graph —
+# ~2,000 mutants, sharded 4 ways. Runs the fast high-signal suites per
+# mutant: unit tests + the differential/oracle property suites + the
+# policy library golden corpus.
+
+name: Mutation Testing (nightly)
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # nightly, 03:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: cargo-mutants (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-mutants"
+          cache-on-failure: true
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run mutants (decision-logic scope)
+        run: |
+          cargo mutants \
+            -f "crates/policy-engine/src/evaluators/**/*.rs" \
+            -f "crates/policy-engine/src/reap/ast_evaluator/**/*.rs" \
+            -f "crates/policy-engine/src/reap/compiler/**/*.rs" \
+            -f "crates/policy-engine/src/data/relationships.rs" \
+            --shard ${{ matrix.shard }}/4 \
+            --timeout 120 \
+            -j 2 \
+            -o mutants-out \
+            -- --lib \
+               --test differential_parity_tests \
+               --test check_mode_differential_tests \
+               --test policy_library_tests \
+               --test compiled_evaluator_tests \
+               --test comprehension_tests \
+               --test rebac_tests \
+               --test input_document_tests \
+          || MUTANTS_EXIT=$?
+          # Exit 2 = missed mutants found (report, don't hard-fail the
+          # nightly — the burn-down lives in the summary + artifact).
+          # Anything else nonzero is a real harness failure.
+          MUTANTS_EXIT=${MUTANTS_EXIT:-0}
+          echo "MUTANTS_EXIT=$MUTANTS_EXIT" >> "$GITHUB_ENV"
+          if [ "$MUTANTS_EXIT" != "0" ] && [ "$MUTANTS_EXIT" != "2" ]; then
+            echo "cargo-mutants failed with exit $MUTANTS_EXIT"
+            exit "$MUTANTS_EXIT"
+          fi
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Mutation testing — shard ${{ matrix.shard }}/4"
+            echo ""
+            for f in caught missed timeout unviable; do
+              if [ -f "mutants-out/$f.txt" ]; then
+                echo "- **$f**: $(wc -l < mutants-out/$f.txt)"
+              fi
+            done
+            echo ""
+            if [ -s mutants-out/missed.txt ]; then
+              echo "### Missed mutants (bugs the suites would not catch)"
+              echo '```'
+              head -50 mutants-out/missed.txt
+              echo '```'
+            else
+              echo "No missed mutants in this shard. ✅"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants-out/
+          retention-days: 30

@@ -1,0 +1,25 @@
+# =============================================================================
+# Profile: PLATFORM  (single-team self-hosted management)
+# =============================================================================
+# Agent + Platform: basic policy management (CRUD + deploy to agents) without
+# multi-tenancy or a database. Good for a single team running Reaper themselves.
+# For the multi-tenant control plane you operate, use profiles/managed-stack.yaml.
+#
+#   helm install reaper ./deploy/helm/reaper -f profiles/platform.yaml
+
+management:
+  enabled: false
+
+platform:
+  enabled: true
+  replicaCount: 2
+
+postgresql:
+  enabled: false
+
+agent:
+  standalone:
+    enabled: true
+    replicaCount: 3
+  managed:
+    enabled: false

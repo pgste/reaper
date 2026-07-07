@@ -6,6 +6,8 @@ pub mod agents;
 pub mod auth;
 pub mod billing;
 pub mod bundles;
+pub mod datastore;
+pub mod decisions;
 pub mod deployments;
 pub mod error;
 pub mod events;
@@ -43,6 +45,8 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
         .merge(webhook_subscriptions::routes())
         .merge(namespaces::routes())
         .merge(deployments::routes())
+        .merge(decisions::routes())
+        .merge(datastore::routes())
         .merge(landscape::routes())
         .merge(billing::routes())
 }

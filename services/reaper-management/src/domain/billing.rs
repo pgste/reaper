@@ -9,8 +9,10 @@ use uuid::Uuid;
 /// Billing plan tiers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PlanTier {
     /// Free tier - limited features
+    #[default]
     Free,
     /// Starter tier - small teams
     Starter,
@@ -18,12 +20,6 @@ pub enum PlanTier {
     Professional,
     /// Enterprise tier - custom pricing
     Enterprise,
-}
-
-impl Default for PlanTier {
-    fn default() -> Self {
-        Self::Free
-    }
 }
 
 impl std::fmt::Display for PlanTier {
@@ -54,8 +50,10 @@ impl std::str::FromStr for PlanTier {
 /// Subscription status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SubscriptionStatus {
     /// Active subscription
+    #[default]
     Active,
     /// Trial period
     Trialing,
@@ -69,12 +67,6 @@ pub enum SubscriptionStatus {
     Incomplete,
     /// Paused subscription
     Paused,
-}
-
-impl Default for SubscriptionStatus {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 impl std::fmt::Display for SubscriptionStatus {

@@ -9,10 +9,58 @@ env:
 
 jobs:
   # ==========================================================================
+  # Correctness Gate — no release ships without it.
+  # Full functional suite + the differential/oracle property suites at
+  # 4x the per-push depth (see docs/development/CORRECTNESS.md).
+  # ==========================================================================
+  correctness-gate:
+    name: Correctness Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-release-gate"
+          cache-on-failure: true
+
+      - name: Functional suite (workspace)
+        run: cargo test --workspace --lib
+
+      - name: Golden corpus + suite runners
+        run: |
+          cargo test -p policy-engine \
+            --test policy_library_tests \
+            --test integration_runner \
+            --test comparison_runner \
+            --test compiled_evaluator_tests \
+            --test comprehension_tests \
+            --test rebac_tests \
+            --test input_document_tests
+
+      - name: Differential correctness at release depth (2000 cases)
+        run: |
+          PROPTEST_CASES=2000 cargo test -p policy-engine --release \
+            --test differential_parity_tests \
+            --test check_mode_differential_tests \
+            --test delta_sync_differential_tests
+
+      - name: Bench smoke (hot paths still build and run)
+        run: |
+          cargo bench -p policy-engine --bench rebac_bench \
+            -- --output-format bencher --warm-up-time 0.2 --measurement-time 0.5
+
+  # ==========================================================================
   # Create Release
   # ==========================================================================
   create-release:
     name: Create Release
+    needs: correctness-gate
     runs-on: ubuntu-latest
     permissions:
       contents: write

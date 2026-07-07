@@ -131,8 +131,8 @@ pub async fn create_tls_config(settings: &TlsSettings) -> Result<RustlsConfig, T
         // Build rustls config with client verification
         let config = rustls::ServerConfig::builder()
             .with_client_cert_verifier(client_verifier)
-            .with_single_cert(certs_vec, key.into())
-            .map_err(|e| TlsError::RustlsError(e))?;
+            .with_single_cert(certs_vec, key)
+            .map_err(TlsError::RustlsError)?;
 
         info!("mTLS configuration complete - client certificates required");
 

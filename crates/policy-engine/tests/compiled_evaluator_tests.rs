@@ -714,8 +714,8 @@ fn test_benchmark_admin() {
         "benchmark.reap",
         Some("benchmark_data.json"),
         vec![
-            // admin_1 has role="admin" - any action allowed
-            ("admin_1", "delete", "any", Expected::Allow),
+            // user_admin_1 has role="admin" - any action allowed
+            ("user_admin_1", "delete", "any", Expected::Allow),
         ],
     );
 }

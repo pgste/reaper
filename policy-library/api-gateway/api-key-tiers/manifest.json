@@ -1,0 +1,14 @@
+{
+  "name": "API key tiers and revocation (ABAC on the key)",
+  "source": "Kong/Zuplo API-key middleware patterns, modeled as OPA data",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "free tier reads same env", "principal": "key-free-1", "action": "read", "resource": "api-prod", "expect": "allow"},
+    {"name": "free tier cannot write", "principal": "key-free-1", "action": "write", "resource": "api-prod", "expect": "deny"},
+    {"name": "pro writes same env", "principal": "key-pro-1", "action": "write", "resource": "api-prod", "expect": "allow"},
+    {"name": "pro cannot cross environments", "principal": "key-pro-1", "action": "read", "resource": "api-staging", "expect": "deny"},
+    {"name": "enterprise crosses environments", "principal": "key-ent-1", "action": "write", "resource": "api-prod", "expect": "allow"},
+    {"name": "revoked enterprise key dead everywhere", "principal": "key-dead-1", "action": "read", "resource": "api-prod", "expect": "deny"}
+  ]
+}

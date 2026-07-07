@@ -80,6 +80,12 @@ pub struct AgentMetrics {
     pub current_bundle_id: Option<Uuid>,
     /// Current bundle version
     pub current_bundle_version: Option<String>,
+    /// Data-plane replica state: datastore version this agent serves.
+    pub data_version: Option<i64>,
+    /// Position in the change stream (delta sync).
+    pub data_applied_seq: Option<i64>,
+    /// Whether the agent's staleness budget is currently exceeded.
+    pub data_stale: Option<bool>,
 }
 
 /// Heartbeat response
@@ -114,6 +120,20 @@ pub struct BundleDownload {
     pub bundle_id: Uuid,
     /// SHA-256 checksum
     pub checksum: String,
+    /// Detached signature envelope from the `X-Reaper-Bundle-Signature` response
+    /// header, if the control plane signed the bundle. Verified before apply.
+    pub signature: Option<reaper_core::bundle_signing::BundleSignature>,
+}
+
+/// Report of the bundle version this agent applied (or failed to apply), sent
+/// back to the management plane so rollouts confirm the actually-applied version.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeploymentReportRequest {
+    pub bundle_id: Uuid,
+    pub checksum: Option<String>,
+    /// "deployed" or "failed".
+    pub status: String,
+    pub error: Option<String>,
 }
 
 /// Data bundle download result
@@ -190,6 +210,9 @@ pub enum ManagementError {
 
     #[error("Data load error: {0}")]
     DataLoadError(String),
+
+    #[error("Bundle signature verification failed: {0}")]
+    SignatureVerification(String),
 }
 
 /// Result type for management operations

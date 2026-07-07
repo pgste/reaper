@@ -91,6 +91,12 @@ pub async fn deploy_policy(
             let engine_stats = state.policy_engine.get_stats();
             ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
 
+            // Invalidate cached decisions — the policy just changed, so any
+            // decision computed under the old policy is now stale.
+            if let Some(ref cache) = state.decision_cache {
+                cache.invalidate();
+            }
+
             // Save to policy cache if enabled
             if let Some(ref cache) = state.policy_cache {
                 if let Err(e) = cache.save_policy(&policy).await {
@@ -215,44 +221,39 @@ pub async fn deploy_compiled_policy(
         payload.policy_name
     );
 
-    use policy_engine::ReaperPolicy;
-
-    // Parse the .reap policy content
-    let policy = ReaperPolicy::from_str(&payload.policy_content).map_err(|e| {
-        error!("Failed to parse .reap policy: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Failed to parse .reap policy: {}", e),
-        )
-    })?;
-
-    // Compile with the agent's DataStore
-    let evaluator = policy.build(state.data_store.clone()).map_err(|e| {
-        error!("Failed to compile policy: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Failed to compile policy: {}", e),
-        )
-    })?;
-
-    info!("✓ Policy compiled successfully");
-
-    // Create EnhancedPolicy with the compiled evaluator
+    // Build the Reaper-DSL policy as a first-class EnhancedPolicy. Parsing
+    // errors are a client error (400). Compilation of a valid-but-unsupported
+    // construct is NOT an error — build_evaluator_with_data falls back to the
+    // AST interpreter, matching bootstrap loading and restart restore so the
+    // same policy behaves identically however it is deployed.
     let mut enhanced_policy = EnhancedPolicy {
-        id: uuid::Uuid::new_v4(),
+        // Stable id from the name so redeploying this policy overwrites in place.
+        id: policy_engine::stable_policy_id(&payload.policy_name),
         version: 1,
         name: payload.policy_name.clone(),
         description: "Compiled .reap policy".to_string(),
-        language: policy_engine::PolicyLanguage::Custom,
+        language: policy_engine::PolicyLanguage::ReaperDsl,
         content: payload.policy_content.clone(),
         rules: vec![],
         metadata: std::collections::HashMap::new(),
         priority: 100,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
-        evaluator: Some(Arc::new(evaluator)),
+        evaluator: None,
         source_metadata: None,
     };
+
+    enhanced_policy
+        .build_evaluator_with_data(Some(state.data_store.clone()))
+        .map_err(|e| {
+            error!("Failed to parse .reap policy: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Failed to parse .reap policy: {}", e),
+            )
+        })?;
+
+    info!("✓ Policy compiled successfully");
 
     // Set API source metadata
     enhanced_policy.set_api_source(None, Some("platform".to_string()));
@@ -274,6 +275,11 @@ pub async fn deploy_compiled_policy(
     // Update metrics
     let engine_stats = state.policy_engine.get_stats();
     ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
+
+    // Invalidate cached decisions — a new compiled policy is now active.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
 
     // Save to policy cache if enabled
     if let Some(ref cache) = state.policy_cache {
@@ -348,6 +354,11 @@ pub async fn deploy_bundle(
     let engine_stats = state.policy_engine.get_stats();
     ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
 
+    // Invalidate cached decisions — a new bundle is now active.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
+
     info!(
         "Bundle deployed successfully: policy_id={}, version={}",
         policy_version.policy_id, policy_version.version
@@ -369,6 +380,76 @@ pub async fn deploy_bundle(
     };
 
     Ok(Json(response))
+}
+
+/// Atomically load a set of bundles as the ENTIRE active policy set.
+///
+/// Unlike `deploy_bundle` (which upserts a single policy and leaves the rest
+/// untouched), this replaces the whole set in one atomic swap: the supplied
+/// bundles become the complete active state and any policy not present is
+/// dropped. This is the "pure bundle load" — build the bundles that represent
+/// your desired state, POST them here, and the agent's policy set matches
+/// exactly, with no floating leftovers and no window where a reader sees a
+/// partial set.
+#[instrument(skip(state, payload))]
+pub async fn load_bundles_atomic(
+    State(state): State<Arc<AgentState>>,
+    Json(payload): Json<crate::types::LoadBundlesRequest>,
+) -> Result<Json<crate::types::LoadBundlesResponse>, (StatusCode, String)> {
+    info!(
+        "Atomic bundle load: {} bundle(s) -> full replace",
+        payload.bundles.len()
+    );
+
+    // Parse + compile every bundle BEFORE swapping anything, so a bad bundle
+    // fails the whole load and leaves the current set untouched.
+    let mut policies = Vec::with_capacity(payload.bundles.len());
+    for (i, bytes) in payload.bundles.iter().enumerate() {
+        let bundle = PolicyBundle::from_bytes(bytes).map_err(|e| {
+            ERRORS_TOTAL.with_label_values(&["invalid_bundle"]).inc();
+            (StatusCode::BAD_REQUEST, format!("Bundle {i} invalid: {e}"))
+        })?;
+        let policy = bundle
+            .to_enhanced_policy_with_store(state.data_store.clone())
+            .map_err(|e| {
+                ERRORS_TOTAL
+                    .with_label_values(&["bundle_compile_failed"])
+                    .inc();
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Bundle {i} failed to compile: {e}"),
+                )
+            })?;
+        policies.push(policy);
+    }
+
+    let count = policies.len();
+
+    // Single atomic swap of the whole set.
+    state
+        .policy_engine
+        .replace_all_policies(policies)
+        .map_err(|e| {
+            ERRORS_TOTAL
+                .with_label_values(&["bundle_deployment_failed"])
+                .inc();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Atomic load failed: {e}"),
+            )
+        })?;
+
+    // The whole set changed — drop any cached decisions.
+    if let Some(ref cache) = state.decision_cache {
+        cache.invalidate();
+    }
+    ACTIVE_POLICIES.set(state.policy_engine.get_stats().total_policies as f64);
+
+    Ok(Json(crate::types::LoadBundlesResponse {
+        status: "loaded".to_string(),
+        active_policies: count,
+        deployed_at: chrono::Utc::now().to_rfc3339(),
+    }))
 }
 
 #[cfg(test)]

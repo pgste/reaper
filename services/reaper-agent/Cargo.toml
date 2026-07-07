@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
 sonic-rs = "0.3"  # SIMD-accelerated JSON parsing
+mimalloc = { version = "0.1", default-features = false }  # fast allocator for the hot path
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 tracing-appender = "0.2"
@@ -45,8 +46,11 @@ futures = { workspace = true }
 sha2 = { workspace = true }
 hostname = "0.4"
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
+ed25519-dalek = { workspace = true }
 hdrhistogram = "7.5"
 sysinfo = "0.32"
+core_affinity = "0.8"  # pin thread-per-core UDS shards to cores
 
 # TLS/mTLS support
 axum-server = { version = "0.7", features = ["tls-rustls"] }
@@ -58,7 +62,18 @@ tokio-rustls = "0.26"
 criterion = { workspace = true }
 cucumber = { workspace = true }
 async-trait = { workspace = true }
-hyper = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = "1"
+
+[[example]]
+name = "throughput"
+path = "examples/throughput.rs"
+
+[[example]]
+name = "uds_shard"
+path = "examples/uds_shard.rs"
 
 [[bench]]
 name = "agent_bench"

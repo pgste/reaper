@@ -1,0 +1,5 @@
+{
+ "token": "Bearer eyJhbGciOiAibm9uZSJ9.eyJzdWIiOiAiZXZlIiwgImlzcyI6ICJodHRwczovL2lzc3Vlci5jb3JwIiwgImF1ZCI6ICJvcmRlcnMtYXBpIiwgInNjb3BlIjogIm9yZGVyczpyZWFkIG9yZGVyczp3cml0ZSIsICJleHAiOiA0MTAyNDQ0ODAwfQ.sig",
+ "path": "/orders",
+ "method": "GET"
+}

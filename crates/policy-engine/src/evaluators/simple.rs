@@ -1,10 +1,19 @@
 //! Simple Rule-Based Policy Evaluator
 //!
-//! This is Reaper's original high-performance rule matcher.
-//! It uses simple wildcard matching for sub-microsecond evaluation.
-//! Perfect for hot paths where performance is critical.
+//! # DEPRECATED — scheduled for removal
 //!
-//! Supports optional decision tree optimization for O(log r) evaluation.
+//! This evaluator matches **only** the request resource against a rule's
+//! resource pattern (`matches_rule`). It ignores the request action, the
+//! principal/context, and the rule's `conditions` entirely, so it cannot
+//! express RBAC or ABAC — a rule that should apply to one principal/action
+//! applies to all of them. Its "sub-microsecond" speed comes from doing almost
+//! no work.
+//!
+//! Real policies must use the Reaper DSL (`PolicyLanguage::ReaperDsl`), which is
+//! now the first-class, correctness-checked evaluator. This type and
+//! `PolicyLanguage::Simple` are retained only until the DSL migration path for
+//! JSON-rule deployments lands, after which they will be removed. Do not build
+//! new functionality on it, and do not benchmark it as an RBAC/ABAC engine.
 
 use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::optimizer::{DecisionTree, DecisionTreeBuilder};

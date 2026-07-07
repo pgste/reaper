@@ -183,6 +183,97 @@ impl AgentClient {
         Ok(deploy_response)
     }
 
+    /// Deploy a verified, versioned data bundle (full replication push).
+    pub async fn deploy_data_version(
+        &self,
+        version: i64,
+        checksum: &str,
+        change_seq: i64,
+        document: &serde_json::Value,
+    ) -> Result<(), AgentClientError> {
+        let url = format!(
+            "{}/api/v1/data/deploy-version",
+            self.agent_url.trim_end_matches('/')
+        );
+        let body = serde_json::json!({
+            "version": version,
+            "checksum": checksum,
+            "change_seq": change_seq,
+            "document": document,
+        });
+        let response = self.http_client.post(&url).json(&body).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(AgentClientError::AgentError {
+                status: status_code,
+                message,
+            });
+        }
+        Ok(())
+    }
+
+    /// Apply a contiguous delta batch. Ok(Ok(head)) = applied to head;
+    /// Ok(Err(agent_seq)) = 409 seq mismatch, the agent reports where it
+    /// actually is — pull from THERE (self-correcting, gap-proof).
+    pub async fn apply_data_deltas(
+        &self,
+        from_seq: i64,
+        head_seq: i64,
+        deltas: &[serde_json::Value],
+    ) -> Result<Result<i64, i64>, AgentClientError> {
+        let url = format!(
+            "{}/api/v1/data/apply-deltas",
+            self.agent_url.trim_end_matches('/')
+        );
+        let body = serde_json::json!({
+            "from_seq": from_seq,
+            "head_seq": head_seq,
+            "deltas": deltas,
+        });
+        let response = self.http_client.post(&url).json(&body).send().await?;
+        match response.status().as_u16() {
+            200 => Ok(Ok(head_seq)),
+            409 => {
+                let text = response.text().await.unwrap_or_default();
+                let agent_seq = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v.get("applied_seq").and_then(|s| s.as_i64()))
+                    .unwrap_or(-1);
+                Ok(Err(agent_seq))
+            }
+            status => {
+                let message = response.text().await.unwrap_or_default();
+                Err(AgentClientError::AgentError { status, message })
+            }
+        }
+    }
+
+    /// Replica heartbeat: confirm the agent is still on the current version
+    /// without shipping the document. 409 = agent behind or diverged; the
+    /// caller responds with a full deploy_data_version.
+    pub async fn confirm_data_version(
+        &self,
+        version: i64,
+        checksum: &str,
+    ) -> Result<bool, AgentClientError> {
+        let url = format!(
+            "{}/api/v1/data/confirm-version",
+            self.agent_url.trim_end_matches('/')
+        );
+        let body = serde_json::json!({"version": version, "checksum": checksum});
+        let response = self.http_client.post(&url).json(&body).send().await?;
+        match response.status().as_u16() {
+            200 => Ok(true),
+            409 => Ok(false), // behind/diverged: caller pushes a full deploy
+            status => {
+                let message = response.text().await.unwrap_or_default();
+                Err(AgentClientError::AgentError { status, message })
+            }
+        }
+    }
+
     /// Sync entity data to the agent
     #[instrument(skip(self, entities))]
     pub async fn sync_data(
@@ -307,6 +398,7 @@ mod tests {
     fn test_config() -> SyncConfig {
         SyncConfig {
             sync: crate::config::SyncSettings {
+                datastore: Default::default(),
                 server: crate::config::ServerConfig {
                     url: "http://localhost:8081".to_string(),
                     api_version: "v1".to_string(),

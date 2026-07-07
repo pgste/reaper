@@ -69,8 +69,12 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-service cache scope: without a scope every matrix service shares
+          # one gha cache and concurrent jobs GC each other's blobs mid-build,
+          # producing "failed to copy: cache entry no longer exists". ignore-error
+          # keeps a transient cache export/import failure from failing the build.
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }},ignore-error=true
           platforms: linux/amd64,linux/arm64
 
   # ==========================================================================

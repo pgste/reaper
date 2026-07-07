@@ -8,10 +8,20 @@ name: Reaper CI
 # in the lint stage are reused by all subsequent jobs, minimizing download time.
 
 on:
+  # Push CI is for the mainline branches only. Feature branches (e.g.
+  # claude/**) are covered by the pull_request event, so an open PR gets a
+  # single run per change instead of duplicate push + PR runs (the duplicate
+  # push run was where scale-tests showed as skipped).
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop ]
   pull_request:
   workflow_dispatch:
+
+# Cancel a superseded run when new commits land on the same branch/PR, so
+# rapid pushes don't pile up in-flight runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -76,15 +86,46 @@ jobs:
 
       - name: Run unit tests
         run: |
+          # Library unit tests across the whole workspace (incl. reaper-management lib).
           cargo test --workspace --lib -- --nocapture 2>&1 | tee unit-test-results.txt
           echo "UNIT_TEST_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run management integration tests (SQLite)
+        run: |
+          # Control-plane HTTP/DB integration tests — SQLite backend, no
+          # external service needed.
+          cargo test -p reaper-management --test integration_tests 2>&1 | tee mgmt-integration-results.txt
+          echo "MGMT_INTEG_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run compiled-vs-AST equivalence suite
+        run: |
+          # DSL v2 differential: every function's compiled path must agree with AST.
+          cargo test -p policy-engine --test compiled_ast_equivalence_tests 2>&1 | tee equivalence-results.txt
+          echo "EQUIV_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run context interner-leak regression
+        run: |
+          # Eval-path guard: context.* comparisons must not intern per-request
+          # values (a novel token per request must leave the interner flat).
+          cargo test -p policy-engine --test context_interner_leak_tests 2>&1 | tee ctx-leak-results.txt
+          echo "CTX_LEAK_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
       - name: Generate unit test summary
         if: always()
         run: |
           echo "# Unit Test Results" > unit-test-summary.md
           echo "" >> unit-test-summary.md
+          echo "## Library unit tests" >> unit-test-summary.md
           grep -E "test result:|running [0-9]+ test" unit-test-results.txt >> unit-test-summary.md || echo "No summary found" >> unit-test-summary.md
+          echo "" >> unit-test-summary.md
+          echo "## Management integration (SQLite)" >> unit-test-summary.md
+          grep -E "test result:" mgmt-integration-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
+          echo "" >> unit-test-summary.md
+          echo "## Compiled≡AST equivalence" >> unit-test-summary.md
+          grep -E "test result:" equivalence-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
+          echo "" >> unit-test-summary.md
+          echo "## Context interner-leak regression" >> unit-test-summary.md
+          grep -E "test result:" ctx-leak-results.txt >> unit-test-summary.md || echo "not available" >> unit-test-summary.md
 
       - name: Upload unit test results
         uses: actions/upload-artifact@v4
@@ -95,9 +136,11 @@ jobs:
             unit-test-results.txt
             unit-test-summary.md
 
-      - name: Fail if unit tests failed
+      - name: Fail if any unit/integration/equivalence tests failed
         if: always()
-        run: exit ${{ env.UNIT_TEST_EXIT_CODE }}
+        run: |
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} ))
+          exit $rc
 
   # ============================================================
   # Stage 3: eBPF Compilation & Testing (x86_64 only)
@@ -338,6 +381,13 @@ jobs:
         run: |
           cargo run -p policy-engine --example memory_volume_test --release 2>&1 | tee memory-volume-test.txt
 
+      - name: Run data-distribution memory profile
+        run: |
+          # Full hot load + bundle snapshot + delta streams (stable vs churning
+          # keys). Self-contained (generates its own data) and asserts the
+          # invariants, so a non-zero exit here is a real regression.
+          cargo run -p policy-engine --example data_distribution_memory --release 2>&1 | tee data-distribution-memory.txt
+
       - name: Extract memory metrics
         if: always()
         run: |
@@ -345,6 +395,11 @@ jobs:
           echo "" >> memory-volume-summary.md
           echo "## Comparison: 1k vs 100k Entities" >> memory-volume-summary.md
           grep -A 20 "COMPARISON ANALYSIS" memory-volume-test.txt >> memory-volume-summary.md || echo "Comparison not found" >> memory-volume-summary.md
+          echo "" >> memory-volume-summary.md
+          echo "## Data Distribution (full load / bundle snapshot / delta streams)" >> memory-volume-summary.md
+          # Pull the compact facts the report surfaces: bundle compactness, and
+          # the bounded-vs-churn delta memory behaviour.
+          grep -E "bundle bytes:|delta upserts applied;|churn cycles|interner [0-9]+ -> [0-9]+" data-distribution-memory.txt >> memory-volume-summary.md || echo "distribution profile not found" >> memory-volume-summary.md
 
       - name: Upload memory test results
         uses: actions/upload-artifact@v4
@@ -354,6 +409,7 @@ jobs:
           path: |
             memory-volume-test.txt
             memory-volume-summary.md
+            data-distribution-memory.txt
             generate-huge-data.log
             generate-large-data.log
 
@@ -480,35 +536,8 @@ jobs:
             scale-tests-output.txt
             scale-test-summary.md
 
-      - name: Comment PR with performance results
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-
-            let summary = '# 🚀 Scale & Performance Test Results\n\n';
-
-            try {
-              if (fs.existsSync('scale-test-summary.md')) {
-                summary = fs.readFileSync('scale-test-summary.md', 'utf8');
-              } else {
-                summary += '⚠️ Summary file not found. Check artifacts for full results.\n';
-              }
-            } catch (error) {
-              summary += `❌ Error reading summary: ${error.message}\n`;
-            }
-
-            summary += '\n\n---\n\n';
-            summary += '💡 **Note:** Scale tests run automatically on PRs to track performance changes.\n';
-            summary += 'Download artifacts for detailed metrics and full output.\n';
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: summary
-            });
+      # NOTE: scale results are folded into the single consolidated PR comment
+      # posted by the generate-report job — no separate comment here.
 
   # ============================================================
   # Stage 7: Integration & Comparison Tests
@@ -547,6 +576,33 @@ jobs:
           cargo test -p policy-engine --test comparison_runner 2>&1 | tee integration-reports/comparison-tests.txt
           echo "COMPARISON_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run Policy Library (golden corpus)
+        run: |
+          cargo test -p policy-engine --test policy_library_tests 2>&1 | tee integration-reports/policy-library.txt
+
+      # TRUE end-to-end: real management + agent binaries as processes,
+      # replicated by the real sync engine over real HTTP (snapshot, deltas
+      # with cascade, kill/respawn self-heal). This is the layer that caught
+      # the ConnectInfo 500 and the /api/v1 mount gap.
+      - name: Run Process-Level Data-Plane E2E
+        run: |
+          cargo build -p reaper-management -p reaper-agent
+          cargo test -p reaper-e2e-tests --test data_plane_e2e \
+            2>&1 | tee integration-reports/data-plane-e2e.txt
+
+      # Differential correctness program: random policies/worlds/documents,
+      # compiled == AST == independent oracle, plus semantic laws
+      # (rule-order invariance, deny monotonicity). These are the gate that
+      # catches miscompiles and fail-open semantics regressions.
+      - name: Run Differential Correctness Suites (500 cases)
+        run: |
+          PROPTEST_CASES=500 cargo test -p policy-engine --release \
+            --test differential_parity_tests 2>&1 | tee integration-reports/differential-parity.txt
+          PROPTEST_CASES=500 cargo test -p policy-engine --release \
+            --test check_mode_differential_tests 2>&1 | tee integration-reports/differential-check-mode.txt
+          PROPTEST_CASES=500 cargo test -p policy-engine --release \
+            --test delta_sync_differential_tests 2>&1 | tee integration-reports/differential-delta-sync.txt
+
       - name: Generate Integration Test Summary
         if: always()
         run: |
@@ -563,6 +619,13 @@ jobs:
           echo "" >> integration-reports/integration-summary.md
           echo '```' >> integration-reports/integration-summary.md
           grep -E "test.*ok|test.*FAILED|passed|failed|Results:|Reaper avg" integration-reports/comparison-tests.txt >> integration-reports/integration-summary.md || echo "See full output" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+
+          # Process-level data-plane E2E (real binaries over HTTP, kill/respawn self-heal)
+          echo "## Process-Level Data-Plane E2E" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          grep -E "test result:|test .* \.\.\. (ok|FAILED)|SKIP" integration-reports/data-plane-e2e.txt >> integration-reports/integration-summary.md || echo "not available" >> integration-reports/integration-summary.md
           echo '```' >> integration-reports/integration-summary.md
           echo "" >> integration-reports/integration-summary.md
 
@@ -703,104 +766,194 @@ jobs:
           path: bdd-reports/cucumber-report.json
 
   # ============================================================
+  # Stage 9b: Eval micro-benchmarks (criterion) — informational
+  # ============================================================
+  eval-microbench:
+    name: Eval Micro-Benchmarks (criterion)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run policy-evaluation criterion bench (bounded)
+        run: |
+          # Bounded measurement so this stays a quick PR signal, not a full
+          # perf run (regression gating lives in perf-tracking.yml).
+          cargo bench -p policy-engine --bench policy_evaluation_bench -- \
+            --measurement-time 2 --warm-up-time 1 2>&1 | tee eval-bench.txt || true
+
+      - name: Extract eval-latency summary
+        if: always()
+        run: |
+          echo "# Eval Micro-Benchmarks (criterion)" > eval-bench-summary.md
+          echo "" >> eval-bench-summary.md
+          echo "Median policy-evaluation latency (compiled engine):" >> eval-bench-summary.md
+          echo '```' >> eval-bench-summary.md
+          # Pair each "group/bench" id with its criterion "time: [lo median hi]" line.
+          awk '
+            /^[a-zA-Z0-9_]+\/[a-zA-Z0-9_]+/ { name=$1 }
+            /time:/ && name { gsub(/^ +/,"",$0); print name"  "$0; name="" }
+          ' eval-bench.txt | head -20 >> eval-bench-summary.md || echo "not available" >> eval-bench-summary.md
+          echo '```' >> eval-bench-summary.md
+
+      - name: Upload eval-bench results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-bench-results
+          path: |
+            eval-bench.txt
+            eval-bench-summary.md
+
+  # ============================================================
   # Stage 10: Generate Combined Test Report
   # ============================================================
   generate-report:
     name: Generate Combined Test Report
     runs-on: ubuntu-latest
-    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, integration-tests, bdd-tests]
+    needs: [unit-tests, ebpf-build, volume-tests, memory-scale-tests, scale-tests, integration-tests, bdd-tests, eval-microbench]
     if: always()
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
-      - name: Generate combined summary
+      - name: Build consolidated summary
+        env:
+          R_UNIT: ${{ needs.unit-tests.result }}
+          R_EBPF: ${{ needs.ebpf-build.result }}
+          R_VOLUME: ${{ needs.volume-tests.result }}
+          R_MEMORY: ${{ needs.memory-scale-tests.result }}
+          R_SCALE: ${{ needs.scale-tests.result }}
+          R_INTEG: ${{ needs.integration-tests.result }}
+          R_BDD: ${{ needs.bdd-tests.result }}
+          R_EVAL: ${{ needs.eval-microbench.result }}
         run: |
-          echo "# 🎯 Reaper CI Test Summary" > COMBINED_REPORT.md
-          echo "" >> COMBINED_REPORT.md
-          echo "## Pipeline Status" >> COMBINED_REPORT.md
-          echo "- Build Date: $(date)" >> COMBINED_REPORT.md
-          echo "- Commit: ${{ github.sha }}" >> COMBINED_REPORT.md
-          echo "" >> COMBINED_REPORT.md
+          # One row per suite: name | job result | test counts parsed from its
+          # artifact summary. A suite is a PASS unless its job result is
+          # 'failure' (skipped/success both count as not-failed).
+          icon() { case "$1" in success) echo "✅ pass";; skipped) echo "⏭️ skipped";; *) echo "❌ fail";; esac; }
 
-          # Unit Tests
-          echo "## ✅ Unit Tests" >> COMBINED_REPORT.md
-          if [ -f "unit-test-results/unit-test-summary.md" ]; then
-            cat unit-test-results/unit-test-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ Unit test results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+          # Parse "N passed" / "N failed" from a suite's own summary file(s)
+          # only — never the whole tree, so a prior REPORT.md or unrelated
+          # artifact can't inflate the totals.
+          suite_pass() { grep -rhoE '[0-9]+ passed' $1 2>/dev/null | awk '{s+=$1} END{print s+0}'; }
+          suite_fail() { grep -rhoE '[0-9]+ failed' $1 2>/dev/null | awk '{s+=$1} END{print s+0}'; }
+          counts() { local p f; p=$(suite_pass "$1"); f=$(suite_fail "$1"); echo "$p passed / $((p+f)) total"; }
 
-          # eBPF Build
-          echo "## ⚡ eBPF Compilation (x86_64)" >> COMBINED_REPORT.md
-          if [ -f "ebpf-build-results/ebpf-summary.md" ]; then
-            cat ebpf-build-results/ebpf-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ eBPF build results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
+          U_P=$(suite_pass 'unit-test-results/*.md'); U_F=$(suite_fail 'unit-test-results/*.md')
+          I_P=$(suite_pass 'integration-test-results/*.md'); I_F=$(suite_fail 'integration-test-results/*.md')
+          B_P=$(suite_pass 'bdd-test-results/*.md'); B_F=$(suite_fail 'bdd-test-results/*.md')
+          TOTAL_PASS=$((U_P + I_P + B_P))
+          TOTAL_FAIL=$((U_F + I_F + B_F))
 
-          # Volume Tests
-          echo "## 🚀 Volume Tests (10k iterations)" >> COMBINED_REPORT.md
-          for policy in multilayer rbac abac rebac; do
-            if [ -f "volume-test-$policy/volume-summary-$policy.md" ]; then
-              cat "volume-test-$policy/volume-summary-$policy.md" >> COMBINED_REPORT.md
-              echo "" >> COMBINED_REPORT.md
-            fi
+          OVERALL="✅ PASSED"
+          FAILING=""
+          # Required suites must actually SUCCEED. They have no `if:` guard, so a
+          # 'skipped' here means an upstream job (lint/build/unit) failed and
+          # cascaded — that is NOT a green build and must not read as PASSED.
+          for pair in "Unit:$R_UNIT" "Integration:$R_INTEG" "BDD:$R_BDD"; do
+            name=${pair%%:*}; res=${pair#*:}
+            if [ "$res" != "success" ]; then OVERALL="❌ FAILED"; FAILING="$FAILING $name($res)"; fi
           done
-
-          # Memory & Scale Test
-          echo "## 💾 Memory & Scale Tests (100k entities)" >> COMBINED_REPORT.md
-          if [ -f "memory-scale-tests/memory-volume-summary.md" ]; then
-            cat memory-scale-tests/memory-volume-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ Memory test results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
-
-          # Scale Tests (PR only)
-          echo "## 🚀 Scale & Performance Tests (PR only)" >> COMBINED_REPORT.md
-          if [ -f "scale-test-results/scale-test-summary.md" ]; then
-            cat scale-test-results/scale-test-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⏭️  Scale tests only run on pull requests" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
-
-          # Integration & Comparison Tests
-          echo "## 🔗 Integration & Comparison Tests" >> COMBINED_REPORT.md
-          if [ -f "integration-test-results/integration-summary.md" ]; then
-            cat integration-test-results/integration-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ Integration test results not available" >> COMBINED_REPORT.md
-          fi
-          echo "" >> COMBINED_REPORT.md
-
-          # BDD Tests
-          echo "## 🥒 BDD Tests (Cucumber)" >> COMBINED_REPORT.md
-          if [ -f "bdd-test-results/bdd-summary.md" ]; then
-            cat bdd-test-results/bdd-summary.md >> COMBINED_REPORT.md
-          else
-            echo "⚠️ BDD test results not available" >> COMBINED_REPORT.md
+          # Informational suites are continue-on-error or conditional (scale-tests
+          # only runs on pull_request), so a legitimate 'skipped' is fine here —
+          # only a hard 'failure' counts against the build.
+          for pair in "eBPF:$R_EBPF" "Volume:$R_VOLUME" "Memory:$R_MEMORY" "Scale:$R_SCALE"; do
+            name=${pair%%:*}; res=${pair#*:}
+            if [ "$res" = "failure" ]; then OVERALL="❌ FAILED"; FAILING="$FAILING $name"; fi
+          done
+          # Belt-and-suspenders: a genuinely green run always executes tests.
+          # Zero counted tests means the pipeline broke before tests ran.
+          if [ "$((TOTAL_PASS + TOTAL_FAIL))" -eq 0 ]; then
+            OVERALL="❌ FAILED"; FAILING="$FAILING no-tests-ran"
           fi
 
-      - name: Upload combined report
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-test-report
-          path: COMBINED_REPORT.md
+          {
+            echo "<!-- reaper-ci-report -->"
+            echo "# $OVERALL — Reaper CI"
+            echo ""
+            echo "Commit \`$(echo ${{ github.sha }} | cut -c1-8)\` · **$TOTAL_PASS passed / $((TOTAL_PASS+TOTAL_FAIL)) tests**"
+            echo ""
+            echo "| Suite | Status | Tests |"
+            echo "|-------|--------|-------|"
+            echo "| Unit + mgmt-integration + equivalence | $(icon "$R_UNIT") | $(counts 'unit-test-results/*.md') |"
+            echo "| Integration, E2E & OPA comparison | $(icon "$R_INTEG") | $(counts 'integration-test-results/*.md') |"
+            echo "| BDD (Cucumber) | $(icon "$R_BDD") | $(counts 'bdd-test-results/*.md') |"
+            echo "| Volume (10k) | $(icon "$R_VOLUME") | 4 policies |"
+            echo "| Memory & Scale (100k) | $(icon "$R_MEMORY") | $(icon "$R_MEMORY") |"
+            echo "| eBPF | $(icon "$R_EBPF") | $(icon "$R_EBPF") |"
+            echo "| Scale & Performance | $(icon "$R_SCALE") | $(icon "$R_SCALE") |"
+            echo "| Eval micro-bench | $(icon "$R_EVAL") | criterion |"
+            echo ""
 
-      - name: Comment PR with results
+            # Performance highlights — a few key numbers, not the full dump.
+            echo "### ⚡ Performance"
+            if [ -f "memory-scale-tests/memory-volume-summary.md" ]; then
+              MEM_SUMMARY="memory-scale-tests/memory-volume-summary.md"
+              NS=$(grep -oE '[0-9]+ ns' "$MEM_SUMMARY" | head -2 | awk 'NR==1{m=$0} NR==2{print m" / "$0}')
+              [ -n "$NS" ] && echo "- 100k-entity eval: ${NS} (mean / p99), store heap scales linearly."
+              # Data distribution: bundle compactness + delta memory behaviour.
+              BND=$(grep -oE 'bundle bytes:[^)]*\)' "$MEM_SUMMARY" | head -1)
+              [ -n "$BND" ] && echo "- Data distribution: ${BND}; bundle snapshot loads to an identical store heap."
+              CHURN=$(grep -oE 'heap [+-][0-9.]+ MB after [0-9]+ churn cycles' "$MEM_SUMMARY" | head -1)
+              echo "- Deltas: stable-key stream bounded (0 interner growth); churning-key stream also bounded${CHURN:+ — }${CHURN} via refcounted eviction + index pruning — see docs/development/DATA_DISTRIBUTION_MEMORY.md."
+            fi
+            for pol in rbac abac rebac multilayer; do
+              f="volume-test-$pol/volume-summary-$pol.md"
+              [ -f "$f" ] || continue
+              MEAN=$(grep -oE 'Mean latency:[[:space:]]*[0-9]+ ns' "$f" | head -1 | grep -oE '[0-9]+ ns')
+              P99=$(grep -oE 'P99 latency:[[:space:]]*[0-9]+ ns' "$f" | head -1 | grep -oE '[0-9]+ ns')
+              [ -n "$MEAN" ] && echo "- ${pol^^}: ${MEAN} mean, ${P99} p99 (10k iterations)"
+            done
+            if [ -f "eval-bench-results/eval-bench-summary.md" ]; then
+              echo "- Eval micro-bench (criterion medians):"
+              grep -E '/' eval-bench-results/eval-bench-summary.md | head -4 | sed 's/^/    /'
+            fi
+            echo ""
+            echo "_Reaper-vs-OPA parity & speedup run in the separate \`benchmark\` workflow; see its checks above._"
+
+            if [ "$OVERALL" = "❌ FAILED" ]; then
+              echo ""
+              echo "### ❌ Failing suites:${FAILING}"
+              echo ""
+              echo "Failing test lines:"
+              echo '```'
+              grep -rhE 'test result: FAILED|[1-9][0-9]* failed|panicked|✘|failed:' . 2>/dev/null | grep -viE '0 failed' | head -15
+              echo '```'
+            fi
+            echo ""
+            echo "<sub>Full logs and metrics: workflow artifacts. This comment updates in place each run.</sub>"
+          } > REPORT.md
+
+          cat REPORT.md
+
+      - name: Upsert single PR comment
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
             const fs = require('fs');
-            const report = fs.readFileSync('COMBINED_REPORT.md', 'utf8');
-            github.rest.issues.createComment({
+            const body = fs.readFileSync('REPORT.md', 'utf8');
+            const marker = '<!-- reaper-ci-report -->';
+            const { data: comments } = await github.rest.issues.listComments({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: report
+              per_page: 100,
             });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner, repo: context.repo.repo, body,
+              });
+            }

@@ -2,57 +2,60 @@ mod bootstrap;
 mod cache;
 mod handlers;
 mod management;
+mod metrics_cache;
 mod observability;
 mod state;
 mod tls;
 mod types;
 mod uds;
 
+// Fast allocator: policy evaluation is allocation-heavy on the request path
+// (request maps, response buffers). mimalloc is faster and has less
+// fragmentation than the system allocator under this concurrent load.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use axum::{
-    body::Bytes,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::{Json, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use cache::PolicyCache;
 use clap::Parser;
 use policy_engine::{
-    cache_config::CacheConfig, create_shared_buffer, DecisionFilter, DecisionLogConfig,
-    DecisionLogEntry, EnhancedPolicy, PolicyAction, PolicyBundle, PolicyEngine, PolicyRequest,
-    PolicyRule,
+    cache_config::CacheConfig, create_shared_buffer, DecisionLogConfig, EnhancedPolicy,
+    PolicyEngine,
 };
-use prometheus::{Encoder, TextEncoder};
 use reaper_core::{config::ReaperAgentConfig, endpoints, BUILD_INFO, VERSION};
 use serde::Deserialize;
-use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // Import from extracted modules
 use handlers::{
+    // Data handlers
+    apply_data_deltas,
     // Evaluation handlers
     batch_evaluate_policy,
     // Entity handlers
     batch_upsert_handler,
+    check_document,
+    confirm_data_version,
     debug_datastore,
     delete_entity_handler,
     // Policy management handlers
     deploy_bundle,
     deploy_compiled_policy,
+    deploy_data_version,
     deploy_policy,
     evaluate_policy,
     // Decision handlers
     export_decisions,
     fast_evaluate_policy,
+    get_decision_by_id,
     get_decision_stats,
     get_decisions,
     get_entity_handler,
@@ -63,7 +66,7 @@ use handlers::{
     list_entities_handler,
     list_policies,
     liveness_check,
-    // Data handlers
+    load_bundles_atomic,
     load_data_handler,
     load_data_stream_handler,
     metrics,
@@ -71,20 +74,9 @@ use handlers::{
     sync_data,
     upsert_entity_handler,
 };
-use observability::{
-    init_observability, record_decision, record_denial, set_active_policies, ACTIVE_POLICIES,
-    CACHE_HITS, CACHE_MISSES, CONCURRENT_EVALUATIONS, DECISIONS_TOTAL, DECISION_DURATION,
-    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DENIALS_TOTAL,
-    ERRORS_TOTAL,
-};
-use opentelemetry::{global, trace::TraceContextExt, KeyValue};
-use state::{AgentState, AgentStats};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-use types::{
-    BatchEvaluateRequest, BatchRequestItem, BatchResponseItem, DecisionQuery, DeployBundleRequest,
-    DeployBundleResponse, DeployCompiledRequest, DeployPolicyRequest, EvaluateRequest,
-    EvaluateResponse, ExportDecisionsRequest, PackageEvaluateRequest,
-};
+use observability::init_observability;
+use opentelemetry::global;
+use state::{AgentState, AgentStats, DataSyncState};
 
 // ============================================================================
 // CLI Arguments
@@ -122,6 +114,7 @@ struct Args {
 
 // Keep DeployPolicyRule here as it's used internally by deploy_policy handler
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // wire-format mirror; serde populates all fields
 struct DeployPolicyRule {
     pub action: String,
     pub resource: String,
@@ -246,8 +239,14 @@ async fn main() -> anyhow::Result<()> {
                 match cache.load_policies().await {
                     Ok(policies) => {
                         for mut policy in policies {
-                            // Build evaluator for cached policy (evaluator is not serialized)
-                            if let Err(e) = policy.build_evaluator() {
+                            // Rebuild the evaluator for the cached policy (the
+                            // evaluator itself is not serialized). Pass the
+                            // populated DataStore so Reaper-DSL policies that
+                            // read entity attributes are restored correctly and
+                            // survive the restart.
+                            if let Err(e) =
+                                policy.build_evaluator_with_data(Some(data_store.clone()))
+                            {
                                 warn!(
                                     "Failed to build evaluator for cached policy {}: {}",
                                     policy.name, e
@@ -283,6 +282,9 @@ async fn main() -> anyhow::Result<()> {
         config.observability.enable_enhanced_metrics,
     ));
     let started_at = std::time::Instant::now();
+    // Data-plane sync state: shared by the heartbeat reporter (two-way
+    // visibility) and the data handlers/staleness guard.
+    let data_sync = Arc::new(DataSyncState::from_env());
 
     if config.observability.enable_enhanced_metrics {
         info!("Enhanced metrics enabled (REAPER_ENHANCED_METRICS=true)");
@@ -307,17 +309,16 @@ async fn main() -> anyhow::Result<()> {
         ) {
             Ok(client) => {
                 let client = Arc::new(client);
-                let policy_engine_for_sync = policy_engine.clone();
 
                 // Create sync service with stats and start time for metrics
                 let (sync_service, mut update_rx) = management::SyncService::new(
                     client.clone(),
                     config.management.clone(),
-                    Arc::new(policy_engine_for_sync),
                     data_store.clone(),
                     stats.clone(),
                     started_at,
                     shutdown_rx.clone(),
+                    data_sync.clone(),
                 );
 
                 // Spawn sync service
@@ -329,9 +330,13 @@ async fn main() -> anyhow::Result<()> {
                 // Spawn bundle update handler
                 let policy_engine_for_updates = policy_engine.clone();
                 let _data_store_for_updates = data_store.clone();
+                let client_for_updates = client.clone();
                 tokio::spawn(async move {
                     while update_rx.changed().await.is_ok() {
-                        if let Some(update) = update_rx.borrow().clone() {
+                        // Clone out of the watch guard immediately so it is not
+                        // held across the awaits below (deploy report).
+                        let maybe_update = update_rx.borrow().clone();
+                        if let Some(update) = maybe_update {
                             info!(
                                 bundle_id = %update.bundle_id,
                                 checksum = %update.checksum,
@@ -365,7 +370,7 @@ async fn main() -> anyhow::Result<()> {
                                         policy.language = match policy_entry.language.as_str() {
                                             "cedar" => policy_engine::PolicyLanguage::Cedar,
                                             "simple" => policy_engine::PolicyLanguage::Simple,
-                                            _ => policy_engine::PolicyLanguage::Custom,
+                                            _ => policy_engine::PolicyLanguage::ReaperDsl,
                                         };
 
                                         if let Err(e) =
@@ -388,9 +393,41 @@ async fn main() -> anyhow::Result<()> {
                                         failed = failed,
                                         "Bundle deployment complete"
                                     );
+
+                                    // Confirm the applied version to the control
+                                    // plane so rollouts converge on real state.
+                                    let success = failed == 0;
+                                    let err = (!success)
+                                        .then(|| format!("{failed} policy(ies) failed to deploy"));
+                                    if let Err(e) = client_for_updates
+                                        .report_deployment(
+                                            update.bundle_id,
+                                            &update.checksum,
+                                            success,
+                                            err.as_deref(),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %e,
+                                            "Failed to report deployment status to management");
+                                    }
                                 }
                                 Err(e) => {
                                     error!(error = %e, "Failed to parse management bundle");
+                                    // Report the failure so the rollout doesn't
+                                    // wait on this agent indefinitely.
+                                    if let Err(re) = client_for_updates
+                                        .report_deployment(
+                                            update.bundle_id,
+                                            &update.checksum,
+                                            false,
+                                            Some("failed to parse management bundle"),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %re,
+                                            "Failed to report deployment failure to management");
+                                    }
                                 }
                             }
                         }
@@ -446,6 +483,8 @@ async fn main() -> anyhow::Result<()> {
         policy_cache,
         decision_buffer,
         agent_id,
+        decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
+        data_sync: data_sync.clone(),
     });
 
     let app = Router::new()
@@ -460,10 +499,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/fast-messages", post(fast_evaluate_policy))
         // Batch evaluation endpoint (parallel processing)
         .route("/api/v1/batch-messages", post(batch_evaluate_policy))
+        .route("/api/v1/check", post(check_document))
         // Data management - load entities
         .route("/api/v1/data", post(load_data_handler))
         .route("/api/v1/data/stream", post(load_data_stream_handler))
         .route("/api/v1/data/sync", post(sync_data))
+        .route("/api/v1/data/deploy-version", post(deploy_data_version))
+        .route("/api/v1/data/confirm-version", post(confirm_data_version))
+        .route("/api/v1/data/apply-deltas", post(apply_data_deltas))
         // Policy management from platform
         .route("/api/v1/policies/deploy", post(deploy_policy))
         .route("/api/v1/policies/compile", post(deploy_compiled_policy))
@@ -475,6 +518,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // Bundle deployment (hot-reload with versioning)
         .route("/api/v1/bundles/deploy", post(deploy_bundle))
+        .route("/api/v1/bundles/load", post(load_bundles_atomic))
         // Entity CRUD operations (requires eBPF integration)
         .route("/api/v1/entities", post(upsert_entity_handler))
         .route("/api/v1/entities/{type}/{id}", get(get_entity_handler))
@@ -490,7 +534,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/decisions", get(get_decisions))
         .route("/api/v1/decisions/stats", get(get_decision_stats))
         .route("/api/v1/decisions/export", post(export_decisions))
-        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit for large datasets
+        .route("/api/v1/decisions/{decision_id}", get(get_decision_by_id))
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)) // 256MB: bulk data loads (100k+ entity benchmark datasets) exceed 100MB
         .with_state(state);
 
     // Clone router for UDS listener before the TCP server consumes it
@@ -517,19 +562,10 @@ async fn main() -> anyhow::Result<()> {
     info!("  Metrics: Prometheus format");
     info!("");
 
-    // Spawn UDS listener if enabled
+    // Spawn UDS listener(s) if enabled — shared (one socket) or sharded
+    // (thread-per-core, N sockets) per config.uds.shards.
     if let Some(uds_app) = uds_app {
-        let socket_path = config.uds.socket_path.clone();
-        let socket_permissions = config.uds.socket_permissions;
-        info!(
-            path = %socket_path.display(),
-            "Starting UDS listener"
-        );
-        tokio::spawn(async move {
-            if let Err(e) = uds::serve_uds(socket_path, socket_permissions, uds_app).await {
-                error!("UDS server error: {}", e);
-            }
-        });
+        uds::spawn_uds_listeners(&config.uds, uds_app);
     }
 
     // Run server with TLS if configured

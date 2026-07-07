@@ -13,9 +13,10 @@ pub use ast::{
     AssignmentValue, ComparisonLeft, ComparisonRight, Condition as ReapCondition, Decision, Entity,
     EntityAttr, Expr, Index, Operator, Policy, Rule as ReapRule, Value as ReapValue, VarAttr,
 };
-pub use ast_evaluator::ReapAstEvaluator;
+pub use ast_evaluator::{CheckResult, ReapAstEvaluator, Violation};
 pub use bundle::{
-    BundleFormat, PackageMetadata, PolicyBundle, PolicyEntry, PolicyPackage, PrecompilationHints,
+    stable_policy_id, BundleFormat, PackageMetadata, PolicyBundle, PolicyEntry, PolicyPackage,
+    PrecompilationHints,
 };
 pub use compiler::compile_policy;
 pub use parser::ReapParser;
@@ -112,6 +113,31 @@ impl ReaperPolicy {
     /// variable assignments, or other features not yet supported by the compiler.
     pub fn build_ast_evaluator(self, store: Arc<DataStore>) -> ReapAstEvaluator {
         ReapAstEvaluator::new(store, self.ast)
+    }
+
+    /// Build the PREFERRED evaluator: the compiled `ReaperDSLEvaluator` when
+    /// this policy compiles, otherwise the `ReapAstEvaluator` fallback.
+    ///
+    /// The compiled path is faster; the AST path supports every feature. They
+    /// are required to produce identical decisions for any policy both can
+    /// evaluate (pinned by the compiled-vs-AST equivalence differential), so
+    /// falling back never changes an authorization outcome — it only trades
+    /// speed for coverage on policies the compiler doesn't yet handle. This is
+    /// the entry point production code should use unless it specifically needs
+    /// one implementation.
+    pub fn build_preferred(
+        self,
+        store: Arc<DataStore>,
+    ) -> Result<Box<dyn crate::evaluators::PolicyEvaluator>, ReaperError> {
+        match compiler::compile_policy(self.clone().ast, store.clone()) {
+            Ok(compiled) => Ok(Box::new(compiled)),
+            Err(compile_err) => {
+                tracing::debug!(
+                    "policy did not compile ({compile_err}); falling back to AST evaluator"
+                );
+                Ok(Box::new(ReapAstEvaluator::new(store, self.ast)))
+            }
+        }
     }
 
     /// Get the policy name

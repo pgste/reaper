@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::cache::PolicyCache;
+use parking_lot::RwLock;
+use std::sync::atomic::AtomicI64;
 
 /// Shared agent state accessible by all request handlers.
 ///
@@ -36,6 +38,181 @@ pub struct AgentState {
     pub decision_buffer: Option<SharedDecisionBuffer>,
     /// Agent identifier for decision logs
     pub agent_id: String,
+    /// Cache of per-policy Prometheus metric handles (avoids re-hashing label
+    /// values and re-locking the metric vecs on every request).
+    pub decision_metrics: Arc<crate::metrics_cache::DecisionMetrics>,
+    /// Data-plane sync state: which datastore version this agent serves and
+    /// how the configured staleness budget is enforced.
+    pub data_sync: Arc<DataSyncState>,
+}
+
+/// What to do when the data-plane staleness budget is exceeded.
+///
+/// The budget question is availability vs. certainty and belongs to the
+/// OPERATOR, not us — so it's configuration, not policy:
+/// - `Monitor`: metrics/logs only (default when no budget is set)
+/// - `Flag`: keep serving, stamp `data_stale: true` into every decision log
+///   entry so audits can see exactly which decisions ran on old data
+/// - `Enforce`: FAIL CLOSED — deny everything until data catches up
+///   ("should reaper stop returning true": yes, in this mode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StalenessMode {
+    Monitor,
+    Flag,
+    Enforce,
+}
+
+impl StalenessMode {
+    pub fn from_env() -> Self {
+        match std::env::var("REAPER_DATA_STALENESS_MODE")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "enforce" | "deny" => Self::Enforce,
+            "flag" => Self::Flag,
+            _ => Self::Monitor,
+        }
+    }
+}
+
+/// Read-replica style sync bookkeeping for the data plane.
+///
+/// Integrity: versions are only recorded after the agent has verified the
+/// published sha256 checksum over the canonical document — a corrupt or
+/// tampered payload is rejected before it ever reaches the DataStore
+/// (same contract as a replica refusing a bad WAL segment).
+pub struct DataSyncState {
+    /// Last verified datastore version (0 = never synced).
+    pub version: AtomicI64,
+    /// Checksum of that version ("sha256:…").
+    pub checksum: RwLock<String>,
+    /// Unix seconds of the last successful sync (0 = never).
+    pub last_synced_epoch: AtomicU64,
+    /// Position in the control plane's change stream (delta sync). Set to
+    /// the snapshot's change_seq on deploy-version; advanced by
+    /// apply-deltas. Contiguity is enforced: a delta batch must start
+    /// exactly here or the agent 409s with this value so the sync client
+    /// self-corrects (pull-based gap repair).
+    pub applied_seq: AtomicI64,
+    /// Staleness budget in seconds; 0 = no budget configured.
+    pub max_staleness_secs: u64,
+    /// Behavior when the budget is exceeded.
+    pub mode: StalenessMode,
+    /// Cold-start gate (REAPER_DATA_REQUIRE_SYNC): until the first
+    /// VERIFIED snapshot lands, /ready reports 503 (orchestrators keep the
+    /// pod out of rotation) and evaluation fails closed. Off by default —
+    /// standalone / bootstrap-file agents have no data plane to wait for.
+    pub require_sync: bool,
+}
+
+impl DataSyncState {
+    pub fn from_env() -> Self {
+        Self {
+            version: AtomicI64::new(0),
+            checksum: RwLock::new(String::new()),
+            last_synced_epoch: AtomicU64::new(0),
+            applied_seq: AtomicI64::new(0),
+            max_staleness_secs: std::env::var("REAPER_DATA_MAX_STALENESS_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            mode: StalenessMode::from_env(),
+            require_sync: std::env::var("REAPER_DATA_REQUIRE_SYNC")
+                .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false),
+        }
+    }
+
+    fn now_epoch() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Record a verified sync (called AFTER checksum verification passes).
+    pub fn record_sync(&self, version: i64, checksum: String) {
+        *self.checksum.write() = checksum;
+        self.version.store(version, Ordering::Release);
+        self.last_synced_epoch
+            .store(Self::now_epoch(), Ordering::Release);
+    }
+
+    /// Refresh the staleness clock WITHOUT changing version/checksum — a
+    /// verified "you are already current" from the control plane is a
+    /// replica heartbeat: staleness measures lag behind the primary, not
+    /// time since the last data change. A quiet hour with no publishes
+    /// must not make a current agent look stale.
+    pub fn record_heartbeat(&self) {
+        self.last_synced_epoch
+            .store(Self::now_epoch(), Ordering::Release);
+    }
+
+    /// Seconds since the last successful sync, if the agent has ever synced.
+    /// An agent that never synced (bootstrap-file / standalone mode) has no
+    /// staleness clock — budgets only apply once the data plane is in use.
+    pub fn staleness_secs(&self) -> Option<u64> {
+        let last = self.last_synced_epoch.load(Ordering::Acquire);
+        if last == 0 {
+            return None;
+        }
+        Some(Self::now_epoch().saturating_sub(last))
+    }
+
+    /// True when a budget is configured AND the last sync is older than it.
+    pub fn is_stale(&self) -> bool {
+        if self.max_staleness_secs == 0 {
+            return false;
+        }
+        self.staleness_secs()
+            .is_some_and(|s| s > self.max_staleness_secs)
+    }
+
+    /// True while the cold-start gate is armed and no verified snapshot
+    /// has landed yet (version is only set after checksum verification).
+    #[inline]
+    pub fn awaiting_initial_sync(&self) -> bool {
+        self.require_sync && self.version.load(Ordering::Acquire) == 0
+    }
+
+    /// Why evaluation must FAIL CLOSED right now, if it must. Two relaxed
+    /// atomic loads on the hot path; None when healthy.
+    #[inline]
+    pub fn deny_reason(&self) -> Option<&'static str> {
+        if self.awaiting_initial_sync() {
+            return Some("awaiting_initial_data_sync");
+        }
+        if self.mode == StalenessMode::Enforce && self.is_stale() {
+            return Some("data_staleness_exceeded");
+        }
+        None
+    }
+
+    /// Whether evaluation must FAIL CLOSED right now. Handlers use
+    /// `deny_reason()` (they need the why); this predicate is the
+    /// test/SDK-facing form.
+    #[allow(dead_code)]
+    #[inline]
+    pub fn must_deny(&self) -> bool {
+        self.deny_reason().is_some()
+    }
+
+    /// Whether decision entries should be flagged stale right now.
+    #[inline]
+    pub fn flag_stale(&self) -> bool {
+        self.mode != StalenessMode::Monitor && self.is_stale()
+    }
+
+    /// (version, checksum) snapshot for stamping decisions; version 0 → None.
+    pub fn provenance(&self) -> (i64, Option<String>) {
+        let version = self.version.load(Ordering::Acquire);
+        if version == 0 {
+            (0, None)
+        } else {
+            (version, Some(self.checksum.read().clone()))
+        }
+    }
 }
 
 impl std::fmt::Debug for AgentState {
@@ -175,7 +352,7 @@ impl AgentStats {
             return 0;
         }
         if let Some(histogram) = self.latency_histogram.try_lock() {
-            if histogram.len() > 0 {
+            if !histogram.is_empty() {
                 return histogram.value_at_percentile(percentile);
             }
         }
@@ -236,21 +413,25 @@ impl AgentStats {
     }
 
     /// Check if enhanced metrics are enabled.
+    #[allow(dead_code)] // stats accessor surface; not every build reads every getter
     pub fn enhanced_metrics_enabled(&self) -> bool {
         self.enhanced_metrics_enabled
     }
 
     /// Get total requests processed.
+    #[allow(dead_code)]
     pub fn get_requests_processed(&self) -> u64 {
         self.requests_processed.load(Ordering::Relaxed)
     }
 
     /// Get total evaluation time in nanoseconds.
+    #[allow(dead_code)]
     pub fn get_total_evaluation_time_ns(&self) -> u64 {
         self.total_evaluation_time_ns.load(Ordering::Relaxed)
     }
 
     /// Get average evaluation time in nanoseconds.
+    #[allow(dead_code)]
     pub fn get_avg_evaluation_time_ns(&self) -> f64 {
         let requests = self.get_requests_processed();
         if requests == 0 {

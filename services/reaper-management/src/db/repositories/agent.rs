@@ -24,7 +24,7 @@ impl<'a> AgentRepository<'a> {
     pub async fn create(&self, org_id: Uuid, input: RegisterAgent) -> Result<Agent, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -34,7 +34,7 @@ impl<'a> AgentRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO agents (id, org_id, name, hostname, version, status, labels, last_heartbeat_at, registered_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -69,14 +69,14 @@ impl<'a> AgentRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -97,14 +97,14 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<Option<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE org_id = ? AND name = ?
+            WHERE org_id = $1 AND name = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -122,14 +122,14 @@ impl<'a> AgentRepository<'a> {
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name ASC
             "#,
         )
@@ -153,14 +153,14 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<Vec<Agent>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
             FROM agents
-            WHERE org_id = ? AND status = ?
+            WHERE org_id = $1 AND status = $2
             ORDER BY name ASC
             "#,
         )
@@ -181,13 +181,13 @@ impl<'a> AgentRepository<'a> {
     pub async fn update_heartbeat(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
-            "UPDATE agents SET last_heartbeat_at = ?, status = ?, updated_at = ? WHERE id = ?",
+            "UPDATE agents SET last_heartbeat_at = $1, status = $2, updated_at = $3 WHERE id = $4",
         )
         .bind(&now)
         .bind(AgentStatus::Active.to_string())
@@ -203,11 +203,11 @@ impl<'a> AgentRepository<'a> {
     pub async fn mark_inactive(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
-        let result = sqlx::query("UPDATE agents SET status = ?, updated_at = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE agents SET status = $1, updated_at = $2 WHERE id = $3")
             .bind(AgentStatus::Inactive.to_string())
             .bind(&now)
             .bind(id.to_string())
@@ -224,12 +224,12 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<usize, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
         let result = sqlx::query(
-            "UPDATE agents SET status = ?, updated_at = ? WHERE status = ? AND last_heartbeat_at < ?",
+            "UPDATE agents SET status = $1, updated_at = $2 WHERE status = $3 AND last_heartbeat_at < $4",
         )
         .bind(AgentStatus::Inactive.to_string())
         .bind(&now)
@@ -245,10 +245,10 @@ impl<'a> AgentRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM agents WHERE id = ?")
+        let result = sqlx::query("DELETE FROM agents WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -257,7 +257,7 @@ impl<'a> AgentRepository<'a> {
     }
 
     /// Convert database row to Agent
-    fn row_to_agent(&self, row: sqlx::sqlite::SqliteRow) -> Result<Agent, DatabaseError> {
+    fn row_to_agent(&self, row: sqlx::any::AnyRow) -> Result<Agent, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -312,7 +312,7 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
@@ -321,8 +321,9 @@ impl<'a> AgentRepository<'a> {
             INSERT INTO agent_metrics_latest (
                 agent_id, requests_total, requests_per_second,
                 latency_p50_us, latency_p99_us, decisions_allow, decisions_deny,
-                memory_bytes, current_bundle_id, current_bundle_version, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                memory_bytes, current_bundle_id, current_bundle_version, updated_at,
+                data_version, data_applied_seq, data_stale
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT(agent_id) DO UPDATE SET
                 requests_total = excluded.requests_total,
                 requests_per_second = excluded.requests_per_second,
@@ -333,7 +334,10 @@ impl<'a> AgentRepository<'a> {
                 memory_bytes = excluded.memory_bytes,
                 current_bundle_id = excluded.current_bundle_id,
                 current_bundle_version = excluded.current_bundle_version,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                data_version = excluded.data_version,
+                data_applied_seq = excluded.data_applied_seq,
+                data_stale = excluded.data_stale
         "#;
 
         sqlx::query(sql)
@@ -348,6 +352,9 @@ impl<'a> AgentRepository<'a> {
             .bind(metrics.current_bundle_id.map(|id| id.to_string()))
             .bind(&metrics.current_bundle_version)
             .bind(&now)
+            .bind(metrics.data_version)
+            .bind(metrics.data_applied_seq)
+            .bind(metrics.data_stale.map(|b| b as i64))
             .execute(pool)
             .await?;
 
@@ -361,15 +368,16 @@ impl<'a> AgentRepository<'a> {
     ) -> Result<Option<crate::domain::agent::AgentMetrics>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT requests_total, requests_per_second, latency_p50_us, latency_p99_us,
                    decisions_allow, decisions_deny, memory_bytes,
-                   current_bundle_id, current_bundle_version
+                   current_bundle_id, current_bundle_version,
+                   data_version, data_applied_seq, data_stale
             FROM agent_metrics_latest
-            WHERE agent_id = ?
+            WHERE agent_id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -392,6 +400,9 @@ impl<'a> AgentRepository<'a> {
                 uptime_seconds: 0, // Not stored
                 current_bundle_id: current_bundle_id.and_then(|s| Uuid::parse_str(&s).ok()),
                 current_bundle_version: r.get("current_bundle_version"),
+                data_version: r.get("data_version"),
+                data_applied_seq: r.get("data_applied_seq"),
+                data_stale: r.get::<Option<i64>, _>("data_stale").map(|v| v != 0),
             }
         }))
     }
@@ -416,21 +427,14 @@ impl<'a> AgentRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

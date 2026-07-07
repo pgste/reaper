@@ -1,0 +1,63 @@
+# Performance regression tracking on the evaluation hot paths.
+#
+# Runs the core criterion micro-benchmarks (policy evaluation + ReBAC
+# traversal) in bencher output format and feeds them to
+# github-action-benchmark:
+#   - on main: results are pushed to the gh-pages benchmark dashboard,
+#     becoming the new baseline
+#   - on every run: results are compared to the previous baseline and the
+#     job FAILS + comments when a benchmark regresses beyond 30%
+#
+# The end-to-end HTTP throughput benchmark (vs OPA) lives in benchmark.yml;
+# this workflow guards the engine's nanosecond-scale core specifically.
+
+name: Perf Regression Tracking
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  deployments: write
+
+jobs:
+  microbench:
+    name: Criterion micro-benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-bench"
+          cache-on-failure: true
+
+      - name: Run core benches (bencher format)
+        run: |
+          cargo bench -p policy-engine --bench policy_evaluation_bench \
+            -- --output-format bencher | tee bench-output.txt
+          cargo bench -p policy-engine --bench rebac_bench \
+            -- --output-format bencher | tee -a bench-output.txt
+
+      - name: Track results / alert on regression
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "cargo"
+          output-file-path: bench-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Baseline history is pushed only from main; branches compare
+          # against the last main baseline without writing.
+          auto-push: ${{ github.ref == 'refs/heads/main' }}
+          alert-threshold: "130%"
+          comment-on-alert: true
+          fail-on-alert: true
+          summary-always: true
+          max-items-in-chart: 100

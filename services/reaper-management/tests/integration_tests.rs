@@ -10,8 +10,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reaper_management::{
     api::build_api_router,
     auth::api_key::{ApiKeyRepository, CreateApiKey},
-    auth::jwks::{JwksConfig, JwksConfigRepository},
-    config::{AuthConfig, Config, DatabaseConfig},
+    auth::jwks::JwksConfigRepository,
+    config::{AuthConfig, Config},
     db::repositories::AgentRepository,
     db::Database,
     storage::FilesystemStorage,
@@ -34,15 +34,10 @@ struct TestEnv {
 /// Test helper to set up a test environment
 async fn setup_test_env() -> TestEnv {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test.db");
     let storage_path = temp_dir.path().join("storage");
     std::fs::create_dir_all(&storage_path).unwrap();
 
-    let db_config = DatabaseConfig {
-        db_type: "sqlite".to_string(),
-        url: format!("sqlite:{}", db_path.display()),
-        max_connections: 5,
-    };
+    let db_config = reaper_management::db::ephemeral_test_config(temp_dir.path()).await;
 
     let db = Database::new(&db_config).await.unwrap();
     db.run_migrations().await.unwrap();
@@ -1396,4 +1391,727 @@ async fn test_session_token_with_api_endpoints() {
     let response = env.app.clone().oneshot(list_agents).await.unwrap();
     // Owner has admin scope, so this should work
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+// ============================================================================
+// Data plane (Authorization Data Model) — Phase D1
+// ============================================================================
+
+/// The full loop: provision a datastore, manage typed data through the
+/// managers' APIs, publish a checksummed version, then load the materialized
+/// document into the ACTUAL policy engine and watch a combined
+/// RBAC+ABAC+ReBAC policy decide with it. This is the "closes the loop"
+/// guarantee: data managed in the control plane drives real decisions.
+#[tokio::test]
+async fn test_data_plane_end_to_end() {
+    use policy_engine::reap::ReaperPolicy;
+    use policy_engine::{DataLoader, DataStore, PolicyRequest};
+    use std::collections::HashMap;
+
+    let env = setup_test_env().await;
+
+    // --- Org + namespace + key ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Data Plane Org", "slug": "dp-org"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/dp-org/namespaces",
+            Some(json!({"slug": "prod", "display_name": "Production"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let base = "/orgs/dp-org/namespaces/prod/datastore";
+
+    // --- Provision from the combined template ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_body(response).await;
+    assert_eq!(body["template"], "combined");
+    assert!(body["model"]["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "editor"));
+
+    // Provisioning twice conflicts.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "rbac"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // --- Entities: typed validation is enforced at write time ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({
+                "entity_id": "alice", "entity_type": "user",
+                "attributes": {"mfa": true, "clearance": 5, "department": "eng"}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // clearance as a STRING must be rejected (type-strict at the source).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({
+                "entity_id": "bob", "entity_type": "user",
+                "attributes": {"clearance": "5"}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // bob, correctly typed, WITHOUT mfa (absence must fail guards downstream).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({
+                "entity_id": "bob", "entity_type": "user",
+                "attributes": {"clearance": 2}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // --- Role bindings (vocabulary-checked) ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "editor"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "warlock"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // --- Tuples (relation vocabulary-checked) ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/tuples"),
+            Some(json!({"object": "doc-1", "relation": "owner", "subject": "bob"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/tuples"),
+            Some(json!({"object": "doc-1", "relation": "haunts", "subject": "bob"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Group membership (TRAVERSAL relation): carol ∈ team-eng, and team-eng
+    // holds viewer on doc-1. Access flows through the graph, not a direct
+    // grant — the exact pattern tuple-only stores sell as their headline.
+    for tuple in [
+        json!({"object": "team-eng", "relation": "member_of", "subject": "carol"}),
+        json!({"object": "doc-1", "relation": "viewer", "subject": "team-eng"}),
+    ] {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("{base}/tuples"),
+                Some(tuple),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/entities"),
+            Some(json!({"entity_id": "carol", "entity_type": "user", "attributes": {}})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Scoped bindings must be rejected until the materializer represents
+    // them — a scoped grant silently going global would be a breach.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "viewer", "scope": "doc-9"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // --- Publish: immutable, checksummed version ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let published = parse_body(response).await;
+    assert_eq!(published["version"], 1);
+    let checksum = published["checksum"].as_str().unwrap().to_string();
+    assert!(checksum.starts_with("sha256:"));
+
+    // --- Fetch the version document (what agents load) ---
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/1"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let version_body = parse_body(response).await;
+    let document = version_body["document"].clone();
+
+    // Agent-side integrity contract: recomputing sha256 over the canonical
+    // serde_json serialization must reproduce the published checksum.
+    {
+        use sha2::{Digest, Sha256};
+        let canonical = serde_json::to_string(&document).unwrap();
+        let computed = format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()));
+        assert_eq!(computed, checksum, "canonical checksum must round-trip");
+    }
+
+    // --- THE LOOP: load into the real policy engine and decide ---
+    let store = std::sync::Arc::new(DataStore::new());
+    DataLoader::new((*store).clone())
+        .load_json(&serde_json::to_string(&document).unwrap())
+        .unwrap();
+
+    let policy: ReaperPolicy = r#"
+        policy data_plane_loop {
+            default: deny,
+            rule editors_with_mfa {
+                allow if {
+                    "editor" in user.roles &&
+                    user.mfa == true
+                }
+            }
+            rule owners {
+                allow if rebac::related(user, "owner", resource)
+            }
+            rule team_viewers_can_read {
+                allow if {
+                    context.action == "read" &&
+                    rebac::reachable(user, "viewer", resource, "member_of", 3)
+                }
+            }
+        }
+    "#
+    .parse()
+    .unwrap();
+    let evaluator = policy.build_ast_evaluator(store);
+
+    let request = |principal: &str, resource: &str| PolicyRequest {
+        resource: resource.to_string(),
+        action: "write".to_string(),
+        context: HashMap::from([("principal".to_string(), principal.to_string())]),
+    };
+
+    // alice: editor binding (RBAC) + mfa attribute (ABAC) -> allow
+    let d = evaluator.evaluate(&request("alice", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Allow", "alice via RBAC+ABAC");
+
+    // bob: no role, no mfa — but OWNS doc-1 (ReBAC tuple) -> allow
+    let d = evaluator.evaluate(&request("bob", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Allow", "bob via ReBAC tuple");
+
+    // bob on another resource: nothing applies -> deny (default)
+    let d = evaluator.evaluate(&request("bob", "doc-2")).unwrap();
+    assert_eq!(format!("{d:?}"), "Deny", "no data, no access");
+
+    // carol: no role, no ownership — reaches doc-1 through team-eng
+    // (member_of traversal edge materialized subject→object). This is the
+    // direction contract: managed Zanzibar tuples MUST drive
+    // rebac::reachable correctly.
+    let read = |principal: &str, resource: &str| PolicyRequest {
+        resource: resource.to_string(),
+        action: "read".to_string(),
+        context: HashMap::from([("principal".to_string(), principal.to_string())]),
+    };
+    let d = evaluator.evaluate(&read("carol", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Allow", "carol via group-hop ReBAC");
+    // …but only for read (the rule gates on action).
+    let d = evaluator.evaluate(&request("carol", "doc-1")).unwrap();
+    assert_eq!(format!("{d:?}"), "Deny", "group viewers cannot write");
+
+    // Status endpoint reports COUNT(*)-backed numbers.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", base, None, &key))
+        .await
+        .unwrap();
+    let status = parse_body(response).await;
+    assert_eq!(status["counts"]["entities"], 3);
+    assert_eq!(status["counts"]["tuples"], 3);
+    assert_eq!(status["counts"]["role_bindings"], 1);
+}
+
+/// Time-based change-log retention: pruning aged delta marks must never
+/// strand a follower — a replica whose position fell below the pruned
+/// floor gets snapshot_required and self-heals via a full snapshot.
+#[tokio::test]
+async fn test_change_log_retention_prune_forces_snapshot() {
+    use reaper_management::db::repositories::DatastoreRepository;
+
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Retention Org", "slug": "retention-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    let base = "/orgs/retention-org/namespaces/prod/datastore";
+    let call = |method: &'static str, path: String, body: Option<Value>| {
+        let app = env.app.clone();
+        let key = key.clone();
+        async move {
+            let response = app
+                .oneshot(authed_request(method, &path, body, &key))
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = parse_body(response).await;
+            (status, body)
+        }
+    };
+
+    let (status, _) = call(
+        "POST",
+        "/orgs/retention-org/namespaces".to_string(),
+        Some(json!({"slug": "prod"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = call(
+        "POST",
+        base.to_string(),
+        Some(json!({"template": "combined"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Churn without publishing — exactly the growth publish-time
+    // compaction cannot bound.
+    for body in [
+        json!({"entity_id": "alice", "entity_type": "user", "attributes": {"mfa": true}}),
+        json!({"entity_id": "bob", "entity_type": "user", "attributes": {}}),
+    ] {
+        let (status, _) = call("POST", format!("{base}/entities"), Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // A follower at seq 0 sees ordinary deltas before the prune.
+    let (status, before) = call("GET", format!("{base}/changes?since=0"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(before["snapshot_required"], json!(false));
+    assert!(before["deltas"].as_array().unwrap().len() >= 2);
+
+    // Prune with a future cutoff (everything is "too old").
+    let cutoff = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+    let pruned = DatastoreRepository::new(&env.db)
+        .prune_change_log(&cutoff)
+        .await
+        .unwrap();
+    assert!(pruned >= 2, "expected marks pruned, got {pruned}");
+
+    // The same follower now falls below the floor and is told to
+    // full-sync — self-healing, no silent gap.
+    let (status, after) = call("GET", format!("{base}/changes?since=0"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        after["snapshot_required"],
+        json!(true),
+        "pruned follower must be redirected to a snapshot: {after}"
+    );
+}
+
+/// The durable delta loop, end-to-end against the real APIs: snapshot,
+/// then mutations (including a cascade delete), then a /changes pull
+/// applied INCREMENTALLY to a live policy-engine store — which must
+/// converge to exactly what a fresh publish produces. Repeating the same
+/// pull (lost-ack redelivery) must change nothing.
+#[tokio::test]
+async fn test_data_plane_delta_sync() {
+    use policy_engine::{DataLoader, DataStore};
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("reaper_management=error")
+        .try_init();
+
+    let env = setup_test_env().await;
+
+    // Org, namespace, key, datastore.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Delta Org", "slug": "delta-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/delta-org/namespaces",
+            Some(json!({"slug": "prod"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let base = "/orgs/delta-org/namespaces/prod/datastore";
+    let call = |method: &'static str, path: String, body: Option<Value>| {
+        let app = env.app.clone();
+        let key = key.clone();
+        async move {
+            let response = app
+                .oneshot(authed_request(method, &path, body, &key))
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = parse_body(response).await;
+            (status, body)
+        }
+    };
+
+    let (status, _) = call(
+        "POST",
+        base.to_string(),
+        Some(json!({"template": "combined"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Seed + snapshot v1.
+    for body in [
+        json!({"entity_id": "alice", "entity_type": "user", "attributes": {"mfa": true}}),
+        json!({"entity_id": "bob", "entity_type": "user", "attributes": {}}),
+    ] {
+        let (status, _) = call("POST", format!("{base}/entities"), Some(body)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, _) = call(
+        "POST",
+        format!("{base}/tuples"),
+        Some(json!({"object": "doc-1", "relation": "owner", "subject": "bob"})),
+    )
+    .await;
+    let (status, published) = call("POST", format!("{base}/publish"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let snapshot_seq = {
+        // versions listing exposes the change_seq the snapshot pinned
+        let (_, versions) = call("GET", format!("{base}/versions"), None).await;
+        versions["versions"][0]["change_seq"].as_i64().unwrap()
+    };
+    assert_eq!(published["version"], 1);
+
+    // Replica: load snapshot v1.
+    let (_, v1) = call("GET", format!("{base}/versions/1"), None).await;
+    let replica = std::sync::Arc::new(DataStore::new());
+    let loader = DataLoader::new((*replica).clone());
+    loader
+        .load_json(&serde_json::to_string(&v1["document"]).unwrap())
+        .unwrap();
+
+    // Mutations AFTER the snapshot: attribute change, role grant, new
+    // tuple, and a cascade delete (bob dies; doc-1's owner edge must go).
+    let (status, _) = call(
+        "PUT",
+        format!("{base}/entities/alice/attributes"),
+        Some(json!({"mfa": false, "clearance": 4})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _) = call(
+        "POST",
+        format!("{base}/role-bindings"),
+        Some(json!({"subject": "alice", "role": "admin"})),
+    )
+    .await;
+    let (status, deleted) = call("DELETE", format!("{base}/entities/bob"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        deleted["cascaded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "doc-1"),
+        "cascade must mark doc-1 dirty: {deleted}"
+    );
+
+    // Pull the change stream from the snapshot position and apply.
+    let apply_changes = |replica: std::sync::Arc<DataStore>, changes: Value| {
+        let loader = DataLoader::new((*replica).clone());
+        for delta in changes["deltas"].as_array().unwrap() {
+            match delta["op"].as_str().unwrap() {
+                "upsert" => loader.upsert_entity_doc(&delta["document"]).unwrap(),
+                "delete" => loader.delete_entity(delta["entity_id"].as_str().unwrap()),
+                other => panic!("unknown op {other}"),
+            }
+        }
+    };
+    let (status, changes) = call("GET", format!("{base}/changes?since={snapshot_seq}"), None).await;
+    assert_eq!(status, StatusCode::OK, "changes failed: {changes}");
+    assert_eq!(changes["snapshot_required"], false);
+    assert!(changes["deltas"].as_array().unwrap().len() >= 3);
+    apply_changes(replica.clone(), changes.clone());
+
+    // Redelivery (lost ack): applying the SAME pull again must be a no-op.
+    apply_changes(replica.clone(), changes);
+
+    // Convergence: a fresh publish's document, loaded into a new store,
+    // must be indistinguishable from the incrementally patched replica.
+    let (status, _) = call("POST", format!("{base}/publish"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, v2) = call("GET", format!("{base}/versions/2"), None).await;
+    let fresh = std::sync::Arc::new(DataStore::new());
+    DataLoader::new((*fresh).clone())
+        .load_json(&serde_json::to_string(&v2["document"]).unwrap())
+        .unwrap();
+
+    let probe = |store: &DataStore| {
+        let interner = store.interner();
+        let mut out = Vec::new();
+        for id in ["alice", "bob", "doc-1"] {
+            let eid = interner.intern(id);
+            let entity = store.get(eid);
+            out.push(format!("{id}:present={}", entity.is_some()));
+        }
+        let owner = interner.intern("owner");
+        let doc1 = interner.intern("doc-1");
+        out.push(format!(
+            "doc-1.owners={}",
+            store.relationships().related(doc1, owner).len()
+        ));
+        out
+    };
+    assert_eq!(
+        probe(&replica),
+        probe(&fresh),
+        "delta-patched replica must converge with a fresh snapshot"
+    );
+    // Attribute maps compared as JSON Values (order-insensitive).
+    assert_eq!(
+        replica.entity_attributes_json("alice"),
+        fresh.entity_attributes_json("alice"),
+        "alice attributes must converge"
+    );
+
+    // And the specifics: bob gone, doc-1 ownerless, alice demoted+promoted.
+    let alice = replica.entity_attributes_json("alice").unwrap();
+    assert_eq!(alice["mfa"], false);
+    assert_eq!(alice["clearance"], 4);
+    assert_eq!(alice["roles"][0], "admin");
+}
+
+/// Save-path latency measurement (run explicitly: `--ignored`). Times the
+/// FULL stack per write — HTTP router, auth, schema validation, and the
+/// transactional mutation+outbox commit (WAL, synchronous=NORMAL) — the
+/// number an API caller actually experiences.
+#[tokio::test]
+#[ignore]
+async fn measure_data_plane_save_latency() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Perf Org", "slug": "perf-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/perf-org/namespaces",
+            Some(json!({"slug": "prod"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let base = "/orgs/perf-org/namespaces/prod/datastore";
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    let mut timings_us: Vec<u128> = Vec::with_capacity(500);
+    for i in 0..500 {
+        let body = json!({
+            "entity_id": format!("user-{i}"), "entity_type": "user",
+            "attributes": {"mfa": i % 2 == 0, "clearance": (i % 7) as i64}
+        });
+        let request = authed_request("POST", &format!("{base}/entities"), Some(body), &key);
+        let start = std::time::Instant::now();
+        let response = env.app.clone().oneshot(request).await.unwrap();
+        timings_us.push(start.elapsed().as_micros());
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    timings_us.sort_unstable();
+    let pct =
+        |p: f64| timings_us[((timings_us.len() as f64 * p) as usize).min(timings_us.len() - 1)];
+    println!(
+        "entity save (full stack, tx mutation+outbox): p50={}µs p95={}µs p99={}µs max={}µs",
+        pct(0.50),
+        pct(0.95),
+        pct(0.99),
+        pct(1.0)
+    );
+
+    // Control: authed READ through the same stack — isolates auth+router
+    // overhead from the transactional write commit.
+    let mut read_us: Vec<u128> = Vec::with_capacity(200);
+    for _ in 0..200 {
+        let request = authed_request("GET", &format!("{base}/role-bindings"), None, &key);
+        let start = std::time::Instant::now();
+        let response = env.app.clone().oneshot(request).await.unwrap();
+        read_us.push(start.elapsed().as_micros());
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    read_us.sort_unstable();
+    println!(
+        "authed read control: p50={}µs p95={}µs",
+        read_us[100], read_us[190]
+    );
+
+    let start = std::time::Instant::now();
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    println!(
+        "publish (materialize 500 entities + checksum + version row): {}ms",
+        start.elapsed().as_millis()
+    );
 }

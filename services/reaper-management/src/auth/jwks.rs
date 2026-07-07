@@ -7,8 +7,77 @@ use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use thiserror::Error;
 use uuid::Uuid;
+
+/// Reject IPs that must never be reachable via a user-configured JWKS URL —
+/// loopback, private, link-local (incl. the 169.254.169.254 cloud metadata
+/// endpoint), CGNAT, and IPv6 equivalents. This is the core SSRF guard.
+fn is_disallowed_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || o[0] == 0
+                // 100.64.0.0/10 carrier-grade NAT
+                || (o[0] == 100 && (o[1] & 0xC0) == 0x40)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // unique local fc00::/7
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // link-local fe80::/10
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Validate a JWKS URL before fetching: require HTTPS and ensure every resolved
+/// address is a public IP. Blocks SSRF to internal services and cloud metadata.
+///
+/// Note: this resolves the host and checks the addresses; a determined attacker
+/// could still attempt DNS rebinding between this check and the actual fetch.
+/// That residual risk is much smaller than the unrestricted fetch it replaces.
+async fn validate_jwks_url(url: &str) -> Result<(), JwksError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| JwksError::UrlNotAllowed("malformed URL".to_string()))?;
+
+    if parsed.scheme() != "https" {
+        return Err(JwksError::UrlNotAllowed("must use https".to_string()));
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| JwksError::UrlNotAllowed("missing host".to_string()))?;
+    let port = parsed.port_or_known_default().unwrap_or(443);
+
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| JwksError::UrlNotAllowed("host does not resolve".to_string()))?;
+
+    let mut resolved_any = false;
+    for addr in addrs {
+        resolved_any = true;
+        if is_disallowed_ip(&addr.ip()) {
+            return Err(JwksError::UrlNotAllowed(
+                "resolves to a disallowed internal address".to_string(),
+            ));
+        }
+    }
+    if !resolved_any {
+        return Err(JwksError::UrlNotAllowed(
+            "host does not resolve".to_string(),
+        ));
+    }
+
+    Ok(())
+}
 
 /// JWKS configuration for an organization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,7 +219,7 @@ impl JwksValidator {
         // Decode header to get kid
         let header = decode_header(token).map_err(|e| JwksError::TokenDecode(e.to_string()))?;
 
-        let kid = header.kid.as_ref().ok_or_else(|| JwksError::MissingKid)?;
+        let kid = header.kid.as_ref().ok_or(JwksError::MissingKid)?;
 
         // Get or fetch JWKS
         let keys = self.get_or_fetch_keys(config).await?;
@@ -165,9 +234,16 @@ impl JwksValidator {
         let mut validation = Validation::new(key.algorithm());
         validation.set_issuer(&[&config.issuer]);
 
-        if let Some(audience) = &config.audience {
-            validation.set_audience(&[audience]);
-        }
+        // Require an audience. Without it, jsonwebtoken would not bind the token
+        // to this relying party, so a token minted for a DIFFERENT service at the
+        // same issuer would be accepted. A JWKS config with no audience is a
+        // misconfiguration we refuse rather than validate insecurely.
+        let audience = config.audience.as_ref().ok_or_else(|| {
+            JwksError::TokenValidation(
+                "JWKS config has no audience; refusing to validate unbound tokens".to_string(),
+            )
+        })?;
+        validation.set_audience(&[audience]);
 
         // Decode and validate
         let decoding_key = key.to_decoding_key()?;
@@ -204,6 +280,9 @@ impl JwksValidator {
 
     /// Fetch JWKS from endpoint
     async fn fetch_keys(&self, url: &str) -> Result<Vec<Jwk>, JwksError> {
+        // SSRF guard: only fetch public https URLs.
+        validate_jwks_url(url).await?;
+
         let response = self
             .http_client
             .get(url)
@@ -330,6 +409,9 @@ pub enum JwksError {
     #[error("Invalid key: {0}")]
     InvalidKey(String),
 
+    #[error("JWKS URL is not allowed: {0}")]
+    UrlNotAllowed(String),
+
     #[error("Database error: {0}")]
     Database(String),
 }
@@ -355,7 +437,7 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<JwksConfig, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -363,7 +445,7 @@ impl<'a> JwksConfigRepository<'a> {
 
         let sql = r#"
             INSERT INTO jwks_configs (id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, 3600, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, 1, 3600, $7, $8)
         "#;
 
         sqlx::query(sql)
@@ -390,13 +472,13 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Option<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE id = ?
+            WHERE id = $1
         "#;
 
         let row = sqlx::query(sql)
@@ -414,13 +496,13 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE org_id = ? AND is_active = 1
+            WHERE org_id = $1 AND is_active = 1
             ORDER BY name ASC
         "#;
 
@@ -439,13 +521,13 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY name ASC
         "#;
 
@@ -461,10 +543,10 @@ impl<'a> JwksConfigRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM jwks_configs WHERE id = ?")
+        let result = sqlx::query("DELETE FROM jwks_configs WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -480,13 +562,13 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<bool, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let now = Utc::now();
 
         let result =
-            sqlx::query("UPDATE jwks_configs SET is_active = ?, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE jwks_configs SET is_active = $1, updated_at = $2 WHERE id = $3")
                 .bind(is_active as i32)
                 .bind(now.to_rfc3339())
                 .bind(id.to_string())
@@ -506,13 +588,13 @@ impl<'a> JwksConfigRepository<'a> {
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
-            WHERE issuer = ? AND is_active = 1
+            WHERE issuer = $1 AND is_active = 1
             ORDER BY created_at DESC
         "#;
 
@@ -523,7 +605,7 @@ impl<'a> JwksConfigRepository<'a> {
 
     fn row_to_config(
         &self,
-        row: &sqlx::sqlite::SqliteRow,
+        row: &sqlx::any::AnyRow,
     ) -> Result<JwksConfig, crate::db::DatabaseError> {
         use sqlx::Row;
 

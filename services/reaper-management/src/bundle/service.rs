@@ -7,12 +7,52 @@ use thiserror::Error;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::config::BundlesConfig;
 use crate::db::repositories::{BundleRepository, PolicyRepository};
 use crate::db::Database;
 use crate::domain::bundle::{Bundle, BundleStatus, CreateBundle, PromotionRequest};
 use crate::storage::{BundleMetadata, BundleStorage, StorageError};
+use reaper_core::bundle_signing::{self, BundleSignature, SigAlgorithm, SigningKey};
 
 use super::compiler::{BundleCompiler, CompileError};
+
+/// Suffix of the sidecar object holding a bundle's detached signature. Stored
+/// next to the bundle in the same backend so it travels with it (e.g. to S3).
+pub const SIGNATURE_SUFFIX: &str = ".sig";
+
+/// Holds the control plane's private signing key and its advertised key id.
+pub struct BundleSigner {
+    key: SigningKey,
+    key_id: String,
+}
+
+impl BundleSigner {
+    /// Build a signer from bundle config. Returns `Ok(None)` when no signing key
+    /// is configured (signing disabled), or an error if the configured
+    /// key/algorithm is invalid.
+    pub fn from_config(cfg: &BundlesConfig) -> Result<Option<Arc<Self>>, String> {
+        let Some(hex) = cfg.signing_key.as_deref() else {
+            return Ok(None);
+        };
+        let alg = SigAlgorithm::parse(&cfg.signing_algorithm).map_err(|e| e.to_string())?;
+        let key = SigningKey::from_hex(alg, hex).map_err(|e| e.to_string())?;
+        Ok(Some(Arc::new(Self {
+            key,
+            key_id: cfg.signing_key_id.clone(),
+        })))
+    }
+
+    fn sign(&self, bytes: &[u8]) -> BundleSignature {
+        bundle_signing::sign_bundle(bytes, &self.key, &self.key_id)
+    }
+}
+
+/// Result of downloading a bundle: the bytes plus the detached signature
+/// (if the bundle was signed at creation).
+pub struct BundleDownloadResult {
+    pub data: Vec<u8>,
+    pub signature: Option<BundleSignature>,
+}
 
 /// Bundle service errors
 #[derive(Debug, Error)]
@@ -31,6 +71,8 @@ pub enum BundleError {
     NoPolicies,
     #[error("Validation error: {0}")]
     Validation(String),
+    #[error("Signing error: {0}")]
+    Signing(String),
 }
 
 /// Bundle service for managing compilation and promotion workflow
@@ -38,16 +80,25 @@ pub struct BundleService {
     db: Arc<Database>,
     storage: Arc<dyn BundleStorage>,
     compiler: BundleCompiler,
+    /// Optional signer; when set, every compiled bundle is signed at creation.
+    signer: Option<Arc<BundleSigner>>,
 }
 
 impl BundleService {
-    /// Create a new bundle service
+    /// Create a new bundle service (no bundle signing).
     pub fn new(db: Arc<Database>, storage: Arc<dyn BundleStorage>) -> Self {
         Self {
             db,
             storage,
             compiler: BundleCompiler::new(),
+            signer: None,
         }
+    }
+
+    /// Attach a bundle signer so compiled bundles are signed at creation.
+    pub fn with_signer(mut self, signer: Option<Arc<BundleSigner>>) -> Self {
+        self.signer = signer;
+        self
     }
 
     /// Create a new bundle
@@ -99,6 +150,12 @@ impl BundleService {
                     "Failed to delete bundle from storage"
                 );
                 // Continue with database deletion even if storage deletion fails
+            }
+            // Best-effort removal of the signature sidecar.
+            let sig_key = format!("{storage_key}{SIGNATURE_SUFFIX}");
+            if let Err(e) = self.storage.delete(&sig_key).await {
+                debug!(bundle_id = %bundle_id, error = %e,
+                    "Failed to delete bundle signature sidecar (may not exist)");
             }
         }
 
@@ -204,6 +261,37 @@ impl BundleService {
         self.storage
             .put(&storage_key, &compiled.data, metadata)
             .await?;
+
+        // Sign at creation and store the signature as a sidecar object next to
+        // the bundle, so it travels with the bundle to any store (S3, fs) and is
+        // available whether the agent pulls from the control plane or directly.
+        if let Some(signer) = &self.signer {
+            let signature = signer.sign(&compiled.data);
+            let sig_bytes = serde_json::to_vec(&signature)
+                .map_err(|e| BundleError::Signing(format!("serialize signature: {e}")))?;
+            let sig_key = format!("{storage_key}{SIGNATURE_SUFFIX}");
+            let sig_metadata = BundleMetadata::new(
+                bundle.org_id,
+                bundle_id,
+                "1.0.0".to_string(),
+                compiled.policy_count as usize,
+                signature.sha256.clone(),
+            )
+            .with_content_type("application/json");
+            self.storage.put(&sig_key, &sig_bytes, sig_metadata).await?;
+            info!(
+                bundle_id = %bundle_id,
+                key_id = %signature.key_id,
+                algorithm = %signature.algorithm,
+                "Bundle signed at creation"
+            );
+        } else {
+            warn!(
+                bundle_id = %bundle_id,
+                "Bundle compiled WITHOUT a signature (no signing key configured); \
+                 agents that require signed bundles will reject it"
+            );
+        }
 
         // Update bundle record
         let updated = bundle_repo
@@ -334,7 +422,7 @@ impl BundleService {
     }
 
     /// Get the compiled bundle data
-    pub async fn download(&self, bundle_id: Uuid) -> Result<Vec<u8>, BundleError> {
+    pub async fn download(&self, bundle_id: Uuid) -> Result<BundleDownloadResult, BundleError> {
         let bundle = self.get(bundle_id).await?;
 
         let storage_key = bundle
@@ -346,35 +434,47 @@ impl BundleService {
             BundleError::NotFound(format!("Bundle data not found: {}", storage_key))
         })?;
 
+        // Read the detached signature sidecar if present.
+        let sig_key = format!("{storage_key}{SIGNATURE_SUFFIX}");
+        let signature = match self.storage.get(&sig_key).await? {
+            Some(sig_obj) => match serde_json::from_slice::<BundleSignature>(&sig_obj.data) {
+                Ok(sig) => Some(sig),
+                Err(e) => {
+                    warn!(bundle_id = %bundle_id, error = %e,
+                        "Bundle signature sidecar is malformed; serving unsigned");
+                    None
+                }
+            },
+            None => None,
+        };
+
         debug!(
             bundle_id = %bundle_id,
             size_bytes = stored.data.len(),
+            signed = signature.is_some(),
             "Bundle downloaded"
         );
 
-        Ok(stored.data)
+        Ok(BundleDownloadResult {
+            data: stored.data,
+            signature,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::storage::FilesystemStorage;
     use sha2::Digest;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, Arc<Database>, Arc<dyn BundleStorage>) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
         let storage_path = temp_dir.path().join("storage");
         std::fs::create_dir_all(&storage_path).unwrap();
 
-        let db_config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url: format!("sqlite:{}", db_path.display()),
-            max_connections: 5,
-        };
+        let db_config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&db_config).await.unwrap();
         db.run_migrations().await.unwrap();
@@ -386,11 +486,11 @@ mod tests {
     }
 
     async fn create_test_org(db: &Database) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let org_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)"
         )
         .bind(org_id.to_string())
         .bind("Test Org")
@@ -404,7 +504,7 @@ mod tests {
     }
 
     async fn create_test_policy(db: &Database, org_id: Uuid, name: &str) -> Uuid {
-        let pool = db.sqlite_pool().unwrap();
+        let pool = db.any_pool().unwrap();
         let policy_id = Uuid::new_v4();
         let version_id = Uuid::new_v4();
         let now = chrono::Utc::now().to_rfc3339();
@@ -412,7 +512,7 @@ mod tests {
         let content_hash = format!("{:x}", sha2::Sha256::digest(content.as_bytes()));
 
         sqlx::query(
-            "INSERT INTO policies (id, org_id, name, language, current_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO policies (id, org_id, name, language, current_version, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)"
         )
         .bind(policy_id.to_string())
         .bind(org_id.to_string())
@@ -426,7 +526,7 @@ mod tests {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO policy_versions (id, policy_id, version, content, content_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6)"
         )
         .bind(version_id.to_string())
         .bind(policy_id.to_string())
@@ -482,6 +582,90 @@ mod tests {
         assert_eq!(compiled.status, BundleStatus::Compiled);
         assert!(compiled.storage_key.is_some());
         assert!(compiled.checksum.is_some());
+
+        // Unsigned service -> no signature sidecar on download.
+        let download = service.download(bundle.id).await.unwrap();
+        assert!(download.signature.is_none());
+    }
+
+    fn signing_cfg(alg: &str) -> BundlesConfig {
+        BundlesConfig {
+            signing_key: Some("07".repeat(32)),
+            signing_key_id: "k1".to_string(),
+            signing_algorithm: alg.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// End-to-end: the control plane signs at compile time, stores the sidecar,
+    /// serves it on download, and the AGENT-side primitive verifies it with the
+    /// signer's public key. Runs for both algorithms.
+    async fn sign_compile_download_verify(alg: &str, sig_alg: SigAlgorithm) {
+        let (_temp_dir, db, storage) = setup().await;
+        let org_id = create_test_org(&db).await;
+        let policy_id = create_test_policy(&db, org_id, "p").await;
+
+        let signer = BundleSigner::from_config(&signing_cfg(alg))
+            .unwrap()
+            .unwrap();
+        let pub_hex = signer.key.public_key_hex();
+        let service = BundleService::new(db.clone(), storage).with_signer(Some(signer));
+
+        let input = CreateBundle {
+            name: "signed".to_string(),
+            description: None,
+            policy_ids: vec![policy_id],
+        };
+        let bundle = service.create(org_id, &input).await.unwrap();
+        service.compile(bundle.id).await.unwrap();
+
+        // Download carries the signature.
+        let download = service.download(bundle.id).await.unwrap();
+        let sig = download.signature.expect("bundle must be signed");
+        assert_eq!(sig.algorithm, alg);
+        assert_eq!(sig.key_id, "k1");
+
+        // Agent side: verify against the signer's public key. Tampering fails.
+        let vk = reaper_core::bundle_signing::VerifyingKey::from_hex(sig_alg, &pub_hex).unwrap();
+        reaper_core::bundle_signing::verify_bundle(&download.data, &sig, &vk, Some("k1")).unwrap();
+
+        let mut tampered = download.data.clone();
+        tampered.push(0xff);
+        assert!(
+            reaper_core::bundle_signing::verify_bundle(&tampered, &sig, &vk, Some("k1")).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_signed_bundle_ed25519_verifies_on_agent_side() {
+        sign_compile_download_verify(
+            reaper_core::bundle_signing::ALG_ED25519,
+            SigAlgorithm::Ed25519Sha256,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_signed_bundle_p256_verifies_on_agent_side() {
+        sign_compile_download_verify(
+            reaper_core::bundle_signing::ALG_ECDSA_P256,
+            SigAlgorithm::EcdsaP256Sha256,
+        )
+        .await;
+    }
+
+    #[test]
+    fn test_no_signing_key_means_no_signer() {
+        assert!(BundleSigner::from_config(&BundlesConfig::default())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_bad_signing_key_errors() {
+        let mut cfg = signing_cfg(reaper_core::bundle_signing::ALG_ED25519);
+        cfg.signing_key = Some("nothex".to_string());
+        assert!(BundleSigner::from_config(&cfg).is_err());
     }
 
     #[tokio::test]

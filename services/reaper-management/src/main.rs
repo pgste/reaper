@@ -125,6 +125,53 @@ async fn main() -> anyhow::Result<()> {
     // Create application state
     let state = Arc::new(AppState::new(db, config.clone(), storage));
 
+    // Cross-instance eventing: on PostgreSQL, LISTEN for sibling
+    // instances' publish notifications and re-broadcast them locally so
+    // agents connected to THIS instance wake up too.
+    if state.db.db_type() == "postgres" {
+        reaper_management::events_pg::spawn_pg_event_bridge(
+            state.clone(),
+            config.database.url.clone(),
+        );
+    }
+
+    // Change-log retention sweeper: publish-time compaction never bounds a
+    // datastore that churns without publishing, so age out old delta marks
+    // on a schedule. Pruning is always safe — a replica below the floor
+    // gets snapshot_required and self-heals — but retention should stay
+    // far above agent sync intervals so healthy followers never hit it.
+    // REAPER_CHANGE_LOG_RETENTION_SECS=0 disables (default 30 days).
+    {
+        let retention_secs: u64 = std::env::var("REAPER_CHANGE_LOG_RETENTION_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30 * 24 * 3600);
+        let sweep_secs: u64 = std::env::var("REAPER_CHANGE_LOG_SWEEP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3600);
+        if retention_secs > 0 {
+            let db = state.db.clone();
+            tokio::spawn(async move {
+                let mut tick =
+                    tokio::time::interval(std::time::Duration::from_secs(sweep_secs.max(60)));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    let cutoff = (chrono::Utc::now()
+                        - chrono::Duration::seconds(retention_secs as i64))
+                    .to_rfc3339();
+                    let repo = reaper_management::db::repositories::DatastoreRepository::new(&db);
+                    match repo.prune_change_log(&cutoff).await {
+                        Ok(0) => {}
+                        Ok(n) => info!(pruned = n, "change-log retention: aged out delta marks"),
+                        Err(e) => warn!("change-log retention sweep failed: {e}"),
+                    }
+                }
+            });
+        }
+    }
+
     // Create rate limiter
     let rate_limiter = rate_limit::create_rate_limiter(&config.rate_limit);
 
@@ -140,10 +187,17 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Run server with graceful shutdown
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(state.clone()))
-        .await?;
+    // Run server with graceful shutdown. ConnectInfo is REQUIRED: the
+    // rate-limit middleware extracts the peer address, and without
+    // into_make_service_with_connect_info every request 500s — a bug the
+    // router-level tests could never see (they bypass serve()); caught by
+    // the process-level data-plane E2E.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(state.clone()))
+    .await?;
 
     info!("Server shutdown complete");
     Ok(())
@@ -154,7 +208,11 @@ fn build_router(
     state: Arc<AppState>,
     rate_limiter: Option<Arc<rate_limit::ApiRateLimiter>>,
 ) -> Router {
-    let api_router = api::build_api_router();
+    // Serve the API at BOTH the root (existing consumers/tests) and the
+    // documented /api/v1 prefix (reaper-sync and external clients build
+    // URLs against /api/v1 — caught by the process-level data-plane E2E).
+    let api_router =
+        api::build_api_router().merge(Router::new().nest("/api/v1", api::build_api_router()));
 
     // Build the router with middleware
     // Middleware is applied in reverse order (last added runs first)

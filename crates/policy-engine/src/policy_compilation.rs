@@ -137,7 +137,7 @@ impl PolicyCompiler {
         let code = match &policy.language {
             PolicyLanguage::Simple => self.compile_simple_policy(policy)?,
             PolicyLanguage::Cedar => self.compile_cedar_policy(policy)?,
-            PolicyLanguage::Custom => self.compile_custom_policy(policy)?,
+            PolicyLanguage::ReaperDsl => self.compile_custom_policy(policy)?,
         };
 
         let elapsed = start.elapsed();
@@ -327,7 +327,7 @@ impl PolicyCompiler {
                 // Complex evaluation benefits more
                 20.0 + (avg_conditions * 5.0).min(30.0)
             }
-            PolicyLanguage::Custom => {
+            PolicyLanguage::ReaperDsl => {
                 // Custom DSL: 10-30x speedup
                 10.0 + (avg_conditions * 4.0).min(20.0)
             }

@@ -115,6 +115,7 @@ impl YamlRule {
         let condition = self.condition.into_ast()?;
 
         Ok(Rule {
+            message: None,
             name: self.name,
             decision,
             condition,
@@ -213,6 +214,7 @@ fn parse_entity(s: &str) -> Result<Entity, ReaperError> {
         "user" => Ok(Entity::User),
         "resource" => Ok(Entity::Resource),
         "context" => Ok(Entity::Context),
+        "input" => Ok(Entity::Input),
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(
                 "Invalid entity '{}'. Use 'user', 'resource', or 'context'",

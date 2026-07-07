@@ -1,0 +1,33 @@
+// API gateway: path/method -> required-permission routing (the Envoy
+// ext_authz staple). Admin paths need an admin scope, versioned public API
+// is read-open, everything else is default-deny.
+policy gateway_routes {
+    default: deny,
+
+    rule public_health {
+        allow if (input.path == "/healthz" || input.path == "/readyz")
+    }
+
+    rule public_api_reads {
+        allow if {
+            input.method == "GET" &&
+            input.path.startswith("/api/v1/public/")
+        }
+    }
+
+    rule admin_paths_need_admin_scope {
+        allow if {
+            input.path.startswith("/api/v1/admin/") &&
+            claims := jwt::decode(input.token) &&
+            scopes := claims.scope.split(" ") &&
+            "admin" in scopes
+        }
+    }
+
+    rule internal_paths_never_via_gateway {
+        deny with message concat("internal path requested via gateway: ", p) if {
+            p := input.path &&
+            input.path.startswith("/internal/")
+        }
+    }
+}

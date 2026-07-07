@@ -41,13 +41,25 @@ spec:
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.agent.service.port }}
               protocol: TCP
           env:
             - name: RUST_LOG
               value: "info,reaper_agent={{ .Values.agent.config.logLevel }}"
-            - name: REAPER_BIND_ADDR
-              value: "0.0.0.0:8080"
+            - name: REAPER_AGENT_BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: REAPER_AGENT_PORT
+              value: {{ .Values.agent.service.port | quote }}
+            {{- if .Values.agent.config.requireDataSync }}
+            - name: REAPER_DATA_REQUIRE_SYNC
+              value: "true"
+            {{- end }}
+            {{- if .Values.agent.config.dataMaxStalenessSecs }}
+            - name: REAPER_DATA_MAX_STALENESS_SECS
+              value: {{ .Values.agent.config.dataMaxStalenessSecs | quote }}
+            - name: REAPER_DATA_STALENESS_MODE
+              value: {{ .Values.agent.config.dataStalenessMode | quote }}
+            {{- end }}
             - name: PLATFORM_URL
               value: "http://{{ include "reaper.platform.fullname" . }}:{{ .Values.platform.service.port }}"
             {{- if .Values.agent.openTelemetry.enabled }}
@@ -56,9 +68,37 @@ spec:
             - name: OTEL_ENDPOINT
               value: {{ .Values.agent.openTelemetry.endpoint | quote }}
             {{- end }}
+            {{- if .Values.agent.uds.enabled }}
+            - name: REAPER_UDS_ENABLED
+              value: "true"
+            - name: REAPER_UDS_PATH
+              value: "{{ .Values.agent.uds.socketDir }}/{{ .Values.agent.uds.socketName }}"
+            - name: REAPER_UDS_SHARDS
+              value: {{ .Values.agent.uds.shards | quote }}
+            - name: REAPER_UDS_PIN_CORES
+              value: {{ .Values.agent.uds.pinCores | quote }}
+            - name: REAPER_UDS_PERMISSIONS
+              value: {{ .Values.agent.uds.permissions | quote }}
+            {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            {{- include "reaper.decisionlogs.agentEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if and .Values.decisionLogs.enabled .Values.decisionLogs.protectionExistingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.decisionLogs.protectionExistingSecret }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.agent.uds.enabled }}
+            - name: uds
+              mountPath: {{ .Values.agent.uds.socketDir }}
+            {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            - name: decision-logs
+              mountPath: /var/log/reaper
+            {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
           livenessProbe:
@@ -71,7 +111,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -79,9 +119,20 @@ spec:
             failureThreshold: 3
           securityContext:
             {{- toYaml .Values.agent.securityContext | nindent 12 }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.vectorSidecar" . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: data
           emptyDir: {}
+        {{- if .Values.agent.uds.enabled }}
+        # Pod-local socket dir shared with a co-located UDS client sidecar.
+        - name: uds
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.volumes" . | nindent 8 }}
+        {{- end }}
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -139,13 +190,25 @@ spec:
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.agent.service.port }}
               protocol: TCP
           env:
             - name: RUST_LOG
               value: "info,reaper_agent={{ .Values.agent.config.logLevel }}"
-            - name: REAPER_BIND_ADDR
-              value: "0.0.0.0:8080"
+            - name: REAPER_AGENT_BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: REAPER_AGENT_PORT
+              value: {{ .Values.agent.service.port | quote }}
+            {{- if .Values.agent.config.requireDataSync }}
+            - name: REAPER_DATA_REQUIRE_SYNC
+              value: "true"
+            {{- end }}
+            {{- if .Values.agent.config.dataMaxStalenessSecs }}
+            - name: REAPER_DATA_MAX_STALENESS_SECS
+              value: {{ .Values.agent.config.dataMaxStalenessSecs | quote }}
+            - name: REAPER_DATA_STALENESS_MODE
+              value: {{ .Values.agent.config.dataStalenessMode | quote }}
+            {{- end }}
             - name: REAPER_MANAGEMENT_ENABLED
               value: "true"
             - name: REAPER_MANAGEMENT_URL
@@ -168,9 +231,37 @@ spec:
             - name: OTEL_ENDPOINT
               value: {{ .Values.agent.openTelemetry.endpoint | quote }}
             {{- end }}
+            {{- if .Values.agent.uds.enabled }}
+            - name: REAPER_UDS_ENABLED
+              value: "true"
+            - name: REAPER_UDS_PATH
+              value: "{{ .Values.agent.uds.socketDir }}/{{ .Values.agent.uds.socketName }}"
+            - name: REAPER_UDS_SHARDS
+              value: {{ .Values.agent.uds.shards | quote }}
+            - name: REAPER_UDS_PIN_CORES
+              value: {{ .Values.agent.uds.pinCores | quote }}
+            - name: REAPER_UDS_PERMISSIONS
+              value: {{ .Values.agent.uds.permissions | quote }}
+            {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            {{- include "reaper.decisionlogs.agentEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if and .Values.decisionLogs.enabled .Values.decisionLogs.protectionExistingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.decisionLogs.protectionExistingSecret }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.agent.uds.enabled }}
+            - name: uds
+              mountPath: {{ .Values.agent.uds.socketDir }}
+            {{- end }}
+            {{- if .Values.decisionLogs.enabled }}
+            - name: decision-logs
+              mountPath: /var/log/reaper
+            {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
           livenessProbe:
@@ -183,7 +274,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -191,9 +282,20 @@ spec:
             failureThreshold: 3
           securityContext:
             {{- toYaml .Values.agent.securityContext | nindent 12 }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.vectorSidecar" . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: data
           emptyDir: {}
+        {{- if .Values.agent.uds.enabled }}
+        # Pod-local socket dir shared with a co-located UDS client sidecar.
+        - name: uds
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.decisionLogs.enabled }}
+        {{- include "reaper.decisionlogs.volumes" . | nindent 8 }}
+        {{- end }}
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

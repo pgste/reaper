@@ -7,7 +7,7 @@ use policy_engine::{DataLoader, DataStore, EnhancedPolicy, PolicyEngine, ReaperP
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Bootstrap loading errors
 #[derive(Debug, Error)]
@@ -155,7 +155,7 @@ async fn load_reap_policy(
         version: 1,
         name: policy_name.clone(),
         description: format!("Bootstrap policy from {:?}", path),
-        language: policy_engine::PolicyLanguage::Custom,
+        language: policy_engine::PolicyLanguage::ReaperDsl,
         content: content.clone(),
         rules: vec![],
         metadata: std::collections::HashMap::new(),

@@ -34,7 +34,9 @@ pub use evaluators::{
 pub use evaluators::reaper_dsl;
 
 // Re-export reap parser and bundle format
-pub use reap::{BundleFormat, PolicyBundle, PolicyPackage, PrecompilationHints, ReaperPolicy};
+pub use reap::{
+    stable_policy_id, BundleFormat, PolicyBundle, PolicyPackage, PrecompilationHints, ReaperPolicy,
+};
 
 // Re-export optimizer types (Phase 5A: Decision Trees)
 pub use optimizer::{DecisionTree, DecisionTreeBuilder, TreeStats};
@@ -81,7 +83,7 @@ pub use arena::{
 };
 
 // Re-export decision cache for caching policy decisions
-pub use decision_cache::{CachedEvaluator, DecisionCache, DecisionCacheStats};
+pub use decision_cache::{scope_hash, DecisionCache, DecisionCacheStats};
 
 // Re-export batch evaluation for parallel request processing
 pub use batch::{BatchEvaluator, BatchResult, BatchStats};
@@ -89,11 +91,16 @@ pub use batch::{BatchEvaluator, BatchResult, BatchStats};
 // Decision logging (OPA-style structured decision logs)
 pub mod decision_buffer;
 pub mod decision_log;
+pub mod decision_privacy;
 
 pub use decision_buffer::{
     create_shared_buffer, DecisionBuffer, DecisionBufferStats, DecisionFilter, SharedDecisionBuffer,
 };
 pub use decision_log::{DecisionLogConfig, DecisionLogEntry};
+pub use decision_privacy::{
+    decrypt_input_data, generate_encryption_key_hex, pseudonymize, DataProtection,
+};
+pub use reap::{CheckResult, Violation};
 
 // Re-export cache configuration for environment-based cache setup
 pub use cache_config::{CacheConfig, CacheConfigBuilder};

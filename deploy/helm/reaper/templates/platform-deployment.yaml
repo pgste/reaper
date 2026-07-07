@@ -41,13 +41,15 @@ spec:
           imagePullPolicy: {{ .Values.platform.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8081
+              containerPort: {{ .Values.platform.service.port }}
               protocol: TCP
           env:
             - name: RUST_LOG
               value: "info,reaper_platform={{ .Values.platform.config.logLevel }}"
-            - name: REAPER_BIND_ADDR
-              value: "0.0.0.0:8081"
+            - name: REAPER_PLATFORM_BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: REAPER_PLATFORM_PORT
+              value: {{ .Values.platform.service.port | quote }}
           volumeMounts:
             - name: data
               mountPath: /data

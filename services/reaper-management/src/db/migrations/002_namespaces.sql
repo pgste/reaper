@@ -99,9 +99,9 @@ CREATE INDEX IF NOT EXISTS idx_version_pins_bundle ON version_pins(bundle_id);
 CREATE TABLE IF NOT EXISTS agent_metrics_latest (
     agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     requests_total INTEGER DEFAULT 0,
-    requests_per_second REAL DEFAULT 0.0,
-    latency_p50_us REAL DEFAULT 0.0,
-    latency_p99_us REAL DEFAULT 0.0,
+    requests_per_second DOUBLE PRECISION DEFAULT 0.0,
+    latency_p50_us DOUBLE PRECISION DEFAULT 0.0,
+    latency_p99_us DOUBLE PRECISION DEFAULT 0.0,
     decisions_allow INTEGER DEFAULT 0,
     decisions_deny INTEGER DEFAULT 0,
     memory_bytes INTEGER DEFAULT 0,
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS org_metrics_hourly (
     org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     hour TEXT NOT NULL,                    -- ISO 8601 hour (e.g., "2024-01-15T10:00:00Z")
     total_requests INTEGER DEFAULT 0,
-    avg_latency_p99_us REAL DEFAULT 0.0,
+    avg_latency_p99_us DOUBLE PRECISION DEFAULT 0.0,
     total_agents INTEGER DEFAULT 0,
     healthy_agents INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,

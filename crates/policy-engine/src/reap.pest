@@ -32,7 +32,13 @@ decision = { "allow" | "deny" }
 
 // Rule definition
 rule = {
-    "rule" ~ ident ~ "{" ~ decision ~ "if" ~ condition ~ "}"
+    "rule" ~ ident ~ "{" ~ decision ~ message_clause? ~ "if" ~ condition ~ "}"
+}
+
+// Human-readable violation message emitted when the rule matches in check
+// mode: deny with message concat("bucket ", [name, " is public"]) if { ... }
+message_clause = {
+    "with" ~ "message" ~ comp_expr
 }
 
 // Conditions
@@ -222,7 +228,7 @@ var_method_call = {
 bracket_index = { "[" ~ bracket_index_value ~ "]" }
 bracket_index_value = { "_" | integer | string }
 
-entity = { "user" | "resource" | "context" }
+entity = { "user" | "resource" | "context" | "input" }
 
 // Operators
 op = {

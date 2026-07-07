@@ -112,15 +112,11 @@ impl ReaperAgentConfig {
 
     /// Apply environment variable overrides to the config
     pub fn apply_env_overrides(&mut self) {
-        // Agent settings
-        if let Ok(val) = std::env::var("REAPER_AGENT_PORT") {
-            if let Ok(port) = val.parse() {
-                self.agent.port = port;
-            }
-        }
-        if let Ok(val) = std::env::var("REAPER_AGENT_BIND_ADDRESS") {
-            self.agent.bind_address = val;
-        }
+        // Agent bind/port: service-specific vars win, then the generic ones,
+        // then the combined REAPER_BIND_ADDR form (see resolve_bind).
+        let (bind, port) = resolve_bind("REAPER_AGENT", &self.agent.bind_address, self.agent.port);
+        self.agent.bind_address = bind;
+        self.agent.port = port;
         if let Ok(val) = std::env::var("REAPER_AGENT_NAME") {
             self.agent.name = val;
         }
@@ -222,6 +218,20 @@ impl ReaperAgentConfig {
                 self.management.poll_interval_with_sse_secs = secs;
             }
         }
+        // Bundle signature verification
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY") {
+            self.management.bundle_public_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_SIGNATURE_ALGORITHM") {
+            self.management.bundle_signature_algorithm = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_BUNDLE_KEY_ID") {
+            self.management.bundle_key_id = Some(val);
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_REQUIRE_SIGNED_BUNDLES") {
+            self.management.require_signed_bundles =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // UDS settings
         if let Ok(val) = std::env::var("REAPER_UDS_ENABLED") {
@@ -234,6 +244,15 @@ impl ReaperAgentConfig {
             if let Ok(perms) = u32::from_str_radix(&val, 8) {
                 self.uds.socket_permissions = perms;
             }
+        }
+        // Number of thread-per-core shards (0/1 = shared single socket).
+        if let Ok(val) = std::env::var("REAPER_UDS_SHARDS") {
+            if let Ok(shards) = val.parse::<usize>() {
+                self.uds.shards = shards;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_UDS_PIN_CORES") {
+            self.uds.pin_cores = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
 
         // TLS settings
@@ -340,12 +359,160 @@ impl ReaperAgentConfig {
 }
 
 // ============================================================================
+// Bind/port resolution shared by all Reaper services
+// ============================================================================
+
+/// Resolve a service's bind address and port from the environment.
+///
+/// Every Reaper service (agent, platform, management) accepts the same
+/// layered scheme, so one convention works across bare processes, Docker
+/// Compose, and Helm:
+///
+/// 1. `{PREFIX}_BIND_ADDRESS` / `{PREFIX}_PORT` — service-specific, wins
+///    (e.g. `REAPER_AGENT_PORT`, `REAPER_PLATFORM_PORT`,
+///    `REAPER_MANAGEMENT_PORT`)
+/// 2. `REAPER_BIND_ADDRESS` / `REAPER_PORT` — generic, for single-service
+///    containers
+/// 3. `REAPER_BIND_ADDR` — combined `host:port` form
+///
+/// Values that fail to parse are ignored (the next layer, or the given
+/// default, applies).
+pub fn resolve_bind(prefix: &str, default_bind: &str, default_port: u16) -> (String, u16) {
+    resolve_bind_with(prefix, default_bind, default_port, |name| {
+        std::env::var(name).ok()
+    })
+}
+
+/// Pure implementation of [`resolve_bind`] over an arbitrary lookup, so the
+/// precedence rules are unit-testable without mutating process env vars.
+pub fn resolve_bind_with<F: Fn(&str) -> Option<String>>(
+    prefix: &str,
+    default_bind: &str,
+    default_port: u16,
+    lookup: F,
+) -> (String, u16) {
+    let mut bind = default_bind.to_string();
+    let mut port = default_port;
+
+    // Layer 3 (lowest): combined REAPER_BIND_ADDR ("0.0.0.0:8080").
+    if let Some(addr) = lookup("REAPER_BIND_ADDR") {
+        if let Some((host, p)) = addr.rsplit_once(':') {
+            if let Ok(p) = p.parse() {
+                bind = host.to_string();
+                port = p;
+            }
+        }
+    }
+
+    // Layer 2: generic split vars.
+    if let Some(val) = lookup("REAPER_BIND_ADDRESS") {
+        bind = val;
+    }
+    if let Some(p) = lookup("REAPER_PORT").and_then(|v| v.parse().ok()) {
+        port = p;
+    }
+
+    // Layer 1 (highest): service-specific vars.
+    if let Some(val) = lookup(&format!("{prefix}_BIND_ADDRESS")) {
+        bind = val;
+    }
+    if let Some(p) = lookup(&format!("{prefix}_PORT")).and_then(|v| v.parse().ok()) {
+        port = p;
+    }
+
+    (bind, port)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup_from<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn test_resolve_bind_defaults_when_nothing_set() {
+        let (bind, port) = resolve_bind_with("REAPER_AGENT", "0.0.0.0", 8080, lookup_from(&[]));
+        assert_eq!((bind.as_str(), port), ("0.0.0.0", 8080));
+    }
+
+    #[test]
+    fn test_resolve_bind_combined_form() {
+        let (bind, port) = resolve_bind_with(
+            "REAPER_AGENT",
+            "0.0.0.0",
+            8080,
+            lookup_from(&[("REAPER_BIND_ADDR", "127.0.0.1:9999")]),
+        );
+        assert_eq!((bind.as_str(), port), ("127.0.0.1", 9999));
+    }
+
+    #[test]
+    fn test_resolve_bind_generic_beats_combined() {
+        let (bind, port) = resolve_bind_with(
+            "REAPER_AGENT",
+            "0.0.0.0",
+            8080,
+            lookup_from(&[
+                ("REAPER_BIND_ADDR", "127.0.0.1:9999"),
+                ("REAPER_PORT", "7777"),
+            ]),
+        );
+        // Generic port wins over the combined form; its host part still applies.
+        assert_eq!((bind.as_str(), port), ("127.0.0.1", 7777));
+    }
+
+    #[test]
+    fn test_resolve_bind_specific_beats_generic() {
+        let (bind, port) = resolve_bind_with(
+            "REAPER_AGENT",
+            "0.0.0.0",
+            8080,
+            lookup_from(&[
+                ("REAPER_PORT", "7777"),
+                ("REAPER_BIND_ADDRESS", "10.0.0.1"),
+                ("REAPER_AGENT_PORT", "6666"),
+                ("REAPER_AGENT_BIND_ADDRESS", "192.168.0.1"),
+            ]),
+        );
+        assert_eq!((bind.as_str(), port), ("192.168.0.1", 6666));
+    }
+
+    #[test]
+    fn test_resolve_bind_ignores_unparseable_port() {
+        let (bind, port) = resolve_bind_with(
+            "REAPER_AGENT",
+            "0.0.0.0",
+            8080,
+            lookup_from(&[
+                ("REAPER_PORT", "not-a-port"),
+                ("REAPER_BIND_ADDR", "not-an-addr"),
+            ]),
+        );
+        assert_eq!((bind.as_str(), port), ("0.0.0.0", 8080));
+    }
+
+    #[test]
+    fn test_resolve_bind_other_service_prefix_ignored() {
+        // A platform-specific var must not affect the agent.
+        let (bind, port) = resolve_bind_with(
+            "REAPER_AGENT",
+            "0.0.0.0",
+            8080,
+            lookup_from(&[("REAPER_PLATFORM_PORT", "5555")]),
+        );
+        assert_eq!((bind.as_str(), port), ("0.0.0.0", 8080));
+    }
 
     #[test]
     fn test_default_config() {

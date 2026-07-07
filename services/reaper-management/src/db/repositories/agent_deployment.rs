@@ -2,6 +2,9 @@
 //!
 //! Database operations for tracking per-agent deployment status.
 
+// sqlx rows decode into wide tuples by design; aliases would just move the noise.
+#![allow(clippy::type_complexity)]
+
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -24,14 +27,14 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn create(&self, deployment: &AgentDeployment) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query(
             r#"
             INSERT INTO agent_deployments
                 (id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(deployment.id.to_string())
@@ -53,14 +56,14 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE id = ?
+                FROM agent_deployments WHERE id = $1
                 "#,
             )
             .bind(id.to_string())
@@ -77,14 +80,14 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Vec<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE rollout_id = ?
+                FROM agent_deployments WHERE rollout_id = $1
                 ORDER BY created_at
                 "#,
             )
@@ -104,18 +107,45 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Option<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE agent_id = ?
+                FROM agent_deployments WHERE agent_id = $1
                 ORDER BY created_at DESC LIMIT 1
                 "#,
             )
             .bind(agent_id.to_string())
+            .fetch_optional(pool)
+            .await?;
+
+        row.map(|r| self.row_to_deployment(r)).transpose()
+    }
+
+    /// Get the most recent deployment record for a specific agent + bundle.
+    pub async fn get_latest_for_agent_bundle(
+        &self,
+        agent_id: Uuid,
+        bundle_id: Uuid,
+    ) -> Result<Option<AgentDeployment>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or(DatabaseError::Config("No database pool".to_string()))?;
+
+        let row: Option<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
+            sqlx::query_as(
+                r#"
+                SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
+                FROM agent_deployments WHERE agent_id = $1 AND bundle_id = $2
+                ORDER BY created_at DESC LIMIT 1
+                "#,
+            )
+            .bind(agent_id.to_string())
+            .bind(bundle_id.to_string())
             .fetch_optional(pool)
             .await?;
 
@@ -131,7 +161,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let deployed_at = if status == AgentDeploymentStatus::Deployed {
@@ -143,8 +173,8 @@ impl<'a> AgentDeploymentRepository<'a> {
         sqlx::query(
             r#"
             UPDATE agent_deployments
-            SET status = ?, error_message = ?, deployed_at = COALESCE(?, deployed_at)
-            WHERE id = ?
+            SET status = $1, error_message = $2, deployed_at = COALESCE($3, deployed_at)
+            WHERE id = $4
             "#,
         )
         .bind(status.to_string())
@@ -161,10 +191,10 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn acknowledge(&self, id: Uuid) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
-        sqlx::query("UPDATE agent_deployments SET acknowledged_at = ? WHERE id = ?")
+        sqlx::query("UPDATE agent_deployments SET acknowledged_at = $1 WHERE id = $2")
             .bind(Utc::now().to_rfc3339())
             .bind(id.to_string())
             .execute(pool)
@@ -177,7 +207,7 @@ impl<'a> AgentDeploymentRepository<'a> {
     pub async fn get_summary(&self, rollout_id: Uuid) -> Result<DeploymentSummary, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
@@ -189,7 +219,7 @@ impl<'a> AgentDeploymentRepository<'a> {
                 SUM(CASE WHEN status = 'deployed' THEN 1 ELSE 0 END) as deployed,
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
                 SUM(CASE WHEN acknowledged_at IS NOT NULL THEN 1 ELSE 0 END) as acknowledged
-            FROM agent_deployments WHERE rollout_id = ?
+            FROM agent_deployments WHERE rollout_id = $1
             "#,
         )
         .bind(rollout_id.to_string())
@@ -213,14 +243,14 @@ impl<'a> AgentDeploymentRepository<'a> {
     ) -> Result<Vec<AgentDeployment>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let rows: Vec<(String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, String)> =
             sqlx::query_as(
                 r#"
                 SELECT id, agent_id, bundle_id, rollout_id, status, error_message, deployed_at, acknowledged_at, created_at
-                FROM agent_deployments WHERE rollout_id = ? AND status = 'failed'
+                FROM agent_deployments WHERE rollout_id = $1 AND status = 'failed'
                 ORDER BY created_at
                 "#,
             )
@@ -292,7 +322,7 @@ impl<'a> RollbackConfigRepository<'a> {
     ) -> Result<Option<RollbackConfig>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         let row: Option<(
@@ -309,7 +339,7 @@ impl<'a> RollbackConfigRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
-                FROM rollback_configs WHERE org_id = ? AND namespace_id = ?
+                FROM rollback_configs WHERE org_id = $1 AND namespace_id = $2
                 "#,
             )
             .bind(org_id.to_string())
@@ -320,7 +350,7 @@ impl<'a> RollbackConfigRepository<'a> {
             sqlx::query_as(
                 r#"
                 SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
-                FROM rollback_configs WHERE org_id = ? AND namespace_id IS NULL
+                FROM rollback_configs WHERE org_id = $1 AND namespace_id IS NULL
                 "#,
             )
             .bind(org_id.to_string())
@@ -335,14 +365,14 @@ impl<'a> RollbackConfigRepository<'a> {
     pub async fn upsert(&self, config: &RollbackConfig) -> Result<(), DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or(DatabaseError::Config("No database pool".to_string()))?;
 
         sqlx::query(
             r#"
             INSERT INTO rollback_configs
                 (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT(org_id, namespace_id) DO UPDATE SET
                 is_enabled = excluded.is_enabled,
                 error_rate_threshold = excluded.error_rate_threshold,

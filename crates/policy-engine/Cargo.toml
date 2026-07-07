@@ -14,8 +14,11 @@ serde_yaml = "0.9"
 thiserror = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
+arc-swap = { workspace = true }
 parking_lot = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
+crossbeam-utils = { workspace = true }
 tracing = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 cedar-policy = "4.2"
@@ -24,6 +27,9 @@ pest_derive = "2.7"
 postcard = { workspace = true }
 regex = "1.10"
 sha2 = { workspace = true }
+hmac = { workspace = true }     # Keyed principal pseudonymization (decision logs)
+aes-gcm = { workspace = true }  # AEAD encryption of decision-log input_data
+base64 = { workspace = true }
 hex = "0.4"  # Hex encoding for checksums
 memchr = "2.7"  # SIMD-accelerated string search
 lazy_static = "1.4"  # Thread-local regex cache global state
@@ -35,6 +41,7 @@ rayon = "1.10"  # Parallel batch evaluation
 sonic-rs = "0.3"
 
 [dev-dependencies]
+proptest = { workspace = true }
 tokio-test = { workspace = true }
 criterion = { workspace = true }
 cucumber = { workspace = true }
@@ -83,4 +90,8 @@ harness = false
 
 [[test]]
 name = "gherkin_tests"
+harness = false
+
+[[bench]]
+name = "rebac_bench"
 harness = false

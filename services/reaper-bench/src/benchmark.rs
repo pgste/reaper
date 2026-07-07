@@ -9,6 +9,10 @@
 //! - **Latency mode**: Sequential requests to measure individual latency (fast-messages)
 //! - **Throughput mode**: Batch requests to measure max throughput (batch-messages)
 
+// Benchmark harness: variants are wired up per-run, so not all paths/fields
+// are referenced in every build.
+#![allow(dead_code)]
+
 use crate::client::{AgentClient, BatchRequest, BatchRequestItem, EvaluateRequest, PolicyRequest};
 use crate::comparison_scenarios;
 use crate::eopa_client::{EopaClient, OpaInput, OpaInputPrincipal};

@@ -42,13 +42,21 @@ spec:
           imagePullPolicy: {{ .Values.management.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 3000
+              containerPort: {{ .Values.management.service.port }}
               protocol: TCP
           envFrom:
             - configMapRef:
                 name: {{ include "reaper.management.fullname" . }}-config
             - secretRef:
                 name: {{ .Values.management.secrets.existingSecret | default (printf "%s-secrets" (include "reaper.management.fullname" .)) }}
+            {{- if .Values.management.decisionLogs.existingSecret }}
+            - secretRef:
+                name: {{ .Values.management.decisionLogs.existingSecret }}
+            {{- else if .Values.decisionLogs.enabled }}
+            # ClickHouse creds from the chart's decision-log pipeline
+            - secretRef:
+                name: {{ include "reaper.decisionlogs.credsSecret" . }}
+            {{- end }}
           volumeMounts:
             - name: storage
               mountPath: /var/lib/reaper/storage

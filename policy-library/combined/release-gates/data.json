@@ -1,0 +1,65 @@
+{
+  "entities": [
+    {
+      "id": "dev-dana",
+      "type": "User",
+      "attributes": { "id": "dev-dana", "role": "developer" }
+    },
+    {
+      "id": "rm-riley",
+      "type": "User",
+      "attributes": { "id": "rm-riley", "role": "release-manager" }
+    },
+    {
+      "id": "svc-checkout",
+      "type": "Resource",
+      "attributes": {
+        "id": "svc-checkout",
+        "checks": [
+          { "name": "unit", "status": "passed" },
+          { "name": "integration", "status": "passed" }
+        ],
+        "approvals": [
+          { "name": "ana", "role": "lead" },
+          { "name": "bo", "role": "lead" },
+          { "name": "cam", "role": "reviewer" }
+        ]
+      }
+    },
+    {
+      "id": "svc-payments",
+      "type": "Resource",
+      "attributes": {
+        "id": "svc-payments",
+        "checks": [
+          { "name": "unit", "status": "passed" },
+          { "name": "load", "status": "failed" }
+        ],
+        "approvals": [
+          { "name": "ana", "role": "lead" },
+          { "name": "bo", "role": "lead" }
+        ]
+      }
+    },
+    {
+      "id": "svc-search",
+      "type": "Resource",
+      "attributes": {
+        "id": "svc-search",
+        "checks": [{ "name": "unit", "status": "passed" }],
+        "approvals": [{ "name": "ana", "role": "lead" }]
+      }
+    },
+    {
+      "id": "svc-legacy",
+      "type": "Resource",
+      "attributes": {
+        "id": "svc-legacy",
+        "approvals": [
+          { "name": "ana", "role": "lead" },
+          { "name": "bo", "role": "lead" }
+        ]
+      }
+    }
+  ]
+}

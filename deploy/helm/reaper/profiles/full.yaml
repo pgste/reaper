@@ -1,0 +1,55 @@
+# =============================================================================
+# Profile: FULL  (demo / staging — everything on)
+# =============================================================================
+# Management + Platform + PostgreSQL + both agent modes + ServiceMonitor.
+# Useful for demos and staging where you want every surface running. Not the
+# recommended production shape — for that pick managed-stack.yaml (control
+# plane) and/or engine*.yaml (enforcement).
+#
+#   helm install reaper ./deploy/helm/reaper -f profiles/full.yaml \
+#       --set management.secrets.jwtSecret=$(openssl rand -hex 32)
+
+management:
+  enabled: true
+
+platform:
+  enabled: true
+
+postgresql:
+  enabled: true
+
+agent:
+  standalone:
+    enabled: true
+    replicaCount: 2
+  managed:
+    enabled: true
+    replicaCount: 2
+    organization: default
+  openTelemetry:
+    enabled: false   # set true + endpoint to ship traces to Tempo/OTLP
+
+metrics:
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+
+# --- Central decision-log pipeline (audit) ----------------------------------
+# Agents write decision NDJSON to a pod-shared file; a Vector sidecar ships it
+# (disk WAL + end-to-end acks) into the bundled ClickHouse; the management
+# query API (GET /api/v1/orgs/{org}/decisions...) is auto-wired to that store.
+# REQUIRED: --set decisionLogs.clickhouse.password=$(openssl rand -hex 24)
+# Multi-tenant note: set decisionLogs.tenantId to the org UUID these agents
+# serve (the query API scopes by org id).
+decisionLogs:
+  enabled: true
+  mode: full               # complete audit: every decision (allows included)
+                           # ships to ClickHouse. Use mode: sampled +
+                           # sampleAllowRate (e.g. "0.05") on high-volume fleets.
+  clickhouse:
+    enabled: true
+    retentionDays: 90
+    persistence:
+      enabled: true
+      size: 50Gi

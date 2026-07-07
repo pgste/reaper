@@ -65,6 +65,32 @@ pub struct EntityDataResponse {
     pub total: Option<usize>,
 }
 
+/// Datastore status (data plane).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatastoreStatus {
+    pub current_version: i64,
+}
+
+/// A published datastore version with its materialized document.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatastoreVersion {
+    pub version: i64,
+    pub checksum: String,
+    #[serde(default)]
+    pub change_seq: i64,
+    pub document: serde_json::Value,
+}
+
+/// A page of the change stream.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatastoreChanges {
+    pub snapshot_required: bool,
+    #[serde(default)]
+    pub head_seq: i64,
+    #[serde(default)]
+    pub deltas: Vec<serde_json::Value>,
+}
+
 /// Client for communicating with the management server
 pub struct ServerClient {
     config: SyncConfig,
@@ -134,7 +160,12 @@ impl ServerClient {
     /// Add authentication headers to a request
     fn add_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.auth_token {
-            Some(token) => request.header(header::AUTHORIZATION, format!("Bearer {}", token)),
+            // JWTs carry dots; anything else is an API key and the
+            // management server only accepts those via X-API-Key.
+            Some(token) if token.contains('.') => {
+                request.header(header::AUTHORIZATION, format!("Bearer {}", token))
+            }
+            Some(token) => request.header("X-API-Key", token.clone()),
             None => request,
         }
     }
@@ -226,6 +257,78 @@ impl ServerClient {
 
     /// Get entity data from the server
     #[instrument(skip(self))]
+    /// Current datastore status for a namespace (version counter only —
+    /// one tiny COUNT-backed response per poll).
+    pub async fn get_datastore_status(
+        &self,
+        org: &str,
+        namespace: &str,
+    ) -> Result<DatastoreStatus, ServerClientError> {
+        let url = format!(
+            "{}/orgs/{}/namespaces/{}/datastore",
+            self.base_url(),
+            org,
+            namespace
+        );
+        let request = self.add_auth_headers(self.http_client.get(&url));
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(ServerClientError::ServerError { status, message });
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Fetch a published datastore version's materialized document.
+    pub async fn get_datastore_version(
+        &self,
+        org: &str,
+        namespace: &str,
+        version: i64,
+    ) -> Result<DatastoreVersion, ServerClientError> {
+        let url = format!(
+            "{}/orgs/{}/namespaces/{}/datastore/versions/{}",
+            self.base_url(),
+            org,
+            namespace,
+            version
+        );
+        let request = self.add_auth_headers(self.http_client.get(&url));
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(ServerClientError::ServerError { status, message });
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Pull the change stream after `since` (durable delta path — the log
+    /// is the source, notifications are only wake-ups).
+    pub async fn get_datastore_changes(
+        &self,
+        org: &str,
+        namespace: &str,
+        since: i64,
+    ) -> Result<DatastoreChanges, ServerClientError> {
+        let url = format!(
+            "{}/orgs/{}/namespaces/{}/datastore/changes?since={}",
+            self.base_url(),
+            org,
+            namespace,
+            since
+        );
+        let request = self.add_auth_headers(self.http_client.get(&url));
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(ServerClientError::ServerError { status, message });
+        }
+        Ok(response.json().await?)
+    }
+
     pub async fn get_entities(&self) -> Result<EntityDataResponse, ServerClientError> {
         let url = format!("{}/entities", self.base_url());
 
@@ -257,6 +360,7 @@ mod tests {
     fn test_config() -> SyncConfig {
         SyncConfig {
             sync: crate::config::SyncSettings {
+                datastore: Default::default(),
                 server: crate::config::ServerConfig {
                     url: "http://localhost:8081".to_string(),
                     api_version: "v1".to_string(),

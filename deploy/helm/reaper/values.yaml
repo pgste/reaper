@@ -24,6 +24,15 @@ management:
     type: ClusterIP
     port: 3000
 
+  # Decision-log query API: point at the ClickHouse the Vector pipeline ships
+  # into (deploy/decision-logs/) to enable GET /api/v1/orgs/{org}/decisions.
+  # Credentials go in an existing Secret (keys: REAPER_CLICKHOUSE_USER,
+  # REAPER_CLICKHOUSE_PASSWORD) referenced via existingSecret.
+  decisionLogs:
+    clickhouseUrl: ""
+    clickhouseDatabase: reaper_audit
+    existingSecret: ""
+
   ingress:
     enabled: false
     className: ""
@@ -156,6 +165,71 @@ platform:
         - ALL
 
 # =============================================================================
+# Decision-log pipeline (audit): agent NDJSON -> Vector sidecar -> ClickHouse
+# =============================================================================
+# One switch deploys the whole audit path (see deploy/decision-logs/ and
+# docs/architecture/DECISION_LOG_PIPELINE.md):
+#   - every agent pod captures decisions to a shared file and ships them via a
+#     Vector sidecar (disk WAL + end-to-end acks; a store outage never blocks
+#     the agent),
+#   - a bundled single-node ClickHouse stores them (or point `clickhouse.url`
+#     at your own / ClickHouse Cloud and set clickhouse.enabled=false),
+#   - the management server's query API (GET /api/v1/orgs/{org}/decisions...)
+#     is wired to the same store automatically.
+decisionLogs:
+  enabled: false
+
+  # --- capture (agent) ---
+  # Capture mode (the explicit intent knob; wins over sampleAllowRate):
+  #   full    -> EVERY decision ships to the store, allows included (complete
+  #              audit; sampling forced off) - the default here.
+  #   sampled -> denies always; allows kept at sampleAllowRate.
+  #   denies  -> denies only (minimal volume).
+  mode: full
+  sampleAllowRate: "1.0"     # used by mode=sampled; denies are never sampled
+  inputData: false           # "explain" tier snapshot (denies-only by default)
+  # Every record ships with this tenant_id. For the managed stack set it to the
+  # org UUID so the control-plane query API (which scopes by org id) finds it;
+  # leave "" for single-tenant self-host + REAPER_CLICKHOUSE_TENANT_FILTER=false
+  # on the management server.
+  tenantId: ""
+  # Data protection (masking/pseudonymization/encryption; see
+  # deploy/decision-logs/README.md). Secrets come from an existing Secret with
+  # keys REAPER_DECISION_LOG_HASH_SALT and/or REAPER_DECISION_LOG_ENCRYPTION_KEY
+  # (generate with: reaper-cli decisions keygen).
+  hashPrincipal: false
+  maskKeys: ""               # e.g. "ssn,password,token"
+  encryptInputData: false
+  protectionExistingSecret: ""
+
+  # --- shipper (Vector sidecar on every agent pod) ---
+  vector:
+    image: timberio/vector:0.41.1-debian
+    resources:
+      requests: { cpu: 20m, memory: 64Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+    bufferMaxBytes: "1073741824"   # 1 GiB disk WAL per pod (emptyDir)
+
+  # --- store (ClickHouse) ---
+  clickhouse:
+    enabled: true              # bundled single-node CH; disable to bring your own
+    image: clickhouse/clickhouse-server:24.8
+    url: ""                    # override when enabled=false (e.g. ClickHouse Cloud)
+    database: reaper_audit
+    username: reaper
+    password: ""               # REQUIRED with bundled CH unless existingSecret set
+    # Existing Secret with keys REAPER_CLICKHOUSE_USER / REAPER_CLICKHOUSE_PASSWORD
+    existingSecret: ""
+    retentionDays: 90          # TTL DELETE on the bundled store
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 250m, memory: 1Gi }
+      limits: { cpu: "2", memory: 4Gi }
+
+# =============================================================================
 # Reaper Agent
 # =============================================================================
 agent:
@@ -214,6 +288,35 @@ agent:
 
   config:
     logLevel: info
+    # Data-plane cold-start gate: when true the agent's /ready stays 503
+    # until its first VERIFIED data snapshot lands, so Kubernetes keeps a
+    # fresh pod out of rotation until its authorization data is loaded.
+    # Leave false for agents that don't use the data plane.
+    requireDataSync: false
+    # Staleness budget for replicated authorization data (seconds; 0 = no
+    # budget) and the behavior when exceeded: monitor | flag | enforce.
+    dataMaxStalenessSecs: 0
+    dataStalenessMode: monitor
+
+  # ---------------------------------------------------------------------------
+  # Unix Domain Socket transport (lower-latency same-host IPC).
+  #
+  # Two first-class deployment models (see docs/deployment/UDS_DEPLOYMENT.md):
+  #   shards: 0 or 1  -> SHARED: one socket, multi-threaded runtime (best p99).
+  #   shards: N (>1)  -> SHARDED: N sockets, one pinned single-thread runtime
+  #                      each (~12-17% more throughput; clients round-robin).
+  #
+  # When enabled, the socket directory is mounted as a pod-local emptyDir so a
+  # co-located sidecar (see the sidecar example) can reach it. The agent creates
+  # the dir 0700 and chmods each socket to `permissions` — filesystem perms are
+  # the ONLY access boundary (UDS has no application-layer auth).
+  uds:
+    enabled: false
+    shards: 0            # 0/1 = shared; N>1 = sharded thread-per-core
+    pinCores: true       # pin each shard runtime to a core (sharded only)
+    socketDir: /run/reaper
+    socketName: agent.sock
+    permissions: "0660"  # 0660 = owner+group; use 0600 for owner-only
 
   openTelemetry:
     enabled: false

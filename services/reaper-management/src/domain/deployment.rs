@@ -11,8 +11,10 @@ use uuid::Uuid;
 /// Deployment strategy types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum StrategyType {
     /// Deploy to all agents immediately
+    #[default]
     Immediate,
     /// Deploy to canary agents first, then proceed
     Canary,
@@ -20,12 +22,6 @@ pub enum StrategyType {
     Percentage,
     /// Deploy only to agents matching labels
     LabelSelector,
-}
-
-impl Default for StrategyType {
-    fn default() -> Self {
-        Self::Immediate
-    }
 }
 
 impl std::fmt::Display for StrategyType {
@@ -107,8 +103,10 @@ impl Default for StrategyConfig {
 /// Rollout status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum RolloutStatus {
     /// Rollout is pending start
+    #[default]
     Pending,
     /// Rollout is in progress
     InProgress,
@@ -122,12 +120,6 @@ pub enum RolloutStatus {
     RolledBack,
     /// Rollout was cancelled
     Cancelled,
-}
-
-impl Default for RolloutStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for RolloutStatus {
@@ -216,17 +208,13 @@ impl Rollout {
 /// Rollout wave status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum WaveStatus {
+    #[default]
     Pending,
     Deploying,
     Completed,
     Failed,
-}
-
-impl Default for WaveStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for WaveStatus {

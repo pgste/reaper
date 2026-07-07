@@ -1,0 +1,14 @@
+{
+  "name": "Payroll access (OPA 'read own salary' classic + manager chain)",
+  "source": "OPA docs policy examples ('allow if input.user == employee or manager')",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "employee reads own salary", "principal": "emp-jo", "action": "read", "resource": "salary-jo", "expect": "allow"},
+    {"name": "direct manager reads report's salary", "principal": "mgr-max", "action": "read", "resource": "salary-jo", "expect": "allow"},
+    {"name": "skip-level director reads via chain", "principal": "dir-dana", "action": "read", "resource": "salary-jo", "expect": "allow"},
+    {"name": "HR cannot read (only update)", "principal": "hr-pat", "action": "read", "resource": "salary-jo", "expect": "deny"},
+    {"name": "HR updates compensation", "principal": "hr-pat", "action": "update", "resource": "salary-jo", "expect": "allow"},
+    {"name": "employee cannot update own compensation", "principal": "emp-jo", "action": "update", "resource": "salary-jo", "expect": "deny"}
+  ]
+}

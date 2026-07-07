@@ -4,10 +4,11 @@
 name: "RBAC Equivalence"
 description: "Verify Reaper RBAC policy produces correct decisions"
 
-# Use existing test data and policies
+# Deterministic committed fixture (NOT the generated benchmark data —
+# test-data/rbac-test-data.json is gitignored and absent on fresh clones).
 reaper_policy: "crates/policy-engine/examples/policies/rbac.reap"
 opa_policy: "n/a"  # OPA comparison disabled
-data_file: "test-data/rbac-test-data.json"
+data_file: "test-fixtures/rbac-fixture.json"
 
 test_cases:
   # Admin full access (user_0 has admin role)

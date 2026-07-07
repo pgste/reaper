@@ -1,0 +1,41 @@
+// GitHub-style repo access — the example that shows WHY the three models
+// compose. None of these alone can express "push to a private repo":
+//   ReBAC: are you in a team the repo grants write to (through org nesting)?
+//   ABAC:  private repos require MFA on the pushing account
+//   RBAC:  org admins bypass team grants, bots may never force-push
+policy github_org {
+    default: deny,
+
+    rule bots_never_force_push {
+        deny if {
+            user.account_type == "bot" &&
+            context.action == "force-push"
+        }
+    }
+
+    rule org_admin_bypass {
+        allow if user.role == "org_admin"
+    }
+
+    rule public_repo_reads {
+        allow if {
+            context.action == "read" &&
+            resource.visibility == "public"
+        }
+    }
+
+    rule team_write_access {
+        allow if {
+            (context.action == "push" || context.action == "read") &&
+            user.mfa_enabled == true &&
+            rebac::reachable(user, "write", resource, "member_of", 3)
+        }
+    }
+
+    rule team_read_access {
+        allow if {
+            context.action == "read" &&
+            rebac::reachable(user, "read", resource, "member_of", 3)
+        }
+    }
+}

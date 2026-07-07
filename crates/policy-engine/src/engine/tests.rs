@@ -263,6 +263,7 @@ async fn test_bundle_deployment_with_version_tracking() {
         metadata,
         default_decision: Decision::Deny,
         rules: vec![ReapRule {
+            message: None,
             name: "allow-admins".to_string(),
             decision: Decision::Allow,
             condition: ReapCondition::True,
@@ -490,6 +491,7 @@ async fn test_atomic_package_stage_and_commit() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Deny,
         rules: vec![ReapRule {
+            message: None,
             name: "allow-admin".to_string(),
             decision: Decision::Allow,
             condition: ReapCondition::True,
@@ -681,4 +683,130 @@ async fn test_staging_id_mismatch_rejected() {
     // Commit with correct ID should work
     let versions = engine.commit_staged_package(&staged).unwrap();
     assert_eq!(versions.len(), 1);
+}
+
+#[test]
+fn test_reaper_dsl_policy_rebuilds_evaluator_from_content() {
+    // Regression for restart durability: a Reaper-DSL policy persisted with only
+    // its `content` (the evaluator is never serialized) must rebuild a working
+    // evaluator via build_evaluator_with_data — previously this hard-errored for
+    // the old `Custom` language and the policy was silently dropped on restart.
+    let content = r#"
+policy restart_test {
+    default: deny,
+    rule allow_read {
+        allow if {
+            action == "read"
+        }
+    }
+}
+"#;
+
+    let mut policy = EnhancedPolicy {
+        id: uuid::Uuid::new_v4(),
+        version: 1,
+        name: "restart_test".to_string(),
+        description: String::new(),
+        language: crate::PolicyLanguage::ReaperDsl,
+        content: content.to_string(),
+        rules: vec![],
+        metadata: std::collections::HashMap::new(),
+        priority: 100,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        evaluator: None,
+        source_metadata: None,
+    };
+
+    // Rebuild as the agent does on restart, passing the populated DataStore so
+    // entity resolution works (the principal must exist as an entity).
+    let store = std::sync::Arc::new(crate::data::DataStore::new());
+    let loader = crate::data::DataLoader::new((*store).clone());
+    loader
+        .load_json(r#"{"entities":[{"id":"alice","type":"User","attributes":{"role":"admin"}}]}"#)
+        .expect("load entity");
+
+    policy
+        .build_evaluator_with_data(Some(store))
+        .expect("ReaperDsl policy should rebuild its evaluator, not error");
+    assert!(policy.evaluator.is_some());
+
+    let engine = PolicyEngine::new();
+    let id = policy.id;
+    engine.deploy_policy(policy).unwrap();
+
+    let mut ctx = std::collections::HashMap::new();
+    ctx.insert("principal".to_string(), "alice".to_string());
+    let allow_req = crate::PolicyRequest {
+        resource: "/doc".to_string(),
+        action: "read".to_string(),
+        context: ctx.clone(),
+    };
+    let deny_req = crate::PolicyRequest {
+        resource: "/doc".to_string(),
+        action: "write".to_string(),
+        context: ctx,
+    };
+
+    assert_eq!(
+        engine.evaluate(&id, &allow_req).unwrap().decision,
+        PolicyAction::Allow
+    );
+    assert_eq!(
+        engine.evaluate(&id, &deny_req).unwrap().decision,
+        PolicyAction::Deny
+    );
+}
+
+#[test]
+fn test_replace_all_policies_is_atomic_full_replace() {
+    let engine = PolicyEngine::new();
+
+    // Deploy two policies the normal (additive) way.
+    for name in ["policy_a", "policy_b"] {
+        let mut p = EnhancedPolicy::new(
+            name.to_string(),
+            String::new(),
+            vec![PolicyRule {
+                action: PolicyAction::Allow,
+                resource: "*".to_string(),
+                conditions: vec![],
+            }],
+        );
+        p.build_evaluator().unwrap();
+        engine.deploy_policy(p).unwrap();
+    }
+    assert_eq!(engine.list_policies().len(), 2);
+    assert!(engine.get_policy_by_name("policy_a").is_some());
+
+    // Full-replace with a bundle that contains only policy_c.
+    let mut c = EnhancedPolicy::new(
+        "policy_c".to_string(),
+        String::new(),
+        vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "*".to_string(),
+            conditions: vec![],
+        }],
+    );
+    c.build_evaluator().unwrap();
+    engine.replace_all_policies(vec![c]).unwrap();
+
+    // Only policy_c remains — the floating a/b were dropped in the swap.
+    assert_eq!(engine.list_policies().len(), 1);
+    assert!(engine.get_policy_by_name("policy_c").is_some());
+    assert!(engine.get_policy_by_name("policy_a").is_none());
+    assert!(engine.get_policy_by_name("policy_b").is_none());
+}
+
+#[test]
+fn test_stable_policy_id_is_deterministic() {
+    let a = crate::stable_policy_id("my-policy");
+    let b = crate::stable_policy_id("my-policy");
+    let c = crate::stable_policy_id("other-policy");
+    assert_eq!(
+        a, b,
+        "same name must map to the same id (idempotent redeploy)"
+    );
+    assert_ne!(a, c);
 }

@@ -23,7 +23,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn create(&self, org_id: Uuid, input: CreateTeam) -> Result<Team, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let id = Uuid::new_v4();
@@ -32,7 +32,7 @@ impl<'a> TeamRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO teams (id, org_id, name, slug, description, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(id.to_string())
@@ -54,14 +54,14 @@ impl<'a> TeamRepository<'a> {
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, name, slug, description, created_at, updated_at
             FROM teams
-            WHERE id = ?
+            WHERE id = $1
             "#,
         )
         .bind(id.to_string())
@@ -82,14 +82,14 @@ impl<'a> TeamRepository<'a> {
     ) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let row = sqlx::query(
             r#"
             SELECT id, org_id, name, slug, description, created_at, updated_at
             FROM teams
-            WHERE org_id = ? AND slug = ?
+            WHERE org_id = $1 AND slug = $2
             "#,
         )
         .bind(org_id.to_string())
@@ -112,7 +112,7 @@ impl<'a> TeamRepository<'a> {
     ) -> Result<Vec<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let limit = limit.unwrap_or(100);
@@ -122,9 +122,9 @@ impl<'a> TeamRepository<'a> {
             r#"
             SELECT id, org_id, name, slug, description, created_at, updated_at
             FROM teams
-            WHERE org_id = ?
+            WHERE org_id = $1
             ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(org_id.to_string())
@@ -145,10 +145,10 @@ impl<'a> TeamRepository<'a> {
     pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE org_id = ?")
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE org_id = $1")
             .bind(org_id.to_string())
             .fetch_one(pool)
             .await?;
@@ -160,7 +160,7 @@ impl<'a> TeamRepository<'a> {
     pub async fn update(&self, id: Uuid, input: UpdateTeam) -> Result<Option<Team>, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         // Get current team to merge updates
@@ -176,8 +176,8 @@ impl<'a> TeamRepository<'a> {
         sqlx::query(
             r#"
             UPDATE teams
-            SET name = ?, description = ?, updated_at = ?
-            WHERE id = ?
+            SET name = $1, description = $2, updated_at = $3
+            WHERE id = $4
             "#,
         )
         .bind(&name)
@@ -194,10 +194,10 @@ impl<'a> TeamRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, DatabaseError> {
         let pool = self
             .db
-            .sqlite_pool()
+            .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
-        let result = sqlx::query("DELETE FROM teams WHERE id = ?")
+        let result = sqlx::query("DELETE FROM teams WHERE id = $1")
             .bind(id.to_string())
             .execute(pool)
             .await?;
@@ -206,7 +206,7 @@ impl<'a> TeamRepository<'a> {
     }
 
     /// Convert a database row to a Team
-    fn row_to_team(&self, row: sqlx::sqlite::SqliteRow) -> Result<Team, DatabaseError> {
+    fn row_to_team(&self, row: sqlx::any::AnyRow) -> Result<Team, DatabaseError> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
             .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
@@ -240,21 +240,14 @@ impl<'a> TeamRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DatabaseConfig;
     use crate::db::repositories::OrganizationRepository;
     use crate::domain::organization::CreateOrganization;
     use tempfile::TempDir;
 
     async fn setup_db() -> (TempDir, Database) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let url = format!("sqlite:{}", db_path.display());
 
-        let config = DatabaseConfig {
-            db_type: "sqlite".to_string(),
-            url,
-            max_connections: 5,
-        };
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
 
         let db = Database::new(&config).await.unwrap();
         db.run_migrations().await.unwrap();

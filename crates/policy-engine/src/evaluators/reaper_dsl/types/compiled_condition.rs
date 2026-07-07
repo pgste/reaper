@@ -30,6 +30,18 @@ pub enum CompiledCondition {
 
     // ============ Core Conditions ============
     Always,
+
+    /// ReBAC check with everything pre-interned: evaluation is DashMap gets on
+    /// (u32, u32) keys + binary search / bounded BFS. No strings, no allocs on
+    /// the direct path.
+    RebacCheck {
+        kind: super::condition::RebacKind,
+        subject: CompiledRebacRef,
+        relation: InternedString,
+        object: CompiledRebacRef,
+        via: Option<InternedString>,
+        max_depth: u32,
+    },
     ActionEquals {
         value: InternedString,
     },
@@ -130,6 +142,11 @@ pub enum CompiledCondition {
         variable: InternedString,
         value: CompiledLiteralValue,
     },
+    /// Native `var != literal` — an unbound variable fails the guard.
+    VariableNotEqualsLiteral {
+        variable: InternedString,
+        value: CompiledLiteralValue,
+    },
     VariableCompare {
         variable: InternedString,
         op: AttrCompareOp,
@@ -205,6 +222,12 @@ pub enum CompiledCondition {
 
     // ============ Variable Attribute Comparisons ============
     VariableAttrEqualsLiteral {
+        variable: InternedString,
+        attribute: InternedString,
+        value: CompiledLiteralValue,
+    },
+    /// Native `var.attr != literal` — missing attribute fails the guard.
+    VariableAttrNotEqualsLiteral {
         variable: InternedString,
         attribute: InternedString,
         value: CompiledLiteralValue,
@@ -301,4 +324,12 @@ impl CompiledCondition {
             _ => None,
         }
     }
+}
+
+/// Pre-resolved rebac argument.
+#[derive(Debug, Clone)]
+pub enum CompiledRebacRef {
+    Principal,
+    ResourceId,
+    Literal(InternedString),
 }
