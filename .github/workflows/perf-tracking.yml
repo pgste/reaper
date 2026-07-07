@@ -97,6 +97,11 @@ jobs:
           benchmark-data-dir-path: "dev/bench/micro-ops"
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.ref == 'refs/heads/main' }}
+          # Second benchmark step in the same job: the first step already
+          # fetched (and, off main, locally committed to) gh-pages, so re-
+          # fetching origin here is a non-fast-forward error. Reuse the branch
+          # the first step set up instead.
+          skip-fetch-gh-pages: true
           # Loose gate for the noisy ns-scale ops: warn at +25%, fail only on a
           # gross +50% regression (a real 1.5x slowdown, not measurement drift).
           alert-threshold: "125%"
