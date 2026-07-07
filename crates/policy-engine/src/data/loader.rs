@@ -228,9 +228,13 @@ impl DataLoader {
             // ReBAC edges: `id #relation @subject` into the relationship graph
             // (forward + reverse indexed at write time).
             for (relation, subjects) in &entity_doc.relationships {
+                // Relations are a bounded vocabulary — pin them. Subjects are
+                // high-cardinality (entity ids), so count them: the graph
+                // releases one per live edge when the carrier is detached, so
+                // subject churn (and ids used only as subjects) is reclaimed.
                 let relation_id = interner.intern(relation);
                 for subject in subjects {
-                    let subject_id = interner.intern(subject);
+                    let subject_id = interner.intern_counted(subject);
                     self.store.add_relationship(id, relation_id, subject_id);
                 }
             }
@@ -266,10 +270,12 @@ impl DataLoader {
         }
 
         for (relation, subjects) in &entity_doc.relationships {
+            // Relations pinned (bounded vocabulary); subjects counted so a
+            // high-cardinality subject churn is reclaimed on detach.
             let relation_id = interner.intern(relation);
             for subject in subjects {
                 self.store
-                    .add_relationship(id, relation_id, interner.intern(subject));
+                    .add_relationship(id, relation_id, interner.intern_counted(subject));
             }
         }
 
@@ -396,13 +402,14 @@ impl DataLoader {
             builder = builder.with_parent(interner.intern_counted(&parent));
         }
 
-        // upsert() detaches previously carried edges; re-add the current set.
+        // upsert() detaches previously carried edges (releasing their counted
+        // subjects); re-add the current set with freshly counted subjects.
         self.store.upsert(builder.build());
         for (relation, subjects) in &entity_doc.relationships {
             let relation_id = interner.intern(relation);
             for subject in subjects {
                 self.store
-                    .add_relationship(id, relation_id, interner.intern(subject));
+                    .add_relationship(id, relation_id, interner.intern_counted(subject));
             }
         }
         Ok(())

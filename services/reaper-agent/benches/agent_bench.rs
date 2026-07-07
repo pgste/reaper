@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::State;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use uuid::Uuid;
 
 use policy_engine::{
@@ -71,6 +72,7 @@ fn build_state_with_buffer(decision_buffer: Option<SharedDecisionBuffer>) -> Arc
         decision_buffer,
         agent_id: "bench".to_string(),
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
+        data_sync: Arc::new(reaper_agent::state::DataSyncState::from_env()),
     })
 }
 

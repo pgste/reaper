@@ -46,11 +46,10 @@ enum Expected {
 
 impl Expected {
     fn matches(&self, decision: &PolicyAction) -> bool {
-        match (self, decision) {
-            (Expected::Allow, PolicyAction::Allow) => true,
-            (Expected::Deny, PolicyAction::Deny) => true,
-            _ => false,
-        }
+        matches!(
+            (self, decision),
+            (Expected::Allow, PolicyAction::Allow) | (Expected::Deny, PolicyAction::Deny)
+        )
     }
 }
 

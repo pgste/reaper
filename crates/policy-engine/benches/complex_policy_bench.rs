@@ -380,10 +380,10 @@ fn ast_vs_compiled_enterprise(c: &mut Criterion) {
     ];
 
     for &(label, principal, action, resource) in scenarios {
-        group.bench_function(&format!("ast/{}", label), |b| {
+        group.bench_function(format!("ast/{}", label), |b| {
             b.iter(|| eval_ast(black_box(&ast), principal, action, resource))
         });
-        group.bench_function(&format!("compiled/{}", label), |b| {
+        group.bench_function(format!("compiled/{}", label), |b| {
             b.iter(|| eval_compiled(black_box(compiled.as_ref()), principal, action, resource))
         });
     }

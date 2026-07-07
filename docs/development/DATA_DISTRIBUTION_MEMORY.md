@@ -133,9 +133,34 @@ asserts **0 interner growth over 10k evals** of a policy producing string result
 every eval. Latency is unchanged (the reclamation is dominated by the regex/alloc
 work the methods already do).
 
-## Residual (documented, not a leak under normal workloads)
+## ReBAC-subject leaks — fixed
 
-- **ReBAC subjects** are pinned (interned via `add_relationship`), so churning a
-  high-cardinality *relationship subject* space is not reclaimed until the next
-  snapshot rebuild. Entity-attribute and entity-id churn (the common case) is
-  fully reclaimed.
+Relationship *subjects* (`doc #owner @alice`) were the last high-cardinality
+string class still pinned: the loader interned every subject with a plain
+`intern()`, so churning a high-cardinality subject space (per-session grants,
+request-scoped shares) grew the interner forever, and — worse — using a loaded
+entity's id as a subject **pinned that id**, defeating the data-plane's
+refcounted reclamation for the entity itself.
+
+Now subjects are **counted**, with the balancing release owned by the
+relationship graph:
+
+- The loader interns each subject `intern_counted` — once per occurrence in the
+  source list. Relations stay pinned (bounded vocabulary — not a churn source).
+- The `RelationshipGraph` holds the store's shared interner and enforces one
+  invariant: **exactly one counted subject reference per live forward edge**.
+  `add_edge` releases the redundant count when an edge is a duplicate;
+  `remove_edge` / `detach_carried` / `detach` release one per edge actually
+  removed. So subject churn (and entity ids used only as subjects) is reclaimed
+  the moment the edge naming them goes away — a deleted subject also cascades
+  out of every edge (fail closed), evicting its id.
+- `DataStore::clear` now also clears the graph, keeping the wholesale
+  `reset_counted` and the wholesale edge drop consistent (no stale edge outlives
+  its entity across a snapshot swap).
+
+Pinned by `rebac_interner_bounding_tests` (subject churn stays flat over 5k
+upserts; a subject-entity id is evicted once both the entity and every edge
+naming it are gone; duplicate/idempotent edges don't leak) and by white-box
+graph unit tests asserting the per-edge release balance directly. Entity churn
+is now **fully bounded end to end**: ids, parents, attribute values, eval-path
+results, and relationship subjects are all reclaimed.

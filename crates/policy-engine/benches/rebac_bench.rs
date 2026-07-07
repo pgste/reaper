@@ -5,10 +5,11 @@
 //!
 //! Run: cargo bench -p policy-engine --bench rebac_bench
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use policy_engine::reap::ReaperPolicy;
 use policy_engine::{DataStore, PolicyEvaluator, PolicyRequest};
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::sync::Arc;
 
 const USERS: usize = 10_000;

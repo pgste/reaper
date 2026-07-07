@@ -1,5 +1,5 @@
 // Integration test for nested comprehension
-use policy_engine::data::{AttributeValue, DataLoader, DataStore};
+use policy_engine::data::{DataLoader, DataStore};
 use policy_engine::reap::ReaperPolicy;
 use policy_engine::PolicyEvaluator;
 use policy_engine::PolicyRequest;

@@ -9,8 +9,7 @@
 use policy_engine::data::DataLoader;
 use policy_engine::reap::ReaperPolicy;
 use policy_engine::{
-    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest,
-    PolicyRule,
+    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRule,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,8 +26,8 @@ fn test_string_interning_efficiency() {
 
     // Create entities with repeated string values
     let mut entities = Vec::new();
-    let departments = vec!["engineering", "sales", "marketing", "finance", "operations"];
-    let roles = vec!["admin", "user", "guest", "manager", "viewer"];
+    let departments = ["engineering", "sales", "marketing", "finance", "operations"];
+    let roles = ["admin", "user", "guest", "manager", "viewer"];
 
     for i in 0..10_000 {
         let dept = departments[i % departments.len()];

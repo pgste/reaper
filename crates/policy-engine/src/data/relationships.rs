@@ -28,7 +28,7 @@
 //!   walk: the relation holds on the object or any ancestor along `up` edges
 //!   (e.g. folder hierarchies)
 
-use crate::data::interning::InternedString;
+use crate::data::interning::{InternedString, StringInterner};
 use crate::data::EntityId;
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
@@ -44,7 +44,7 @@ pub type EdgeList = SmallVec<[EntityId; 4]>;
 const TRAVERSAL_NODE_BUDGET: usize = 4_096;
 
 /// Concurrent, doubly-indexed relationship graph.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RelationshipGraph {
     /// (declaring entity, relation) -> subjects, sorted.
     forward: DashMap<(EntityId, InternedString), EdgeList>,
@@ -56,16 +56,39 @@ pub struct RelationshipGraph {
     carrier_rels: DashMap<EntityId, SmallVec<[InternedString; 4]>>,
     /// entity -> relations it appears in as SUBJECT (edge target).
     subject_rels: DashMap<EntityId, SmallVec<[InternedString; 4]>>,
+    /// The store's shared interner. The loader counts one reference per
+    /// subject occurrence it interns; this graph releases exactly one when
+    /// each live forward edge is removed, so a high-cardinality *subject*
+    /// churn (and entity ids used only as subjects) is reclaimed rather than
+    /// pinned for the life of the store. Relations are pinned (bounded
+    /// vocabulary), so releasing them is a no-op.
+    interner: StringInterner,
 }
 
 impl RelationshipGraph {
-    pub fn new() -> Self {
-        Self::default()
+    /// Build a graph over the store's shared interner. The interner is
+    /// `Clone` but Arc-backed internally, so this shares state with the store
+    /// rather than copying it — releases here evict from the same table the
+    /// loader interned into.
+    pub fn new(interner: StringInterner) -> Self {
+        Self {
+            forward: DashMap::new(),
+            reverse: DashMap::new(),
+            carrier_rels: DashMap::new(),
+            subject_rels: DashMap::new(),
+            interner,
+        }
     }
 
     /// Record `from #relation @to` (idempotent; lists stay sorted).
+    ///
+    /// The loader interns each subject *counted* once per occurrence in the
+    /// source list before calling this. A duplicate occurrence collapses onto
+    /// the same stored edge, so its redundant count is released here — the
+    /// invariant is **exactly one counted subject reference per live forward
+    /// edge**, balanced by the release in every removal path below.
     pub fn add_edge(&self, from: EntityId, relation: InternedString, to: EntityId) {
-        insert_sorted(
+        let is_new = insert_sorted(
             self.forward
                 .entry((from, relation))
                 .or_default()
@@ -78,13 +101,21 @@ impl RelationshipGraph {
         );
         register_rel(&self.carrier_rels, from, relation);
         register_rel(&self.subject_rels, to, relation);
+        if !is_new {
+            // Duplicate edge — the loader's extra counted reference is redundant.
+            self.interner.release(to);
+        }
     }
 
     /// Remove one edge (both directions). Idempotent: removing a missing
     /// edge is a no-op — delta deletes are at-least-once delivered.
     pub fn remove_edge(&self, from: EntityId, relation: InternedString, to: EntityId) {
-        remove_from_list(&self.forward, (from, relation), to);
+        let removed = remove_from_list(&self.forward, (from, relation), to);
         remove_from_list(&self.reverse, (to, relation), from);
+        if removed {
+            // Balances the one counted reference this live edge held on `to`.
+            self.interner.release(to);
+        }
     }
 
     /// Drop every edge this entity CARRIES (declares). The upsert primitive:
@@ -97,6 +128,8 @@ impl RelationshipGraph {
                 if let Some((_, targets)) = self.forward.remove(&(entity, rel)) {
                     for target in targets {
                         remove_from_list(&self.reverse, (target, rel), entity);
+                        // Each removed forward edge held one count on its subject.
+                        self.interner.release(target);
                     }
                 }
             }
@@ -112,7 +145,11 @@ impl RelationshipGraph {
             for rel in rels {
                 if let Some((_, carriers)) = self.reverse.remove(&(entity, rel)) {
                     for carrier in carriers {
-                        remove_from_list(&self.forward, (carrier, rel), entity);
+                        // `entity` is this edge's subject; release its count
+                        // only if the forward edge was actually present.
+                        if remove_from_list(&self.forward, (carrier, rel), entity) {
+                            self.interner.release(entity);
+                        }
                     }
                 }
             }
@@ -239,6 +276,18 @@ impl RelationshipGraph {
         false
     }
 
+    /// Drop every edge and registry entry. Used by `DataStore::clear`, which
+    /// also `reset_counted`s the interner — so the wholesale interner drop and
+    /// this wholesale edge drop stay consistent (no stale edge survives a
+    /// snapshot swap to grant a deleted entity a relation, and no counted
+    /// subject is orphaned).
+    pub fn clear(&self) {
+        self.forward.clear();
+        self.reverse.clear();
+        self.carrier_rels.clear();
+        self.subject_rels.clear();
+    }
+
     /// Total number of forward edge lists (diagnostics).
     pub fn len(&self) -> usize {
         self.forward.len()
@@ -249,9 +298,16 @@ impl RelationshipGraph {
     }
 }
 
-fn insert_sorted(list: &mut EdgeList, value: EntityId) {
-    if let Err(pos) = list.binary_search(&value) {
-        list.insert(pos, value);
+/// Insert into the sorted list, returning `true` if the value was new (the
+/// list changed) and `false` if it was already present. Callers use the flag
+/// to keep the interner's subject refcount balanced against idempotent adds.
+fn insert_sorted(list: &mut EdgeList, value: EntityId) -> bool {
+    match list.binary_search(&value) {
+        Ok(_) => false,
+        Err(pos) => {
+            list.insert(pos, value);
+            true
+        }
     }
 }
 
@@ -269,24 +325,30 @@ fn register_rel(
 }
 
 /// Remove `value` from the sorted list at `key`, dropping the key when the
-/// list empties (keeps the maps from accumulating tombstone keys).
+/// list empties (keeps the maps from accumulating tombstone keys). Returns
+/// `true` if `value` was actually present and removed — callers gate the
+/// interner subject release on this so a no-op removal doesn't over-release.
 fn remove_from_list(
     map: &DashMap<(EntityId, InternedString), EdgeList>,
     key: (EntityId, InternedString),
     value: EntityId,
-) {
-    let now_empty = match map.get_mut(&key) {
+) -> bool {
+    let (removed, now_empty) = match map.get_mut(&key) {
         Some(mut list) => {
-            if let Ok(pos) = list.binary_search(&value) {
+            let removed = if let Ok(pos) = list.binary_search(&value) {
                 list.remove(pos);
-            }
-            list.is_empty()
+                true
+            } else {
+                false
+            };
+            (removed, list.is_empty())
         }
-        None => return,
+        None => return false,
     };
     if now_empty {
         map.remove_if(&key, |_, list| list.is_empty());
     }
+    removed
 }
 
 #[cfg(test)]
@@ -295,7 +357,10 @@ mod tests {
     use crate::data::interning::StringInterner;
 
     fn graph() -> (RelationshipGraph, StringInterner) {
-        (RelationshipGraph::new(), StringInterner::new())
+        // Share one interner so the graph's subject releases evict from the
+        // same table the test interns into (the store wires it identically).
+        let interner = StringInterner::new();
+        (RelationshipGraph::new(interner.clone()), interner)
     }
 
     #[test]
@@ -428,5 +493,119 @@ mod tests {
             !g.has_relation_inherited(doc, owner, alice, parent, 1),
             "root is 2 levels up"
         );
+    }
+
+    // --- Subject refcount balance (white-box) --------------------------------
+    //
+    // These mirror the loader's contract exactly: a subject is `intern_counted`
+    // once per occurrence in the source list BEFORE `add_edge`, and the graph
+    // owns the balancing release in every removal path. Relations/carriers use
+    // plain `intern` (pinned, bounded), so only subjects are evictable — which
+    // is precisely what these assert.
+
+    #[test]
+    fn remove_edge_releases_the_subject_and_evicts_it() {
+        let (g, i) = graph();
+        let (doc, owner) = (i.intern("doc"), i.intern("owner"));
+        let alice = i.intern_counted("alice"); // the loader's per-subject count
+        g.add_edge(doc, owner, alice);
+        assert!(i.lookup("alice").is_some());
+
+        g.remove_edge(doc, owner, alice);
+        assert!(
+            i.lookup("alice").is_none(),
+            "the edge's single counted subject reference was not released"
+        );
+        // Removing again must not over-release (no panic, still gone).
+        g.remove_edge(doc, owner, alice);
+        assert!(i.lookup("alice").is_none());
+    }
+
+    #[test]
+    fn duplicate_subject_occurrence_is_released_on_add() {
+        let (g, i) = graph();
+        let (doc, owner) = (i.intern("doc"), i.intern("owner"));
+        // Same subject counted twice (e.g. `owner: ["alice", "alice"]`): two
+        // references in, but only one live edge, so one is dropped on the
+        // duplicate add. A single removal must then fully reclaim it.
+        let a1 = i.intern_counted("alice");
+        let a2 = i.intern_counted("alice");
+        assert_eq!(a1, a2);
+        g.add_edge(doc, owner, a1); // new edge — keeps the count
+        g.add_edge(doc, owner, a2); // duplicate — releases the redundant count
+        assert!(i.lookup("alice").is_some(), "still one live edge");
+
+        g.remove_edge(doc, owner, a1);
+        assert!(
+            i.lookup("alice").is_none(),
+            "duplicate occurrence left a residual count (leak)"
+        );
+    }
+
+    #[test]
+    fn detach_carried_releases_every_subject_it_declared() {
+        let (g, i) = graph();
+        let doc = i.intern("doc");
+        let (owner, viewer) = (i.intern("owner"), i.intern("viewer"));
+        let alice = i.intern_counted("alice");
+        let bob = i.intern_counted("bob");
+        g.add_edge(doc, owner, alice);
+        g.add_edge(doc, viewer, bob);
+
+        g.detach_carried(doc);
+        assert!(i.lookup("alice").is_none(), "carried owner subject leaked");
+        assert!(i.lookup("bob").is_none(), "carried viewer subject leaked");
+        // Reverse index is gone too — nothing points anywhere anymore.
+        assert!(g.is_empty());
+    }
+
+    #[test]
+    fn detach_releases_subject_counts_from_every_carrier_and_fails_closed() {
+        let (g, i) = graph();
+        let (doc1, doc2, owner) = (i.intern("doc1"), i.intern("doc2"), i.intern("owner"));
+        // `alice` is the owner-subject of two documents: two live edges, two
+        // counted references. Tombstoning alice must release both and drop
+        // both dangling edges (fail closed: a deleted subject owns nothing).
+        let a1 = i.intern_counted("alice");
+        let a2 = i.intern_counted("alice");
+        g.add_edge(doc1, owner, a1);
+        g.add_edge(doc2, owner, a2);
+        assert!(i.lookup("alice").is_some());
+
+        g.detach(a1);
+        assert!(
+            i.lookup("alice").is_none(),
+            "subject counted once per carrier — detach must release all of them"
+        );
+        assert!(
+            g.related(doc1, owner).is_empty(),
+            "doc1's edge must be gone"
+        );
+        assert!(
+            g.related(doc2, owner).is_empty(),
+            "doc2's edge must be gone"
+        );
+    }
+
+    #[test]
+    fn self_edge_subject_count_is_reclaimed_without_double_release() {
+        // A self-referential edge (entity is both carrier and subject). The
+        // subject is counted once; detach_carried removes the edge and releases
+        // it, and the subject-side pass then finds the reverse entry already
+        // pruned — so there is no second release to evict a live string out
+        // from under anyone. (`release` is a no-op on an evicted id regardless,
+        // but this proves the graph doesn't rely on that.)
+        let (g, i) = graph();
+        let rel = i.intern("linked");
+        let node = i.intern_counted("node"); // counted as its own subject
+        g.add_edge(node, rel, node);
+        assert!(i.lookup("node").is_some());
+
+        g.detach(node);
+        assert!(
+            i.lookup("node").is_none(),
+            "self-edge subject count not reclaimed"
+        );
+        assert!(g.is_empty());
     }
 }

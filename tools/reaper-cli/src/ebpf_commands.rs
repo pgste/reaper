@@ -132,7 +132,7 @@ pub fn handle_validate_data(
                         count: *c,
                     })
                     .collect();
-                type_summaries.sort_by(|a, b| b.count.cmp(&a.count));
+                type_summaries.sort_by_key(|b| std::cmp::Reverse(b.count));
 
                 let table = Table::new(type_summaries).to_string();
                 println!("{}\n", table);

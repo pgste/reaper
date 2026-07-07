@@ -57,7 +57,12 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee clippy-report.txt
+        run: |
+          # pipefail is REQUIRED: without it the pipeline's exit code is tee's
+          # (always 0), so `-D warnings` never fails the step and clippy silently
+          # stops gating. This is the basic lint gate — it must actually block.
+          set -o pipefail
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee clippy-report.txt
 
       - name: Upload Clippy report
         uses: actions/upload-artifact@v4

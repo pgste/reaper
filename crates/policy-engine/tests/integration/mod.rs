@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Test suite configuration loaded from YAML
+// Test fixture: deserialized from YAML; not every field is read by the runner.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TestSuite {
     pub name: String,
@@ -34,6 +36,8 @@ pub struct DataPath {
 }
 
 /// Single test case
+// Test fixture: deserialized from YAML; not every field is read by the runner.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct TestCase {
     pub name: String,
@@ -48,6 +52,8 @@ pub struct TestCase {
 }
 
 /// Performance thresholds for the suite
+// Test fixture: deserialized from YAML; not every field is read by the runner.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct PerformanceThresholds {
     #[serde(default)]

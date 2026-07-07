@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         conditions: vec![],
     });
 
-    let mut policy = EnhancedPolicy::new(
+    let policy = EnhancedPolicy::new(
         "test-policy".to_string(),
         "Test policy for comparison".to_string(),
         rules,
