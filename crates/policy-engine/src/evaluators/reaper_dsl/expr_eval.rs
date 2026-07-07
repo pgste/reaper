@@ -33,7 +33,7 @@ pub fn eval_string_lower(
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let lower = resolved.to_lowercase();
-            let interned = interner.intern(&lower);
+            let interned = super::intern_transient(interner, &lower);
             return Some(AttributeValue::String(interned));
         }
     }
@@ -53,7 +53,7 @@ pub fn eval_string_upper(
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let upper = resolved.to_uppercase();
-            let interned = interner.intern(&upper);
+            let interned = super::intern_transient(interner, &upper);
             return Some(AttributeValue::String(interned));
         }
     }
@@ -73,7 +73,7 @@ pub fn eval_string_trim(
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let trimmed = resolved.trim().to_string();
-            let interned = interner.intern(&trimmed);
+            let interned = super::intern_transient(interner, &trimmed);
             return Some(AttributeValue::String(interned));
         }
     }
@@ -96,7 +96,7 @@ pub fn eval_string_split(
             let parts: Vec<AttributeValue> = resolved
                 .split(delimiter)
                 .map(|part| {
-                    let interned = interner.intern(part);
+                    let interned = super::intern_transient(interner, part);
                     AttributeValue::String(interned)
                 })
                 .collect();
@@ -121,7 +121,7 @@ pub fn eval_string_replace(
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let replaced = resolved.replace(pattern, replacement);
-            let interned = interner.intern(&replaced);
+            let interned = super::intern_transient(interner, &replaced);
             return Some(AttributeValue::String(interned));
         }
     }
@@ -150,7 +150,7 @@ pub fn eval_string_substring(
                 .skip(start_idx)
                 .take(end_idx - start_idx)
                 .collect();
-            let interned = interner.intern(&substring);
+            let interned = super::intern_transient(interner, &substring);
             return Some(AttributeValue::String(interned));
         }
     }
@@ -1078,7 +1078,7 @@ pub fn evaluate_compiled_expr_type(
                 if let Some(resolved) = interner.resolve(*s) {
                     if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
                         if let Some(m) = re.find(&resolved) {
-                            let interned = interner.intern(m.as_str());
+                            let interned = super::intern_transient(interner, m.as_str());
                             return Some(AttributeValue::String(interned));
                         }
                     }
@@ -1099,7 +1099,12 @@ pub fn evaluate_compiled_expr_type(
                         // Every match as a list, matching AST method_find_all.
                         let matches: Vec<AttributeValue> = re
                             .find_iter(&resolved)
-                            .map(|m| AttributeValue::String(interner.intern(m.as_str())))
+                            .map(|m| {
+                                AttributeValue::String(super::intern_transient(
+                                    interner,
+                                    m.as_str(),
+                                ))
+                            })
                             .collect();
                         return Some(AttributeValue::List(matches));
                     }
@@ -1120,7 +1125,7 @@ pub fn evaluate_compiled_expr_type(
                     if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
                         // Regex replace-all, matching AST method_replace.
                         let result = re.replace_all(&resolved, replacement.as_str());
-                        let interned = interner.intern(&result);
+                        let interned = super::intern_transient(interner, &result);
                         return Some(AttributeValue::String(interned));
                     }
                 }

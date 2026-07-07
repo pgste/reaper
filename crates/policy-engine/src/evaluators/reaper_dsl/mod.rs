@@ -32,10 +32,95 @@ mod variable_eval;
 pub use types::*;
 
 use super::{EvaluatorMetadata, PolicyEvaluator};
-use crate::data::{AttributeValue, DataStore, Entity, InternedString};
+use crate::data::{AttributeValue, DataStore, Entity, InternedString, StringInterner};
 use crate::{PolicyAction, PolicyRequest};
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::sync::Arc;
+
+// ===========================================================================
+// Per-evaluation transient-string reclamation
+// ===========================================================================
+//
+// String-producing methods (lower/upper/trim/split/replace/find/find_all and
+// comprehension transforms) compute NEW strings at eval time and must intern
+// them to represent them as `AttributeValue::String(id)` (the compiled value
+// model is interned-only). Those results live only for the one evaluation — but
+// a plain `intern()` PINS them, so on the hot path a policy producing
+// high-cardinality results (regex captures, per-request transforms) would grow
+// the shared interner without bound.
+//
+// The fix: within an evaluation, produce results via `intern_transient`, which
+// interns them *counted* and records the ids in a per-thread scratch frame. A
+// `ScratchGuard` in `evaluate()` releases every recorded id when the evaluation
+// unwinds (including on panic), so novel results are evicted while strings that
+// are also owned by an entity (or pinned as a policy literal) are untouched
+// (release is a no-op / a balanced decrement on those). Outside an evaluation
+// (e.g. a unit test calling an eval helper directly) there is no scope to
+// reclaim into, so `intern_transient` falls back to a plain pinned `intern`.
+
+#[derive(Default)]
+struct ScratchFrame {
+    /// Active `evaluate()` nesting depth (re-entrancy guard).
+    depth: u32,
+    /// Counted ids interned this evaluation, released when depth returns to 0.
+    ids: Vec<InternedString>,
+}
+
+thread_local! {
+    static EVAL_SCRATCH: RefCell<ScratchFrame> = RefCell::new(ScratchFrame::default());
+}
+
+/// Intern a freshly-computed eval result. Counted + recorded inside an
+/// evaluation (reclaimed at eval end); pinned if called with no active scope.
+pub(crate) fn intern_transient(interner: &StringInterner, s: &str) -> InternedString {
+    EVAL_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        if scratch.depth == 0 {
+            interner.intern(s)
+        } else {
+            let id = interner.intern_counted(s);
+            scratch.ids.push(id);
+            id
+        }
+    })
+}
+
+/// RAII scope for one `evaluate()` call: bumps the scratch depth on entry and,
+/// when the outermost scope exits, releases every transient id interned during
+/// the evaluation. Drop runs on panic too, so a failing eval cannot leak.
+struct ScratchGuard<'a> {
+    interner: &'a StringInterner,
+}
+
+impl<'a> ScratchGuard<'a> {
+    fn enter(interner: &'a StringInterner) -> Self {
+        EVAL_SCRATCH.with(|s| s.borrow_mut().depth += 1);
+        Self { interner }
+    }
+}
+
+impl Drop for ScratchGuard<'_> {
+    fn drop(&mut self) {
+        EVAL_SCRATCH.with(|scratch| {
+            // Take the ids to release without holding the borrow across
+            // `release` (release never re-enters the scratch, but keep the
+            // critical section minimal and re-entrancy-proof).
+            let to_release = {
+                let mut scratch = scratch.borrow_mut();
+                scratch.depth -= 1;
+                if scratch.depth == 0 {
+                    std::mem::take(&mut scratch.ids)
+                } else {
+                    Vec::new()
+                }
+            };
+            for id in to_release {
+                self.interner.release(id);
+            }
+        });
+    }
+}
 
 /// Truthiness of a collection element for `any()` / `all()`, matching the AST
 /// `builtin_methods::method_any` / `method_all`: false/0/null/empty-string are
@@ -1446,15 +1531,36 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
     fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyAction, reaper_core::ReaperError> {
         let interner = self.store.interner();
 
-        // Parse entity IDs from request
-        // In production, these would be passed directly as InternedString
-        let user_id = interner.intern(request.context.get("principal").ok_or_else(|| {
+        // Reclaim transient result strings interned during this evaluation
+        // (see intern_transient). Drop runs on every exit path, incl. panic.
+        let _scratch = ScratchGuard::enter(interner);
+
+        // Resolve entity ids from the request WITHOUT interning the request
+        // values. Interning here would pin a per-request string in the shared
+        // interner forever — an unbounded eval-path leak under high request
+        // cardinality (many principals / resources) — and, when a principal is a
+        // loaded entity, would pin that entity's id and defeat the data-plane's
+        // refcounted reclamation. `lookup` only reads an already-interned id.
+        let principal = request.context.get("principal").ok_or_else(|| {
             reaper_core::ReaperError::EvaluationError {
                 reason: "Missing principal in context".to_string(),
             }
-        })?);
+        })?;
+        // A principal that was never interned cannot be a loaded entity.
+        let user_id = interner.lookup(principal).ok_or_else(|| {
+            reaper_core::ReaperError::EvaluationError {
+                reason: format!("User entity not found: {}", principal),
+            }
+        })?;
 
-        let resource_id = interner.intern(&request.resource);
+        // The resource id is used only for the entity lookup and the synthesized
+        // entity below; `resource == "x"` compares the raw request string
+        // (ResourceIdEquals), not this id. A resource that was never interned is
+        // not an entity and matches no literal, so a sentinel id (never inserted
+        // into the interner) is a correct, allocation-free stand-in.
+        let resource_id = interner
+            .lookup(&request.resource)
+            .unwrap_or(InternedString::from_id(u32::MAX));
 
         // Fast DataStore lookups (~20-50ns each)
         let user =
