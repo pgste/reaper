@@ -11,7 +11,9 @@
 #         tight gate: WARN at +5%, FAIL at +10%. This is what guards eval perf.
 #       * engine micro-ops (raw lookups, hot-swap, threaded, allocation) —
 #         nanosecond-scale and noisy, so a loose gate: WARN +25%, FAIL +50%.
-#     Each bucket has its own gh-pages history dir (its own trend chart).
+#     A third capture-only step records EVERY benchmark to a single history
+#     dir (dev/bench/all) so the trend dashboard has one complete chart with
+#     no point dropped; it never gates (the two buckets above enforce).
 #
 # The end-to-end HTTP throughput benchmark (vs OPA) lives in benchmark.yml;
 # this workflow guards the engine's nanosecond-scale core specifically.
@@ -108,5 +110,30 @@ jobs:
           fail-threshold: "150%"
           comment-on-alert: true
           fail-on-alert: true
+          summary-always: true
+          max-items-in-chart: 100
+
+      - name: Full benchmark trend (capture every point, no gate)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          # One unified history dir holding EVERY benchmark, so the trend
+          # dashboard shows the complete set on a single chart. The two steps
+          # above are the CI gates; this one is capture-only and never fails
+          # the job — it exists so no data point is lost from the trend.
+          name: "All benchmarks (criterion)"
+          tool: "cargo"
+          output-file-path: bench-output.txt
+          benchmark-data-dir-path: "dev/bench/all"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.ref == 'refs/heads/main' }}
+          # Third step in the job — reuse the gh-pages branch the first step set
+          # up rather than re-fetching (non-fast-forward otherwise).
+          skip-fetch-gh-pages: true
+          # Capture-only: never comment, never fail. The threshold is set high
+          # and fail-on-alert is off so this step records points regardless of
+          # any regression (the gates above are what enforce).
+          alert-threshold: "200%"
+          comment-on-alert: false
+          fail-on-alert: false
           summary-always: true
           max-items-in-chart: 100
