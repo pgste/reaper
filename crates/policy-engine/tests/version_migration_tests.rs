@@ -8,11 +8,9 @@
 
 use policy_engine::reap::ReaperPolicy;
 use policy_engine::{
-    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest,
-    PolicyRule,
+    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRequest, PolicyRule,
 };
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 // ============================================================================

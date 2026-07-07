@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Test suite for semantic equivalence testing
+// Test fixture: some fields are deserialized from YAML but not read in Reaper-only CI mode.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ComparisonSuite {
     pub name: String,
@@ -47,6 +49,8 @@ pub enum ExpectedDecision {
 }
 
 /// Result of a single test case
+// Test fixture: OPA-comparison fields are unused in Reaper-only CI mode.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct TestCaseResult {
     pub id: String,

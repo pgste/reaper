@@ -1,6 +1,7 @@
 //! Tests for the Reaper DSL types.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::data::StringInterner;
     use crate::evaluators::reaper_dsl::types::*;
@@ -97,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_compare_target_variants() {
-        let targets = vec![
+        let targets = [
             CompareTarget::LiteralString("admin".to_string()),
             CompareTarget::LiteralNum(42.0),
             CompareTarget::LiteralBool(true),

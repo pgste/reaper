@@ -3,9 +3,7 @@
 //! These tests verify that the policy engine handles concurrent operations safely,
 //! including simultaneous policy deployments and evaluations.
 
-use policy_engine::{
-    EnhancedPolicy, PolicyAction, PolicyEngine, PolicyEvaluator, PolicyRequest, PolicyRule,
-};
+use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRequest, PolicyRule};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

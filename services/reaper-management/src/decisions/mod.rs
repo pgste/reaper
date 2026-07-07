@@ -792,9 +792,8 @@ mod tests {
 
             let row = r#"{"timestamp":"2026-07-04 10:00:00.000","decision_id":"d-1","trace_id":"","principal":"sha256:ab","action":"read","resource":"/x","decision":"deny","policy_id":"p","policy_name":"pol","policy_version":"1","matched_rule":"","evaluation_time_ns":"450","cache_hit":0,"agent_id":"a1","context":"{}","input_data":""}"#;
             let resp = format!(
-                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{row}\n",
                 row.len() + 1,
-                format!("{row}\n")
             );
             sock.write_all(resp.as_bytes()).await.unwrap();
             req

@@ -653,7 +653,7 @@ mod tests {
 
         // Serialize to bytes
         let bytes = bundle.to_bytes().unwrap();
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
 
         // Deserialize
         let bundle2 = DataBundle::from_bytes(&bytes).unwrap();
@@ -692,7 +692,7 @@ mod tests {
             .with_string(str_key, str_val)
             .with_int(int_key, 42)
             .with_bool(bool_key, true)
-            .with_float(float_key, 3.14)
+            .with_float(float_key, std::f64::consts::PI)
             .build();
 
         store.insert(entity);
@@ -721,7 +721,10 @@ mod tests {
 
         // Verify float attribute
         let float_attr = retrieved.get_attribute(interner2.intern("float_attr"));
-        assert_eq!(float_attr, Some(&AttributeValue::Float(3.14)));
+        assert_eq!(
+            float_attr,
+            Some(&AttributeValue::Float(std::f64::consts::PI))
+        );
     }
 
     #[test]

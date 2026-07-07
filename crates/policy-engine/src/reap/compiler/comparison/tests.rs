@@ -1,6 +1,7 @@
 //! Tests for comparison compilation.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::evaluators::reaper_dsl::Condition as DslCondition;
     use crate::reap::ast::{

@@ -447,6 +447,81 @@ fn compile_comprehension_assignment(
     }
 }
 
+/// Lower a rebac::* function call into a RebacCheck condition. Only static
+/// argument shapes compile (the sub-microsecond path needs ids resolvable
+/// without variable state); anything else errors, which routes the policy to
+/// the AST evaluator.
+fn compile_rebac_call(function: &str, args: Vec<Expr>) -> Result<DslCondition, ReaperError> {
+    use crate::evaluators::reaper_dsl::{RebacKind, RebacRef};
+
+    let kind = match function {
+        "related" => RebacKind::Direct,
+        "reachable" => RebacKind::Reachable,
+        _ => RebacKind::Inherited,
+    };
+    let expected = if kind == RebacKind::Direct { 3 } else { 5 };
+    if args.len() != expected {
+        return Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "rebac::{function} requires {expected} arguments, got {}",
+                args.len()
+            ),
+        });
+    }
+
+    let rebac_ref = |expr: &Expr| -> Result<RebacRef, ReaperError> {
+        match expr {
+            Expr::Variable(name) if name == "user" => Ok(RebacRef::Principal),
+            Expr::Variable(name) if name == "resource" => Ok(RebacRef::ResourceId),
+            Expr::Literal(crate::reap::ast::Value::String(s)) => Ok(RebacRef::Literal(s.clone())),
+            other => Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "rebac::{function}: only `user`, `resource`, or string literals compile (got {other:?}); dynamic ids use the AST evaluator"
+                ),
+            }),
+        }
+    };
+    let literal_str = |expr: &Expr, what: &str| -> Result<String, ReaperError> {
+        match expr {
+            Expr::Literal(crate::reap::ast::Value::String(s)) => Ok(s.clone()),
+            other => Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "rebac::{function}: {what} must be a string literal, got {other:?}"
+                ),
+            }),
+        }
+    };
+
+    let subject = rebac_ref(&args[0])?;
+    let relation = literal_str(&args[1], "relation")?;
+    let object = rebac_ref(&args[2])?;
+    let (via, max_depth) = if kind == RebacKind::Direct {
+        (None, 1)
+    } else {
+        let via = literal_str(&args[3], "edge")?;
+        let max = match &args[4] {
+            Expr::Literal(crate::reap::ast::Value::Integer(n)) if *n > 0 => (*n as u32).min(16),
+            other => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "rebac::{function}: max_depth must be a positive integer literal, got {other:?}"
+                    ),
+                })
+            }
+        };
+        (Some(via), max)
+    };
+
+    Ok(DslCondition::RebacCheck {
+        kind,
+        subject,
+        relation,
+        object,
+        via,
+        max_depth,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,79 +796,4 @@ policy test_comp {
             decision
         );
     }
-}
-
-/// Lower a rebac::* function call into a RebacCheck condition. Only static
-/// argument shapes compile (the sub-microsecond path needs ids resolvable
-/// without variable state); anything else errors, which routes the policy to
-/// the AST evaluator.
-fn compile_rebac_call(function: &str, args: Vec<Expr>) -> Result<DslCondition, ReaperError> {
-    use crate::evaluators::reaper_dsl::{RebacKind, RebacRef};
-
-    let kind = match function {
-        "related" => RebacKind::Direct,
-        "reachable" => RebacKind::Reachable,
-        _ => RebacKind::Inherited,
-    };
-    let expected = if kind == RebacKind::Direct { 3 } else { 5 };
-    if args.len() != expected {
-        return Err(ReaperError::InvalidPolicy {
-            reason: format!(
-                "rebac::{function} requires {expected} arguments, got {}",
-                args.len()
-            ),
-        });
-    }
-
-    let rebac_ref = |expr: &Expr| -> Result<RebacRef, ReaperError> {
-        match expr {
-            Expr::Variable(name) if name == "user" => Ok(RebacRef::Principal),
-            Expr::Variable(name) if name == "resource" => Ok(RebacRef::ResourceId),
-            Expr::Literal(crate::reap::ast::Value::String(s)) => Ok(RebacRef::Literal(s.clone())),
-            other => Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "rebac::{function}: only `user`, `resource`, or string literals compile (got {other:?}); dynamic ids use the AST evaluator"
-                ),
-            }),
-        }
-    };
-    let literal_str = |expr: &Expr, what: &str| -> Result<String, ReaperError> {
-        match expr {
-            Expr::Literal(crate::reap::ast::Value::String(s)) => Ok(s.clone()),
-            other => Err(ReaperError::InvalidPolicy {
-                reason: format!(
-                    "rebac::{function}: {what} must be a string literal, got {other:?}"
-                ),
-            }),
-        }
-    };
-
-    let subject = rebac_ref(&args[0])?;
-    let relation = literal_str(&args[1], "relation")?;
-    let object = rebac_ref(&args[2])?;
-    let (via, max_depth) = if kind == RebacKind::Direct {
-        (None, 1)
-    } else {
-        let via = literal_str(&args[3], "edge")?;
-        let max = match &args[4] {
-            Expr::Literal(crate::reap::ast::Value::Integer(n)) if *n > 0 => (*n as u32).min(16),
-            other => {
-                return Err(ReaperError::InvalidPolicy {
-                    reason: format!(
-                        "rebac::{function}: max_depth must be a positive integer literal, got {other:?}"
-                    ),
-                })
-            }
-        };
-        (Some(via), max)
-    };
-
-    Ok(DslCondition::RebacCheck {
-        kind,
-        subject,
-        relation,
-        object,
-        via,
-        max_depth,
-    })
 }

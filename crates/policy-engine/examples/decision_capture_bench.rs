@@ -17,7 +17,12 @@ fn entry(i: usize, t: usize) -> DecisionLogEntry {
         format!("user_{t}"),
         "read".to_string(),
         format!("/api/data/{i}"),
-        if i % 10 == 0 { "deny" } else { "allow" }.to_string(),
+        if i.is_multiple_of(10) {
+            "deny"
+        } else {
+            "allow"
+        }
+        .to_string(),
         "policy-1".to_string(),
         "bench-policy".to_string(),
     )
