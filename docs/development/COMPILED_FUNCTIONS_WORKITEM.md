@@ -1,6 +1,6 @@
 # Work Item: Complete Compiled-Mode Coverage for All DSL Functions
 
-**Status**: PLANNED (not started)
+**Status**: DONE
 **Owner**: policy-engine
 **Related**: `DSL_V2_DESIGN.md`, `COMPILER_LIMITATIONS.md`,
 `crates/policy-engine/tests/compiled_ast_equivalence_tests.rs`
@@ -9,27 +9,37 @@
 
 Every DSL method/function should evaluate on the **compiled `ReaperDSLEvaluator`
 (DSL v2)** fast path. The compiled evaluator is the preferred, sub-microsecond
-path; the AST interpreter is the correctness-equivalent fallback. Today a
-handful of functions still fall back to AST — correct, but not on the fast
-path. This work item closes that gap so `build_preferred` picks the compiled
-evaluator for **all** policies, not most.
+path; the AST interpreter is the correctness-equivalent fallback.
 
-## Current state (measured)
+## Outcome
 
-Categorized by building each function's policy through `ReaperPolicy::build()`
-(compiled) and checking Ok vs Err:
+All previously-falling-back functions now compile on the fast path:
+`find`, `find_all`, `replace`, `values`, `has_key`, `any`, `all`, and
+`intersection` / `difference` with **literal-array** arguments (the entity-attr
+forms already compiled). `find_all` was an extra fallback the strengthened
+equivalence suite surfaced during the work.
 
-**Compiled today (16/24):** `count`, `sum`, `max`, `min`, `first`, `last`,
-`slice`, `reverse`, `sort`, `unique`, `union`, `keys`, `trim`, `split`,
-`lower`/`upper`, `regex::matches`.
+`compiled_ast_equivalence_tests.rs` now **asserts the compiled path is selected**
+for every function it covers — `assert_fn_is` fails if `build_preferred` falls
+back to AST — so a future compiler regression that drops a function back to the
+interpreter fails the build. Compiled ≡ AST is still pinned for every function
+(plus new deny/edge cases), and comprehensions remain a deliberate AST-only
+fallback (`build_preferred_falls_back_to_ast`).
 
-**Falls back to AST (8):** `intersection`, `difference`, `values`, `has_key`,
-`any`, `all`, `find`, `replace`.
-
-> Correctness note: the 8 fallback functions return the SAME decisions via the
-> AST evaluator — they are not broken, only slower for policies that use them.
-> `compiled_ast_equivalence_tests.rs` pins compiled≡AST agreement, so this work
-> can proceed one function at a time with a guaranteed correctness net.
+### How each was wired (for reference)
+- **find / find_all**: `ExprType::RegexFind` / `RegexFindAll` →
+  `CompiledExprType::RegexFind` (already existed) / `RegexFindAll` (new eval via
+  `regex_cache` + `find` / `find_iter`).
+- **replace**: new `ExprType`/`CompiledExprType::StringReplace` (regex
+  `replace_all`, matching AST).
+- **values**: new `SetValues` mirroring `SetKeys`.
+- **has_key / any / all**: new `Condition` + `CompiledCondition` variants
+  (`ObjectHasKey`, `CollectionAny`, `CollectionAll`) with truthiness matching
+  `builtin_methods::method_any/all`; wired in both `compile_method_call` and
+  `compile_entity_method_call`.
+- **intersection / difference (literal args)**: the direct-path compiler arms now
+  fall back from `extract_entity_attr` to `extract_string_array`, producing the
+  existing `SetIntersection` / new `SetDifference` literal-value expr variants.
 
 ## Exact blockers (from the compile errors)
 

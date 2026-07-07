@@ -149,6 +149,24 @@ pub enum Condition {
         pattern: String,
     },
 
+    // ============ Object / collection predicates ============
+    // `entity.attribute.has_key("k")` — true if the object attribute contains k.
+    ObjectHasKey {
+        entity_type: EntityType,
+        attribute: String,
+        key: String,
+    },
+    // `entity.attribute.any()` — true if any element of the collection is truthy.
+    CollectionAny {
+        entity_type: EntityType,
+        attribute: String,
+    },
+    // `entity.attribute.all()` — true if all elements of the collection are truthy.
+    CollectionAll {
+        entity_type: EntityType,
+        attribute: String,
+    },
+
     // ============ Type Check Functions ============
     IsString {
         entity_type: EntityType,

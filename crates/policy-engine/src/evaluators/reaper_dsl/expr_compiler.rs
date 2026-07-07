@@ -170,10 +170,26 @@ pub(super) fn compile_expr_type(
             attribute: interner.intern(attribute),
             values: values.iter().map(|v| interner.intern(v)).collect(),
         },
+        ExprType::SetDifference {
+            entity_type,
+            attribute,
+            values,
+        } => CompiledExprType::SetDifference {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+            values: values.iter().map(|v| interner.intern(v)).collect(),
+        },
         ExprType::SetKeys {
             entity_type,
             attribute,
         } => CompiledExprType::SetKeys {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+        },
+        ExprType::SetValues {
+            entity_type,
+            attribute,
+        } => CompiledExprType::SetValues {
             entity_type: entity_type.clone(),
             attribute: interner.intern(attribute),
         },
@@ -215,6 +231,35 @@ pub(super) fn compile_expr_type(
             entity_type: entity_type.clone(),
             attribute: interner.intern(attribute),
             pattern: pattern.clone(),
+        },
+        ExprType::RegexFind {
+            entity_type,
+            attribute,
+            pattern,
+        } => CompiledExprType::RegexFind {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+            pattern: pattern.clone(),
+        },
+        ExprType::RegexFindAll {
+            entity_type,
+            attribute,
+            pattern,
+        } => CompiledExprType::RegexFindAll {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+            pattern: pattern.clone(),
+        },
+        ExprType::StringReplace {
+            entity_type,
+            attribute,
+            pattern,
+            replacement,
+        } => CompiledExprType::StringReplace {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+            pattern: pattern.clone(),
+            replacement: replacement.clone(),
         },
         ExprType::ChainedMethod { base, method } => CompiledExprType::ChainedMethod {
             base: Box::new(compile_expr_type(base, interner)),

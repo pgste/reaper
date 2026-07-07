@@ -40,6 +40,7 @@ test-data.json
 /test-data/abac-test-data.json
 /test-data/rebac-test-data.json
 /test-data/multilayer-test-data.json
+/test-data/functions-test-data.json
 /test-data/huge-test-data.json
 /test-data/dualsource-*.json
 

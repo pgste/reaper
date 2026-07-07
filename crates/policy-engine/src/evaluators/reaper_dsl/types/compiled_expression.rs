@@ -99,7 +99,16 @@ pub enum CompiledExprType {
         attribute: InternedString,
         values: Vec<InternedString>,
     },
+    SetDifference {
+        entity_type: EntityType,
+        attribute: InternedString,
+        values: Vec<InternedString>,
+    },
     SetKeys {
+        entity_type: EntityType,
+        attribute: InternedString,
+    },
+    SetValues {
         entity_type: EntityType,
         attribute: InternedString,
     },
@@ -136,6 +145,17 @@ pub enum CompiledExprType {
         entity_type: EntityType,
         attribute: InternedString,
         pattern: String,
+    },
+    RegexFindAll {
+        entity_type: EntityType,
+        attribute: InternedString,
+        pattern: String,
+    },
+    StringReplace {
+        entity_type: EntityType,
+        attribute: InternedString,
+        pattern: String,
+        replacement: String,
     },
 
     // Chained method call (e.g., user.name.lower().trim())

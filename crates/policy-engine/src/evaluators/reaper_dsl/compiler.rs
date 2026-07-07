@@ -158,6 +158,31 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
             pattern: pattern.clone(),
         }),
 
+        // ============ Object / collection predicates ============
+        Condition::ObjectHasKey {
+            entity_type,
+            attribute,
+            key,
+        } => CompiledCondition::ObjectHasKey {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+            key: interner.intern(key),
+        },
+        Condition::CollectionAny {
+            entity_type,
+            attribute,
+        } => CompiledCondition::CollectionAny {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+        },
+        Condition::CollectionAll {
+            entity_type,
+            attribute,
+        } => CompiledCondition::CollectionAll {
+            entity_type: entity_type.clone(),
+            attribute: interner.intern(attribute),
+        },
+
         // ============ Type Checks ============
         Condition::IsString {
             entity_type,

@@ -142,6 +142,13 @@ pub fn collect_strings_for_interning(
         Condition::RegexMatches { attribute, .. } => {
             intern(attribute);
         }
+        Condition::ObjectHasKey { attribute, key, .. } => {
+            intern(attribute);
+            intern(key);
+        }
+        Condition::CollectionAny { attribute, .. } | Condition::CollectionAll { attribute, .. } => {
+            intern(attribute);
+        }
         // Type check functions
         Condition::IsString { attribute, .. }
         | Condition::IsNumber { attribute, .. }
@@ -415,7 +422,8 @@ fn collect_expr_type_strings(
         | ExprType::CollectionReverse { attribute, .. }
         | ExprType::CollectionSort { attribute, .. }
         | ExprType::CollectionUnique { attribute, .. }
-        | ExprType::SetKeys { attribute, .. } => {
+        | ExprType::SetKeys { attribute, .. }
+        | ExprType::SetValues { attribute, .. } => {
             intern(attribute);
         }
         ExprType::CollectionSlice { attribute, .. } => {
@@ -452,6 +460,9 @@ fn collect_expr_type_strings(
         }
         | ExprType::SetUnion {
             attribute, values, ..
+        }
+        | ExprType::SetDifference {
+            attribute, values, ..
         } => {
             intern(attribute);
             for v in values {
@@ -468,6 +479,15 @@ fn collect_expr_type_strings(
             intern(attribute);
         }
         ExprType::RegexMatches { attribute, .. } => {
+            intern(attribute);
+        }
+        ExprType::RegexFind { attribute, .. } => {
+            intern(attribute);
+        }
+        ExprType::RegexFindAll { attribute, .. } => {
+            intern(attribute);
+        }
+        ExprType::StringReplace { attribute, .. } => {
             intern(attribute);
         }
         ExprType::ChainedMethod { base, method } => {
