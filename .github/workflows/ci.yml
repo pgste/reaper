@@ -8,10 +8,20 @@ name: Reaper CI
 # in the lint stage are reused by all subsequent jobs, minimizing download time.
 
 on:
+  # Push CI is for the mainline branches only. Feature branches (e.g.
+  # claude/**) are covered by the pull_request event, so an open PR gets a
+  # single run per change instead of duplicate push + PR runs (the duplicate
+  # push run was where scale-tests showed as skipped).
   push:
-    branches: [ main, develop, 'claude/**' ]
+    branches: [ main, develop ]
   pull_request:
   workflow_dispatch:
+
+# Cancel a superseded run when new commits land on the same branch/PR, so
+# rapid pushes don't pile up in-flight runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
