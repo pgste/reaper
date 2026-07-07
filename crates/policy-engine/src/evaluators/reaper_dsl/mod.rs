@@ -37,6 +37,23 @@ use crate::{PolicyAction, PolicyRequest};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
+/// Truthiness of a collection element for `any()` / `all()`, matching the AST
+/// `builtin_methods::method_any` / `method_all`: false/0/null/empty-string are
+/// falsy; everything else (incl. floats and nested collections) is truthy.
+#[inline]
+fn is_truthy(v: &AttributeValue, interner: &crate::data::StringInterner) -> bool {
+    match v {
+        AttributeValue::Bool(b) => *b,
+        AttributeValue::Int(i) => *i != 0,
+        AttributeValue::Null => false,
+        AttributeValue::String(id) => interner
+            .resolve(*id)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        _ => true,
+    }
+}
+
 /// Zero-copy evaluation context — avoids HashMap clone per evaluation.
 /// "action" and "resource" are served from borrowed fields;
 /// all other keys fall through to the original request context.
@@ -332,6 +349,63 @@ impl ReaperDSLEvaluator {
 
             CompiledCondition::RegexMatch(m) => {
                 string_eval::eval_regex_match(m, user, resource, interner)
+            }
+
+            CompiledCondition::ObjectHasKey {
+                entity_type,
+                attribute,
+                key,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                matches!(
+                    entity.get_attribute(*attribute),
+                    Some(AttributeValue::Object(map)) if map.contains_key(key)
+                )
+            }
+
+            CompiledCondition::CollectionAny {
+                entity_type,
+                attribute,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                match entity.get_attribute(*attribute) {
+                    Some(AttributeValue::List(items)) => {
+                        items.iter().any(|v| is_truthy(v, interner))
+                    }
+                    Some(AttributeValue::Set(items)) => {
+                        items.iter().any(|v| is_truthy(v, interner))
+                    }
+                    _ => false,
+                }
+            }
+
+            CompiledCondition::CollectionAll {
+                entity_type,
+                attribute,
+            } => {
+                let entity = match entity_type {
+                    EntityType::User => user,
+                    EntityType::Resource => resource,
+                    EntityType::Context => return false,
+                };
+                match entity.get_attribute(*attribute) {
+                    // Vacuously true on an empty collection, matching AST all().
+                    Some(AttributeValue::List(items)) => {
+                        items.iter().all(|v| is_truthy(v, interner))
+                    }
+                    Some(AttributeValue::Set(items)) => {
+                        items.iter().all(|v| is_truthy(v, interner))
+                    }
+                    _ => false,
+                }
             }
 
             CompiledCondition::SameEntityAttrCompare {

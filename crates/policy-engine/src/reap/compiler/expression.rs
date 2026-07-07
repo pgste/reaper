@@ -167,7 +167,6 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                         attribute,
                     }),
                     MethodName::Difference => {
-                        // .difference(other_collection) - need to parse other entity.attr
                         if args.len() != 1 {
                             return Err(ReaperError::InvalidPolicy {
                                 reason: format!(
@@ -176,21 +175,35 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                                 ),
                             });
                         }
-                        // args[0] should be an entity attribute like user.forbidden_content
-                        let (other_entity_type, other_attribute) = extract_entity_attr(&args[0])?;
-                        Ok(ExprType::CollectionDifference {
-                            entity_type,
-                            attribute,
-                            other_entity_type,
-                            other_attribute,
-                        })
+                        // Another entity attribute (user.a.difference(user.b)) or
+                        // a literal array (user.a.difference(["x"])).
+                        if let Ok((other_entity_type, other_attribute)) =
+                            extract_entity_attr(&args[0])
+                        {
+                            Ok(ExprType::CollectionDifference {
+                                entity_type,
+                                attribute,
+                                other_entity_type,
+                                other_attribute,
+                            })
+                        } else {
+                            let values = extract_string_array(&args)?;
+                            Ok(ExprType::SetDifference {
+                                entity_type,
+                                attribute,
+                                values,
+                            })
+                        }
                     }
                     MethodName::Keys => Ok(ExprType::SetKeys {
                         entity_type,
                         attribute,
                     }),
+                    MethodName::Values => Ok(ExprType::SetValues {
+                        entity_type,
+                        attribute,
+                    }),
                     MethodName::Intersection => {
-                        // .intersection(other_collection) - parse entity.attr
                         if args.len() != 1 {
                             return Err(ReaperError::InvalidPolicy {
                                 reason: format!(
@@ -199,13 +212,26 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                                 ),
                             });
                         }
-                        let (other_entity_type, other_attribute) = extract_entity_attr(&args[0])?;
-                        Ok(ExprType::CollectionIntersection {
-                            entity_type,
-                            attribute,
-                            other_entity_type,
-                            other_attribute,
-                        })
+                        // Two arg forms: another entity attribute
+                        // (user.a.intersection(user.b)) or a literal array
+                        // (user.a.intersection(["x","y"])).
+                        if let Ok((other_entity_type, other_attribute)) =
+                            extract_entity_attr(&args[0])
+                        {
+                            Ok(ExprType::CollectionIntersection {
+                                entity_type,
+                                attribute,
+                                other_entity_type,
+                                other_attribute,
+                            })
+                        } else {
+                            let values = extract_string_array(&args)?;
+                            Ok(ExprType::SetIntersection {
+                                entity_type,
+                                attribute,
+                                values,
+                            })
+                        }
                     }
                     MethodName::Union => {
                         // .union(other_collection) - parse entity.attr
@@ -228,6 +254,40 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                             entity_type,
                             attribute,
                             pattern,
+                        })
+                    }
+                    MethodName::Find => {
+                        let pattern = extract_string_literal(&args[0])?;
+                        Ok(ExprType::RegexFind {
+                            entity_type,
+                            attribute,
+                            pattern,
+                        })
+                    }
+                    MethodName::FindAll => {
+                        let pattern = extract_string_literal(&args[0])?;
+                        Ok(ExprType::RegexFindAll {
+                            entity_type,
+                            attribute,
+                            pattern,
+                        })
+                    }
+                    MethodName::Replace => {
+                        if args.len() != 2 {
+                            return Err(ReaperError::InvalidPolicy {
+                                reason: format!(
+                                    ".replace() requires 2 arguments (pattern, replacement), got {}",
+                                    args.len()
+                                ),
+                            });
+                        }
+                        let pattern = extract_string_literal(&args[0])?;
+                        let replacement = extract_string_literal(&args[1])?;
+                        Ok(ExprType::StringReplace {
+                            entity_type,
+                            attribute,
+                            pattern,
+                            replacement,
                         })
                     }
                     MethodName::Contains => {

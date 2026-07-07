@@ -392,6 +392,15 @@ fn assert_fn_is(policy_text: &str, principal: &str, resource: &str, expected: Po
         .clone()
         .build_preferred(store_with_data())
         .unwrap_or_else(|e| panic!("build_preferred failed: {e}\npolicy:\n{policy_text}"));
+    // Every function this suite covers must run on the COMPILED fast path — a
+    // fallback to AST here means the compiler regressed for that function.
+    assert_eq!(
+        preferred.evaluator_type(),
+        "reaper_dsl",
+        "expected the compiled fast path but build_preferred fell back to {} \
+         for {principal}/{resource}\npolicy:\n{policy_text}",
+        preferred.evaluator_type()
+    );
     let got = preferred
         .evaluate(&request(principal, resource))
         .expect("preferred evaluate");
@@ -401,16 +410,17 @@ fn assert_fn_is(policy_text: &str, principal: &str, resource: &str, expected: Po
          expected {expected:?}\npolicy:\n{policy_text}"
     );
 
-    // Equivalence: if the compiled path also builds, it must agree.
-    if let Ok(compiled) = policy.build(store_with_data()) {
-        let c: PolicyAction = compiled
-            .evaluate(&request(principal, resource))
-            .expect("compiled evaluate");
-        assert_eq!(
-            c, got,
-            "compiled and AST diverged for {principal}/{resource}\npolicy:\n{policy_text}"
-        );
-    }
+    // Equivalence: the compiled path must build (guaranteed above) and agree.
+    let compiled = policy
+        .build(store_with_data())
+        .unwrap_or_else(|e| panic!("compiled build failed: {e}\npolicy:\n{policy_text}"));
+    let c: PolicyAction = compiled
+        .evaluate(&request(principal, resource))
+        .expect("compiled evaluate");
+    assert_eq!(
+        c, got,
+        "compiled and AST diverged for {principal}/{resource}\npolicy:\n{policy_text}"
+    );
 }
 
 // ---- Aggregate: sum / max / min ------------------------------------------
@@ -607,4 +617,49 @@ fn fn_replace() {
     let p = r#"policy p { default: deny, rule r { allow if {
         resource == "res_regex" && rp := user.name.replace("Alice", "Bob") && rp == "Bob" } } }"#;
     assert_fn_is(p, "alice", "res_regex", PolicyAction::Allow);
+}
+
+// ---- Negative / edge cases for the newly-compiled functions ----------------
+// Each still exercises the COMPILED fast path (assert_fn_is asserts that) and
+// must agree with AST on the deny outcome.
+
+#[test]
+fn fn_has_key_missing_denies() {
+    // profile has no "manager" key -> false -> deny.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && user.profile.has_key("manager") } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Deny);
+}
+
+#[test]
+fn fn_intersection_no_overlap_denies() {
+    // skills ∩ [nope] = [] -> count 0, rule wants 1 -> deny.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && i := user.skills.intersection(["nope"]) && c := i.count() && c == 1 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Deny);
+}
+
+#[test]
+fn fn_difference_removes_all_denies() {
+    // skills - [all four skills] = [] -> count 0, rule wants 3 -> deny.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && d := user.skills.difference(["rust", "python", "go", "java"]) && c := d.count() && c == 3 } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Deny);
+}
+
+#[test]
+fn fn_find_no_match_denies() {
+    // "zzz" is not in alice's email -> find is null -> null == "corp" is false.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_regex" && m := user.email.find("zzz") && m == "corp" } } }"#;
+    assert_fn_is(p, "alice", "res_regex", PolicyAction::Deny);
+}
+
+#[test]
+fn fn_has_key_true_for_both_principals() {
+    // Both alice and bob have a "tier" key -> allow for each.
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_util" && user.profile.has_key("tier") } } }"#;
+    assert_fn_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_fn_is(p, "bob", "res_util", PolicyAction::Allow);
 }

@@ -941,6 +941,33 @@ pub fn evaluate_compiled_expr_type(
             }
         }
 
+        CompiledExprType::SetDifference {
+            entity_type,
+            attribute,
+            values,
+        } => {
+            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let items_vec: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
+                Some(AttributeValue::List(items)) => items.clone(),
+                Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
+                _ => return None,
+            };
+            // Keep only items NOT present in the literal set (attr - values).
+            let difference: Vec<AttributeValue> = items_vec
+                .iter()
+                .filter(|item| {
+                    if let AttributeValue::String(s) = item {
+                        !values.contains(s)
+                    } else {
+                        // Non-string items are never in the (string) literal set.
+                        true
+                    }
+                })
+                .cloned()
+                .collect();
+            Some(AttributeValue::List(difference))
+        }
+
         CompiledExprType::SetKeys {
             entity_type,
             attribute,
@@ -951,6 +978,21 @@ pub fn evaluate_compiled_expr_type(
                     let keys: Vec<AttributeValue> =
                         map.keys().map(|k| AttributeValue::String(*k)).collect();
                     Some(AttributeValue::List(keys))
+                }
+                _ => None,
+            }
+        }
+
+        CompiledExprType::SetValues {
+            entity_type,
+            attribute,
+        } => {
+            let entity = get_entity_for_type(entity_type, user, resource)?;
+            match entity.get_attribute(*attribute) {
+                // Matches AST method_values: the object's values as a list.
+                Some(AttributeValue::Object(map)) => {
+                    let values: Vec<AttributeValue> = map.values().cloned().collect();
+                    Some(AttributeValue::List(values))
                 }
                 _ => None,
             }
@@ -1039,6 +1081,47 @@ pub fn evaluate_compiled_expr_type(
                             let interned = interner.intern(m.as_str());
                             return Some(AttributeValue::String(interned));
                         }
+                    }
+                }
+            }
+            None
+        }
+
+        CompiledExprType::RegexFindAll {
+            entity_type,
+            attribute,
+            pattern,
+        } => {
+            let entity = get_entity_for_type(entity_type, user, resource)?;
+            if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
+                if let Some(resolved) = interner.resolve(*s) {
+                    if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
+                        // Every match as a list, matching AST method_find_all.
+                        let matches: Vec<AttributeValue> = re
+                            .find_iter(&resolved)
+                            .map(|m| AttributeValue::String(interner.intern(m.as_str())))
+                            .collect();
+                        return Some(AttributeValue::List(matches));
+                    }
+                }
+            }
+            None
+        }
+
+        CompiledExprType::StringReplace {
+            entity_type,
+            attribute,
+            pattern,
+            replacement,
+        } => {
+            let entity = get_entity_for_type(entity_type, user, resource)?;
+            if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
+                if let Some(resolved) = interner.resolve(*s) {
+                    if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
+                        // Regex replace-all, matching AST method_replace.
+                        let result = re.replace_all(&resolved, replacement.as_str());
+                        let interned = interner.intern(&result);
+                        return Some(AttributeValue::String(interned));
                     }
                 }
             }

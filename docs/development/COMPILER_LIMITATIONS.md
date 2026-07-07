@@ -117,19 +117,22 @@ let evaluator = policy.build_ast_evaluator(store);  // Direct AST evaluation
 - `crates/policy-engine/tests/features/integration/time_based_policies.feature` - Integration tests (blocked)
 - `crates/policy-engine/examples/policies/time_policy.reap` - Example policy (cannot compile)
 
-## Tracked follow-up: complete compiled-mode function coverage
+## Compiled-mode function coverage: COMPLETE
 
-Much of this document predates DSL v2. As of the equivalence work, the compiled
-evaluator handles **16 of 24** DSL functions on the fast path; 8 still fall back
-to AST (`intersection`, `difference`, `values`, `has_key`, `any`, `all`, `find`,
-`replace`). Closing that gap is tracked as a dedicated work item with the exact
-blockers and an incremental plan:
+Much of this document predates DSL v2. The compiled-mode coverage gap is now
+**closed**: every DSL method/function the equivalence suite covers runs on the
+compiled fast path (`find`, `find_all`, `replace`, `values`, `has_key`, `any`,
+`all`, and `intersection`/`difference` with literal-array args were the last to
+land). `compiled_ast_equivalence_tests.rs` asserts `build_preferred` selects the
+compiled evaluator for each — a regression that drops back to AST fails the
+build. See:
 
-**→ `COMPILED_FUNCTIONS_WORKITEM.md`**
+**→ `COMPILED_FUNCTIONS_WORKITEM.md`** (Status: DONE)
 
-The AST fallback is decision-equivalent (guaranteed by
-`compiled_ast_equivalence_tests.rs`), so the remaining functions are a
-performance/coverage task, not a correctness one.
+Comprehensions and the expression/function features listed earlier in this
+document (time function calls, `context` entity in some positions) remain a
+deliberate AST-only fallback; the AST path stays decision-equivalent, guaranteed
+by the equivalence suite.
 
 ## Conclusion
 

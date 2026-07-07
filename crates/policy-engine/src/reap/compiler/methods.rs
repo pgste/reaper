@@ -137,6 +137,44 @@ pub fn compile_method_call(
             })
         }
 
+        MethodName::HasKey => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".has_key() requires 1 argument, got {}", args.len()),
+                });
+            }
+            let key = extract_string_literal(&args[0])?;
+            Ok(DslCondition::ObjectHasKey {
+                entity_type,
+                attribute,
+                key,
+            })
+        }
+
+        MethodName::Any => {
+            if !args.is_empty() {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".any() takes no arguments, got {}", args.len()),
+                });
+            }
+            Ok(DslCondition::CollectionAny {
+                entity_type,
+                attribute,
+            })
+        }
+
+        MethodName::All => {
+            if !args.is_empty() {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".all() takes no arguments, got {}", args.len()),
+                });
+            }
+            Ok(DslCondition::CollectionAll {
+                entity_type,
+                attribute,
+            })
+        }
+
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(
                 "Method .{}() is not supported in compiled policies. \
@@ -221,6 +259,44 @@ pub fn compile_entity_method_call(
                 entity_type,
                 attribute,
                 pattern,
+            })
+        }
+
+        MethodName::HasKey => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".has_key() requires 1 argument, got {}", args.len()),
+                });
+            }
+            let key = extract_string_literal(&args[0])?;
+            Ok(DslCondition::ObjectHasKey {
+                entity_type,
+                attribute,
+                key,
+            })
+        }
+
+        MethodName::Any => {
+            if !args.is_empty() {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".any() takes no arguments, got {}", args.len()),
+                });
+            }
+            Ok(DslCondition::CollectionAny {
+                entity_type,
+                attribute,
+            })
+        }
+
+        MethodName::All => {
+            if !args.is_empty() {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(".all() takes no arguments, got {}", args.len()),
+                });
+            }
+            Ok(DslCondition::CollectionAll {
+                entity_type,
+                attribute,
             })
         }
 

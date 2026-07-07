@@ -31,6 +31,23 @@ pub enum CompiledCondition {
     // ============ Core Conditions ============
     Always,
 
+    /// `entity.attribute.has_key("k")` — object attribute contains the key.
+    ObjectHasKey {
+        entity_type: EntityType,
+        attribute: InternedString,
+        key: InternedString,
+    },
+    /// `entity.attribute.any()` — any element of the collection is truthy.
+    CollectionAny {
+        entity_type: EntityType,
+        attribute: InternedString,
+    },
+    /// `entity.attribute.all()` — all elements of the collection are truthy.
+    CollectionAll {
+        entity_type: EntityType,
+        attribute: InternedString,
+    },
+
     /// ReBAC check with everything pre-interned: evaluation is DashMap gets on
     /// (u32, u32) keys + binary search / bounded BFS. No strings, no allocs on
     /// the direct path.

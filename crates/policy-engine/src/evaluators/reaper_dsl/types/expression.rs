@@ -99,7 +99,16 @@ pub enum ExprType {
         attribute: String,
         values: Vec<String>,
     },
+    SetDifference {
+        entity_type: EntityType,
+        attribute: String,
+        values: Vec<String>,
+    },
     SetKeys {
+        entity_type: EntityType,
+        attribute: String,
+    },
+    SetValues {
         entity_type: EntityType,
         attribute: String,
     },
@@ -131,6 +140,25 @@ pub enum ExprType {
         entity_type: EntityType,
         attribute: String,
         pattern: String,
+    },
+    // Regex find: first match of `pattern` in the attribute (or null).
+    RegexFind {
+        entity_type: EntityType,
+        attribute: String,
+        pattern: String,
+    },
+    // Regex find-all: list of every match of `pattern` in the attribute.
+    RegexFindAll {
+        entity_type: EntityType,
+        attribute: String,
+        pattern: String,
+    },
+    // Regex replace-all: `pattern` -> `replacement` in the attribute string.
+    StringReplace {
+        entity_type: EntityType,
+        attribute: String,
+        pattern: String,
+        replacement: String,
     },
 
     // Chained method call
