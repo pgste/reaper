@@ -21,7 +21,7 @@ pub(super) fn evaluate_chained_method(
             if let AttributeValue::String(s) = base_value {
                 if let Some(resolved) = interner.resolve(s) {
                     let lower = resolved.to_lowercase();
-                    let interned = interner.intern(&lower);
+                    let interned = super::intern_transient(interner, &lower);
                     return Some(AttributeValue::String(interned));
                 }
             }
@@ -31,7 +31,7 @@ pub(super) fn evaluate_chained_method(
             if let AttributeValue::String(s) = base_value {
                 if let Some(resolved) = interner.resolve(s) {
                     let upper = resolved.to_uppercase();
-                    let interned = interner.intern(&upper);
+                    let interned = super::intern_transient(interner, &upper);
                     return Some(AttributeValue::String(interned));
                 }
             }
@@ -41,7 +41,7 @@ pub(super) fn evaluate_chained_method(
             if let AttributeValue::String(s) = base_value {
                 if let Some(resolved) = interner.resolve(s) {
                     let trimmed = resolved.trim().to_string();
-                    let interned = interner.intern(&trimmed);
+                    let interned = super::intern_transient(interner, &trimmed);
                     return Some(AttributeValue::String(interned));
                 }
             }

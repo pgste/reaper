@@ -223,7 +223,7 @@ pub fn get_comprehension_output(
                     OutputMethod::Upper => resolved.to_uppercase(),
                     OutputMethod::Trim => resolved.trim().to_string(),
                 };
-                let interned = interner.intern(&transformed);
+                let interned = super::intern_transient(interner, &transformed);
                 Some(AttributeValue::String(interned))
             } else {
                 None
@@ -249,7 +249,7 @@ pub fn get_comprehension_output_as_string(
                     AttributeValue::String(s) => Some(*s),
                     AttributeValue::Int(i) => {
                         // Convert int to string
-                        Some(interner.intern(&i.to_string()))
+                        Some(super::intern_transient(interner, &i.to_string()))
                     }
                     _ => None,
                 }
@@ -270,7 +270,9 @@ pub fn get_comprehension_output_as_string(
                 })?;
                 match attr_val {
                     AttributeValue::String(s) => Some(*s),
-                    AttributeValue::Int(i) => Some(interner.intern(&i.to_string())),
+                    AttributeValue::Int(i) => {
+                        Some(super::intern_transient(interner, &i.to_string()))
+                    }
                     _ => None,
                 }
             } else {
@@ -279,7 +281,7 @@ pub fn get_comprehension_output_as_string(
         }
         CompiledOutput::Literal(lit) => match lit {
             CompiledLiteralValue::String(s) => Some(*s),
-            CompiledLiteralValue::Int(i) => Some(interner.intern(&i.to_string())),
+            CompiledLiteralValue::Int(i) => Some(super::intern_transient(interner, &i.to_string())),
             _ => None,
         },
         CompiledOutput::VarMethodCall { variable, method } => {
@@ -291,7 +293,7 @@ pub fn get_comprehension_output_as_string(
                     OutputMethod::Upper => str_val.to_uppercase(),
                     OutputMethod::Trim => str_val.trim().to_string(),
                 };
-                Some(interner.intern(&result))
+                Some(super::intern_transient(interner, &result))
             } else {
                 None
             }

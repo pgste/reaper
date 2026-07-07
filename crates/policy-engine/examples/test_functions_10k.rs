@@ -99,7 +99,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = run(&compiled, 1000);
     let _ = run(&ast, 1000);
 
+    // Eval-path interner bounding: this policy produces string results
+    // (find/find_all/replace + set ops) every eval. With per-eval transient
+    // reclamation the interner must NOT grow across the run.
+    let interner_before = store.interner().stats().unique_strings;
     let (c_lat, c_allow) = run(&compiled, iterations);
+    let interner_after = store.interner().stats().unique_strings;
     let (a_lat, _a_allow) = run(&ast, iterations);
 
     let (c_mean, c_p50, c_p95, c_p99) = percentiles(c_lat);
@@ -114,6 +119,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Median latency: {} ns", c_p50);
     println!("   P95 latency:    {} ns", c_p95);
     println!("   P99 latency:    {} ns", c_p99);
+    let interner_growth = interner_after.saturating_sub(interner_before);
+    println!(
+        "   Interner growth: {} strings over {} evals (bounded — transient results reclaimed)",
+        interner_growth, iterations
+    );
+    assert!(
+        interner_growth == 0,
+        "eval path leaked the interner: grew {interner_before} -> {interner_after} over {iterations} evals"
+    );
     println!(
         "   Allow rate:     {:.1}%",
         (c_allow as f64 / iterations as f64) * 100.0

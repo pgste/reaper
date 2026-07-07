@@ -98,19 +98,40 @@ composite indexes.
   intern-after-count pins, `reset_counted` keeps pinned, evicted ids not reused.
 - `data_distribution_memory` asserts stable **and** churning deltas stay bounded.
 
-## Eval-path leak — also fixed
+## Eval-path leaks — all fixed
 
-Cross-entity `context.*` comparisons (`context.token == resource.secret`) used
-to intern the request value at eval time (`reaper_dsl/mod.rs`), pinning a
-per-request string forever — an unbounded leak on the hot eval path under high
-request cardinality (unique tokens/sessions/nonces). The compiled evaluator now
-compares the request value **by content** without interning: an already-interned
-value reuses its id (compares by id, as before); a novel one is carried as raw
-text and compared by content, matching the AST evaluator (which returns context
-values as owned strings and never interned them — so this also removed a latent
-compiled-vs-AST divergence). Pinned by `context_interner_leak_tests`: 10k unique
-context values leave the interner at exactly its baseline, decisions stay correct,
-and compiled ≡ AST.
+The compiled evaluator represents strings only as interned ids, so anything it
+reads from or produces per request had to be interned — and a plain `intern()`
+pins forever. Three eval-path leak classes are now closed:
+
+1. **Cross-entity `context.*` comparisons** (`context.token == resource.secret`)
+   interned the request value. Now compared **by content** without interning: an
+   already-interned value reuses its id; a novel one is carried as raw text and
+   compared by content, matching the AST evaluator (which also removed a latent
+   compiled-vs-AST divergence). Pinned by `context_interner_leak_tests`.
+
+2. **Per-request entity lookups** (`mod.rs::evaluate`) interned the request
+   principal and resource on every eval. This leaked novel resource ids
+   (URL-path-style resources) and, worse, **pinned a loaded entity's id when it
+   was used as a principal — defeating the data-plane's refcounted reclamation
+   for that entity**. Now resolved via `lookup` (never `intern`): the principal
+   must be an already-interned entity or the eval fails closed; a non-interned
+   resource uses a sentinel id (it matches no literal by content and has no
+   entity/edges).
+
+3. **Result-producing methods** (`lower`/`upper`/`trim`/`split`/`replace`/`find`/
+   `find_all` and comprehension transforms) intern the NEW strings they compute.
+   Those live only for the one evaluation, so they are now interned via
+   `intern_transient` — **counted** and recorded in a per-thread scratch frame —
+   and released by a `ScratchGuard` when `evaluate()` returns (including on
+   panic). Novel results are evicted; strings that are also owned by an entity or
+   pinned as a literal are untouched (release is a balanced decrement / no-op).
+
+Pinned by `eval_interner_bounding_tests` (high-cardinality resources, results,
+and principal-stays-evictable) and by the `test_functions_10k` volume test, which
+asserts **0 interner growth over 10k evals** of a policy producing string results
+every eval. Latency is unchanged (the reclamation is dominated by the regex/alloc
+work the methods already do).
 
 ## Residual (documented, not a leak under normal workloads)
 
