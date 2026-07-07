@@ -305,7 +305,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        policy: [multilayer, rbac, abac, rebac]
+        policy: [multilayer, rbac, abac, rebac, functions]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -902,7 +902,7 @@ jobs:
               CHURN=$(grep -oE 'heap [+-][0-9.]+ MB after [0-9]+ churn cycles' "$MEM_SUMMARY" | head -1)
               echo "- Deltas: stable-key stream bounded (0 interner growth); churning-key stream also bounded${CHURN:+ — }${CHURN} via refcounted eviction + index pruning — see docs/development/DATA_DISTRIBUTION_MEMORY.md."
             fi
-            for pol in rbac abac rebac multilayer; do
+            for pol in rbac abac rebac multilayer functions; do
               f="volume-test-$pol/volume-summary-$pol.md"
               [ -f "$f" ] || continue
               MEAN=$(grep -oE 'Mean latency:[[:space:]]*[0-9]+ ns' "$f" | head -1 | grep -oE '[0-9]+ ns')
