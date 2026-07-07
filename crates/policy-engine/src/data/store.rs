@@ -92,29 +92,35 @@ pub struct DataStore {
 impl DataStore {
     /// Create a new data store
     pub fn new() -> Self {
+        let interner = Arc::new(StringInterner::new());
         Self {
             config: DataStoreConfig::default(),
-            interner: Arc::new(StringInterner::new()),
             entities: Arc::new(DashMap::new()),
             type_index: Arc::new(DashMap::new()),
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
-            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new(
+                (*interner).clone(),
+            )),
+            interner,
         }
     }
 
     /// Create a new data store with custom configuration
     pub fn with_config(config: DataStoreConfig) -> Self {
+        let interner = Arc::new(StringInterner::new());
         Self {
             config,
-            interner: Arc::new(StringInterner::new()),
             entities: Arc::new(DashMap::new()),
             type_index: Arc::new(DashMap::new()),
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
-            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new(
+                (*interner).clone(),
+            )),
+            interner,
         }
     }
 
@@ -122,16 +128,19 @@ impl DataStore {
     pub fn with_prewarm(common_strings: &[&str]) -> Self {
         let interner = StringInterner::new();
         interner.prewarm(common_strings);
+        let interner = Arc::new(interner);
 
         Self {
             config: DataStoreConfig::default(),
-            interner: Arc::new(interner),
             entities: Arc::new(DashMap::new()),
             type_index: Arc::new(DashMap::new()),
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
-            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new()),
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new(
+                (*interner).clone(),
+            )),
+            interner,
         }
     }
 
@@ -457,6 +466,10 @@ impl DataStore {
         if self.config.index_composite {
             self.composite_index.clear();
         }
+        // Drop the relationship graph too: its edges reference entity ids that
+        // are about to be evicted, and a stale edge must never outlive its
+        // entity (fail closed) or leave a counted subject orphaned.
+        self.relationships.clear();
         // After clearing all entities, no counted string is referenced — drop
         // them so a clear()+reload (snapshot deploy) doesn't accumulate stale
         // interned strings. Pinned strings (policy literals, types) survive.
