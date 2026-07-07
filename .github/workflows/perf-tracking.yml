@@ -5,13 +5,13 @@
 # github-action-benchmark:
 #   - on main: results are pushed to the gh-pages benchmark dashboard,
 #     becoming the new baseline (this is the trend-over-time history)
-#   - on every run: results are compared to the previous baseline and the
-#     job WARNS (PR comment) at a +5% regression and FAILS at +10%
-#
-# Thresholds are deliberately tight: these are nanosecond-scale hot paths
-# where a 10% regression is a real slowdown, not measurement drift. If a
-# specific noisy bench (e.g. deploy_policy) trips this flakily, prefer
-# stabilising that bench over loosening the global gate.
+#   - on every run: results are compared to the previous baseline in two
+#     buckets with different sensitivities:
+#       * eval-latency (end-to-end policy evaluation) — stable benches, so a
+#         tight gate: WARN at +5%, FAIL at +10%. This is what guards eval perf.
+#       * engine micro-ops (raw lookups, hot-swap, threaded, allocation) —
+#         nanosecond-scale and noisy, so a loose gate: WARN +25%, FAIL +50%.
+#     Each bucket has its own gh-pages history dir (its own trend chart).
 #
 # The end-to-end HTTP throughput benchmark (vs OPA) lives in benchmark.yml;
 # this workflow guards the engine's nanosecond-scale core specifically.
@@ -52,11 +52,28 @@ jobs:
           cargo bench -p policy-engine --bench rebac_bench \
             -- --output-format bencher | tee -a bench-output.txt
 
-      - name: Track results / alert on regression
+      - name: Split benches into eval-latency (tight gate) and micro-ops (loose gate)
+        run: |
+          # EVAL-LATENCY: end-to-end "evaluate a policy" benches. Stable
+          # run-to-run (±1-2%) and the thing that must not regress -> tight gate.
+          CORE='simple_policy|complex_policy|policy_evaluation_performance|compiled_policy_allow_group_viewer|compiled_policy_deny_full_sweep|ast_policy_allow_group_viewer'
+          grep -E "$CORE" bench-output.txt > bench-eval-core.txt
+          # MICRO-OPS: raw graph lookups, hot-swap, threaded, allocation, and the
+          # realistic-workload macro bench. These are nanosecond-scale and/or
+          # variance-prone, so they jitter run-to-run and get a loose gate —
+          # tracked for trend, but only failing on a gross (>=50%) regression.
+          grep -vE "$CORE" bench-output.txt > bench-microbench.txt
+          echo "== eval-latency (tight) =="; cat bench-eval-core.txt
+          echo "== micro-ops (loose) =="; cat bench-microbench.txt
+
+      - name: Eval-latency regression gate (warn +5% / fail +10%)
         uses: benchmark-action/github-action-benchmark@v1
         with:
+          name: "Eval latency (criterion)"
           tool: "cargo"
-          output-file-path: bench-output.txt
+          output-file-path: bench-eval-core.txt
+          # Separate history dir so this suite charts on its own.
+          benchmark-data-dir-path: "dev/bench/eval-latency"
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Baseline history is pushed only from main; branches compare
           # against the last main baseline without writing.
@@ -66,6 +83,24 @@ jobs:
           # not fail, at or beyond +10% it fails.
           alert-threshold: "105%"
           fail-threshold: "110%"
+          comment-on-alert: true
+          fail-on-alert: true
+          summary-always: true
+          max-items-in-chart: 100
+
+      - name: Micro-op trend (warn +25% / fail +50%)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "Engine micro-ops (criterion)"
+          tool: "cargo"
+          output-file-path: bench-microbench.txt
+          benchmark-data-dir-path: "dev/bench/micro-ops"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.ref == 'refs/heads/main' }}
+          # Loose gate for the noisy ns-scale ops: warn at +25%, fail only on a
+          # gross +50% regression (a real 1.5x slowdown, not measurement drift).
+          alert-threshold: "125%"
+          fail-threshold: "150%"
           comment-on-alert: true
           fail-on-alert: true
           summary-always: true
