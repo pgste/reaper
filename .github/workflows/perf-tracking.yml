@@ -4,9 +4,14 @@
 # traversal) in bencher output format and feeds them to
 # github-action-benchmark:
 #   - on main: results are pushed to the gh-pages benchmark dashboard,
-#     becoming the new baseline
+#     becoming the new baseline (this is the trend-over-time history)
 #   - on every run: results are compared to the previous baseline and the
-#     job FAILS + comments when a benchmark regresses beyond 30%
+#     job WARNS (PR comment) at a +5% regression and FAILS at +10%
+#
+# Thresholds are deliberately tight: these are nanosecond-scale hot paths
+# where a 10% regression is a real slowdown, not measurement drift. If a
+# specific noisy bench (e.g. deploy_policy) trips this flakily, prefer
+# stabilising that bench over loosening the global gate.
 #
 # The end-to-end HTTP throughput benchmark (vs OPA) lives in benchmark.yml;
 # this workflow guards the engine's nanosecond-scale core specifically.
@@ -56,7 +61,11 @@ jobs:
           # Baseline history is pushed only from main; branches compare
           # against the last main baseline without writing.
           auto-push: ${{ github.ref == 'refs/heads/main' }}
-          alert-threshold: "130%"
+          # Warn (comment) at +5%, fail the job at +10%. fail-threshold must be
+          # >= alert-threshold; a bench between +5% and +10% comments but does
+          # not fail, at or beyond +10% it fails.
+          alert-threshold: "105%"
+          fail-threshold: "110%"
           comment-on-alert: true
           fail-on-alert: true
           summary-always: true
