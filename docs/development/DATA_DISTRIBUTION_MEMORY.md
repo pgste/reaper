@@ -98,16 +98,23 @@ composite indexes.
   intern-after-count pins, `reset_counted` keeps pinned, evicted ids not reused.
 - `data_distribution_memory` asserts stable **and** churning deltas stay bounded.
 
-## Residuals (documented, not leaks under normal workloads)
+## Eval-path leak — also fixed
+
+Cross-entity `context.*` comparisons (`context.token == resource.secret`) used
+to intern the request value at eval time (`reaper_dsl/mod.rs`), pinning a
+per-request string forever — an unbounded leak on the hot eval path under high
+request cardinality (unique tokens/sessions/nonces). The compiled evaluator now
+compares the request value **by content** without interning: an already-interned
+value reuses its id (compares by id, as before); a novel one is carried as raw
+text and compared by content, matching the AST evaluator (which returns context
+values as owned strings and never interned them — so this also removed a latent
+compiled-vs-AST divergence). Pinned by `context_interner_leak_tests`: 10k unique
+context values leave the interner at exactly its baseline, decisions stay correct,
+and compiled ≡ AST.
+
+## Residual (documented, not a leak under normal workloads)
 
 - **ReBAC subjects** are pinned (interned via `add_relationship`), so churning a
   high-cardinality *relationship subject* space is not reclaimed until the next
   snapshot rebuild. Entity-attribute and entity-id churn (the common case) is
   fully reclaimed.
-- **Cross-entity `context.*` comparisons** intern the request value at eval time
-  (`reaper_dsl/mod.rs`), pinning it. A policy comparing `context.principal` to an
-  entity attribute over a high-cardinality principal space grows the interner on
-  the eval path. This is a separate, pre-existing concern from data distribution;
-  the fix here does not make it worse (pinned strings are safe), and it is
-  tracked for its own change (compare context values by string rather than by
-  interned id).

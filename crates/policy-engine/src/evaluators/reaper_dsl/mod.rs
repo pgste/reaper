@@ -250,38 +250,79 @@ impl ReaperDSLEvaluator {
 
             CompiledCondition::CrossEntityCompare(comp) => {
                 // context.* on either side resolves from the REQUEST, not an
-                // entity. Previously this silently compared against None and
-                // returned false (`context.principal == resource.owner` denied
-                // everything) — a miscompile caught by the policy-library
-                // compiled-vs-AST parity suite.
-                let ctx_side = |attr: crate::data::InternedString| {
-                    let name = interner.resolve(attr)?;
-                    // EvalContext::get already special-cases "action"/"resource".
-                    let raw: &str = _context.get(name.as_ref())?;
-                    if let Ok(n) = raw.parse::<f64>() {
-                        return Some(AttributeValue::Float(n));
-                    }
-                    Some(AttributeValue::String(interner.intern(raw)))
-                };
+                // entity. It must NOT intern the request value: interning a
+                // per-request string (a principal, a token) would pin it in the
+                // shared interner forever — an unbounded eval-path memory leak
+                // under high request cardinality. A request value that is
+                // already interned reuses its id (compares by id, exactly as an
+                // entity value would); a novel one is carried as raw text and
+                // compared by content, matching the AST evaluator (which returns
+                // context values as owned strings and never interns them).
                 let needs_ctx = matches!(comp.left_entity, EntityType::Context)
                     || matches!(comp.right_entity, EntityType::Context);
-                if needs_ctx {
-                    let side = |etype: &EntityType, attr: crate::data::InternedString| {
+                if !needs_ctx {
+                    comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                } else {
+                    // Ok(v)  = a concrete AttributeValue (entity attr, parsed
+                    //          number, or an already-interned request string).
+                    // Err(s) = a request string that is not interned, so it
+                    //          content-matches nothing already in the store.
+                    let resolve = |etype: &EntityType,
+                                   attr: crate::data::InternedString|
+                     -> Option<Result<AttributeValue, Arc<str>>> {
                         if matches!(etype, EntityType::Context) {
-                            ctx_side(attr)
+                            let name = interner.resolve(attr)?;
+                            // EvalContext::get special-cases "action"/"resource".
+                            let raw: &str = _context.get(name.as_ref())?;
+                            if let Ok(n) = raw.parse::<f64>() {
+                                Some(Ok(AttributeValue::Float(n)))
+                            } else if let Some(id) = interner.lookup(raw) {
+                                Some(Ok(AttributeValue::String(id)))
+                            } else {
+                                Some(Err(Arc::from(raw)))
+                            }
                         } else {
                             entity_helpers::get_nested_attr(etype, attr, user, resource, interner)
+                                .map(Ok)
                         }
                     };
-                    let left = side(&comp.left_entity, comp.left_attr);
-                    let right = side(&comp.right_entity, comp.right_attr);
-                    comparison_eval::compare_attr_values(
-                        left.as_ref(),
-                        right.as_ref(),
-                        &comp.op.into(),
-                    )
-                } else {
-                    comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                    let op: AttrCompareOp = comp.op.into();
+                    match (
+                        resolve(&comp.left_entity, comp.left_attr),
+                        resolve(&comp.right_entity, comp.right_attr),
+                    ) {
+                        // Both concrete: identical to the pre-existing comparator.
+                        (Some(Ok(l)), Some(Ok(r))) => {
+                            comparison_eval::compare_attr_values(Some(&l), Some(&r), &op)
+                        }
+                        // Two novel request strings: compare by content.
+                        (Some(Err(a)), Some(Err(b))) => match op {
+                            AttrCompareOp::Equal => a == b,
+                            AttrCompareOp::NotEqual => a != b,
+                            _ => false,
+                        },
+                        // A novel request string vs a resolved value. It was not
+                        // interned, so it content-matches nothing in the store —
+                        // unequal to everything. compare_attr_values only
+                        // compares scalars (List/Set/Object/Null -> false), so
+                        // mirror its type-strict NotEqual: != is true iff the
+                        // other side is a present scalar.
+                        (Some(Err(_)), Some(Ok(other))) | (Some(Ok(other)), Some(Err(_))) => {
+                            match op {
+                                AttrCompareOp::Equal => false,
+                                AttrCompareOp::NotEqual => matches!(
+                                    other,
+                                    AttributeValue::String(_)
+                                        | AttributeValue::Int(_)
+                                        | AttributeValue::Float(_)
+                                        | AttributeValue::Bool(_)
+                                ),
+                                _ => false,
+                            }
+                        }
+                        // A Null / missing side satisfies neither == nor !=.
+                        _ => false,
+                    }
                 }
             }
 
