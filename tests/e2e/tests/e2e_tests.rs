@@ -30,6 +30,18 @@ struct TestClient {
     management_url: String,
     agent_url: String,
     api_key: Option<String>,
+    /// Session token (rst_…) from /auth/signup or /auth/login, sent as a
+    /// Bearer credential. The management control plane is default-deny, so
+    /// every org-scoped call needs one of these or an API key.
+    session_token: Option<String>,
+}
+
+/// An authenticated E2E session: a freshly signed-up user plus the org that
+/// signup created for them (session credentials are scoped to that org).
+struct TestSession {
+    client: TestClient,
+    org_id: String,
+    org_slug: String,
 }
 
 impl TestClient {
@@ -42,6 +54,7 @@ impl TestClient {
             management_url: management_url(),
             agent_url: agent_url(),
             api_key: None,
+            session_token: None,
         }
     }
 
@@ -51,35 +64,63 @@ impl TestClient {
         self
     }
 
+    /// Sign up a fresh user through the public auth flow (the same journey a
+    /// real customer takes) and return a session-authenticated client along
+    /// with the org that signup provisioned.
+    async fn signup(label: &str) -> TestSession {
+        let mut client = Self::new();
+        let unique = &Uuid::new_v4().to_string()[..8];
+        let response = client
+            .management_post(
+                "/auth/signup",
+                json!({
+                    "email": format!("e2e-{label}-{unique}@example.com"),
+                    "password": "E2eTestPassw0rd!",
+                    "org_name": format!("E2E {label} {unique}")
+                }),
+            )
+            .await
+            .expect("signup request failed");
+        assert_eq!(response.status().as_u16(), 201, "signup must succeed");
+        let body: Value = response.json().await.unwrap();
+        client.session_token = Some(body["session_token"].as_str().unwrap().to_string());
+        TestSession {
+            client,
+            org_id: body["org"]["id"].as_str().unwrap().to_string(),
+            org_slug: body["org"]["slug"].as_str().unwrap().to_string(),
+        }
+    }
+
+    fn auth_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref key) = self.api_key {
+            req = req.header("X-API-Key", key);
+        }
+        if let Some(ref token) = self.session_token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        req
+    }
+
     // Management API helpers
 
     async fn management_get(&self, path: &str) -> reqwest::Result<reqwest::Response> {
-        let mut req = self.client.get(format!("{}{}", self.management_url, path));
-        if let Some(ref key) = self.api_key {
-            req = req.header("X-API-Key", key);
-        }
-        req.send().await
+        let req = self.client.get(format!("{}{}", self.management_url, path));
+        self.auth_headers(req).send().await
     }
 
     async fn management_post(&self, path: &str, body: Value) -> reqwest::Result<reqwest::Response> {
-        let mut req = self
+        let req = self
             .client
             .post(format!("{}{}", self.management_url, path))
             .json(&body);
-        if let Some(ref key) = self.api_key {
-            req = req.header("X-API-Key", key);
-        }
-        req.send().await
+        self.auth_headers(req).send().await
     }
 
     async fn management_delete(&self, path: &str) -> reqwest::Result<reqwest::Response> {
-        let mut req = self
+        let req = self
             .client
             .delete(format!("{}{}", self.management_url, path));
-        if let Some(ref key) = self.api_key {
-            req = req.header("X-API-Key", key);
-        }
-        req.send().await
+        self.auth_headers(req).send().await
     }
 
     // Agent API helpers
@@ -178,54 +219,49 @@ async fn test_agent_metrics() {
 async fn test_e2e_organization_lifecycle() {
     skip_if_no_services!();
 
-    let client = TestClient::new();
-    let slug = format!("e2e-org-{}", &Uuid::new_v4().to_string()[..8]);
+    // Signup provisions the org and an Owner session (the real user journey —
+    // anonymous org CRUD is rejected by the default-deny control plane).
+    let session = TestClient::signup("org-lifecycle").await;
+    let client = &session.client;
 
-    // Create organization
-    let response = client
-        .management_post(
-            "/orgs",
-            json!({
-                "name": "E2E Test Organization",
-                "slug": slug
-            }),
-        )
+    // Unauthenticated requests to org routes fail closed.
+    let response = TestClient::new()
+        .management_get(&format!("/orgs/{}", session.org_slug))
         .await
         .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-
-    let body: Value = response.json().await.unwrap();
-    let org_id = body["id"].as_str().unwrap();
-    assert_eq!(body["slug"], slug);
+    assert_eq!(response.status().as_u16(), 401);
 
     // Get organization
     let response = client
-        .management_get(&format!("/orgs/{}", slug))
+        .management_get(&format!("/orgs/{}", session.org_slug))
         .await
         .unwrap();
     assert!(response.status().is_success());
 
     let body: Value = response.json().await.unwrap();
-    assert_eq!(body["id"], org_id);
+    assert_eq!(body["id"], session.org_id.as_str());
 
-    // List organizations
+    // List organizations (a non-platform-admin only ever sees their own)
     let response = client.management_get("/orgs").await.unwrap();
     assert!(response.status().is_success());
 
     let body: Value = response.json().await.unwrap();
     let orgs = body["organizations"].as_array().unwrap();
-    assert!(orgs.iter().any(|o| o["slug"] == slug));
+    assert!(orgs.iter().any(|o| o["slug"] == session.org_slug.as_str()));
 
-    // Delete organization
+    // Delete organization (Owner holds org:admin)
     let response = client
-        .management_delete(&format!("/orgs/{}", org_id))
+        .management_delete(&format!("/orgs/{}", session.org_id))
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 204);
 
-    // Verify deletion
-    let response = client
-        .management_get(&format!("/orgs/{}", org_id))
+    // Verify deletion — probe from a different authenticated user, since the
+    // deleted org's own session loses its membership with the org.
+    let probe = TestClient::signup("org-lifecycle-probe").await;
+    let response = probe
+        .client
+        .management_get(&format!("/orgs/{}", session.org_id))
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 404);
@@ -239,23 +275,10 @@ async fn test_e2e_organization_lifecycle() {
 async fn test_e2e_full_policy_deployment() {
     skip_if_no_services!();
 
-    let client = TestClient::new();
-    let slug = format!("e2e-deploy-{}", &Uuid::new_v4().to_string()[..8]);
-
-    // Step 1: Create organization
-    let response = client
-        .management_post(
-            "/orgs",
-            json!({
-                "name": "E2E Deployment Org",
-                "slug": slug
-            }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-    let org_body: Value = response.json().await.unwrap();
-    let _org_id = org_body["id"].as_str().unwrap();
+    // Step 1: Signup provisions the org + Owner session.
+    let session = TestClient::signup("deploy").await;
+    let client = &session.client;
+    let slug = session.org_slug.clone();
 
     // Step 2: Create policy
     let response = client
@@ -347,7 +370,7 @@ async fn test_e2e_full_policy_deployment() {
 
     // Cleanup
     let _ = client
-        .management_delete(&format!("/orgs/{}", org_body["id"].as_str().unwrap()))
+        .management_delete(&format!("/orgs/{}", session.org_id))
         .await;
 }
 
@@ -359,38 +382,27 @@ async fn test_e2e_full_policy_deployment() {
 async fn test_e2e_agent_registration_flow() {
     skip_if_no_services!();
 
-    let client = TestClient::new();
-    let slug = format!("e2e-agent-{}", &Uuid::new_v4().to_string()[..8]);
+    let session = TestClient::signup("agent").await;
+    let client = &session.client;
 
-    // Create organization
+    // Agents list works for the org Owner (agent:read scope).
     let response = client
-        .management_post(
-            "/orgs",
-            json!({
-                "name": "E2E Agent Org",
-                "slug": slug
-            }),
-        )
+        .management_get(&format!("/orgs/{}/agents", session.org_slug))
         .await
         .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-    let org_body: Value = response.json().await.unwrap();
-    let org_id = org_body["id"].as_str().unwrap();
+    assert!(response.status().is_success());
 
-    // Note: In production, we'd create an API key here.
-    // For e2e tests, we may need to use a pre-configured test key
-    // or test without auth depending on configuration.
-
-    // Verify agents list endpoint works
-    let response = client
-        .management_get(&format!("/orgs/{}/agents", slug))
+    // ... and is refused without credentials (default-deny).
+    let response = TestClient::new()
+        .management_get(&format!("/orgs/{}/agents", session.org_slug))
         .await
         .unwrap();
-    // May require auth - just verify endpoint exists
-    assert!(response.status().is_success() || response.status().as_u16() == 401);
+    assert_eq!(response.status().as_u16(), 401);
 
     // Cleanup
-    let _ = client.management_delete(&format!("/orgs/{}", org_id)).await;
+    let _ = client
+        .management_delete(&format!("/orgs/{}", session.org_id))
+        .await;
 }
 
 // =============================================================================
@@ -401,34 +413,20 @@ async fn test_e2e_agent_registration_flow() {
 async fn test_e2e_policy_source_management() {
     skip_if_no_services!();
 
-    let client = TestClient::new();
-    let slug = format!("e2e-source-{}", &Uuid::new_v4().to_string()[..8]);
+    let session = TestClient::signup("source").await;
+    let client = &session.client;
 
-    // Create organization
+    // Sources list works for the org Owner (policy:read scope).
     let response = client
-        .management_post(
-            "/orgs",
-            json!({
-                "name": "E2E Source Org",
-                "slug": slug
-            }),
-        )
+        .management_get(&format!("/orgs/{}/sources", session.org_slug))
         .await
         .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-    let org_body: Value = response.json().await.unwrap();
-    let org_id = org_body["id"].as_str().unwrap();
-
-    // Verify sources endpoint exists
-    let response = client
-        .management_get(&format!("/orgs/{}/sources", slug))
-        .await
-        .unwrap();
-    // May require auth
-    assert!(response.status().is_success() || response.status().as_u16() == 401);
+    assert!(response.status().is_success());
 
     // Cleanup
-    let _ = client.management_delete(&format!("/orgs/{}", org_id)).await;
+    let _ = client
+        .management_delete(&format!("/orgs/{}", session.org_id))
+        .await;
 }
 
 // =============================================================================
@@ -482,28 +480,13 @@ async fn test_e2e_agent_list_policies() {
 async fn test_e2e_events_endpoint() {
     skip_if_no_services!();
 
-    let test_client = TestClient::new();
-    let slug = format!("e2e-events-{}", &Uuid::new_v4().to_string()[..8]);
-
-    // Create organization for events test
-    let response = test_client
-        .management_post(
-            "/orgs",
-            json!({
-                "name": "E2E Events Org",
-                "slug": slug
-            }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-    let org_body: Value = response.json().await.unwrap();
-    let org_id = org_body["id"].as_str().unwrap();
+    let session = TestClient::signup("events").await;
+    let test_client = &session.client;
 
     // Verify events endpoint exists (don't actually consume the stream)
     // Just check the endpoint responds
     let response = test_client
-        .management_get(&format!("/orgs/{}/events", slug))
+        .management_get(&format!("/orgs/{}/events", session.org_slug))
         .await;
 
     // Events endpoint should exist (may timeout since it's a stream)
@@ -511,7 +494,7 @@ async fn test_e2e_events_endpoint() {
 
     // Cleanup
     let _ = test_client
-        .management_delete(&format!("/orgs/{}", org_id))
+        .management_delete(&format!("/orgs/{}", session.org_id))
         .await;
 }
 
@@ -523,9 +506,10 @@ async fn test_e2e_events_endpoint() {
 async fn test_e2e_error_handling() {
     skip_if_no_services!();
 
-    let client = TestClient::new();
+    let session = TestClient::signup("errors").await;
+    let client = &session.client;
 
-    // Test 404 for non-existent org
+    // Test 404 for non-existent org (authenticated — anonymous gets 401 first)
     let response = client
         .management_get("/orgs/nonexistent-org-12345")
         .await
@@ -544,6 +528,10 @@ async fn test_e2e_error_handling() {
         .await
         .unwrap();
     assert!(response.status().is_client_error());
+
+    // Unauthenticated requests to protected routes are refused outright.
+    let response = TestClient::new().management_get("/orgs").await.unwrap();
+    assert_eq!(response.status().as_u16(), 401);
 }
 
 // =============================================================================

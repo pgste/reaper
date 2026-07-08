@@ -10,6 +10,7 @@
 //! - mTLS client certificate validation
 
 pub mod api_key;
+pub mod gateway;
 pub mod jwks;
 pub mod jwt;
 pub mod middleware;

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // Re-export all configuration types
-pub use auth::AuthConfig;
+pub use auth::{AuthConfig, GatewayMode};
 pub use bundles::BundlesConfig;
 pub use database::DatabaseConfig;
 pub use error::ConfigError;
@@ -102,6 +102,23 @@ impl Config {
         // Auth overrides
         if let Ok(secret) = std::env::var("REAPER_JWT_SECRET") {
             config.auth.jwt_secret = Some(secret);
+        }
+
+        // Rate-limit overrides. The per-IP signup/login limits protect the
+        // public auth endpoints; they're env-tunable for environments where
+        // many principals legitimately share one IP (E2E suites, corporate
+        // NAT). Unparseable values fall back to the defaults.
+        if let Some(v) = std::env::var("REAPER_RATE_LIMIT_SIGNUP_PER_HOUR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            config.rate_limit.signup_per_hour = v;
+        }
+        if let Some(v) = std::env::var("REAPER_RATE_LIMIT_LOGIN_PER_MINUTE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            config.rate_limit.login_per_minute = v;
         }
 
         // Bundle signing overrides

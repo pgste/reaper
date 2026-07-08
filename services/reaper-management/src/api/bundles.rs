@@ -15,6 +15,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::api::error::{ApiError, ApiResult};
+use crate::api::orgs::authorize_org;
+use crate::auth::middleware::RequireAuth;
+use crate::auth::scopes::Scope;
 use crate::domain::bundle::{BundleStatus, CreateBundle, PromotionRequest, UpdateBundle};
 use crate::state::AppState;
 
@@ -79,10 +82,13 @@ pub fn routes() -> Router<Arc<AppState>> {
 /// List bundles for an organization
 async fn list_bundles(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<ListBundlesQuery>,
 ) -> ApiResult<Json<Vec<crate::domain::Bundle>>> {
-    let org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
+        .await?
+        .id;
     let status_filter = query
         .status
         .as_ref()
@@ -97,10 +103,13 @@ async fn list_bundles(
 /// Create a new bundle
 async fn create_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(input): Json<CreateBundle>,
 ) -> ApiResult<(StatusCode, Json<crate::domain::Bundle>)> {
-    let org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
     let bundle = state.bundle_service.create(org_id, &input).await?;
     Ok((StatusCode::CREATED, Json(bundle)))
 }
@@ -108,20 +117,28 @@ async fn create_bundle(
 /// Get a specific bundle
 async fn get_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
-    let bundle = state.bundle_service.get(bundle_id).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
+        .await?
+        .id;
+    let bundle = state.bundle_service.get_scoped(org_id, bundle_id).await?;
     Ok(Json(bundle))
 }
 
 /// Update a bundle
 async fn update_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     Json(input): Json<UpdateBundle>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    // Tenant guard: 404 unless the bundle belongs to this org.
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
 
     // Update bundle metadata through repository
     let bundle = crate::db::repositories::BundleRepository::new(&state.db)
@@ -140,9 +157,13 @@ async fn update_bundle(
 /// Delete a bundle
 async fn delete_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<StatusCode> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     state.bundle_service.delete(bundle_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -150,10 +171,14 @@ async fn delete_bundle(
 /// Add policies to a bundle
 async fn add_policies(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     Json(input): Json<AddPoliciesRequest>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let bundle = state
         .bundle_service
         .add_policies(bundle_id, &input.policy_ids)
@@ -164,10 +189,14 @@ async fn add_policies(
 /// Remove policies from a bundle
 async fn remove_policies(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     Json(input): Json<RemovePoliciesRequest>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let bundle = state
         .bundle_service
         .remove_policies(bundle_id, &input.policy_ids)
@@ -178,9 +207,13 @@ async fn remove_policies(
 /// Compile a bundle
 async fn compile_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let bundle = state.bundle_service.compile(bundle_id).await?;
     Ok(Json(bundle))
 }
@@ -188,9 +221,13 @@ async fn compile_bundle(
 /// Stage a bundle
 async fn stage_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let bundle = state.bundle_service.stage(bundle_id).await?;
     Ok(Json(bundle))
 }
@@ -198,10 +235,14 @@ async fn stage_bundle(
 /// Promote a bundle to production
 async fn promote_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     Json(request): Json<PromotionRequest>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundlePromote])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let bundle = state.bundle_service.promote(bundle_id, &request).await?;
     Ok(Json(bundle))
 }
@@ -209,9 +250,13 @@ async fn promote_bundle(
 /// Deprecate a bundle
 async fn deprecate_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
+        .await?
+        .id;
+    state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let bundle = state.bundle_service.deprecate(bundle_id, None).await?;
     Ok(Json(bundle))
 }
@@ -219,11 +264,13 @@ async fn deprecate_bundle(
 /// Download a compiled bundle
 async fn download_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Response> {
-    let _org_id = parse_org_id(&org, &state).await?;
-
-    let bundle = state.bundle_service.get(bundle_id).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
+        .await?
+        .id;
+    let bundle = state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let download = state.bundle_service.download(bundle_id).await?;
 
     let filename = format!("{}-{}.rbb", bundle.name, bundle_id);
@@ -256,29 +303,14 @@ async fn download_bundle(
 /// Get the currently promoted bundle
 async fn get_promoted_bundle(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
 ) -> ApiResult<Json<Option<crate::domain::Bundle>>> {
-    let org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
+        .await?
+        .id;
     let bundle = state.bundle_service.get_promoted(org_id).await?;
     Ok(Json(bundle))
-}
-
-/// Parse organization ID from slug or UUID
-async fn parse_org_id(org: &str, state: &AppState) -> ApiResult<Uuid> {
-    // Try parsing as UUID first
-    if let Ok(id) = org.parse::<Uuid>() {
-        return Ok(id);
-    }
-
-    // Otherwise, look up by slug
-    let org_repo = crate::db::repositories::OrganizationRepository::new(&state.db);
-    let organization = org_repo
-        .get_by_slug(org)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::NotFound(format!("Organization not found: {}", org)))?;
-
-    Ok(organization.id)
 }
 
 // Implement From<BundleError> for ApiError
@@ -370,26 +402,30 @@ pub struct DiffSummary {
 /// Get diff between two bundles
 async fn get_bundle_diff(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     Query(query): Query<BundleDiffQuery>,
 ) -> ApiResult<Json<BundleDiffResponse>> {
     use crate::db::repositories::{BundleRepository, PolicyRepository};
     use std::collections::HashMap;
 
-    let _org_id = parse_org_id(&org, &state).await?;
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
+        .await?
+        .id;
 
-    // Get both bundles
+    // Get both bundles — org-scoped, so neither side of the diff can address
+    // another tenant's bundle by UUID.
     let bundle_repo = BundleRepository::new(&state.db);
     let policy_repo = PolicyRepository::new(&state.db);
 
     let base_bundle = bundle_repo
-        .get_by_id(query.base)
+        .get_by_id_scoped(org_id, query.base)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound(format!("Base bundle not found: {}", query.base)))?;
 
     let new_bundle = bundle_repo
-        .get_by_id(bundle_id)
+        .get_by_id_scoped(org_id, bundle_id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::NotFound(format!("New bundle not found: {}", bundle_id)))?;

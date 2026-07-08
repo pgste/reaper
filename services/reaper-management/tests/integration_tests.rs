@@ -12,8 +12,9 @@ use reaper_management::{
     auth::api_key::{ApiKeyRepository, CreateApiKey},
     auth::jwks::JwksConfigRepository,
     config::{AuthConfig, Config},
-    db::repositories::AgentRepository,
+    db::repositories::{AgentRepository, OrganizationRepository},
     db::Database,
+    domain::organization::CreateOrganization,
     storage::FilesystemStorage,
     AppState,
 };
@@ -119,6 +120,28 @@ async fn create_test_api_key(db: &Database, org_id: Uuid) -> String {
     created.key
 }
 
+/// Create an API key with an explicit (non-admin) scope list — for tests that
+/// exercise the tenant guard and scope checks, which the platform `admin`
+/// scope would bypass.
+async fn create_scoped_api_key(db: &Database, org_id: Uuid, scopes: &[&str]) -> String {
+    let api_key_repo = ApiKeyRepository::new(db);
+    let created = api_key_repo
+        .create(
+            org_id,
+            CreateApiKey {
+                // api_keys has UNIQUE(org_id, name); randomize so one org can
+                // mint several scoped keys in a test.
+                name: format!("scoped-key-{}", Uuid::new_v4()),
+                scopes: scopes.iter().map(|s| s.to_string()).collect(),
+                expires_at: None,
+                created_by: None,
+            },
+        )
+        .await
+        .unwrap();
+    created.key
+}
+
 /// Parse JSON response body
 async fn parse_body(response: axum::response::Response) -> Value {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -163,20 +186,23 @@ async fn test_organization_crud() {
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let body = parse_body(response).await;
-    let org_id = body["id"].as_str().unwrap();
+    let org_id = body["id"].as_str().unwrap().to_string();
     assert_eq!(body["name"], "Test Organization");
     assert_eq!(body["slug"], "test-org");
 
+    // Org reads/mutations now require authentication (Phase B).
+    let key = create_test_api_key(&env.db, org_id.parse().unwrap()).await;
+
     // Get organization by slug
-    let get_req = json_request("GET", "/orgs/test-org", None);
+    let get_req = authed_request("GET", "/orgs/test-org", None, &key);
     let response = env.app.clone().oneshot(get_req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = parse_body(response).await;
-    assert_eq!(body["id"], org_id);
+    assert_eq!(body["id"], org_id.as_str());
 
     // List organizations
-    let list_req = json_request("GET", "/orgs", None);
+    let list_req = authed_request("GET", "/orgs", None, &key);
     let response = env.app.clone().oneshot(list_req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -184,23 +210,38 @@ async fn test_organization_crud() {
     assert!(!body["organizations"].as_array().unwrap().is_empty());
 
     // Update organization
-    let update_req = json_request(
+    let update_req = authed_request(
         "PUT",
         &format!("/orgs/{}", org_id),
         Some(json!({
             "display_name": "Updated Name"
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(update_req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
+    // A second org's admin key, minted BEFORE the delete: deleting an org
+    // cascades away its own API keys, so the probe must come from elsewhere.
+    let probe_org = OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "Probe Org".to_string(),
+            slug: "probe-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let probe_key = create_test_api_key(&env.db, probe_org.id).await;
+
     // Delete organization
-    let delete_req = json_request("DELETE", &format!("/orgs/{}", org_id), None);
+    let delete_req = authed_request("DELETE", &format!("/orgs/{}", org_id), None, &key);
     let response = env.app.clone().oneshot(delete_req).await.unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    // Verify deletion
-    let get_req = json_request("GET", &format!("/orgs/{}", org_id), None);
+    // Verify deletion (platform-admin key from the probe org sees 404)
+    let get_req = authed_request("GET", &format!("/orgs/{}", org_id), None, &probe_key);
     let response = env.app.clone().oneshot(get_req).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
@@ -220,9 +261,12 @@ async fn test_policy_lifecycle() {
     );
     let response = env.app.clone().oneshot(create_org).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
+    let body = parse_body(response).await;
+    let org_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
 
     // Create policy
-    let create_policy = json_request(
+    let create_policy = authed_request(
         "POST",
         "/orgs/policy-org/policies",
         Some(json!({
@@ -231,6 +275,7 @@ async fn test_policy_lifecycle() {
             "language": "reaper",
             "content": "allow admin to access /admin"
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(create_policy).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -240,27 +285,29 @@ async fn test_policy_lifecycle() {
     assert_eq!(body["name"], "test-policy");
 
     // Get policy
-    let get_policy = json_request(
+    let get_policy = authed_request(
         "GET",
         &format!("/orgs/policy-org/policies/{}", policy_id),
         None,
+        &key,
     );
     let response = env.app.clone().oneshot(get_policy).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     // Update policy (creates new version)
-    let update_policy = json_request(
+    let update_policy = authed_request(
         "PUT",
         &format!("/orgs/policy-org/policies/{}", policy_id),
         Some(json!({
             "content": "allow admin to access /admin/*"
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(update_policy).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     // List policies
-    let list_policies = json_request("GET", "/orgs/policy-org/policies", None);
+    let list_policies = authed_request("GET", "/orgs/policy-org/policies", None, &key);
     let response = env.app.clone().oneshot(list_policies).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -283,9 +330,12 @@ async fn test_bundle_workflow() {
     );
     let response = env.app.clone().oneshot(create_org).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
+    let body = parse_body(response).await;
+    let org_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
 
     // Create policy
-    let create_policy = json_request(
+    let create_policy = authed_request(
         "POST",
         "/orgs/bundle-org/policies",
         Some(json!({
@@ -293,6 +343,7 @@ async fn test_bundle_workflow() {
             "language": "reaper",
             "content": "allow user to read /api"
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(create_policy).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -300,7 +351,7 @@ async fn test_bundle_workflow() {
     let policy_id = policy_body["id"].as_str().unwrap();
 
     // Create bundle with policy
-    let create_bundle = json_request(
+    let create_bundle = authed_request(
         "POST",
         "/orgs/bundle-org/bundles",
         Some(json!({
@@ -308,6 +359,7 @@ async fn test_bundle_workflow() {
             "description": "Test bundle",
             "policy_ids": [policy_id]
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(create_bundle).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -318,10 +370,11 @@ async fn test_bundle_workflow() {
     assert_eq!(body["policy_count"], 1);
 
     // Compile bundle
-    let compile = json_request(
+    let compile = authed_request(
         "POST",
         &format!("/orgs/bundle-org/bundles/{}/compile", bundle_id),
         None,
+        &key,
     );
     let response = env.app.clone().oneshot(compile).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -332,10 +385,11 @@ async fn test_bundle_workflow() {
     assert!(body["checksum"].as_str().is_some());
 
     // Stage bundle
-    let stage = json_request(
+    let stage = authed_request(
         "POST",
         &format!("/orgs/bundle-org/bundles/{}/stage", bundle_id),
         None,
+        &key,
     );
     let response = env.app.clone().oneshot(stage).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -344,12 +398,13 @@ async fn test_bundle_workflow() {
     assert_eq!(body["status"], "staged");
 
     // Promote bundle
-    let promote = json_request(
+    let promote = authed_request(
         "POST",
         &format!("/orgs/bundle-org/bundles/{}/promote", bundle_id),
         Some(json!({
             "notes": "Initial release"
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(promote).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -358,7 +413,7 @@ async fn test_bundle_workflow() {
     assert_eq!(body["status"], "promoted");
 
     // Get promoted bundle
-    let get_promoted = json_request("GET", "/orgs/bundle-org/bundles/promoted", None);
+    let get_promoted = authed_request("GET", "/orgs/bundle-org/bundles/promoted", None, &key);
     let response = env.app.clone().oneshot(get_promoted).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -366,10 +421,11 @@ async fn test_bundle_workflow() {
     assert_eq!(body["id"], bundle_id);
 
     // Download bundle
-    let download = json_request(
+    let download = authed_request(
         "GET",
         &format!("/orgs/bundle-org/bundles/{}/download", bundle_id),
         None,
+        &key,
     );
     let response = env.app.clone().oneshot(download).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -533,15 +589,6 @@ async fn test_policy_source_crud() {
 async fn test_invalid_requests() {
     let env = setup_test_env().await;
 
-    // Get non-existent organization
-    let response = env
-        .app
-        .clone()
-        .oneshot(json_request("GET", "/orgs/nonexistent", None))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
     // Create org with missing required field
     let response = env
         .app
@@ -558,7 +605,7 @@ async fn test_invalid_requests() {
         .unwrap();
     assert!(response.status().is_client_error());
 
-    // Create org first for further tests
+    // Create org first (org reads now require auth, so we need a key)
     let create_org = json_request(
         "POST",
         "/orgs",
@@ -567,16 +614,29 @@ async fn test_invalid_requests() {
             "slug": "error-org"
         })),
     );
-    env.app.clone().oneshot(create_org).await.unwrap();
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    let body = parse_body(response).await;
+    let org_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    // Get non-existent organization (authenticated; platform-admin key)
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", "/orgs/nonexistent", None, &key))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     // Get non-existent policy
     let response = env
         .app
         .clone()
-        .oneshot(json_request(
+        .oneshot(authed_request(
             "GET",
             "/orgs/error-org/policies/00000000-0000-0000-0000-000000000000",
             None,
+            &key,
         ))
         .await
         .unwrap();
@@ -586,10 +646,11 @@ async fn test_invalid_requests() {
     let response = env
         .app
         .clone()
-        .oneshot(json_request(
+        .oneshot(authed_request(
             "GET",
             "/orgs/error-org/bundles/00000000-0000-0000-0000-000000000000",
             None,
+            &key,
         ))
         .await
         .unwrap();
@@ -609,43 +670,50 @@ async fn test_bundle_invalid_transitions() {
             "slug": "transition-org"
         })),
     );
-    env.app.clone().oneshot(create_org).await.unwrap();
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    let body = parse_body(response).await;
+    let org_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
 
     // Create bundle (empty, no policies)
-    let create_bundle = json_request(
+    let create_bundle = authed_request(
         "POST",
         "/orgs/transition-org/bundles",
         Some(json!({
             "name": "empty-bundle"
         })),
+        &key,
     );
     let response = env.app.clone().oneshot(create_bundle).await.unwrap();
     let body = parse_body(response).await;
     let bundle_id = body["id"].as_str().unwrap();
 
     // Try to compile empty bundle - should fail
-    let compile = json_request(
+    let compile = authed_request(
         "POST",
         &format!("/orgs/transition-org/bundles/{}/compile", bundle_id),
         None,
+        &key,
     );
     let response = env.app.clone().oneshot(compile).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // Try to stage draft bundle - should fail
-    let stage = json_request(
+    let stage = authed_request(
         "POST",
         &format!("/orgs/transition-org/bundles/{}/stage", bundle_id),
         None,
+        &key,
     );
     let response = env.app.clone().oneshot(stage).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // Try to promote draft bundle - should fail
-    let promote = json_request(
+    let promote = authed_request(
         "POST",
         &format!("/orgs/transition-org/bundles/{}/promote", bundle_id),
         Some(json!({})),
+        &key,
     );
     let response = env.app.clone().oneshot(promote).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -2114,4 +2182,343 @@ async fn measure_data_plane_save_latency() {
         "publish (materialize 500 entities + checksum + version row): {}ms",
         start.elapsed().as_millis()
     );
+}
+
+// ============================================================================
+// Default-deny authentication gateway (Plan 01, Phase A)
+// ============================================================================
+
+/// Build a test app WITH the default-deny gateway middleware layered in —
+/// mirrors `build_router`'s wiring. The shared `setup_test_env` deliberately
+/// omits the gateway (many tests exercise handlers directly), so the gateway
+/// gets its own harness here.
+async fn setup_gateway_env() -> (axum::Router, Arc<Database>) {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_path = temp_dir.path().join("storage");
+    std::fs::create_dir_all(&storage_path).unwrap();
+
+    let db_config = reaper_management::db::ephemeral_test_config(temp_dir.path()).await;
+    let db = Database::new(&db_config).await.unwrap();
+    db.run_migrations().await.unwrap();
+    let db = Arc::new(db);
+
+    let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap())
+        as Arc<dyn reaper_management::storage::BundleStorage>;
+
+    let config = Config {
+        auth: AuthConfig {
+            jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
+            ..AuthConfig::default()
+        },
+        ..Config::default()
+    };
+
+    let state = Arc::new(AppState::new(db.clone(), config, storage));
+    let app = build_api_router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            reaper_management::auth::gateway::require_authentication,
+        ))
+        .with_state(state);
+
+    // Keep the temp dir alive for the app's lifetime by leaking it: the
+    // sqlite file lives under it and is needed for the whole test.
+    std::mem::forget(temp_dir);
+    (app, db)
+}
+
+/// The gateway must fail closed by default: unauthenticated requests to a
+/// protected route get 401 at the router layer — INCLUDING routes whose
+/// handlers never spelled out `RequireAuth` (the structural bug this fixes).
+#[tokio::test]
+async fn test_auth_gateway_default_deny() {
+    let (app, db) = setup_gateway_env().await;
+
+    // Public route: reachable without authentication.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", "/health", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "/health must stay public"
+    );
+
+    // Seed an org + admin key directly — POST /orgs is gated now.
+    let org = OrganizationRepository::new(&db)
+        .create(CreateOrganization {
+            name: "Gateway Org".to_string(),
+            slug: "gateway-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let key = create_test_api_key(&db, org.id).await;
+
+    // Forgotten-extractor proof: `GET /orgs/{slug}/bundles` (list_bundles)
+    // takes NO `RequireAuth`. Before the gateway it served anonymous callers;
+    // now it must fail closed.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", "/orgs/gateway-org/bundles", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "handler without RequireAuth must still fail closed under the gateway"
+    );
+
+    // A route that DOES use RequireAuth is likewise 401 without a credential.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", "/orgs/gateway-org/agents", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // The `/api/v1` mount is gated on the same terms.
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            "/api/v1/orgs/gateway-org/bundles",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "/api/v1 mount must be gated too"
+    );
+
+    // With a valid API key the gateway passes the request through to the
+    // handler, which serves it (200, not 401).
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/gateway-org/agents",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "authenticated request must pass the gateway and reach the handler"
+    );
+}
+
+// ============================================================================
+// Per-handler authZ + tenant scoping (Plan 01, Phase B)
+// ============================================================================
+
+/// Phase B defense-in-depth: a fully authenticated caller still can't (a) see
+/// or touch another tenant's bundle by guessing its UUID (404, same as "does
+/// not exist"), (b) operate on another org's path (403 tenant guard), or
+/// (c) act beyond their granted scopes in their OWN org (403).
+#[tokio::test]
+async fn test_cross_tenant_and_scope_enforcement() {
+    let env = setup_test_env().await;
+
+    // Org A with a bundle and a policy, via a platform-admin key.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Org A", "slug": "org-a"})),
+        ))
+        .await
+        .unwrap();
+    let org_a: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key_a = create_test_api_key(&env.db, org_a).await;
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/org-a/bundles",
+            Some(json!({"name": "secret-bundle"})),
+            &key_a,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bundle_a = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/org-a/policies",
+            Some(json!({
+                "name": "secret-policy",
+                "language": "reaper",
+                "content": "allow admin to access /x"
+            })),
+            &key_a,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy_a = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Org B with NON-admin keys (the platform `admin` scope would bypass the
+    // tenant guard, which is exactly what these tests must not do).
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Org B", "slug": "org-b"})),
+        ))
+        .await
+        .unwrap();
+    let org_b: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key_b = create_scoped_api_key(
+        &env.db,
+        org_b,
+        &[
+            "bundle:read",
+            "bundle:write",
+            "bundle:promote",
+            "policy:read",
+        ],
+    )
+    .await;
+
+    // IDOR: org B addressing org A's bundle through org B's OWN path → 404,
+    // indistinguishable from "no such bundle".
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("/orgs/org-b/bundles/{bundle_a}"),
+            None,
+            &key_b,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "cross-tenant bundle read must 404"
+    );
+
+    // ... and mutations through the same trick fail identically.
+    for (method, suffix) in [("DELETE", ""), ("POST", "/compile"), ("POST", "/promote")] {
+        let body = (suffix == "/promote").then(|| json!({}));
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                method,
+                &format!("/orgs/org-b/bundles/{bundle_a}{suffix}"),
+                body,
+                &key_b,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "cross-tenant bundle {method}{suffix} must 404"
+        );
+    }
+
+    // Tenant guard: org B calling org A's path → 403 regardless of scopes.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("/orgs/org-a/bundles/{bundle_a}"),
+            None,
+            &key_b,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "foreign-org path must 403"
+    );
+
+    // Cross-tenant policy read via org B's own path → 404.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("/orgs/org-b/policies/{policy_a}"),
+            None,
+            &key_b,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "cross-tenant policy read must 404"
+    );
+
+    // Scope check: a read-only key cannot create bundles in its OWN org.
+    let key_b_ro = create_scoped_api_key(&env.db, org_b, &["bundle:read"]).await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/org-b/bundles",
+            Some(json!({"name": "nope"})),
+            &key_b_ro,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "bundle:read key must not create bundles"
+    );
+
+    // Org A's bundle is untouched by all of the above.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("/orgs/org-a/bundles/{bundle_a}"),
+            None,
+            &key_a,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

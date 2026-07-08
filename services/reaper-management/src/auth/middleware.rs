@@ -144,6 +144,10 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        // Fast path: the default-deny `require_authentication` gateway already
+        // authenticated this request and stashed the user in extensions. Reuse
+        // it so the handler extractor doesn't re-run DB/JWT validation.
+        let cached = parts.extensions.get::<AuthenticatedUser>().cloned();
         // Clone what we need before moving into async block
         let api_key_header = parts.headers.get(API_KEY_HEADER).cloned();
         let auth_header = parts.headers.get(AUTHORIZATION).cloned();
@@ -163,6 +167,9 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
             .filter(|s| !s.is_empty());
 
         async move {
+            if let Some(user) = cached {
+                return Ok(RequireAuth(user));
+            }
             // Try API key first
             if let Some(api_key_value) = api_key_header {
                 let api_key_str = api_key_value.to_str().map_err(|_| {

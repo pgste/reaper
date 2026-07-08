@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use crate::{
     api::error::{ApiError, ApiResult},
-    api::orgs::resolve_org,
+    api::orgs::authorize_org,
+    auth::middleware::RequireAuth,
+    auth::scopes::Scope,
     billing::{BillingError, BillingService},
-    db::repositories::OrganizationRepository,
     domain::billing::{
         BillingSummary, CheckoutSessionResponse, PlanLimits, PlanTier, PortalSessionResponse,
     },
@@ -90,10 +91,10 @@ pub struct PlanInfo {
 /// Get billing summary for an organization
 async fn get_billing_summary(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
 ) -> ApiResult<Json<BillingSummaryResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let billing_service = BillingService::disabled(state.db.clone());
     let summary = billing_service
@@ -109,11 +110,11 @@ async fn get_billing_summary(
 /// Create a checkout session for upgrading
 async fn create_checkout(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<CreateCheckoutRequest>,
 ) -> ApiResult<Json<CheckoutSessionResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     // Validate plan tier
     if request.plan_tier == PlanTier::Free {
@@ -162,11 +163,11 @@ async fn create_checkout(
 /// Create a billing portal session
 async fn create_portal(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<CreatePortalRequest>,
 ) -> ApiResult<Json<PortalSessionResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     // Get billing service with config
     let billing_service = match crate::billing::BillingConfig::from_env() {
@@ -186,9 +187,10 @@ async fn create_portal(
     Ok(Json(session))
 }
 
-/// List available plans
+/// List available plans (static catalog; any authenticated caller)
 async fn list_plans(
     State(_state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
     Path(_org): Path<String>,
 ) -> ApiResult<Json<Vec<PlanInfo>>> {
     let plans = vec![

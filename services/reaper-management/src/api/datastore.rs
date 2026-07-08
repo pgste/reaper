@@ -20,10 +20,9 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
-    api::orgs::resolve_org,
     auth::{middleware::AuthenticatedUser, middleware::RequireAuth, scopes::Scope},
     db::repositories::datastore::DatastoreRecord,
-    db::repositories::{DatastoreRepository, NamespaceRepository, OrganizationRepository},
+    db::repositories::{DatastoreRepository, NamespaceRepository},
     domain::datastore::{
         AdmEntity, DatastoreTemplate, ModelDefinition, RelationTuple, RoleBinding,
     },
@@ -96,30 +95,12 @@ async fn authorize(
     ns_slug: &str,
     write: bool,
 ) -> ApiResult<Resolved> {
-    let allowed = if write {
-        user.has_permission(Scope::OrgAdmin)
-            || user.has_permission(Scope::AgentWrite)
-            || user.has_permission(Scope::Admin)
+    let required: &[Scope] = if write {
+        &[Scope::OrgAdmin, Scope::AgentWrite]
     } else {
-        user.has_permission(Scope::AgentRead)
-            || user.has_permission(Scope::OrgAdmin)
-            || user.has_permission(Scope::Admin)
+        &[Scope::AgentRead, Scope::OrgAdmin]
     };
-    if !allowed {
-        return Err(ApiError::Forbidden(if write {
-            "Missing org:admin or agent:write scope".to_string()
-        } else {
-            "Missing agent:read or org:admin scope".to_string()
-        }));
-    }
-
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, org_ref).await?;
-    if user.org_id != organization.id && !user.has_permission(Scope::Admin) {
-        return Err(ApiError::Forbidden(
-            "Cannot access datastores for other organizations".to_string(),
-        ));
-    }
+    let organization = crate::api::orgs::authorize_org(state, user, org_ref, required).await?;
 
     let ns_repo = NamespaceRepository::new(&state.db);
     let namespace = ns_repo
