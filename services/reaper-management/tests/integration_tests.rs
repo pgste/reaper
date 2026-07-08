@@ -12,8 +12,9 @@ use reaper_management::{
     auth::api_key::{ApiKeyRepository, CreateApiKey},
     auth::jwks::JwksConfigRepository,
     config::{AuthConfig, Config},
-    db::repositories::AgentRepository,
+    db::repositories::{AgentRepository, OrganizationRepository},
     db::Database,
+    domain::organization::CreateOrganization,
     storage::FilesystemStorage,
     AppState,
 };
@@ -2113,5 +2114,137 @@ async fn measure_data_plane_save_latency() {
     println!(
         "publish (materialize 500 entities + checksum + version row): {}ms",
         start.elapsed().as_millis()
+    );
+}
+
+// ============================================================================
+// Default-deny authentication gateway (Plan 01, Phase A)
+// ============================================================================
+
+/// Build a test app WITH the default-deny gateway middleware layered in —
+/// mirrors `build_router`'s wiring. The shared `setup_test_env` deliberately
+/// omits the gateway (many tests exercise handlers directly), so the gateway
+/// gets its own harness here.
+async fn setup_gateway_env() -> (axum::Router, Arc<Database>) {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_path = temp_dir.path().join("storage");
+    std::fs::create_dir_all(&storage_path).unwrap();
+
+    let db_config = reaper_management::db::ephemeral_test_config(temp_dir.path()).await;
+    let db = Database::new(&db_config).await.unwrap();
+    db.run_migrations().await.unwrap();
+    let db = Arc::new(db);
+
+    let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap())
+        as Arc<dyn reaper_management::storage::BundleStorage>;
+
+    let config = Config {
+        auth: AuthConfig {
+            jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
+            ..AuthConfig::default()
+        },
+        ..Config::default()
+    };
+
+    let state = Arc::new(AppState::new(db.clone(), config, storage));
+    let app = build_api_router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            reaper_management::auth::gateway::require_authentication,
+        ))
+        .with_state(state);
+
+    // Keep the temp dir alive for the app's lifetime by leaking it: the
+    // sqlite file lives under it and is needed for the whole test.
+    std::mem::forget(temp_dir);
+    (app, db)
+}
+
+/// The gateway must fail closed by default: unauthenticated requests to a
+/// protected route get 401 at the router layer — INCLUDING routes whose
+/// handlers never spelled out `RequireAuth` (the structural bug this fixes).
+#[tokio::test]
+async fn test_auth_gateway_default_deny() {
+    let (app, db) = setup_gateway_env().await;
+
+    // Public route: reachable without authentication.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", "/health", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "/health must stay public"
+    );
+
+    // Seed an org + admin key directly — POST /orgs is gated now.
+    let org = OrganizationRepository::new(&db)
+        .create(CreateOrganization {
+            name: "Gateway Org".to_string(),
+            slug: "gateway-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let key = create_test_api_key(&db, org.id).await;
+
+    // Forgotten-extractor proof: `GET /orgs/{slug}/bundles` (list_bundles)
+    // takes NO `RequireAuth`. Before the gateway it served anonymous callers;
+    // now it must fail closed.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", "/orgs/gateway-org/bundles", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "handler without RequireAuth must still fail closed under the gateway"
+    );
+
+    // A route that DOES use RequireAuth is likewise 401 without a credential.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", "/orgs/gateway-org/agents", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // The `/api/v1` mount is gated on the same terms.
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            "/api/v1/orgs/gateway-org/bundles",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "/api/v1 mount must be gated too"
+    );
+
+    // With a valid API key the gateway passes the request through to the
+    // handler, which serves it (200, not 401).
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/gateway-org/agents",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "authenticated request must pass the gateway and reach the handler"
     );
 }

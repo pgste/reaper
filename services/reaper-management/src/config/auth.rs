@@ -5,6 +5,26 @@ use std::path::PathBuf;
 
 use super::error::ConfigError;
 
+/// Default-deny authentication gateway mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayMode {
+    /// No router-level auth gateway; per-handler `RequireAuth` only (legacy,
+    /// fails open for any handler that forgot the extractor). Not recommended.
+    Disabled,
+    /// Authenticate every non-public request but allow unauthenticated ones
+    /// through, logging a warning. A migration/observability window before
+    /// flipping to `enforcing`.
+    LogOnly,
+    /// Default-deny: unauthenticated requests to non-public routes get 401 at
+    /// the router layer, so a handler missing `RequireAuth` still fails closed.
+    Enforcing,
+}
+
+fn default_gateway_mode() -> GatewayMode {
+    GatewayMode::Enforcing
+}
+
 /// Authentication configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuthConfig {
@@ -27,6 +47,10 @@ pub struct AuthConfig {
     /// forge the header and authenticate as any registered agent.
     #[serde(default)]
     pub mtls_fingerprint_header: Option<String>,
+    /// Default-deny authentication gateway mode (see [`GatewayMode`]). Defaults
+    /// to `enforcing` so the control plane fails closed by construction.
+    #[serde(default = "default_gateway_mode")]
+    pub gateway_mode: GatewayMode,
 }
 
 impl Default for AuthConfig {
@@ -39,6 +63,7 @@ impl Default for AuthConfig {
             jwt_secret_file: None,
             jwt_expiry_hours: default_jwt_expiry_hours(),
             mtls_fingerprint_header: None,
+            gateway_mode: default_gateway_mode(),
         }
     }
 }

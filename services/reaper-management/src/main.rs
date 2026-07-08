@@ -30,8 +30,8 @@
 use axum::{middleware, Router};
 use clap::Parser;
 use reaper_management::{
-    api, config::Config, db, graceful, metrics, middleware as app_middleware, rate_limit, storage,
-    AppState,
+    api, auth, config::Config, db, graceful, metrics, middleware as app_middleware, rate_limit,
+    storage, AppState,
 };
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tower_http::trace::TraceLayer;
@@ -213,6 +213,14 @@ fn build_router(
     // URLs against /api/v1 — caught by the process-level data-plane E2E).
     let api_router =
         api::build_api_router().merge(Router::new().nest("/api/v1", api::build_api_router()));
+
+    // Default-deny authentication gateway: authenticate every non-public request
+    // at the router layer so a handler that forgets `RequireAuth` still fails
+    // closed. Runs innermost (right before handlers), after body-size/rate-limit.
+    let api_router = api_router.layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth::gateway::require_authentication,
+    ));
 
     // Build the router with middleware
     // Middleware is applied in reverse order (last added runs first)

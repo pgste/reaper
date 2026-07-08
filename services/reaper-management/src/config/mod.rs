@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // Re-export all configuration types
-pub use auth::AuthConfig;
+pub use auth::{AuthConfig, GatewayMode};
 pub use bundles::BundlesConfig;
 pub use database::DatabaseConfig;
 pub use error::ConfigError;
