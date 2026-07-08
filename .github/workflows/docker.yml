@@ -118,10 +118,11 @@ jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: build-images
-    # Runs on PRs too (builds its own images via compose). This job used to be
-    # push-only, which let it rot undetected until it broke a main build — PR
-    # coverage means a stale reference now fails the PR that introduces it.
+    # No `needs: build-images`: this job builds its own single-arch images via
+    # `docker compose --build`, so gating it behind the slow multi-arch publish
+    # build only serialized ~40 min of wait it never consumed. Runs on PRs too
+    # (it used to be push-only, which let it rot undetected until it broke a
+    # main build — PR coverage fails the PR that introduces a stale reference).
 
     steps:
       - uses: actions/checkout@v4
