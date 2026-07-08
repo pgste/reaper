@@ -15,8 +15,10 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
-    api::orgs::resolve_org,
-    db::repositories::{OrganizationRepository, PolicyRepository},
+    api::orgs::authorize_org,
+    auth::middleware::RequireAuth,
+    auth::scopes::Scope,
+    db::repositories::PolicyRepository,
     domain::policy::{CreatePolicy, Policy, PolicyLanguage, PolicyVersion, UpdatePolicy},
     state::AppState,
     validation::{PolicyValidationResult, ValidationService},
@@ -105,11 +107,11 @@ pub struct PolicyVersionSummary {
 /// List policies for an organization
 async fn list_policies(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<ListPoliciesQuery>,
 ) -> ApiResult<Json<ListPoliciesResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let limit = query.limit.unwrap_or(100);
@@ -131,6 +133,7 @@ async fn list_policies(
 /// Create a new policy
 async fn create_policy(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<CreatePolicyRequest>,
 ) -> ApiResult<(StatusCode, Json<Policy>)> {
@@ -145,8 +148,7 @@ async fn create_policy(
         ));
     }
 
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyWrite]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
 
@@ -180,10 +182,10 @@ async fn create_policy(
 /// Get a policy by ID or name
 async fn get_policy(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
 ) -> ApiResult<Json<Policy>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
@@ -194,11 +196,11 @@ async fn get_policy(
 /// Update a policy
 async fn update_policy(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
     Json(request): Json<UpdatePolicyRequest>,
 ) -> ApiResult<Json<Policy>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyWrite]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let existing = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
@@ -221,10 +223,10 @@ async fn update_policy(
 /// Delete a policy
 async fn delete_policy(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyWrite]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let existing = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
@@ -241,10 +243,10 @@ async fn delete_policy(
 /// List versions of a policy
 async fn list_versions(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
 ) -> ApiResult<Json<ListVersionsResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
@@ -269,10 +271,10 @@ async fn list_versions(
 /// Get a specific version of a policy
 async fn get_version(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, policy_ref, version)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<PolicyVersion>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
@@ -296,10 +298,10 @@ pub struct ValidatePolicyContentRequest {
 /// Validate an existing policy by ID
 async fn validate_policy(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
 ) -> ApiResult<Json<PolicyValidationResult>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
@@ -316,11 +318,11 @@ async fn validate_policy(
 /// Validate policy content before saving (preview)
 async fn validate_policy_content(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<ValidatePolicyContentRequest>,
 ) -> ApiResult<Json<PolicyValidationResult>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let _organization = resolve_org(&org_repo, &org).await?;
+    let _organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     if request.content.is_empty() {
         return Err(ApiError::BadRequest(

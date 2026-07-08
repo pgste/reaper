@@ -15,8 +15,10 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
-    api::orgs::resolve_org,
-    db::repositories::{OrganizationRepository, TeamRepository},
+    api::orgs::authorize_org,
+    auth::middleware::RequireAuth,
+    auth::scopes::Scope,
+    db::repositories::TeamRepository,
     domain::team::{CreateTeam, Team, UpdateTeam},
     state::AppState,
 };
@@ -65,11 +67,12 @@ pub struct UpdateTeamRequest {
 /// List teams for an organization
 async fn list_teams(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<ListTeamsQuery>,
 ) -> ApiResult<Json<ListTeamsResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    // Any authenticated member of the org may read teams.
+    let organization = authorize_org(&state, &user, &org, &[]).await?;
 
     let team_repo = TeamRepository::new(&state.db);
     let limit = query.limit.unwrap_or(100);
@@ -91,6 +94,7 @@ async fn list_teams(
 /// Create a new team
 async fn create_team(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<CreateTeamRequest>,
 ) -> ApiResult<(StatusCode, Json<Team>)> {
@@ -101,8 +105,8 @@ async fn create_team(
         ));
     }
 
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization =
+        authorize_org(&state, &user, &org, &[Scope::OrgWrite, Scope::OrgAdmin]).await?;
 
     let team_repo = TeamRepository::new(&state.db);
 
@@ -132,10 +136,10 @@ async fn create_team(
 /// Get a team by ID or slug
 async fn get_team(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, team_ref)): Path<(String, String)>,
 ) -> ApiResult<Json<Team>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[]).await?;
 
     let team_repo = TeamRepository::new(&state.db);
     let team = resolve_team(&team_repo, organization.id, &team_ref).await?;
@@ -146,11 +150,12 @@ async fn get_team(
 /// Update a team
 async fn update_team(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, team_ref)): Path<(String, String)>,
     Json(request): Json<UpdateTeamRequest>,
 ) -> ApiResult<Json<Team>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization =
+        authorize_org(&state, &user, &org, &[Scope::OrgWrite, Scope::OrgAdmin]).await?;
 
     let team_repo = TeamRepository::new(&state.db);
     let existing = resolve_team(&team_repo, organization.id, &team_ref).await?;
@@ -171,10 +176,11 @@ async fn update_team(
 /// Delete a team
 async fn delete_team(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path((org, team_ref)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization =
+        authorize_org(&state, &user, &org, &[Scope::OrgWrite, Scope::OrgAdmin]).await?;
 
     let team_repo = TeamRepository::new(&state.db);
     let existing = resolve_team(&team_repo, organization.id, &team_ref).await?;

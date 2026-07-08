@@ -85,6 +85,37 @@ impl<'a> BundleRepository<'a> {
         row.map(|r| self.row_to_bundle(&r)).transpose()
     }
 
+    /// Get a bundle by ID only if it belongs to `org_id`.
+    ///
+    /// Tenant-scoped lookup: a bundle in another org resolves to `None`,
+    /// indistinguishable from "does not exist" — callers surface `404` either
+    /// way, so cross-tenant probing can't confirm a bundle id exists.
+    pub async fn get_by_id_scoped(
+        &self,
+        org_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Bundle>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
+                   policy_count, created_at, updated_at, compiled_at, promoted_at
+            FROM bundles
+            WHERE id = $1 AND org_id = $2
+        "#;
+
+        let row = sqlx::query(sql)
+            .bind(id.to_string())
+            .bind(org_id.to_string())
+            .fetch_optional(pool)
+            .await?;
+
+        row.map(|r| self.row_to_bundle(&r)).transpose()
+    }
+
     /// List bundles for an organization
     pub async fn list_by_org(
         &self,

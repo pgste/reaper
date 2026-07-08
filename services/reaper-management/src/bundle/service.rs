@@ -117,6 +117,19 @@ impl BundleService {
             .ok_or_else(|| BundleError::NotFound(bundle_id.to_string()))
     }
 
+    /// Get a bundle by ID, scoped to an organization.
+    ///
+    /// `NotFound` when the bundle doesn't exist OR belongs to a different org
+    /// — API handlers must use this (not [`get`](Self::get)) for any
+    /// id-addressed operation so a caller can never act on another tenant's
+    /// bundle by guessing its UUID.
+    pub async fn get_scoped(&self, org_id: Uuid, bundle_id: Uuid) -> Result<Bundle, BundleError> {
+        let repo = BundleRepository::new(&self.db);
+        repo.get_by_id_scoped(org_id, bundle_id)
+            .await?
+            .ok_or_else(|| BundleError::NotFound(bundle_id.to_string()))
+    }
+
     /// List bundles for an organization
     pub async fn list(
         &self,

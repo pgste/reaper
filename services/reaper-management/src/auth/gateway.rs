@@ -61,10 +61,14 @@ fn is_public_path(path: &str) -> bool {
         return true;
     }
 
-    // Bundle-update webhook ingest authenticates via its own source signature,
-    // not a session. (Webhook *subscription management* lives under
-    // /orgs/{org}/webhooks and stays authenticated.)
-    p == "/webhooks/bundle-update" || p.starts_with("/webhooks/bundle-update/")
+    // Webhook ingest endpoints authenticate via their own source signatures,
+    // not a session: bundle-update (source-signed) and Stripe (verified
+    // against the stripe-signature header in the handler). Webhook
+    // *subscription management* lives under /orgs/{org}/webhooks and stays
+    // authenticated.
+    p == "/webhooks/bundle-update"
+        || p.starts_with("/webhooks/bundle-update/")
+        || p == "/webhooks/stripe"
 }
 
 /// Router-level default-deny authentication middleware.
@@ -126,6 +130,7 @@ mod tests {
             "/auth/github/callback",
             "/webhooks/bundle-update",
             "/webhooks/bundle-update/3f00",
+            "/webhooks/stripe",
         ];
         for base in ["", "/api/v1"] {
             for p in public {

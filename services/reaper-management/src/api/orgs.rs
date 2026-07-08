@@ -15,6 +15,8 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
+    auth::middleware::{AuthenticatedUser, RequireAuth},
+    auth::scopes::Scope,
     db::repositories::OrganizationRepository,
     domain::organization::{CreateOrganization, Organization, UpdateOrganization},
     state::AppState,
@@ -72,9 +74,11 @@ pub struct UpdateOrgRequest {
     pub settings: Option<serde_json::Value>,
 }
 
-/// List all organizations
+/// List organizations. Platform admins see every org; everyone else sees
+/// only the org they belong to (org enumeration is a tenant-isolation leak).
 async fn list_orgs(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Query(query): Query<ListOrgsQuery>,
 ) -> ApiResult<Json<ListOrgsResponse>> {
     let repo = OrganizationRepository::new(&state.db);
@@ -82,8 +86,17 @@ async fn list_orgs(
     let limit = query.limit.unwrap_or(100);
     let offset = query.offset.unwrap_or(0);
 
-    let organizations = repo.list(Some(limit), Some(offset)).await?;
-    let total = repo.count().await?;
+    let (organizations, total) = if user.has_permission(Scope::Admin) {
+        (
+            repo.list(Some(limit), Some(offset)).await?,
+            repo.count().await?,
+        )
+    } else {
+        let own = repo.get_by_id(user.org_id).await?;
+        let organizations: Vec<Organization> = own.into_iter().collect();
+        let total = organizations.len() as i64;
+        (organizations, total)
+    };
 
     Ok(Json(ListOrgsResponse {
         organizations,
@@ -132,14 +145,13 @@ async fn create_org(
     Ok((StatusCode::CREATED, Json(org)))
 }
 
-/// Get an organization by ID or slug
+/// Get an organization by ID or slug (any authenticated member of the org)
 async fn get_org(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
 ) -> ApiResult<Json<Organization>> {
-    let repo = OrganizationRepository::new(&state.db);
-
-    let org = resolve_org(&repo, &org).await?;
+    let org = authorize_org(&state, &user, &org, &[]).await?;
 
     Ok(Json(org))
 }
@@ -147,12 +159,13 @@ async fn get_org(
 /// Update an organization
 async fn update_org(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<UpdateOrgRequest>,
 ) -> ApiResult<Json<Organization>> {
-    let repo = OrganizationRepository::new(&state.db);
+    let existing = authorize_org(&state, &user, &org, &[Scope::OrgWrite, Scope::OrgAdmin]).await?;
 
-    let existing = resolve_org(&repo, &org).await?;
+    let repo = OrganizationRepository::new(&state.db);
 
     let input = UpdateOrganization {
         display_name: request.display_name,
@@ -171,11 +184,12 @@ async fn update_org(
 /// Delete an organization
 async fn delete_org(
     State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let repo = OrganizationRepository::new(&state.db);
+    let existing = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
-    let existing = resolve_org(&repo, &org).await?;
+    let repo = OrganizationRepository::new(&state.db);
 
     let deleted = repo.delete(existing.id).await?;
 
@@ -184,6 +198,43 @@ async fn delete_org(
     } else {
         Err(ApiError::NotFound("Organization not found".to_string()))
     }
+}
+
+/// Authorize `user` against the organization referenced by `org_ref`.
+///
+/// Enforces, in order:
+/// 1. the user holds at least one of `required` scopes (an empty slice means
+///    any authenticated principal qualifies) — `403` otherwise;
+/// 2. the org exists — `404` otherwise;
+/// 3. the user belongs to that org — `403` otherwise. The platform `admin`
+///    scope is the only cross-org escape hatch; org roles never confer it.
+///
+/// Returns the resolved organization so handlers use its real `id` instead of
+/// trusting the path parameter.
+pub async fn authorize_org(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    org_ref: &str,
+    required: &[Scope],
+) -> ApiResult<Organization> {
+    if !required.is_empty() && !user.has_any_permission(required) {
+        let names: Vec<&str> = required.iter().map(|s| s.as_str()).collect();
+        return Err(ApiError::Forbidden(format!(
+            "Missing required scope (need one of: {})",
+            names.join(", ")
+        )));
+    }
+
+    let repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&repo, org_ref).await?;
+
+    if user.org_id != organization.id && !user.has_permission(Scope::Admin) {
+        return Err(ApiError::Forbidden(
+            "Cannot access resources of another organization".to_string(),
+        ));
+    }
+
+    Ok(organization)
 }
 
 /// Resolve organization by ID or slug
