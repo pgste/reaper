@@ -6,6 +6,9 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  # Manual trigger so the push-only E2E job can be validated on a branch
+  # before merging (it never runs on pull_request events).
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -122,32 +125,33 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Start services
         run: |
-          docker compose -f docker-compose.full.yml --profile managed up -d
-          sleep 30  # Wait for services to be ready
+          # The `management` profile brings up postgres + management (:3000) +
+          # agent (:8080) — the two services the E2E suite drives. `--wait`
+          # blocks until healthchecks pass instead of a fixed sleep.
+          docker compose -f docker-compose.yml --profile management up -d --build --wait
 
       - name: Check service health
         run: |
-          curl -f http://localhost:3000/health || exit 1
-          curl -f http://localhost:8081/health || exit 1
-          curl -f http://localhost:8080/health || exit 1
+          curl -f http://localhost:3000/health || exit 1  # management
+          curl -f http://localhost:8080/health || exit 1  # agent
 
       - name: Run E2E tests
         run: |
           export REAPER_MANAGEMENT_URL=http://localhost:3000
-          export REAPER_AGENT_URL=http://localhost:8082
+          export REAPER_AGENT_URL=http://localhost:8080
           cargo test -p reaper-e2e-tests --test e2e_tests -- --test-threads=1
 
       - name: Collect logs on failure
         if: failure()
         run: |
-          docker compose -f docker-compose.full.yml logs > docker-logs.txt
+          docker compose -f docker-compose.yml logs > docker-logs.txt
           cat docker-logs.txt
 
       - name: Upload logs
@@ -159,4 +163,4 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose -f docker-compose.full.yml --profile managed down -v
+        run: docker compose -f docker-compose.yml --profile management down -v
