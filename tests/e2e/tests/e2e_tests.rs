@@ -5,8 +5,8 @@
 //!
 //! To run these tests, services must be running:
 //! - Management Server on port 3000
-//! - Agent (managed mode) on port 8082
-//! - Or use: docker compose -f docker-compose.full.yml --profile managed up
+//! - Agent on port 8080
+//! - Or use: docker compose -f docker-compose.yml --profile management up
 //!
 //! Run with: cargo test -p reaper-e2e-tests --test e2e_tests
 
@@ -21,7 +21,7 @@ fn management_url() -> String {
 }
 
 fn agent_url() -> String {
-    std::env::var("REAPER_AGENT_URL").unwrap_or_else(|_| "http://localhost:8082".to_string())
+    std::env::var("REAPER_AGENT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
 /// Test client with helper methods for API interaction

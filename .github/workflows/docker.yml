@@ -6,6 +6,9 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  # Manual trigger so the push-only E2E job can be validated on a branch
+  # before merging (it never runs on pull_request events).
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -115,39 +118,48 @@ jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: build-images
-    if: github.event_name != 'pull_request'
+    # No `needs: build-images`: this job builds its own single-arch images via
+    # `docker compose --build`, so gating it behind the slow multi-arch publish
+    # build only serialized ~40 min of wait it never consumed. Runs on PRs too
+    # (it used to be push-only, which let it rot undetected until it broke a
+    # main build — PR coverage fails the PR that introduces a stale reference).
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Start services
         run: |
-          docker compose -f docker-compose.full.yml --profile managed up -d
-          sleep 30  # Wait for services to be ready
+          # The `management` profile brings up postgres + management (:3000) +
+          # agent (:8080) — the two services the E2E suite drives. `--wait`
+          # blocks until healthchecks pass instead of a fixed sleep.
+          docker compose -f docker-compose.yml --profile management up -d --build --wait
 
       - name: Check service health
         run: |
-          curl -f http://localhost:3000/health || exit 1
-          curl -f http://localhost:8081/health || exit 1
-          curl -f http://localhost:8080/health || exit 1
+          curl -f http://localhost:3000/health || exit 1  # management
+          curl -f http://localhost:8080/health || exit 1  # agent
 
       - name: Run E2E tests
         run: |
           export REAPER_MANAGEMENT_URL=http://localhost:3000
-          export REAPER_AGENT_URL=http://localhost:8082
+          export REAPER_AGENT_URL=http://localhost:8080
           cargo test -p reaper-e2e-tests --test e2e_tests -- --test-threads=1
 
       - name: Collect logs on failure
         if: failure()
         run: |
-          docker compose -f docker-compose.full.yml logs > docker-logs.txt
+          # --profile management is REQUIRED here: without it compose doesn't
+          # know about the profiled services and `logs` captures nothing (the
+          # reason the first failure produced an empty artifact). Dump container
+          # states + exit codes too, so a boot crash is visible.
+          docker compose -f docker-compose.yml --profile management ps -a || true
+          docker compose -f docker-compose.yml --profile management logs --no-color > docker-logs.txt 2>&1 || true
           cat docker-logs.txt
 
       - name: Upload logs
@@ -159,4 +171,4 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose -f docker-compose.full.yml --profile managed down -v
+        run: docker compose -f docker-compose.yml --profile management down -v

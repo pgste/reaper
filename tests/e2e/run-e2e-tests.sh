@@ -65,7 +65,7 @@ cleanup() {
     if [[ "$USE_DOCKER" == "true" ]]; then
         echo_info "Stopping Docker Compose services..."
         cd "$PROJECT_ROOT"
-        docker compose -f docker-compose.full.yml --profile managed down -v 2>/dev/null || true
+        docker compose -f docker-compose.yml --profile management down -v 2>/dev/null || true
     fi
 }
 
@@ -78,25 +78,25 @@ main() {
     if [[ "$USE_DOCKER" == "true" ]]; then
         echo_info "Starting Reaper stack with Docker Compose..."
 
-        # Build images
+        # Build images (management profile: postgres + management + agent)
         echo_info "Building Docker images..."
-        docker compose -f docker-compose.full.yml build
+        docker compose -f docker-compose.yml --profile management build
 
         # Start services
         echo_info "Starting services..."
-        docker compose -f docker-compose.full.yml --profile managed up -d
+        docker compose -f docker-compose.yml --profile management up -d
 
         # Wait for services
         wait_for_service "http://localhost:3000" "Management Server"
-        wait_for_service "http://localhost:8082" "Agent (Managed)"
+        wait_for_service "http://localhost:8080" "Agent"
 
         # Export URLs for tests
         export REAPER_MANAGEMENT_URL="http://localhost:3000"
-        export REAPER_AGENT_URL="http://localhost:8082"
+        export REAPER_AGENT_URL="http://localhost:8080"
     else
         echo_info "Running against local services..."
         export REAPER_MANAGEMENT_URL="${REAPER_MANAGEMENT_URL:-http://localhost:3000}"
-        export REAPER_AGENT_URL="${REAPER_AGENT_URL:-http://localhost:8082}"
+        export REAPER_AGENT_URL="${REAPER_AGENT_URL:-http://localhost:8080}"
 
         # Check if services are running
         if ! wait_for_service "$REAPER_MANAGEMENT_URL" "Management Server"; then
