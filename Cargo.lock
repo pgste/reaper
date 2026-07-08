@@ -5420,6 +5420,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.10.1",
  "hyper-util",
+ "jsonwebtoken",
  "lazy_static",
  "mimalloc",
  "opentelemetry",

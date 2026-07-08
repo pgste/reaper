@@ -12,6 +12,9 @@ services:
     environment:
       - RUST_LOG=info
       - OTEL_ENABLED=false
+      # Benchmark harness drives the agent unauthenticated; explicit opt-out
+      # (a non-loopback bind without auth refuses to start otherwise).
+      - REAPER_AGENT_ALLOW_UNAUTHENTICATED=true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s

@@ -247,6 +247,15 @@ agent:
     apiKey: ""  # API key for authentication
     existingSecret: ""  # Use existing secret
 
+  # Inbound authentication (Plan 01 Phase C). The agent refuses to start on
+  # a non-loopback bind with auth disabled unless allowUnauthenticated
+  # explicitly opts out. Production: set enabled=true and one credential.
+  auth:
+    enabled: false
+    bearerToken: ""       # static token for callers (simple setups)
+    jwtSecret: ""         # shared with management REAPER_JWT_SECRET (validates agent JWTs)
+    allowUnauthenticated: true  # explicit opt-out preserving pre-auth behaviour
+
   image:
     repository: ghcr.io/pgste/reaper/reaper-agent
     tag: ""

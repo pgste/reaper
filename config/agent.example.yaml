@@ -6,8 +6,28 @@ agent:
   name: reaper-agent-001
   # Port to listen on
   port: 8080
-  # Address to bind to
+  # Address to bind to. Default is 127.0.0.1 (loopback): exposing the agent
+  # beyond the host requires inbound auth below (or an explicit opt-out).
   bind_address: 0.0.0.0
+
+# Inbound authentication for the agent HTTP API (Plan 01 Phase C).
+# A non-loopback bind_address with auth disabled refuses to start unless
+# allow_unauthenticated explicitly opts out.
+auth:
+  enabled: true
+  # Accepted credentials: mtls | bearer_token | both
+  mode: both
+  # Static token for simple setups (callers send "Authorization: Bearer <token>")
+  # bearer_token: change-me
+  # Shared secret validating management-minted agent JWTs — same value as the
+  # management server's REAPER_JWT_SECRET.
+  # jwt_secret: change-me-32-bytes-minimum!!!!!
+  # Trusted-proxy mTLS: header carrying the proxy-verified client-cert
+  # fingerprint (only when the proxy strips client-supplied copies).
+  # mtls_fingerprint_header: x-client-cert-fingerprint
+  # mtls_allowed_fingerprints: ["sha256:..."]
+  # Explicit, auditable opt-out for unauthenticated non-loopback serving:
+  # allow_unauthenticated: true
 
 policies:
   # Directory to load policies from on startup
