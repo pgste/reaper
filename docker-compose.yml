@@ -78,6 +78,9 @@ services:
       - REAPER_JWT_SECRET=${JWT_SECRET:-development-jwt-secret-change-in-production}
       - REAPER_STORAGE_TYPE=filesystem
       - REAPER_STORAGE_PATH=/var/lib/reaper/storage
+      # Per-IP signup abuse limit. Unset → server default (5/hour). E2E/CI
+      # raises it because every test signs up from the same runner IP.
+      - REAPER_RATE_LIMIT_SIGNUP_PER_HOUR=${RATE_LIMIT_SIGNUP_PER_HOUR:-}
       # Decision-log query API (enable after `docker compose -f deploy/decision-logs/docker-compose.yml up`)
       - REAPER_CLICKHOUSE_URL=${REAPER_CLICKHOUSE_URL:-}
       - REAPER_CLICKHOUSE_DATABASE=${REAPER_CLICKHOUSE_DATABASE:-reaper_audit}
