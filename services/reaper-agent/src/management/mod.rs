@@ -13,6 +13,7 @@ mod client;
 mod sse;
 mod sync;
 mod types;
+pub mod verify;
 
 pub use client::ManagementClient;
 pub use sync::SyncService;

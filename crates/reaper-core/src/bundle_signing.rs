@@ -67,22 +67,77 @@ impl SigAlgorithm {
     }
 }
 
+/// Current envelope schema version. v1 (legacy) envelopes carry only
+/// `algorithm/key_id/sha256/signature`; v2 adds authenticated anti-replay
+/// metadata (`bundle_id`, monotonic `version`, validity window).
+pub const ENVELOPE_V2: u8 = 2;
+
+fn default_envelope_version() -> u8 {
+    1 // a serialized envelope without the field is, by definition, legacy v1
+}
+
 /// A detached signature over a bundle's bytes plus its SHA-256 digest.
 ///
 /// Shipped alongside (not inside) the bundle so the bundle format is unchanged
 /// and the same envelope works over HTTP headers, S3 object metadata, or a
 /// sidecar file.
+///
+/// **v2 envelopes** additionally authenticate `bundle_id`, a monotonic
+/// `version`, and a `not_before`/`expires_at` validity window: these fields
+/// are folded into the signed message (see [`sign_bundle_v2`]), so tampering
+/// with any of them breaks authenticity — they are not advisory JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BundleSignature {
+    /// Envelope schema version (1 = legacy, 2 = current). Serialized v1
+    /// envelopes lack the field and deserialize as 1.
+    #[serde(default = "default_envelope_version")]
+    pub envelope_version: u8,
     /// Signature scheme: `ed25519-sha256` or `ecdsa-p256-sha256`.
     pub algorithm: String,
     /// Identifier of the key that signed this bundle (for key rotation). The
     /// verifier can require a specific `key_id` to pin to one key.
     pub key_id: String,
+    /// v2: UUID of the bundle lineage this envelope is bound to — prevents
+    /// replaying a valid envelope against a different bundle's slot.
+    #[serde(default)]
+    pub bundle_id: String,
+    /// v2: monotonic version within the bundle lineage; verifiers refuse
+    /// non-increasing versions (anti-rollback).
+    #[serde(default)]
+    pub version: u64,
+    /// v2: unix seconds; the envelope is not valid before this instant.
+    #[serde(default)]
+    pub not_before: i64,
+    /// v2: unix seconds; the envelope is not valid after this instant.
+    #[serde(default)]
+    pub expires_at: i64,
     /// Lowercase-hex SHA-256 of the signed bundle bytes (64 hex chars).
     pub sha256: String,
-    /// Lowercase-hex signature over the bundle bytes.
+    /// Lowercase-hex signature. v1: over the bundle bytes. v2: over the
+    /// canonical metadata preamble followed by the bundle bytes.
     pub signature: String,
+}
+
+/// The authenticated claims a v2 envelope binds to the bundle bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvelopeClaims {
+    /// Bundle lineage UUID.
+    pub bundle_id: String,
+    /// Monotonic version within the lineage.
+    pub version: u64,
+    /// Unix seconds; envelope invalid before this instant.
+    pub not_before: i64,
+    /// Unix seconds; envelope invalid after this instant.
+    pub expires_at: i64,
+}
+
+/// Verified metadata returned by [`verify_bundle_at`] so callers can run
+/// anti-rollback / lineage checks outside the crypto core.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedEnvelope {
+    pub envelope_version: u8,
+    pub bundle_id: String,
+    pub version: u64,
 }
 
 /// Errors from signing-key handling and bundle verification.
@@ -102,6 +157,12 @@ pub enum SignatureError {
     InvalidKey(String),
     #[error("malformed signature envelope: {0}")]
     Malformed(String),
+    #[error("envelope expired at {expires_at} (now {now})")]
+    Expired { expires_at: i64, now: i64 },
+    #[error("envelope not valid before {not_before} (now {now})")]
+    NotYetValid { not_before: i64, now: i64 },
+    #[error("unsupported envelope version {got} (require >= {required})")]
+    EnvelopeVersionUnsupported { got: u8, required: u8 },
 }
 
 /// SHA-256 of `bytes`.
@@ -247,27 +308,123 @@ impl VerifyingKey {
     }
 }
 
+/// Canonical v2 signed message: a domain-separated, NUL-delimited metadata
+/// preamble followed by the bundle bytes. Every field a v2 envelope promises
+/// is inside this message, so tampering with any of them breaks authenticity.
+/// (No field can contain NUL: UUIDs, decimal integers, and hex digests.)
+fn v2_message(
+    bundle_id: &str,
+    version: u64,
+    not_before: i64,
+    expires_at: i64,
+    sha256_hex: &str,
+    bundle_bytes: &[u8],
+) -> Vec<u8> {
+    let preamble = format!(
+        "reaper-bundle-envelope-v2\0{bundle_id}\0{version}\0{not_before}\0{expires_at}\0{sha256_hex}\0"
+    );
+    let mut msg = Vec::with_capacity(preamble.len() + bundle_bytes.len());
+    msg.extend_from_slice(preamble.as_bytes());
+    msg.extend_from_slice(bundle_bytes);
+    msg
+}
+
 /// Sign `bytes` with `key`, tagging the envelope with `key_id`.
+///
+/// Produces a **legacy v1** envelope (no anti-replay metadata). New code
+/// should use [`sign_bundle_v2`]; this remains for compatibility and tests.
 pub fn sign_bundle(bytes: &[u8], key: &SigningKey, key_id: &str) -> BundleSignature {
     BundleSignature {
+        envelope_version: 1,
         algorithm: key.algorithm().as_str().to_string(),
         key_id: key_id.to_string(),
+        bundle_id: String::new(),
+        version: 0,
+        not_before: 0,
+        expires_at: 0,
         sha256: to_hex(&sha256(bytes)),
         signature: to_hex(&key.sign_raw(bytes)),
     }
 }
 
-/// Verify `bytes` against `sig` using `verifying_key`.
+/// Sign `bytes` with `key` into a **v2** envelope binding the given claims.
+pub fn sign_bundle_v2(
+    bytes: &[u8],
+    key: &SigningKey,
+    key_id: &str,
+    claims: &EnvelopeClaims,
+) -> BundleSignature {
+    let sha256_hex = to_hex(&sha256(bytes));
+    let msg = v2_message(
+        &claims.bundle_id,
+        claims.version,
+        claims.not_before,
+        claims.expires_at,
+        &sha256_hex,
+        bytes,
+    );
+    BundleSignature {
+        envelope_version: ENVELOPE_V2,
+        algorithm: key.algorithm().as_str().to_string(),
+        key_id: key_id.to_string(),
+        bundle_id: claims.bundle_id.clone(),
+        version: claims.version,
+        not_before: claims.not_before,
+        expires_at: claims.expires_at,
+        sha256: sha256_hex,
+        signature: to_hex(&key.sign_raw(&msg)),
+    }
+}
+
+/// Verify `bytes` against `sig` using `verifying_key` (compatibility form).
 ///
-/// All of the following must pass (fail closed): the envelope algorithm must be
-/// supported and match the key; if `expected_key_id` is `Some`, the envelope's
-/// `key_id` must match it; the SHA-256 must match; the signature must verify.
+/// Accepts both v1 and v2 envelopes; enforces the v2 validity window against
+/// the system clock. Callers that must **require** v2 (strict anti-replay) or
+/// need the verified claims should use [`verify_bundle_at`].
 pub fn verify_bundle(
     bytes: &[u8],
     sig: &BundleSignature,
     verifying_key: &VerifyingKey,
     expected_key_id: Option<&str>,
 ) -> Result<(), SignatureError> {
+    verify_bundle_at(
+        bytes,
+        sig,
+        verifying_key,
+        expected_key_id,
+        unix_now(),
+        false,
+    )
+    .map(|_| ())
+}
+
+/// Unix seconds from the system clock.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Verify `bytes` against `sig` using `verifying_key`, at time `now`.
+///
+/// All of the following must pass (fail closed): the envelope algorithm must
+/// be supported and match the key; if `expected_key_id` is `Some`, the
+/// envelope's `key_id` must match it; for v2 envelopes the validity window
+/// must contain `now`; the SHA-256 must match; the signature must verify over
+/// the version-appropriate message. When `require_v2` is true, v1 envelopes
+/// are rejected outright (`EnvelopeVersionUnsupported`).
+///
+/// Returns the authenticated claims so callers can run anti-rollback and
+/// lineage checks (v1 envelopes yield empty `bundle_id` / version 0).
+pub fn verify_bundle_at(
+    bytes: &[u8],
+    sig: &BundleSignature,
+    verifying_key: &VerifyingKey,
+    expected_key_id: Option<&str>,
+    now: i64,
+    require_v2: bool,
+) -> Result<VerifiedEnvelope, SignatureError> {
     let alg = SigAlgorithm::parse(&sig.algorithm)?;
     if alg != verifying_key.algorithm() {
         return Err(SignatureError::AlgorithmMismatch {
@@ -284,16 +441,68 @@ pub fn verify_bundle(
         }
     }
 
+    match sig.envelope_version {
+        1 if require_v2 => {
+            return Err(SignatureError::EnvelopeVersionUnsupported {
+                got: 1,
+                required: ENVELOPE_V2,
+            })
+        }
+        1 | 2 => {}
+        other => {
+            // Unknown future schema: fail closed rather than guess.
+            return Err(SignatureError::EnvelopeVersionUnsupported {
+                got: other,
+                required: ENVELOPE_V2,
+            });
+        }
+    }
+
+    // v2 validity window — checked before the (cheaper to skip) crypto so an
+    // expired envelope never reports "bad signature".
+    if sig.envelope_version == ENVELOPE_V2 {
+        if now < sig.not_before {
+            return Err(SignatureError::NotYetValid {
+                not_before: sig.not_before,
+                now,
+            });
+        }
+        if now > sig.expires_at {
+            return Err(SignatureError::Expired {
+                expires_at: sig.expires_at,
+                now,
+            });
+        }
+    }
+
     // 1. Integrity.
     let expected_digest = to_hex(&sha256(bytes));
     if !constant_time_eq(sig.sha256.as_bytes(), expected_digest.as_bytes()) {
         return Err(SignatureError::IntegrityMismatch);
     }
 
-    // 2. Authenticity.
+    // 2. Authenticity over the version-appropriate message.
     let sig_bytes = from_hex(&sig.signature)
         .map_err(|e| SignatureError::Malformed(format!("signature hex: {e}")))?;
-    verifying_key.verify_raw(bytes, &sig_bytes)
+    if sig.envelope_version == ENVELOPE_V2 {
+        let msg = v2_message(
+            &sig.bundle_id,
+            sig.version,
+            sig.not_before,
+            sig.expires_at,
+            &sig.sha256,
+            bytes,
+        );
+        verifying_key.verify_raw(&msg, &sig_bytes)?;
+    } else {
+        verifying_key.verify_raw(bytes, &sig_bytes)?;
+    }
+
+    Ok(VerifiedEnvelope {
+        envelope_version: sig.envelope_version,
+        bundle_id: sig.bundle_id.clone(),
+        version: sig.version,
+    })
 }
 
 // -- small hex + constant-time helpers (no extra deps) ------------------------
@@ -485,6 +694,137 @@ mod tests {
         let json = serde_json::to_string(&sig).unwrap();
         let back: BundleSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(sig, back);
+    }
+
+    fn claims(version: u64, now: i64) -> EnvelopeClaims {
+        EnvelopeClaims {
+            bundle_id: "3f2b0e26-0000-4000-8000-000000000001".to_string(),
+            version,
+            not_before: now - 60,
+            expires_at: now + 3600,
+        }
+    }
+
+    #[test]
+    fn v2_roundtrips_and_returns_claims() {
+        let key = ed25519_key();
+        let now = 1_700_000_000;
+        let sig = sign_bundle_v2(b"bundle v7", &key, "k1", &claims(7, now));
+        assert_eq!(sig.envelope_version, ENVELOPE_V2);
+        let verified = verify_bundle_at(
+            b"bundle v7",
+            &sig,
+            &verifying_of(&key),
+            Some("k1"),
+            now,
+            true,
+        )
+        .unwrap();
+        assert_eq!(verified.version, 7);
+        assert_eq!(verified.bundle_id, sig.bundle_id);
+    }
+
+    #[test]
+    fn v2_expired_and_not_yet_valid_are_rejected() {
+        let key = ed25519_key();
+        let now = 1_700_000_000;
+        let sig = sign_bundle_v2(b"bundle", &key, "k1", &claims(1, now));
+
+        let err = verify_bundle_at(
+            b"bundle",
+            &sig,
+            &verifying_of(&key),
+            None,
+            now + 4000, // past expires_at
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::Expired { .. }));
+
+        let err = verify_bundle_at(
+            b"bundle",
+            &sig,
+            &verifying_of(&key),
+            None,
+            now - 3600, // before not_before
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::NotYetValid { .. }));
+    }
+
+    #[test]
+    fn v2_metadata_tampering_breaks_authenticity() {
+        let key = ed25519_key();
+        let now = 1_700_000_000;
+        let base = sign_bundle_v2(b"bundle", &key, "k1", &claims(5, now));
+
+        // Bump the version field without re-signing → authenticity failure
+        // (the version is inside the signed message).
+        let mut tampered = base.clone();
+        tampered.version = 6;
+        let err = verify_bundle_at(b"bundle", &tampered, &verifying_of(&key), None, now, true)
+            .unwrap_err();
+        assert_eq!(err, SignatureError::BadSignature);
+
+        // Swap the bundle_id → same failure.
+        let mut tampered = base.clone();
+        tampered.bundle_id = "3f2b0e26-0000-4000-8000-00000000dead".to_string();
+        let err = verify_bundle_at(b"bundle", &tampered, &verifying_of(&key), None, now, true)
+            .unwrap_err();
+        assert_eq!(err, SignatureError::BadSignature);
+
+        // Extend the expiry window → same failure.
+        let mut tampered = base.clone();
+        tampered.expires_at += 999_999;
+        let err = verify_bundle_at(b"bundle", &tampered, &verifying_of(&key), None, now, true)
+            .unwrap_err();
+        assert_eq!(err, SignatureError::BadSignature);
+    }
+
+    #[test]
+    fn legacy_v1_rejected_when_strict_accepted_otherwise() {
+        let key = ed25519_key();
+        let sig = sign_bundle(b"bundle", &key, "k1"); // v1
+        let now = unix_now();
+
+        let err =
+            verify_bundle_at(b"bundle", &sig, &verifying_of(&key), None, now, true).unwrap_err();
+        assert_eq!(
+            err,
+            SignatureError::EnvelopeVersionUnsupported {
+                got: 1,
+                required: ENVELOPE_V2
+            }
+        );
+
+        // Non-strict (compat wrapper) still accepts v1.
+        verify_bundle(b"bundle", &sig, &verifying_of(&key), Some("k1")).unwrap();
+    }
+
+    #[test]
+    fn unknown_future_envelope_version_fails_closed() {
+        let key = ed25519_key();
+        let now = 1_700_000_000;
+        let mut sig = sign_bundle_v2(b"bundle", &key, "k1", &claims(1, now));
+        sig.envelope_version = 9;
+        let err =
+            verify_bundle_at(b"bundle", &sig, &verifying_of(&key), None, now, false).unwrap_err();
+        assert!(matches!(
+            err,
+            SignatureError::EnvelopeVersionUnsupported { got: 9, .. }
+        ));
+    }
+
+    #[test]
+    fn v1_json_deserializes_as_envelope_version_1() {
+        // A stored/legacy envelope predating the schema tag.
+        let json = r#"{"algorithm":"ed25519-sha256","key_id":"k1",
+            "sha256":"00","signature":"00"}"#;
+        let sig: BundleSignature = serde_json::from_str(json).unwrap();
+        assert_eq!(sig.envelope_version, 1);
+        assert_eq!(sig.version, 0);
+        assert!(sig.bundle_id.is_empty());
     }
 
     #[test]

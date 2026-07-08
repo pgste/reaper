@@ -25,6 +25,12 @@ pub struct BundlesConfig {
     /// Signature algorithm: `ed25519-sha256` (default) or `ecdsa-p256-sha256`.
     #[serde(default = "default_signing_algorithm")]
     pub signing_algorithm: String,
+
+    /// How long a signature envelope stays valid after signing, in days
+    /// (v2 envelopes carry an authenticated `expires_at`). A bundle older
+    /// than this must be recompiled (re-signed) before agents will load it.
+    #[serde(default = "default_signature_validity_days")]
+    pub signature_validity_days: u64,
 }
 
 impl Default for BundlesConfig {
@@ -35,8 +41,13 @@ impl Default for BundlesConfig {
             signing_key: None,
             signing_key_id: default_signing_key_id(),
             signing_algorithm: default_signing_algorithm(),
+            signature_validity_days: default_signature_validity_days(),
         }
     }
+}
+
+fn default_signature_validity_days() -> u64 {
+    365
 }
 
 fn default_require_staged() -> bool {

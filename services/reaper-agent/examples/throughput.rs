@@ -168,6 +168,11 @@ async fn main() -> anyhow::Result<()> {
         agent_id: "throughput-bench".to_string(),
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
         data_sync: std::sync::Arc::new(reaper_agent::state::DataSyncState::from_env()),
+        bundle_verifier: std::sync::Arc::new(
+            reaper_agent::management::verify::BundleVerifier::from_config(
+                &reaper_core::config::ManagementSettings::default(),
+            ),
+        ),
     });
 
     let app = Router::new()

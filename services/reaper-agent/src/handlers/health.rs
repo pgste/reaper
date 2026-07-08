@@ -178,6 +178,9 @@ mod tests {
             agent_id: "test-agent".to_string(),
             decision_metrics: Arc::new(crate::metrics_cache::DecisionMetrics::new()),
             data_sync: std::sync::Arc::new(data_sync),
+            bundle_verifier: Arc::new(crate::management::verify::BundleVerifier::from_config(
+                &reaper_core::config::ManagementSettings::default(),
+            )),
         })
     }
 

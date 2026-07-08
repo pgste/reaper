@@ -510,6 +510,9 @@ async fn main() -> anyhow::Result<()> {
         agent_id,
         decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
         data_sync: data_sync.clone(),
+        bundle_verifier: Arc::new(management::verify::BundleVerifier::from_config(
+            &config.management,
+        )),
     });
 
     let app = Router::new()
