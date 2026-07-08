@@ -474,6 +474,13 @@ pub struct ManagementSettings {
     /// default). Set to false only for trusted dev/test setups.
     #[serde(default = "default_true")]
     pub require_signed_bundles: bool,
+
+    /// Require the v2 signature envelope (authenticated bundle_id, monotonic
+    /// version, validity window) on verified bundles. Defaults to true; set to
+    /// false only as a bounded migration window while a pre-v2 control plane
+    /// is being upgraded — legacy v1 envelopes carry no anti-replay metadata.
+    #[serde(default = "default_true")]
+    pub require_envelope_v2: bool,
 }
 
 impl Default for ManagementSettings {
@@ -498,6 +505,7 @@ impl Default for ManagementSettings {
             bundle_signature_algorithm: None,
             bundle_key_id: None,
             require_signed_bundles: true,
+            require_envelope_v2: true,
         }
     }
 }

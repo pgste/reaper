@@ -73,6 +73,11 @@ fn build_state_with_buffer(decision_buffer: Option<SharedDecisionBuffer>) -> Arc
         agent_id: "bench".to_string(),
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
         data_sync: Arc::new(reaper_agent::state::DataSyncState::from_env()),
+        bundle_verifier: std::sync::Arc::new(
+            reaper_agent::management::verify::BundleVerifier::from_config(
+                &reaper_core::config::ManagementSettings::default(),
+            ),
+        ),
     })
 }
 

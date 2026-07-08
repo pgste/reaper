@@ -129,6 +129,11 @@ pub struct DeployBundleRequest {
     /// Override version check
     #[serde(default)]
     pub force: bool,
+    /// Detached signature envelope over `bundle`. Required whenever the agent
+    /// enforces signed bundles (a verification key is pinned, or the agent is
+    /// management-connected with `require_signed_bundles=true`).
+    #[serde(default)]
+    pub signature: Option<reaper_core::bundle_signing::BundleSignature>,
 }
 
 /// Atomic full-replace bundle-load request.
@@ -140,6 +145,11 @@ pub struct DeployBundleRequest {
 pub struct LoadBundlesRequest {
     /// Raw `.rbb` bundle bytes; one entry per policy.
     pub bundles: Vec<Vec<u8>>,
+    /// Detached signature envelopes aligned by index with `bundles`. When
+    /// present, must have the same length; required whenever the agent
+    /// enforces signed bundles.
+    #[serde(default)]
+    pub signatures: Option<Vec<reaper_core::bundle_signing::BundleSignature>>,
 }
 
 /// Response for an atomic full-replace bundle load.

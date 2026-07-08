@@ -237,6 +237,10 @@ impl ReaperAgentConfig {
             self.management.require_signed_bundles =
                 matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_REQUIRE_ENVELOPE_V2") {
+            self.management.require_envelope_v2 =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // UDS settings
         if let Ok(val) = std::env::var("REAPER_UDS_ENABLED") {

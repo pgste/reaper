@@ -19,7 +19,7 @@ is *missing wiring around correct primitives*, so the path back is tractable.
 
 | # | Plan | Prio | Moves gate | Findings closed | Effort | Depends on |
 |---|------|------|-----------|-----------------|--------|-----------|
-| 01 | [AuthN/AuthZ Foundation](01-authn-authz-foundation.md) | **P0** | →CONDITIONAL | Synth #1,#2; Sec P0-1/P0-3/P0-3b; API-1/API-2 | M | — |
+| 01 | [AuthN/AuthZ Foundation](01-authn-authz-foundation.md) ✅ **shipped** (PRs #10/#11; Phase D dogfooding deferred — see plan header) | **P0** | →CONDITIONAL | Synth #1,#2; Sec P0-1/P0-3/P0-3b; API-1/API-2 | M | — |
 | 02 | [Policy Integrity & Distribution](02-policy-integrity-and-distribution.md) | **P0** | →CONDITIONAL | Synth #3,#6; Sec P0-2/P1-1 | M | 01 (promotion authz) |
 | 03 | [Enterprise Identity: SSO + SCIM](03-enterprise-identity-sso-scim.md) | **P0** | →CONDITIONAL | Synth #4; Prod F1 | M | 01 (session/RequireAuth seam) |
 | 04 | [Audit Integrity & Replay](04-audit-integrity-and-replay.md) | P1 | →CONDITIONAL | Sec P1-2; Prod F7/F10 | M–L | 02 (signing primitive for checkpoints); 03 (actor identity) |

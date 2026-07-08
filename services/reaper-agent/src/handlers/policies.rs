@@ -314,6 +314,23 @@ pub async fn deploy_bundle(
         payload.version, payload.force
     );
 
+    // 0. Signature verification FIRST — same fail-closed policy as the pull
+    // path (Plan 02 chokepoint). An unverifiable bundle never gets parsed,
+    // let alone hot-swapped.
+    state
+        .bundle_verifier
+        .verify_push(&payload.bundle, payload.signature.as_ref(), "push:deploy")
+        .map_err(|e| {
+            ERRORS_TOTAL
+                .with_label_values(&["bundle_signature_rejected"])
+                .inc();
+            error!("Bundle signature rejected: {e}");
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("Bundle signature verification failed: {e}"),
+            )
+        })?;
+
     // 1. Parse .rbb bundle
     let bundle = PolicyBundle::from_bytes(&payload.bundle).map_err(|e| {
         ERRORS_TOTAL.with_label_values(&["invalid_bundle"]).inc();
@@ -400,6 +417,37 @@ pub async fn load_bundles_atomic(
         "Atomic bundle load: {} bundle(s) -> full replace",
         payload.bundles.len()
     );
+
+    // Signature verification FIRST (Plan 02 chokepoint): every bundle in the
+    // set must pass the same fail-closed policy as the pull path before any
+    // byte is parsed. `signatures`, when present, aligns with `bundles`.
+    if let Some(signatures) = &payload.signatures {
+        if signatures.len() != payload.bundles.len() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "signatures length ({}) does not match bundles length ({})",
+                    signatures.len(),
+                    payload.bundles.len()
+                ),
+            ));
+        }
+    }
+    for (i, bytes) in payload.bundles.iter().enumerate() {
+        let sig = payload.signatures.as_ref().map(|sigs| &sigs[i]);
+        state
+            .bundle_verifier
+            .verify_push(bytes, sig, &format!("push:load[{i}]"))
+            .map_err(|e| {
+                ERRORS_TOTAL
+                    .with_label_values(&["bundle_signature_rejected"])
+                    .inc();
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("Bundle {i} signature verification failed: {e}"),
+                )
+            })?;
+    }
 
     // Parse + compile every bundle BEFORE swapping anything, so a bad bundle
     // fails the whole load and leaves the current set untouched.

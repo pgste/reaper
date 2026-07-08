@@ -24,6 +24,7 @@ pub const SIGNATURE_SUFFIX: &str = ".sig";
 pub struct BundleSigner {
     key: SigningKey,
     key_id: String,
+    validity_days: u64,
 }
 
 impl BundleSigner {
@@ -39,11 +40,29 @@ impl BundleSigner {
         Ok(Some(Arc::new(Self {
             key,
             key_id: cfg.signing_key_id.clone(),
+            validity_days: cfg.signature_validity_days,
         })))
     }
 
-    fn sign(&self, bytes: &[u8]) -> BundleSignature {
-        bundle_signing::sign_bundle(bytes, &self.key, &self.key_id)
+    /// Sign a compiled bundle into a v2 envelope binding the bundle lineage id,
+    /// a monotonic version, and a validity window.
+    ///
+    /// Version source: unix **milliseconds** at signing. The control plane is
+    /// the single writer for a lineage, so wall-clock milliseconds are strictly
+    /// increasing across recompiles in practice; the envelope field is a plain
+    /// `u64`, so this can move to a database sequence without a schema change
+    /// when agent-side anti-rollback enforcement lands (Plan 02 Phase B).
+    fn sign(&self, bytes: &[u8], bundle_id: Uuid) -> BundleSignature {
+        let now = chrono::Utc::now();
+        let claims = bundle_signing::EnvelopeClaims {
+            bundle_id: bundle_id.to_string(),
+            version: now.timestamp_millis().max(0) as u64,
+            // Small backdating grace so agents with modest clock skew accept
+            // a freshly signed bundle immediately.
+            not_before: now.timestamp() - 300,
+            expires_at: now.timestamp() + (self.validity_days as i64) * 86_400,
+        };
+        bundle_signing::sign_bundle_v2(bytes, &self.key, &self.key_id, &claims)
     }
 }
 
@@ -279,7 +298,7 @@ impl BundleService {
         // the bundle, so it travels with the bundle to any store (S3, fs) and is
         // available whether the agent pulls from the control plane or directly.
         if let Some(signer) = &self.signer {
-            let signature = signer.sign(&compiled.data);
+            let signature = signer.sign(&compiled.data, bundle_id);
             let sig_bytes = serde_json::to_vec(&signature)
                 .map_err(|e| BundleError::Signing(format!("serialize signature: {e}")))?;
             let sig_key = format!("{storage_key}{SIGNATURE_SUFFIX}");

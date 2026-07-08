@@ -44,6 +44,9 @@ pub struct AgentState {
     /// Data-plane sync state: which datastore version this agent serves and
     /// how the configured staleness budget is enforced.
     pub data_sync: Arc<DataSyncState>,
+    /// Bundle signature verification policy — the single implementation both
+    /// the sync pull path and the HTTP push endpoints enforce (Plan 02).
+    pub bundle_verifier: Arc<crate::management::verify::BundleVerifier>,
 }
 
 /// What to do when the data-plane staleness budget is exceeded.
