@@ -45,14 +45,19 @@ pub struct SyncService {
     shutdown_rx: watch::Receiver<bool>,
     /// Whether SSE is currently connected
     sse_connected: bool,
-    /// Shared verification policy (same implementation the push handlers use).
-    verifier: super::verify::BundleVerifier,
+    /// Shared verification policy (same instance the push handlers use, so the
+    /// anti-rollback floor is consistent across pull and push).
+    verifier: std::sync::Arc<super::verify::BundleVerifier>,
     /// Data-plane replica state, reported with every heartbeat.
     data_sync: Arc<crate::state::DataSyncState>,
 }
 
 impl SyncService {
-    /// Create a new sync service
+    /// Create a new sync service.
+    // The dependencies are all distinct collaborators wired once at startup;
+    // grouping them into a params struct would add indirection without
+    // clarifying anything.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Arc<ManagementClient>,
         config: ManagementSettings,
@@ -61,13 +66,9 @@ impl SyncService {
         started_at: Instant,
         shutdown_rx: watch::Receiver<bool>,
         data_sync: Arc<crate::state::DataSyncState>,
+        verifier: Arc<super::verify::BundleVerifier>,
     ) -> (Self, watch::Receiver<Option<BundleUpdate>>) {
         let (update_tx, update_rx) = watch::channel(None);
-
-        // One verification policy, shared with the HTTP push handlers — the
-        // pinned key is parsed once inside BundleVerifier (fail closed on a
-        // bad key), so pull and push can never diverge.
-        let verifier = super::verify::BundleVerifier::from_config(&config);
 
         let service = Self {
             client,

@@ -20,18 +20,20 @@
 //!   the push surface in that mode is the job of inbound auth + the loopback
 //!   default (Plan 01 Phase C).
 
+use std::path::PathBuf;
+
 use reaper_core::bundle_signing::{
     self, BundleSignature, SigAlgorithm, VerifiedEnvelope, VerifyingKey,
 };
 use reaper_core::config::ManagementSettings;
 use tracing::{error, info, warn};
 
+use super::anti_rollback::AntiRollbackStore;
+
 /// Outcome of a successful verification decision.
 #[derive(Debug)]
 pub enum VerifyOutcome {
-    /// A signature was present and fully verified. The carried claims feed
-    /// the persisted anti-rollback check (Plan 02 Phase B); until that lands
-    /// the binary only pattern-matches the variant, hence the allow.
+    /// A signature was present and fully verified (and passed anti-rollback).
     Verified(#[allow(dead_code)] VerifiedEnvelope),
     /// No signature was verified, but policy allows the load (non-strict or
     /// standalone mode). Callers may log/annotate but proceed.
@@ -48,13 +50,27 @@ pub struct BundleVerifier {
     /// Whether this agent is management-connected. Affects only the
     /// no-key push case (standalone agents must keep working).
     managed: bool,
+    /// Persisted per-lineage anti-rollback floor (Plan 02 Phase B).
+    anti_rollback: AntiRollbackStore,
 }
 
 impl BundleVerifier {
-    /// Parse the pinned public key once. A bad key/algorithm is a hard
-    /// configuration error surfaced loudly; verification then fails closed
-    /// for every bundle.
+    /// Build from config with an in-memory anti-rollback floor (no
+    /// persistence). Used by tests and standalone agents.
     pub fn from_config(config: &ManagementSettings) -> Self {
+        Self::from_config_with_store(config, AntiRollbackStore::in_memory())
+    }
+
+    /// Build from config, persisting the anti-rollback floor to `path` so a
+    /// downgrade is still refused after a process restart.
+    pub fn from_config_persistent(config: &ManagementSettings, path: PathBuf) -> Self {
+        Self::from_config_with_store(config, AntiRollbackStore::persistent(path))
+    }
+
+    fn from_config_with_store(
+        config: &ManagementSettings,
+        anti_rollback: AntiRollbackStore,
+    ) -> Self {
         let key = match &config.bundle_public_key {
             Some(hex) => {
                 let alg_str = config
@@ -91,6 +107,7 @@ impl BundleVerifier {
             key,
             key_id_pin: config.bundle_key_id.clone(),
             managed: config.enabled,
+            anti_rollback,
         }
     }
 
@@ -101,20 +118,23 @@ impl BundleVerifier {
         sig: Option<&BundleSignature>,
         label: &str,
     ) -> Result<VerifyOutcome, String> {
-        self.verify_inner(data, sig, label, /* standalone_open= */ false)
+        self.verify_inner(data, sig, label, /* standalone_open= */ false, false)
     }
 
     /// Verify a **pushed** bundle (HTTP deploy/load endpoints) before apply.
     /// Identical policy, except a standalone agent (no management, no key)
-    /// accepts unsigned pushes — see module docs.
+    /// accepts unsigned pushes — see module docs. `force` overrides only the
+    /// anti-rollback floor (an authorized emergency downgrade), never the
+    /// signature, window, or revocation checks.
     pub fn verify_push(
         &self,
         data: &[u8],
         sig: Option<&BundleSignature>,
         label: &str,
+        force: bool,
     ) -> Result<VerifyOutcome, String> {
         let standalone_open = !self.managed && self.key.is_none();
-        self.verify_inner(data, sig, label, standalone_open)
+        self.verify_inner(data, sig, label, standalone_open, force)
     }
 
     fn verify_inner(
@@ -123,6 +143,7 @@ impl BundleVerifier {
         sig: Option<&BundleSignature>,
         label: &str,
         standalone_open: bool,
+        force: bool,
     ) -> Result<VerifyOutcome, String> {
         match (&self.key, sig) {
             (Some(key), Some(sig)) => {
@@ -135,6 +156,11 @@ impl BundleVerifier {
                     self.require_v2,
                 )
                 .map_err(|e| e.to_string())?;
+                // Anti-rollback: reject a genuinely-signed but superseded
+                // version, and raise the persisted floor on success.
+                self.anti_rollback
+                    .admit(&verified.bundle_id, verified.version, force)
+                    .map_err(|e| e.to_string())?;
                 info!(bundle = %label, key_id = %sig.key_id,
                     envelope_version = verified.envelope_version,
                     version = verified.version,
@@ -199,6 +225,7 @@ mod tests {
             key: key.map(|k| VerifyingKey::from_hex(k.algorithm(), &k.public_key_hex()).unwrap()),
             key_id_pin: pin.map(str::to_string),
             managed,
+            anti_rollback: AntiRollbackStore::in_memory(),
         }
     }
 
@@ -242,7 +269,7 @@ mod tests {
         let v = verifier(true, true, Some(&key), None, true);
         assert!(v.verify_managed(b"data", None, "b").is_err());
         // Push path with a key configured is just as strict.
-        assert!(v.verify_push(b"data", None, "b").is_err());
+        assert!(v.verify_push(b"data", None, "b", false).is_err());
     }
 
     #[test]
@@ -260,7 +287,7 @@ mod tests {
         let v = verifier(true, true, None, None, true);
         assert!(v.verify_managed(b"data", None, "b").is_err());
         // A managed agent's PUSH surface fails closed too.
-        assert!(v.verify_push(b"data", None, "b").is_err());
+        assert!(v.verify_push(b"data", None, "b", false).is_err());
     }
 
     #[test]
@@ -270,7 +297,7 @@ mod tests {
         // the agent has no key to check.
         let v = verifier(true, true, None, None, false);
         assert!(matches!(
-            v.verify_push(b"data", None, "b").unwrap(),
+            v.verify_push(b"data", None, "b", false).unwrap(),
             VerifyOutcome::UnsignedAllowed
         ));
         // ... but the managed pull path in the same config still fails closed.

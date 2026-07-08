@@ -40,6 +40,10 @@ fn managed_settings(key: &SigningKey) -> ManagementSettings {
 }
 
 fn make_app(mgmt: ManagementSettings) -> (Router, Arc<AgentState>) {
+    make_app_with(Arc::new(BundleVerifier::from_config(&mgmt)))
+}
+
+fn make_app_with(verifier: Arc<BundleVerifier>) -> (Router, Arc<AgentState>) {
     let state = Arc::new(AgentState {
         policy_engine: PolicyEngine::new(),
         data_store: Arc::new(policy_engine::DataStore::new()),
@@ -52,7 +56,7 @@ fn make_app(mgmt: ManagementSettings) -> (Router, Arc<AgentState>) {
         agent_id: "test-agent".to_string(),
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
         data_sync: Arc::new(DataSyncState::from_env()),
-        bundle_verifier: Arc::new(BundleVerifier::from_config(&mgmt)),
+        bundle_verifier: verifier,
     });
     let app = Router::new()
         .route("/api/v1/bundles/deploy", post(deploy_bundle))
@@ -77,6 +81,10 @@ fn bundle_bytes() -> Vec<u8> {
 }
 
 fn v2_signature(key: &SigningKey, bytes: &[u8]) -> BundleSignature {
+    v2_signature_versioned(key, bytes, 1)
+}
+
+fn v2_signature_versioned(key: &SigningKey, bytes: &[u8], version: u64) -> BundleSignature {
     let now = unix_now();
     sign_bundle_v2(
         bytes,
@@ -84,7 +92,7 @@ fn v2_signature(key: &SigningKey, bytes: &[u8]) -> BundleSignature {
         "k1",
         &EnvelopeClaims {
             bundle_id: "11111111-2222-4333-8444-555555555555".to_string(),
-            version: 1,
+            version,
             not_before: now - 60,
             expires_at: now + 3600,
         },
@@ -257,4 +265,128 @@ async fn standalone_agent_still_accepts_local_pushes() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state.policy_engine.get_stats().total_policies, 1);
+}
+
+#[tokio::test]
+async fn replayed_older_version_is_rejected_and_persists_across_restart() {
+    use reaper_agent::management::verify::BundleVerifier;
+    use tempfile::TempDir;
+
+    let key = signing_key();
+    let dir = TempDir::new().unwrap();
+    let floor_path = dir.path().join("anti_rollback.json");
+    let bytes = bundle_bytes();
+
+    // Agent #1: apply v5 (valid signature), then attempt a genuinely-signed v4.
+    {
+        let verifier = Arc::new(BundleVerifier::from_config_persistent(
+            &managed_settings(&key),
+            floor_path.clone(),
+        ));
+        let (app, state) = make_app_with(verifier);
+
+        let v5 = v2_signature_versioned(&key, &bytes, 5);
+        let status = post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "5", "signature": v5}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state.policy_engine.get_stats().total_policies, 1);
+
+        // Replay an older, still-validly-signed v4 → rejected.
+        let v4 = v2_signature_versioned(&key, &bytes, 4);
+        let status = post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "4", "signature": v4}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        // (Idempotent re-apply of the current version is covered by the
+        // anti_rollback unit tests; the engine's own same-version dedup makes
+        // a re-push here a separate concern.)
+    }
+
+    // Agent #2: fresh process, SAME floor file. The v4 downgrade is still
+    // refused because the floor (5) survived the restart.
+    {
+        let verifier = Arc::new(BundleVerifier::from_config_persistent(
+            &managed_settings(&key),
+            floor_path,
+        ));
+        let (app, state) = make_app_with(verifier);
+        let v4 = v2_signature_versioned(&key, &bytes, 4);
+        let status = post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "4", "signature": v4}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "persisted floor must reject a downgrade after restart"
+        );
+        assert_eq!(state.policy_engine.get_stats().total_policies, 0);
+    }
+}
+
+#[tokio::test]
+async fn force_overrides_anti_rollback_but_not_signature() {
+    let key = signing_key();
+    let (app, state) = make_app(managed_settings(&key));
+    let bytes = bundle_bytes();
+
+    // Apply v10.
+    let v10 = v2_signature_versioned(&key, &bytes, 10);
+    assert_eq!(
+        post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "10", "signature": v10}),
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    // A normal older v3 is refused...
+    let v3 = v2_signature_versioned(&key, &bytes, 3);
+    assert_eq!(
+        post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "3", "signature": v3.clone()}),
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // ...but force applies it (still a valid signature).
+    assert_eq!(
+        post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "3", "force": true, "signature": v3}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(state.policy_engine.get_stats().total_policies, 1);
+
+    // force does NOT bypass the signature: a force push of tampered bytes fails.
+    let mut tampered = bytes.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0xff;
+    let sig = v2_signature_versioned(&key, &bytes, 11);
+    assert_eq!(
+        post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": tampered, "version": "11", "force": true, "signature": sig}),
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }

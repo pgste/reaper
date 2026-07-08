@@ -9,6 +9,7 @@
 //!
 //! When disabled (default), the agent runs in standalone mode using local policies.
 
+pub mod anti_rollback;
 mod client;
 mod sse;
 mod sync;

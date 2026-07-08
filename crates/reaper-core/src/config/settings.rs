@@ -149,6 +149,17 @@ pub struct AgentAuthSettings {
     /// non-loopback bind. Without this, such a config refuses to start.
     #[serde(default)]
     pub allow_unauthenticated: bool,
+
+    /// Sidecar posture: when `enabled`, keep the **data-plane hot path**
+    /// (policy evaluation — `/api/v1/messages`, `/fast-messages`,
+    /// `/batch-messages`, `/check`) open while inbound auth still gates the
+    /// **management plane** (bundle/policy/data deploy + mutation). Lets a
+    /// co-located app call the evaluator with zero auth overhead while a
+    /// remote or shared caller still needs a credential to push policy.
+    /// Bundle *signing* is independent and stays enforced on the deploy path
+    /// regardless of this flag. Default false (auth gates everything).
+    #[serde(default)]
+    pub open_data_plane: bool,
 }
 
 impl Default for AgentAuthSettings {
@@ -163,6 +174,7 @@ impl Default for AgentAuthSettings {
             jwt_issuer: default_agent_jwt_issuer(),
             jwt_audience: default_agent_jwt_audience(),
             allow_unauthenticated: false,
+            open_data_plane: false,
         }
     }
 }

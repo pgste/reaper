@@ -40,9 +40,20 @@ use reaper_core::config::ReaperAgentConfig;
 /// an attacker can grow; the bound is a safety net, not a working limit.
 const JWT_CACHE_MAX: usize = 4096;
 
-/// Routes that must stay reachable without credentials.
+/// Routes that must stay reachable without credentials (orchestrator probes).
 fn is_exempt(path: &str) -> bool {
     matches!(path, "/health" | "/ready" | "/live" | "/metrics") || path.starts_with("/metrics/")
+}
+
+/// The read-only data-plane hot path: policy evaluation. Optionally left open
+/// (sidecar posture) so a co-located caller pays no auth on the hot path while
+/// the management plane stays gated. These endpoints do not mutate policy or
+/// data — they only decide against the already-loaded set.
+fn is_data_plane(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/v1/messages" | "/api/v1/fast-messages" | "/api/v1/batch-messages" | "/api/v1/check"
+    )
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -67,6 +78,9 @@ pub struct AgentAuthVerifier {
     bearer_token_digest: Option<(usize, [u8; 32])>,
     /// Pre-built JWT decoding key + pinned validation rules.
     jwt: Option<(jsonwebtoken::DecodingKey, jsonwebtoken::Validation)>,
+    /// Sidecar posture: leave the evaluation hot path unauthenticated while
+    /// the management plane stays gated (see [`is_data_plane`]).
+    open_data_plane: bool,
     /// Per-process random SipHash key for the validated-JWT cache: an
     /// attacker can't precompute colliding tokens without it, and a chance
     /// collision only costs a re-verify (entries confirm the exact token).
@@ -103,6 +117,7 @@ impl AgentAuthVerifier {
         Some(Arc::new(Self {
             accepts_mtls: auth.accepts_mtls(),
             accepts_bearer: auth.accepts_bearer(),
+            open_data_plane: auth.open_data_plane,
             tls_handshake_is_auth: config.tls.enabled && config.tls.require_client_cert,
             fingerprint_header: auth
                 .mtls_fingerprint_header
@@ -204,7 +219,11 @@ pub async fn require_agent_auth(
     request: Request,
     next: Next,
 ) -> Response {
-    if is_exempt(request.uri().path()) || verifier.authorize(&request) {
+    let path = request.uri().path();
+    if is_exempt(path)
+        || (verifier.open_data_plane && is_data_plane(path))
+        || verifier.authorize(&request)
+    {
         return next.run(request).await;
     }
 
@@ -281,6 +300,120 @@ mod tests {
     #[test]
     fn disabled_config_builds_no_verifier() {
         assert!(AgentAuthVerifier::from_config(&ReaperAgentConfig::default()).is_none());
+    }
+
+    #[test]
+    fn data_plane_classification() {
+        for p in [
+            "/api/v1/messages",
+            "/api/v1/fast-messages",
+            "/api/v1/batch-messages",
+            "/api/v1/check",
+        ] {
+            assert!(is_data_plane(p), "{p} is the eval hot path");
+        }
+        for p in [
+            "/api/v1/bundles/deploy",
+            "/api/v1/bundles/load",
+            "/api/v1/policies/deploy",
+            "/api/v1/data",
+            "/api/v1/entities",
+            "/debug/datastore",
+        ] {
+            assert!(!is_data_plane(p), "{p} is management, not the hot path");
+        }
+    }
+
+    #[tokio::test]
+    async fn sidecar_open_data_plane_gates_management_only() {
+        use axum::routing::{get, post};
+        use tower::ServiceExt;
+
+        // Sidecar posture: auth enabled + open_data_plane. A co-located caller
+        // hits the evaluator with no credential; a push still needs one.
+        let verifier =
+            AgentAuthVerifier::from_config(&config(reaper_core::config::AgentAuthSettings {
+                enabled: true,
+                open_data_plane: true,
+                bearer_token: Some("tok-secret".into()),
+                ..Default::default()
+            }))
+            .unwrap();
+
+        async fn ok() -> &'static str {
+            "ok"
+        }
+        let app = axum::Router::new()
+            .route("/api/v1/messages", post(ok))
+            .route("/api/v1/bundles/deploy", post(ok))
+            .route("/health", get(ok))
+            .layer(axum::middleware::from_fn_with_state(
+                verifier,
+                require_agent_auth,
+            ));
+
+        let call = |uri: &str, auth: Option<&str>| {
+            let mut b = axum::http::Request::builder().uri(uri).method("POST");
+            if let Some(a) = auth {
+                b = b.header("authorization", a);
+            }
+            app.clone()
+                .oneshot(b.body(axum::body::Body::empty()).unwrap())
+        };
+
+        // Eval path: open, no credential needed.
+        assert_eq!(
+            call("/api/v1/messages", None).await.unwrap().status(),
+            StatusCode::OK
+        );
+        // Management path: 401 without a credential...
+        assert_eq!(
+            call("/api/v1/bundles/deploy", None).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        // ...and 200 with one.
+        assert_eq!(
+            call("/api/v1/bundles/deploy", Some("Bearer tok-secret"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn without_open_data_plane_eval_is_gated_too() {
+        use axum::routing::post;
+        use tower::ServiceExt;
+
+        let verifier =
+            AgentAuthVerifier::from_config(&config(reaper_core::config::AgentAuthSettings {
+                enabled: true,
+                open_data_plane: false,
+                bearer_token: Some("tok-secret".into()),
+                ..Default::default()
+            }))
+            .unwrap();
+        async fn ok() -> &'static str {
+            "ok"
+        }
+        let app = axum::Router::new()
+            .route("/api/v1/messages", post(ok))
+            .layer(axum::middleware::from_fn_with_state(
+                verifier,
+                require_agent_auth,
+            ));
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/messages")
+                    .method("POST")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
