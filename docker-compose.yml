@@ -70,6 +70,10 @@ services:
       - RUST_LOG=info,reaper_management=debug
       - REAPER_MANAGEMENT_PORT=3000
       - REAPER_MANAGEMENT_BIND_ADDRESS=0.0.0.0
+      # DB backend is selected by REAPER_DATABASE_TYPE (defaults to sqlite);
+      # it MUST be set to postgres to match the postgres:// URL below, or config
+      # validation rejects the mismatch and the server exits on boot.
+      - REAPER_DATABASE_TYPE=postgres
       - REAPER_DATABASE_URL=postgres://reaper:${POSTGRES_PASSWORD:-reaper_secret}@postgres:5432/reaper_management
       - REAPER_JWT_SECRET=${JWT_SECRET:-development-jwt-secret-change-in-production}
       - REAPER_STORAGE_TYPE=filesystem

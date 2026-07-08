@@ -154,7 +154,12 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
-          docker compose -f docker-compose.yml logs > docker-logs.txt
+          # --profile management is REQUIRED here: without it compose doesn't
+          # know about the profiled services and `logs` captures nothing (the
+          # reason the first failure produced an empty artifact). Dump container
+          # states + exit codes too, so a boot crash is visible.
+          docker compose -f docker-compose.yml --profile management ps -a || true
+          docker compose -f docker-compose.yml --profile management logs --no-color > docker-logs.txt 2>&1 || true
           cat docker-logs.txt
 
       - name: Upload logs
