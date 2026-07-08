@@ -24,6 +24,50 @@ use crate::state::AppState;
 /// Header name for API key authentication
 pub const API_KEY_HEADER: &str = "X-API-Key";
 
+/// Extract the `{org}` reference from an org-scoped request path
+/// (`/orgs/{org}/…` or `/api/v1/orgs/{org}/…`), if any.
+///
+/// Session credentials aren't org-bound the way API keys are: a user can
+/// belong to several orgs. Resolving the membership that matches the org the
+/// request addresses (instead of blindly taking the first membership) is what
+/// makes multi-org accounts work.
+fn org_ref_from_path(path: &str) -> Option<String> {
+    let mut segments = path.split('/').filter(|s| !s.is_empty());
+    while let Some(segment) = segments.next() {
+        if segment == "orgs" {
+            return segments.next().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Pick the membership matching the org the request addresses; fall back to
+/// the first membership (single-org users, non-org-scoped routes).
+async fn select_membership<'m>(
+    db: &crate::db::Database,
+    memberships: &'m [super::users::UserOrg],
+    path_org: Option<&str>,
+) -> Option<&'m super::users::UserOrg> {
+    if let Some(org_ref) = path_org {
+        // Resolve the path reference to an org id: UUID directly, else slug.
+        let org_id = match Uuid::parse_str(org_ref) {
+            Ok(id) => Some(id),
+            Err(_) => crate::db::repositories::OrganizationRepository::new(db)
+                .get_by_slug(org_ref)
+                .await
+                .ok()
+                .flatten()
+                .map(|o| o.id),
+        };
+        if let Some(org_id) = org_id {
+            if let Some(membership) = memberships.iter().find(|m| m.org_id == org_id) {
+                return Some(membership);
+            }
+        }
+    }
+    memberships.first()
+}
+
 /// Authenticated user/agent extracted from request
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
@@ -151,6 +195,7 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
         // Clone what we need before moving into async block
         let api_key_header = parts.headers.get(API_KEY_HEADER).cloned();
         let auth_header = parts.headers.get(AUTHORIZATION).cloned();
+        let path_org = org_ref_from_path(parts.uri.path());
         let db = state.db.clone();
         let config = state.config.clone();
         let jwks_validator = state.jwks_validator.clone();
@@ -228,17 +273,22 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
                         let session_repo = SessionRepository::new(&db);
                         match session_repo.find_by_token(token).await {
                             Ok(Some(session)) => {
-                                // Get user's first org membership for permissions
+                                // Resolve the membership matching the org this
+                                // request addresses (multi-org users), falling
+                                // back to the first membership.
                                 let user_org_repo = UserOrgRepository::new(&db);
                                 if let Ok(memberships) =
                                     user_org_repo.get_user_orgs(session.user_id).await
                                 {
-                                    if let Some(first_membership) = memberships.first() {
+                                    if let Some(membership) =
+                                        select_membership(&db, &memberships, path_org.as_deref())
+                                            .await
+                                    {
                                         // Convert org role to scopes
-                                        let scopes = role_to_scopes(first_membership.role);
+                                        let scopes = role_to_scopes(membership.role);
                                         return Ok(RequireAuth(AuthenticatedUser {
                                             id: session.user_id.to_string(),
-                                            org_id: first_membership.org_id,
+                                            org_id: membership.org_id,
                                             permissions: Permission::from_strings(&scopes),
                                             auth_method: AuthMethod::Jwt {
                                                 token_id: session.id.to_string(),
@@ -358,14 +408,21 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        // Fast path: reuse the gateway's resolved user (same request URI, so
+        // org-aware session selection already happened there).
+        let cached = parts.extensions.get::<AuthenticatedUser>().cloned();
         // Clone what we need
         let api_key_header = parts.headers.get(API_KEY_HEADER).cloned();
         let auth_header = parts.headers.get(AUTHORIZATION).cloned();
+        let path_org = org_ref_from_path(parts.uri.path());
         let db = state.db.clone();
         let config = state.config.clone();
         let jwks_validator = state.jwks_validator.clone();
 
         async move {
+            if cached.is_some() {
+                return Ok(OptionalAuth(cached));
+            }
             // Try API key first
             if let Some(api_key_value) = api_key_header {
                 if let Ok(api_key_str) = api_key_value.to_str() {
@@ -390,11 +447,14 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
                                 if let Ok(memberships) =
                                     user_org_repo.get_user_orgs(session.user_id).await
                                 {
-                                    if let Some(first_membership) = memberships.first() {
-                                        let scopes = role_to_scopes(first_membership.role);
+                                    if let Some(membership) =
+                                        select_membership(&db, &memberships, path_org.as_deref())
+                                            .await
+                                    {
+                                        let scopes = role_to_scopes(membership.role);
                                         return Ok(OptionalAuth(Some(AuthenticatedUser {
                                             id: session.user_id.to_string(),
-                                            org_id: first_membership.org_id,
+                                            org_id: membership.org_id,
                                             permissions: Permission::from_strings(&scopes),
                                             auth_method: AuthMethod::Jwt {
                                                 token_id: session.id.to_string(),

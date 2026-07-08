@@ -50,6 +50,23 @@ spec:
               value: "0.0.0.0"
             - name: REAPER_AGENT_PORT
               value: {{ .Values.agent.service.port | quote }}
+            {{- if .Values.agent.auth.enabled }}
+            - name: REAPER_AGENT_AUTH_ENABLED
+              value: "true"
+            {{- if .Values.agent.auth.bearerToken }}
+            - name: REAPER_AGENT_AUTH_BEARER_TOKEN
+              value: {{ .Values.agent.auth.bearerToken | quote }}
+            {{- end }}
+            {{- if .Values.agent.auth.jwtSecret }}
+            - name: REAPER_AGENT_AUTH_JWT_SECRET
+              value: {{ .Values.agent.auth.jwtSecret | quote }}
+            {{- end }}
+            {{- else if .Values.agent.auth.allowUnauthenticated }}
+            # Explicit, auditable opt-out: unauthenticated on a pod-network
+            # bind. Set agent.auth.enabled=true for production.
+            - name: REAPER_AGENT_ALLOW_UNAUTHENTICATED
+              value: "true"
+            {{- end }}
             {{- if .Values.agent.config.requireDataSync }}
             - name: REAPER_DATA_REQUIRE_SYNC
               value: "true"
@@ -199,6 +216,23 @@ spec:
               value: "0.0.0.0"
             - name: REAPER_AGENT_PORT
               value: {{ .Values.agent.service.port | quote }}
+            {{- if .Values.agent.auth.enabled }}
+            - name: REAPER_AGENT_AUTH_ENABLED
+              value: "true"
+            {{- if .Values.agent.auth.bearerToken }}
+            - name: REAPER_AGENT_AUTH_BEARER_TOKEN
+              value: {{ .Values.agent.auth.bearerToken | quote }}
+            {{- end }}
+            {{- if .Values.agent.auth.jwtSecret }}
+            - name: REAPER_AGENT_AUTH_JWT_SECRET
+              value: {{ .Values.agent.auth.jwtSecret | quote }}
+            {{- end }}
+            {{- else if .Values.agent.auth.allowUnauthenticated }}
+            # Explicit, auditable opt-out: unauthenticated on a pod-network
+            # bind. Set agent.auth.enabled=true for production.
+            - name: REAPER_AGENT_ALLOW_UNAUTHENTICATED
+              value: "true"
+            {{- end }}
             {{- if .Values.agent.config.requireDataSync }}
             - name: REAPER_DATA_REQUIRE_SYNC
               value: "true"

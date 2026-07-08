@@ -1,3 +1,4 @@
+mod auth;
 mod bootstrap;
 mod cache;
 mod handlers;
@@ -166,6 +167,30 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(ref bootstrap_data) = args.bootstrap_data {
         config.data.bootstrap_file = Some(bootstrap_data.clone());
+    }
+
+    // Fail-closed exposure check: a non-loopback bind without inbound auth,
+    // agent-terminated mTLS, or the explicit opt-out never gets to serve.
+    if let Err(reason) = config
+        .auth
+        .validate_exposure(&config.agent.bind_address, config.tls.require_client_cert)
+    {
+        error!("{reason}");
+        anyhow::bail!(reason);
+    }
+    if config.auth.enabled {
+        info!(
+            "🔐 Inbound authentication ENABLED (mode: {:?})",
+            config.auth.mode
+        );
+    } else if config.auth.allow_unauthenticated
+        && !reaper_core::config::is_loopback_bind(&config.agent.bind_address)
+    {
+        warn!(
+            "Inbound authentication DISABLED on a non-loopback bind — explicitly opted out via \
+             allow_unauthenticated. Anyone who can reach {}:{} can query and mutate this agent.",
+            config.agent.bind_address, config.agent.port
+        );
     }
 
     info!("Configuration: {}", config.summary());
@@ -528,13 +553,38 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/v1/entities/{type}", get(list_entities_handler))
         .route("/api/v1/entities/batch", post(batch_upsert_handler))
-        // Debug endpoints
-        .route("/debug/datastore", get(debug_datastore))
         // Decision log endpoints (OPA-style audit logging)
         .route("/api/v1/decisions", get(get_decisions))
         .route("/api/v1/decisions/stats", get(get_decision_stats))
         .route("/api/v1/decisions/export", post(export_decisions))
-        .route("/api/v1/decisions/{decision_id}", get(get_decision_by_id))
+        .route("/api/v1/decisions/{decision_id}", get(get_decision_by_id));
+
+    // Debug endpoints: compiled out of release builds unless explicitly
+    // re-enabled — /debug/datastore dumps the full entity store, which is
+    // tenant data, not something a production agent should ever serve.
+    let debug_endpoints = cfg!(debug_assertions)
+        || std::env::var("REAPER_DEBUG_ENDPOINTS")
+            .map(|v| matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on"))
+            .unwrap_or(false);
+    let app = if debug_endpoints {
+        app.route("/debug/datastore", get(debug_datastore))
+    } else {
+        app
+    };
+
+    // Inbound authentication (Plan 01 Phase C): default-deny over every
+    // non-health route. Configuration-driven and zero-cost when disabled —
+    // the layer is only mounted at all when auth.enabled, and the verifier
+    // pre-computes keys/digests so the enabled path is ~one hash per request.
+    let app = match auth::AgentAuthVerifier::from_config(&config) {
+        Some(verifier) => app.layer(axum::middleware::from_fn_with_state(
+            verifier,
+            auth::require_agent_auth,
+        )),
+        None => app,
+    };
+
+    let app = app
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)) // 256MB: bulk data loads (100k+ entity benchmark datasets) exceed 100MB
         .with_state(state);
 

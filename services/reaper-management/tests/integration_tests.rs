@@ -2522,3 +2522,134 @@ async fn test_cross_tenant_and_scope_enforcement() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+/// Owner-on-create + multi-org sessions (Plan 01 follow-up from PR #10):
+/// a signed-up user creates a SECOND org through `POST /orgs` and can
+/// immediately manage it — the creator is recorded as Owner, and session
+/// resolution picks the membership matching the org the request path
+/// addresses instead of blindly using the first membership.
+#[tokio::test]
+async fn test_org_create_grants_owner_and_multi_org_sessions_work() {
+    let env = setup_test_env().await;
+
+    // Signup → first org + session token.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/auth/signup",
+            Some(json!({
+                "email": "multi-org@example.com",
+                "password": "SecurePass123!",
+                "org_name": "First Org"
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = parse_body(response).await;
+    let token = body["session_token"].as_str().unwrap().to_string();
+    let first_slug = body["org"]["slug"].as_str().unwrap().to_string();
+
+    // Create a SECOND org with the same session.
+    let response = env
+        .app
+        .clone()
+        .oneshot(session_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Second Org", "slug": "second-org"})),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Immediately manageable: read, mutate (Owner holds org:write/org:admin),
+    // and create org-scoped resources — all with the SAME session.
+    let response = env
+        .app
+        .clone()
+        .oneshot(session_request("GET", "/orgs/second-org", None, &token))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "creator must be able to read the org they just created"
+    );
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(session_request(
+            "PUT",
+            "/orgs/second-org",
+            Some(json!({"display_name": "Renamed"})),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "creator must be Owner of the org they created"
+    );
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(session_request(
+            "POST",
+            "/orgs/second-org/policies",
+            Some(json!({
+                "name": "p1",
+                "language": "reaper",
+                "content": "allow admin to access /x"
+            })),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // The FIRST org keeps working with the same session (path-aware
+    // membership selection, not last-created).
+    let response = env
+        .app
+        .clone()
+        .oneshot(session_request(
+            "GET",
+            &format!("/orgs/{first_slug}"),
+            None,
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // A stranger's org stays out of reach for this session: no membership →
+    // the tenant guard rejects, path-awareness notwithstanding.
+    OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "Stranger Org".to_string(),
+            slug: "stranger-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let response = env
+        .app
+        .clone()
+        .oneshot(session_request("GET", "/orgs/stranger-org", None, &token))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "no membership in the addressed org must be rejected"
+    );
+}

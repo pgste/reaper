@@ -48,8 +48,158 @@ fn default_port() -> u16 {
     8080
 }
 
+/// Loopback by default: exposing the enforcement API beyond the host is an
+/// explicit decision that pairs with inbound auth (see [`AgentAuthSettings`]),
+/// not something a default config does silently.
 fn default_bind_address() -> String {
-    "0.0.0.0".to_string()
+    "127.0.0.1".to_string()
+}
+
+/// Is this bind address loopback-only (unreachable from other hosts)?
+pub fn is_loopback_bind(addr: &str) -> bool {
+    if addr.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    addr.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+// ============================================================================
+// Agent Inbound Auth Settings
+// ============================================================================
+
+/// Which credential(s) the agent's inbound auth accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAuthMode {
+    /// mTLS-verified client identity only: either TLS terminates at the agent
+    /// with `tls.require_client_cert`, or a trusted reverse proxy verified the
+    /// client cert and forwards its fingerprint in `mtls_fingerprint_header`.
+    Mtls,
+    /// Bearer credential only: the management-minted agent JWT (validated
+    /// against the shared `jwt_secret`) or the static `bearer_token`.
+    BearerToken,
+    /// Either credential is accepted.
+    Both,
+}
+
+fn default_agent_auth_mode() -> AgentAuthMode {
+    AgentAuthMode::Both
+}
+
+fn default_agent_jwt_issuer() -> String {
+    "reaper-management".to_string()
+}
+
+fn default_agent_jwt_audience() -> String {
+    "reaper-agent".to_string()
+}
+
+/// Inbound authentication for the agent's HTTP API (Plan 01, Phase C).
+///
+/// The agent refuses to start when bound to a non-loopback address without
+/// either inbound auth, agent-terminated mTLS, or the explicit
+/// `allow_unauthenticated` opt-out — see
+/// [`validate_exposure`](AgentAuthSettings::validate_exposure).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentAuthSettings {
+    /// Enable inbound authentication on non-health endpoints (default: false).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Accepted credential kinds when enabled (default: both).
+    #[serde(default = "default_agent_auth_mode")]
+    pub mode: AgentAuthMode,
+
+    /// Header carrying a client-certificate fingerprint verified by a trusted
+    /// reverse proxy (e.g. "x-client-cert-fingerprint"). Only set this when
+    /// the proxy strips any client-supplied copy — otherwise it is forgeable.
+    #[serde(default)]
+    pub mtls_fingerprint_header: Option<String>,
+
+    /// Optional allowlist of accepted certificate fingerprints for the
+    /// trusted-proxy header. Empty = any non-empty fingerprint the proxy
+    /// verified is accepted.
+    #[serde(default)]
+    pub mtls_allowed_fingerprints: Vec<String>,
+
+    /// Static bearer token for the simple localhost-sidecar case.
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+
+    /// Shared secret validating management-minted agent JWTs
+    /// (`Authorization: Bearer <jwt>`; same value as the management server's
+    /// `REAPER_JWT_SECRET`, so the token an agent received at registration
+    /// also authenticates callers holding it).
+    #[serde(default)]
+    pub jwt_secret: Option<String>,
+
+    /// Expected JWT issuer — must match the management server's
+    /// `auth.jwt_issuer` (default "reaper-management").
+    #[serde(default = "default_agent_jwt_issuer")]
+    pub jwt_issuer: String,
+
+    /// Expected JWT audience — must match the management server's
+    /// `auth.jwt_audience` (default "reaper-agent").
+    #[serde(default = "default_agent_jwt_audience")]
+    pub jwt_audience: String,
+
+    /// Explicit, auditable opt-out: allow serving unauthenticated on a
+    /// non-loopback bind. Without this, such a config refuses to start.
+    #[serde(default)]
+    pub allow_unauthenticated: bool,
+}
+
+impl Default for AgentAuthSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_agent_auth_mode(),
+            mtls_fingerprint_header: None,
+            mtls_allowed_fingerprints: Vec::new(),
+            bearer_token: None,
+            jwt_secret: None,
+            jwt_issuer: default_agent_jwt_issuer(),
+            jwt_audience: default_agent_jwt_audience(),
+            allow_unauthenticated: false,
+        }
+    }
+}
+
+impl AgentAuthSettings {
+    /// Fail-closed exposure check, run at startup: a non-loopback bind with
+    /// no inbound auth and no agent-terminated mTLS is refused unless
+    /// `allow_unauthenticated` explicitly opts out.
+    pub fn validate_exposure(
+        &self,
+        bind_address: &str,
+        tls_requires_client_cert: bool,
+    ) -> Result<(), String> {
+        if is_loopback_bind(bind_address) {
+            return Ok(());
+        }
+        if self.enabled || tls_requires_client_cert || self.allow_unauthenticated {
+            return Ok(());
+        }
+        Err(format!(
+            "refusing to start: bind address '{bind_address}' is reachable from other hosts but \
+             inbound authentication is disabled. Enable agent auth (auth.enabled / \
+             REAPER_AGENT_AUTH_ENABLED), require client certificates \
+             (tls.require_client_cert), bind to 127.0.0.1, or explicitly opt out with \
+             auth.allow_unauthenticated / REAPER_AGENT_ALLOW_UNAUTHENTICATED=true"
+        ))
+    }
+
+    /// True when the configuration accepts mTLS-style credentials.
+    pub fn accepts_mtls(&self) -> bool {
+        matches!(self.mode, AgentAuthMode::Mtls | AgentAuthMode::Both)
+    }
+
+    /// True when the configuration accepts bearer credentials.
+    pub fn accepts_bearer(&self) -> bool {
+        matches!(self.mode, AgentAuthMode::BearerToken | AgentAuthMode::Both)
+    }
 }
 
 // ============================================================================
@@ -541,8 +691,43 @@ mod tests {
     fn test_agent_settings_default() {
         let settings = AgentSettings::default();
         assert_eq!(settings.port, 8080);
-        assert_eq!(settings.bind_address, "0.0.0.0");
+        // Loopback by default: exposure must be an explicit decision.
+        assert_eq!(settings.bind_address, "127.0.0.1");
         assert_eq!(settings.name, "reaper-agent");
+    }
+
+    #[test]
+    fn test_loopback_detection() {
+        for addr in ["127.0.0.1", "::1", "localhost", "127.0.0.53"] {
+            assert!(is_loopback_bind(addr), "{addr} should be loopback");
+        }
+        for addr in ["0.0.0.0", "::", "10.0.0.5", "192.168.1.2", "example.com"] {
+            assert!(!is_loopback_bind(addr), "{addr} must not count as loopback");
+        }
+    }
+
+    #[test]
+    fn test_exposure_validation_fails_closed() {
+        let auth = AgentAuthSettings::default();
+
+        // Loopback is always fine, authenticated or not.
+        assert!(auth.validate_exposure("127.0.0.1", false).is_ok());
+
+        // Non-loopback + no auth + no client-cert TLS → refused.
+        assert!(auth.validate_exposure("0.0.0.0", false).is_err());
+
+        // Any one of the three escape hatches admits the bind.
+        assert!(auth.validate_exposure("0.0.0.0", true).is_ok());
+        let enabled = AgentAuthSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(enabled.validate_exposure("0.0.0.0", false).is_ok());
+        let opted_out = AgentAuthSettings {
+            allow_unauthenticated: true,
+            ..Default::default()
+        };
+        assert!(opted_out.validate_exposure("0.0.0.0", false).is_ok());
     }
 
     #[test]

@@ -11,5 +11,10 @@ data:
   RUST_LOG: "info,reaper_agent=info"
   REAPER_AGENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_AGENT_PORT: "8080"
+  # Inbound auth (Plan 01 Phase C): a non-loopback bind without auth refuses
+  # to start. This manifest explicitly opts out to preserve the open-demo
+  # behaviour — for production, set REAPER_AGENT_AUTH_ENABLED=true and a
+  # bearer token / JWT secret instead, and remove the opt-out.
+  REAPER_AGENT_ALLOW_UNAUTHENTICATED: "true"
   REAPER_UDS_ENABLED: "true"
   REAPER_UDS_PATH: "/var/run/reaper/agent.sock"

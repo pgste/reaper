@@ -151,6 +151,14 @@ services:
       - RUST_LOG=info,reaper_agent=debug
       - REAPER_AGENT_BIND_ADDRESS=0.0.0.0
       - REAPER_AGENT_PORT=8080
+      # Inbound auth (Plan 01 Phase C): a non-loopback bind without auth
+      # refuses to start. This compose defaults to the explicit, auditable
+      # opt-out so local/demo flows keep working; production should set
+      # AGENT_AUTH_ENABLED=true plus a bearer token or the shared JWT secret.
+      - REAPER_AGENT_AUTH_ENABLED=${AGENT_AUTH_ENABLED:-false}
+      - REAPER_AGENT_AUTH_BEARER_TOKEN=${AGENT_AUTH_BEARER_TOKEN:-}
+      - REAPER_AGENT_AUTH_JWT_SECRET=${AGENT_AUTH_JWT_SECRET:-}
+      - REAPER_AGENT_ALLOW_UNAUTHENTICATED=${AGENT_ALLOW_UNAUTHENTICATED:-true}
       # Platform connection (for platform profile)
       - PLATFORM_URL=http://platform:8081
       # Management connection (for management profile) - configure as needed

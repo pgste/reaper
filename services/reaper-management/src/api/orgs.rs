@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
-    auth::middleware::{AuthenticatedUser, RequireAuth},
+    auth::middleware::{AuthenticatedUser, OptionalAuth, RequireAuth},
     auth::scopes::Scope,
+    auth::users::{OrgRole, UserOrg, UserOrgRepository, UserRepository},
     db::repositories::OrganizationRepository,
     domain::organization::{CreateOrganization, Organization, UpdateOrganization},
     state::AppState,
@@ -106,9 +107,17 @@ async fn list_orgs(
     }))
 }
 
-/// Create a new organization
+/// Create a new organization.
+///
+/// Anonymous callers are rejected by the auth gateway in production; the
+/// handler itself stays extractor-light so gateway-less deployments (and the
+/// direct-router test harness) keep working. When the creator is a real user
+/// (session principal), they are recorded as the org's Owner so the org is
+/// immediately manageable by them — orgs created by platform automation
+/// (API keys) have no user to bind.
 async fn create_org(
     State(state): State<Arc<AppState>>,
+    OptionalAuth(caller): OptionalAuth,
     Json(request): Json<CreateOrgRequest>,
 ) -> ApiResult<(StatusCode, Json<Organization>)> {
     // Validate slug format
@@ -141,6 +150,35 @@ async fn create_org(
     };
 
     let org = repo.create(input).await?;
+
+    // Owner-on-create: if the caller is a real user (their principal id is a
+    // row in `users` — API-key ids never are), grant them Owner membership.
+    if let Some(caller) = caller {
+        if let Ok(user_id) = Uuid::parse_str(&caller.id) {
+            let user_repo = UserRepository::new(&state.db);
+            if let Ok(Some(_)) = user_repo.find_by_id(user_id).await {
+                let membership = UserOrg {
+                    id: Uuid::new_v4(),
+                    user_id,
+                    org_id: org.id,
+                    role: OrgRole::Owner,
+                    invited_by: None,
+                    joined_at: chrono::Utc::now(),
+                };
+                if let Err(e) = UserOrgRepository::new(&state.db)
+                    .add_membership(&membership)
+                    .await
+                {
+                    // The org exists; failing the request now would leave the
+                    // caller unsure whether creation happened. Surface loudly.
+                    tracing::error!(
+                        org_id = %org.id, user_id = %user_id, error = %e,
+                        "org created but owner membership could not be recorded"
+                    );
+                }
+            }
+        }
+    }
 
     Ok((StatusCode::CREATED, Json(org)))
 }

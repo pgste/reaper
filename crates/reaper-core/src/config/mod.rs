@@ -22,8 +22,9 @@ mod settings;
 // Re-export all types for public API
 pub use error::ConfigError;
 pub use settings::{
-    AgentSettings, CacheSettings, DataSettings, ManagementSettings, ObservabilitySettings,
-    PerformanceSettings, PolicySettings, TlsSettings, UdsSettings,
+    is_loopback_bind, AgentAuthMode, AgentAuthSettings, AgentSettings, CacheSettings, DataSettings,
+    ManagementSettings, ObservabilitySettings, PerformanceSettings, PolicySettings, TlsSettings,
+    UdsSettings,
 };
 
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,10 @@ pub struct ReaperAgentConfig {
     /// TLS/mTLS settings
     #[serde(default)]
     pub tls: TlsSettings,
+
+    /// Inbound authentication for the agent HTTP API
+    #[serde(default)]
+    pub auth: AgentAuthSettings,
 
     /// Unix Domain Socket settings
     #[serde(default)]
@@ -253,6 +258,58 @@ impl ReaperAgentConfig {
         }
         if let Ok(val) = std::env::var("REAPER_UDS_PIN_CORES") {
             self.uds.pin_cores = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+
+        // Inbound auth settings
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_ENABLED") {
+            self.auth.enabled = matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_MODE") {
+            match val.to_lowercase().as_str() {
+                "mtls" => self.auth.mode = AgentAuthMode::Mtls,
+                "bearer_token" | "bearer" => self.auth.mode = AgentAuthMode::BearerToken,
+                "both" => self.auth.mode = AgentAuthMode::Both,
+                other => tracing::warn!(
+                    "Ignoring invalid REAPER_AGENT_AUTH_MODE '{other}' (expected mtls | bearer_token | both)"
+                ),
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_MTLS_FINGERPRINT_HEADER") {
+            if !val.is_empty() {
+                self.auth.mtls_fingerprint_header = Some(val);
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_MTLS_ALLOWED_FINGERPRINTS") {
+            self.auth.mtls_allowed_fingerprints = val
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_BEARER_TOKEN") {
+            if !val.is_empty() {
+                self.auth.bearer_token = Some(val);
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_JWT_SECRET") {
+            if !val.is_empty() {
+                self.auth.jwt_secret = Some(val);
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_JWT_ISSUER") {
+            if !val.is_empty() {
+                self.auth.jwt_issuer = val;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_AUTH_JWT_AUDIENCE") {
+            if !val.is_empty() {
+                self.auth.jwt_audience = val;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_AGENT_ALLOW_UNAUTHENTICATED") {
+            self.auth.allow_unauthenticated =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
 
         // TLS settings
@@ -518,7 +575,8 @@ mod tests {
     fn test_default_config() {
         let config = ReaperAgentConfig::default();
         assert_eq!(config.agent.port, 8080);
-        assert_eq!(config.agent.bind_address, "0.0.0.0");
+        // Loopback by default: exposure is an explicit decision (Plan 01 C1).
+        assert_eq!(config.agent.bind_address, "127.0.0.1");
         assert!(config.cache.enabled);
         assert_eq!(config.cache.capacity, 10_000);
     }
@@ -566,7 +624,7 @@ cache:
     fn test_summary() {
         let config = ReaperAgentConfig::default();
         let summary = config.summary();
-        assert!(summary.contains("0.0.0.0:8080"));
+        assert!(summary.contains("127.0.0.1:8080"));
         assert!(summary.contains("enabled"));
     }
 

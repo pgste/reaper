@@ -29,6 +29,7 @@ tracing-appender = "0.2"
 tower = { workspace = true }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9.3"
 prometheus = { version = "0.13", features = ["process"] }
 lazy_static = "1.4"
 scopeguard = "1.2"
