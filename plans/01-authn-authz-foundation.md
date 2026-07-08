@@ -1,5 +1,16 @@
 # AuthN/AuthZ Foundation
 
+> **STATUS (2026-07-08): Phases A–C SHIPPED** — control-plane default-deny gateway + per-handler
+> authZ/tenant scoping (PR #10), agent inbound auth + loopback-by-default + debug-endpoint
+> removal, owner-on-create and multi-org session resolution (PR #11).
+>
+> **OPEN GAP — Phase D (stretch, deliberately deferred):** "eat your own dogfood" — drive the
+> control plane's own authZ decisions through an embedded policy-engine evaluation behind
+> `authorize_org`, advisory-then-enforcing after a differential test proves 100% parity with the
+> hard-coded scope checks (§ Phase D / step D1 below). Deferred in favour of Plan 02
+> (Policy Integrity & Distribution — the remaining P0 on the critical path). Pick this up as an
+> independent increment; it has no dependents.
+
 **Readiness gate:** Unblocks the "identity & tenant-isolation" gate on the enterprise security questionnaire — the hard stop that keeps Reaper at NOT READY. Moves both the enforcement plane (agent) and the control plane (management) from "auth is opt-in and fails open" to "default-deny, fail-closed." This is the #1 prerequisite the synthesis names before any other remediation (Synthesis §"good news", sequence step 1).
 
 **Priority:** P0
