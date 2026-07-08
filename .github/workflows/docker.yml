@@ -119,7 +119,9 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: build-images
-    if: github.event_name != 'pull_request'
+    # Runs on PRs too (builds its own images via compose). This job used to be
+    # push-only, which let it rot undetected until it broke a main build — PR
+    # coverage means a stale reference now fails the PR that introduces it.
 
     steps:
       - uses: actions/checkout@v4
