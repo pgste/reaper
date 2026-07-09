@@ -115,6 +115,101 @@ impl<'a> UserRepository<'a> {
         row.map(Self::row_to_user).transpose()
     }
 
+    /// Find a user by its external IdP identity `(issuer, subject)`. This is the
+    /// primary SSO lookup — email can change or be reused, the IdP subject can't.
+    pub async fn find_by_idp_identity(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<User>, UserError> {
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
+
+        let row: Option<(
+            String,
+            String,
+            i32,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        )> = sqlx::query_as(
+            r#"
+            SELECT id, email, email_verified, password_hash, status, created_at, updated_at, last_login_at
+            FROM users WHERE external_idp_issuer = $1 AND external_idp_subject = $2
+            "#,
+        )
+        .bind(issuer)
+        .bind(subject)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(Self::row_to_user).transpose()
+    }
+
+    /// Insert an externally-provisioned (SSO) user together with its IdP linkage.
+    pub async fn create_external(
+        &self,
+        user: &User,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<(), UserError> {
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO users
+              (id, email, email_verified, password_hash, status, created_at, updated_at,
+               last_login_at, external_idp_issuer, external_idp_subject)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(user.id.to_string())
+        .bind(&user.email)
+        .bind(user.email_verified as i64)
+        .bind(&user.password_hash)
+        .bind(user.status.to_string())
+        .bind(user.created_at.to_rfc3339())
+        .bind(user.updated_at.to_rfc3339())
+        .bind(user.last_login_at.map(|t| t.to_rfc3339()))
+        .bind(issuer)
+        .bind(subject)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                UserError::EmailExists
+            } else {
+                UserError::Database(e)
+            }
+        })?;
+
+        Ok(())
+    }
+
+    /// Link an existing (e.g. local-password) user to an external IdP identity,
+    /// so subsequent logins resolve by `(issuer, subject)`.
+    pub async fn link_idp_identity(
+        &self,
+        user_id: Uuid,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<(), UserError> {
+        let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
+
+        sqlx::query(
+            "UPDATE users SET external_idp_issuer = $1, external_idp_subject = $2, updated_at = $3 WHERE id = $4",
+        )
+        .bind(issuer)
+        .bind(subject)
+        .bind(Utc::now().to_rfc3339())
+        .bind(user_id.to_string())
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// Update user's last login time
     pub async fn update_last_login(&self, user_id: Uuid) -> Result<(), UserError> {
         let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;

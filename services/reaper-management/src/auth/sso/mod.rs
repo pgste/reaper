@@ -4,11 +4,45 @@
 //! Plan 03, Phase 1 ships native OIDC; SAML and SCIM layer on later through the
 //! same [`broker`] seam.
 
+pub mod broker;
 pub mod store;
+
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Attribute mapping for an OIDC config: which ID-token claims carry the
+/// email/name/groups, and how IdP group names map to Reaper org roles.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AttrMap {
+    /// Claim holding the user's group list (default `groups`).
+    #[serde(default)]
+    pub groups_claim: Option<String>,
+    /// Claim holding the user's email (default `email`).
+    #[serde(default)]
+    pub email_claim: Option<String>,
+    /// Claim holding the display name (default `name`).
+    #[serde(default)]
+    pub name_claim: Option<String>,
+    /// IdP group name → Reaper role (e.g. `{"reaper-admins":"owner"}`). Values
+    /// that don't parse to an `OrgRole` are ignored.
+    #[serde(default)]
+    pub group_map: HashMap<String, String>,
+}
+
+impl AttrMap {
+    pub fn groups_claim(&self) -> &str {
+        self.groups_claim.as_deref().unwrap_or("groups")
+    }
+    pub fn email_claim(&self) -> &str {
+        self.email_claim.as_deref().unwrap_or("email")
+    }
+    pub fn name_claim(&self) -> &str {
+        self.name_claim.as_deref().unwrap_or("name")
+    }
+}
 
 /// SSO protocol. Only OIDC is wired today; SAML is a later phase through the
 /// same broker.
@@ -77,6 +111,16 @@ impl SsoConfig {
             "{}/.well-known/openid-configuration",
             self.issuer.trim_end_matches('/')
         )
+    }
+
+    /// Parsed attribute map (claim names + group→role map). Returns defaults if
+    /// unset or malformed, so a bad map degrades to "default role for everyone"
+    /// rather than breaking login.
+    pub fn attr_map(&self) -> AttrMap {
+        self.attr_map_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<AttrMap>(s).ok())
+            .unwrap_or_default()
     }
 
     /// Parsed allowed email domains (lowercased). Empty = no restriction.

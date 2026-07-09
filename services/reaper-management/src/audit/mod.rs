@@ -200,6 +200,10 @@ pub mod actions {
     pub const OAUTH_CONNECT: &str = "oauth.connect";
     pub const OAUTH_DISCONNECT: &str = "oauth.disconnect";
     pub const OAUTH_REFRESH: &str = "oauth.refresh";
+
+    // SSO / enterprise identity actions
+    pub const SSO_LOGIN: &str = "sso.login";
+    pub const SSO_CONFIG_UPDATE: &str = "sso.config_update";
 }
 
 /// Audit log entry
