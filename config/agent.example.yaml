@@ -28,6 +28,12 @@ auth:
   # mtls_allowed_fingerprints: ["sha256:..."]
   # Explicit, auditable opt-out for unauthenticated non-loopback serving:
   # allow_unauthenticated: true
+  # Sidecar posture: keep the policy-evaluation hot path
+  # (/api/v1/messages, /fast-messages, /batch-messages, /check) open with zero
+  # auth overhead while inbound auth still gates the management plane (bundle/
+  # policy/data deploy + mutation). Bundle signing is enforced on the deploy
+  # path regardless. Env: REAPER_AGENT_AUTH_OPEN_DATA_PLANE=true
+  # open_data_plane: true
 
 policies:
   # Directory to load policies from on startup

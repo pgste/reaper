@@ -319,7 +319,12 @@ pub async fn deploy_bundle(
     // let alone hot-swapped.
     state
         .bundle_verifier
-        .verify_push(&payload.bundle, payload.signature.as_ref(), "push:deploy")
+        .verify_push(
+            &payload.bundle,
+            payload.signature.as_ref(),
+            "push:deploy",
+            payload.force,
+        )
         .map_err(|e| {
             ERRORS_TOTAL
                 .with_label_values(&["bundle_signature_rejected"])
@@ -437,7 +442,7 @@ pub async fn load_bundles_atomic(
         let sig = payload.signatures.as_ref().map(|sigs| &sigs[i]);
         state
             .bundle_verifier
-            .verify_push(bytes, sig, &format!("push:load[{i}]"))
+            .verify_push(bytes, sig, &format!("push:load[{i}]"), false)
             .map_err(|e| {
                 ERRORS_TOTAL
                     .with_label_values(&["bundle_signature_rejected"])

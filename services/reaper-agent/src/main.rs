@@ -317,6 +317,18 @@ async fn main() -> anyhow::Result<()> {
         debug!("Enhanced metrics disabled (set REAPER_ENHANCED_METRICS=true to enable)");
     }
 
+    // One bundle verifier, shared by the pull (sync) and push (HTTP) paths so
+    // they enforce a single anti-rollback floor (Plan 02 Phase B). The floor
+    // persists under the policy cache dir when one is configured, so a
+    // downgrade is still refused after a restart; otherwise it is in-memory.
+    let bundle_verifier = Arc::new(match config.policies.cache_dir.as_ref() {
+        Some(dir) => management::verify::BundleVerifier::from_config_persistent(
+            &config.management,
+            dir.join("anti_rollback.json"),
+        ),
+        None => management::verify::BundleVerifier::from_config(&config.management),
+    });
+
     // Initialize management client if enabled
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut management_handle = None;
@@ -344,6 +356,7 @@ async fn main() -> anyhow::Result<()> {
                     started_at,
                     shutdown_rx.clone(),
                     data_sync.clone(),
+                    bundle_verifier.clone(),
                 );
 
                 // Spawn sync service
@@ -510,9 +523,7 @@ async fn main() -> anyhow::Result<()> {
         agent_id,
         decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
         data_sync: data_sync.clone(),
-        bundle_verifier: Arc::new(management::verify::BundleVerifier::from_config(
-            &config.management,
-        )),
+        bundle_verifier: bundle_verifier.clone(),
     });
 
     let app = Router::new()
