@@ -97,12 +97,19 @@ fn authed_request(method: &str, uri: &str, body: Option<Value>, api_key: &str) -
 
 /// Create an API key for testing
 async fn create_test_api_key(db: &Database, org_id: Uuid) -> String {
+    create_named_api_key(db, org_id, "test-key").await
+}
+
+/// Create a named API key. Keys are unique per (org, name), so a second key in
+/// the same org (e.g. a distinct approver for two-person controls) needs a
+/// distinct name.
+async fn create_named_api_key(db: &Database, org_id: Uuid, name: &str) -> String {
     let api_key_repo = ApiKeyRepository::new(db);
     let created = api_key_repo
         .create(
             org_id,
             CreateApiKey {
-                name: "test-key".to_string(),
+                name: name.to_string(),
                 scopes: vec![
                     "admin".to_string(),
                     "agent:register".to_string(),
@@ -397,26 +404,55 @@ async fn test_bundle_workflow() {
     let body = parse_body(response).await;
     assert_eq!(body["status"], "staged");
 
-    // Promote bundle
+    // Governed promotion: opening a promote request does NOT promote — it
+    // records a pending change request for a second principal to approve.
     let promote = authed_request(
         "POST",
         &format!("/orgs/bundle-org/bundles/{}/promote", bundle_id),
-        Some(json!({
-            "notes": "Initial release"
-        })),
+        Some(json!({ "notes": "Initial release" })),
         &key,
     );
     let response = env.app.clone().oneshot(promote).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
+    assert_eq!(response.status(), StatusCode::CREATED);
     let body = parse_body(response).await;
-    assert_eq!(body["status"], "promoted");
+    assert_eq!(body["kind"], "promote");
+    assert_eq!(body["status"], "pending");
+    let cr_id = body["id"].as_str().unwrap().to_string();
 
-    // Get promoted bundle
+    // The bundle is still only staged until the request is approved.
     let get_promoted = authed_request("GET", "/orgs/bundle-org/bundles/promoted", None, &key);
     let response = env.app.clone().oneshot(get_promoted).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(parse_body(response).await.is_null());
 
+    // The requester cannot approve their own request (two-person rule).
+    let self_approve = authed_request(
+        "POST",
+        &format!("/orgs/bundle-org/change-requests/{}/approve", cr_id),
+        None,
+        &key,
+    );
+    let response = env.app.clone().oneshot(self_approve).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // A second, distinct principal approves — now the bundle goes live.
+    let key2 = create_named_api_key(&env.db, org_id, "approver-key").await;
+    let approve = authed_request(
+        "POST",
+        &format!("/orgs/bundle-org/change-requests/{}/approve", cr_id),
+        None,
+        &key2,
+    );
+    let response = env.app.clone().oneshot(approve).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_body(response).await;
+    assert_eq!(body["status"], "promoted");
+    assert_eq!(body["id"], bundle_id);
+
+    // Get promoted bundle now returns it.
+    let get_promoted = authed_request("GET", "/orgs/bundle-org/bundles/promoted", None, &key);
+    let response = env.app.clone().oneshot(get_promoted).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
     let body = parse_body(response).await;
     assert_eq!(body["id"], bundle_id);
 
@@ -708,7 +744,9 @@ async fn test_bundle_invalid_transitions() {
     let response = env.app.clone().oneshot(stage).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    // Try to promote draft bundle - should fail
+    // Opening a promote request for a draft bundle is allowed (it only records
+    // intent); the invalid transition is enforced when a second principal
+    // approves and execution is attempted.
     let promote = authed_request(
         "POST",
         &format!("/orgs/transition-org/bundles/{}/promote", bundle_id),
@@ -716,6 +754,20 @@ async fn test_bundle_invalid_transitions() {
         &key,
     );
     let response = env.app.clone().oneshot(promote).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let cr_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let key2 = create_named_api_key(&env.db, org_id, "approver-key").await;
+    let approve = authed_request(
+        "POST",
+        &format!("/orgs/transition-org/change-requests/{}/approve", cr_id),
+        None,
+        &key2,
+    );
+    let response = env.app.clone().oneshot(approve).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -2790,4 +2842,211 @@ async fn test_revocation_list_served_signed_and_updates() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// =============================================================================
+// Governed promotion (two-person control) — Plan 02, Phase B step 5
+// =============================================================================
+
+/// Create an org (with slug) and an admin API key; return (org_id, key).
+async fn org_with_key(env: &TestEnv, name: &str, slug: &str) -> (Uuid, String) {
+    let create_org = json_request("POST", "/orgs", Some(json!({ "name": name, "slug": slug })));
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+    (org_id, key)
+}
+
+/// Create a one-policy bundle, compile and stage it; return the bundle id.
+async fn staged_bundle(env: &TestEnv, slug: &str, key: &str, name: &str) -> String {
+    let policy = authed_request(
+        "POST",
+        &format!("/orgs/{slug}/policies"),
+        Some(json!({
+            "name": format!("{name}-pol"),
+            "language": "reaper",
+            "content": "allow user to read /api"
+        })),
+        key,
+    );
+    let resp = env.app.clone().oneshot(policy).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let policy_id = parse_body(resp).await["id"].as_str().unwrap().to_string();
+
+    let create = authed_request(
+        "POST",
+        &format!("/orgs/{slug}/bundles"),
+        Some(json!({ "name": name, "policy_ids": [policy_id] })),
+        key,
+    );
+    let resp = env.app.clone().oneshot(create).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bundle_id = parse_body(resp).await["id"].as_str().unwrap().to_string();
+
+    for step in ["compile", "stage"] {
+        let req = authed_request(
+            "POST",
+            &format!("/orgs/{slug}/bundles/{bundle_id}/{step}"),
+            None,
+            key,
+        );
+        let resp = env.app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{step} step failed");
+    }
+    bundle_id
+}
+
+/// POST a promote/rollback (`path` = e.g. `bundles/{id}/promote`) and return
+/// the opened change request id.
+async fn open_change_request(env: &TestEnv, slug: &str, key: &str, path: &str) -> String {
+    let req = authed_request(
+        "POST",
+        &format!("/orgs/{slug}/{path}"),
+        Some(json!({})),
+        key,
+    );
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    parse_body(resp).await["id"].as_str().unwrap().to_string()
+}
+
+/// Approve a change request as `approver` and assert it executed, promoting
+/// `expect_bundle`.
+async fn approve_ok(env: &TestEnv, slug: &str, approver: &str, cr_id: &str, expect_bundle: &str) {
+    let req = authed_request(
+        "POST",
+        &format!("/orgs/{slug}/change-requests/{cr_id}/approve"),
+        None,
+        approver,
+    );
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = parse_body(resp).await;
+    assert_eq!(body["status"], "promoted");
+    assert_eq!(body["id"], expect_bundle);
+}
+
+/// Opening a promotion change request requires authentication.
+#[tokio::test]
+async fn test_promote_change_request_requires_auth() {
+    let env = setup_test_env().await;
+    let _ = org_with_key(&env, "Auth CR Org", "authcr-org").await;
+
+    // No API key → 401, before any change request could be recorded.
+    let req = json_request(
+        "POST",
+        &format!("/orgs/authcr-org/bundles/{}/promote", Uuid::new_v4()),
+        Some(json!({})),
+    );
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A change request opened in one org is invisible and un-approvable from
+/// another org (tenant isolation: 404, not another org's decision).
+#[tokio::test]
+async fn test_change_request_cross_org_isolation() {
+    let env = setup_test_env().await;
+    let (_a, a_key) = org_with_key(&env, "CR Org A", "cr-org-a").await;
+    let (_b, b_key) = org_with_key(&env, "CR Org B", "cr-org-b").await;
+
+    let bundle = staged_bundle(&env, "cr-org-a", &a_key, "iso-bundle").await;
+    let cr = open_change_request(
+        &env,
+        "cr-org-a",
+        &a_key,
+        &format!("bundles/{bundle}/promote"),
+    )
+    .await;
+
+    // Org B cannot read org A's change request through its own org scope.
+    let get = authed_request(
+        "GET",
+        &format!("/orgs/cr-org-b/change-requests/{cr}"),
+        None,
+        &b_key,
+    );
+    let resp = env.app.clone().oneshot(get).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // ...nor approve it through its own org.
+    let approve = authed_request(
+        "POST",
+        &format!("/orgs/cr-org-b/change-requests/{cr}/approve"),
+        None,
+        &b_key,
+    );
+    let resp = env.app.clone().oneshot(approve).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // The request is still pending in org A (org B's probes changed nothing).
+    let get = authed_request(
+        "GET",
+        &format!("/orgs/cr-org-a/change-requests/{cr}"),
+        None,
+        &a_key,
+    );
+    let resp = env.app.clone().oneshot(get).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(parse_body(resp).await["status"], "pending");
+}
+
+/// End-to-end rollback: promote A, promote B (A deprecated), then roll back to
+/// A through a second change request. Rollback is recorded with its own kind
+/// and executed only by a distinct approver.
+#[tokio::test]
+async fn test_rollback_change_request_flow() {
+    let env = setup_test_env().await;
+    let (org_id, key) = org_with_key(&env, "Rollback Org", "rollback-org").await;
+    let approver = create_named_api_key(&env.db, org_id, "approver-key").await;
+
+    let a = staged_bundle(&env, "rollback-org", &key, "bundle-a").await;
+    let b = staged_bundle(&env, "rollback-org", &key, "bundle-b").await;
+
+    // Promote A, then B — B is now live and A is deprecated.
+    let cr_a =
+        open_change_request(&env, "rollback-org", &key, &format!("bundles/{a}/promote")).await;
+    approve_ok(&env, "rollback-org", &approver, &cr_a, &a).await;
+    let cr_b =
+        open_change_request(&env, "rollback-org", &key, &format!("bundles/{b}/promote")).await;
+    approve_ok(&env, "rollback-org", &approver, &cr_b, &b).await;
+
+    // Open a rollback change request targeting A.
+    let roll = authed_request(
+        "POST",
+        &format!("/orgs/rollback-org/bundles/{a}/rollback"),
+        Some(json!({ "notes": "B misbehaved" })),
+        &key,
+    );
+    let resp = env.app.clone().oneshot(roll).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = parse_body(resp).await;
+    assert_eq!(body["kind"], "rollback");
+    assert_eq!(body["status"], "pending");
+    let cr_roll = body["id"].as_str().unwrap().to_string();
+
+    // A distinct principal approves the rollback — A is live again.
+    approve_ok(&env, "rollback-org", &approver, &cr_roll, &a).await;
+
+    let getp = authed_request("GET", "/orgs/rollback-org/bundles/promoted", None, &key);
+    let resp = env.app.clone().oneshot(getp).await.unwrap();
+    assert_eq!(parse_body(resp).await["id"], a);
+
+    // The executed rollback record names a distinct approver.
+    let getcr = authed_request(
+        "GET",
+        &format!("/orgs/rollback-org/change-requests/{cr_roll}"),
+        None,
+        &key,
+    );
+    let resp = env.app.clone().oneshot(getcr).await.unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["status"], "executed");
+    assert!(body["approver_id"].is_string());
+    assert_ne!(body["approver_id"], body["requester_id"]);
 }
