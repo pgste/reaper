@@ -37,7 +37,13 @@ env:
   # delta). GHA backend is self-evicting, so it won't blow the 10GB repo cache
   # budget the way a full target/ cache would. Incremental must be off for
   # sccache to hit.
-  RUSTC_WRAPPER: sccache
+  #
+  # RUSTC_WRAPPER is deliberately NOT set here. Setting it globally makes cargo
+  # route every rustc call through sccache, so a transient GHAC outage during
+  # sccache's server startup turns into a hard, red build instead of a cache
+  # miss. Instead each job runs the "Enable sccache ..." probe step, which only
+  # exports RUSTC_WRAPPER=sccache once it has confirmed the backend is reachable
+  # (fail-open: unreachable backend => uncached but green build).
   SCCACHE_GHA_ENABLED: "true"
   CARGO_INCREMENTAL: 0
 
@@ -57,6 +63,25 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -97,6 +122,25 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -169,10 +213,10 @@ jobs:
     name: eBPF Compilation (x86_64)
     runs-on: ubuntu-latest
     needs: unit-tests
-    # sccache can't cache `-Z build-std` against a custom BPF target; disable
-    # the wrapper here so the kernel build path is never at its mercy. The
-    # sccache-action step is harmless with no wrapper set (userspace parts just
-    # compile directly).
+    # sccache can't cache `-Z build-std` against a custom BPF target, so this
+    # job pins RUSTC_WRAPPER to empty. The per-job "Enable sccache ..." probe
+    # sees it is already set and leaves it untouched, so the kernel build path
+    # is never routed through sccache (userspace parts just compile directly).
     env:
       RUSTC_WRAPPER: ""
     steps:
@@ -189,6 +233,25 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -345,6 +408,25 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
 
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -397,6 +479,25 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -466,6 +567,25 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -593,6 +713,25 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -732,6 +871,25 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
 
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -822,6 +980,25 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # RUSTC_WRAPPER=sccache routes EVERY rustc invocation (even
+          # `rustc -vV`) through sccache, so a transient GitHub Actions cache
+          # (GHAC) outage during server startup becomes a hard, red build —
+          # not just a cache miss. Probe the backend by starting the server and
+          # only enable the wrapper if it comes up; otherwise build uncached
+          # (slower) but green. Jobs that opt out (eBPF pins RUSTC_WRAPPER=""
+          # because `-Z build-std` can't be sccache-cached) are left untouched.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
