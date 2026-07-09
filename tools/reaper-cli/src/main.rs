@@ -1539,7 +1539,7 @@ async fn handle_bundle_action(
                                 "│ {:8} │ {:27} │ {:32}…│",
                                 v.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
                                 v.get("deployed_at").and_then(|v| v.as_str()).unwrap_or("?"),
-                                &v.get("bundle_hash")
+                                v.get("bundle_hash")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .chars()
