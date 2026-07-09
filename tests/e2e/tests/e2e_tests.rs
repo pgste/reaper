@@ -336,55 +336,13 @@ async fn test_e2e_full_policy_deployment() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["status"], "staged");
 
-    // Step 6: Governed promotion — opening a promote request records a pending
-    // change request; it does NOT promote the bundle by itself.
+    // Step 6: Promote bundle. The E2E server runs single-control (the default),
+    // so this goes live immediately for the owner. (Two-person / dual-control
+    // approval is exercised in the in-process management integration tests.)
     let response = client
         .management_post(
             &format!("/orgs/{}/bundles/{}/promote", slug, bundle_id),
             json!({"notes": "E2E test promotion"}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["kind"], "promote");
-    assert_eq!(body["status"], "pending");
-    let cr_id = body["id"].as_str().unwrap().to_string();
-
-    // The owner cannot approve their own request — a second, distinct principal
-    // must. Mint a promote-scoped API key in the same org to act as approver.
-    let response = client
-        .management_post(
-            &format!("/orgs/{}/api-keys", slug),
-            json!({
-                "name": "e2e-approver",
-                "scopes": ["bundle:promote", "bundle:read"]
-            }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 201);
-    let approver_key = response.json::<Value>().await.unwrap()["key"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let approver = TestClient::new().with_api_key(approver_key);
-
-    // Self-approval is refused (two-person control).
-    let response = client
-        .management_post(
-            &format!("/orgs/{}/change-requests/{}/approve", slug, cr_id),
-            json!({}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 403);
-
-    // The distinct approver executes the promotion.
-    let response = approver
-        .management_post(
-            &format!("/orgs/{}/change-requests/{}/approve", slug, cr_id),
-            json!({}),
         )
         .await
         .unwrap();

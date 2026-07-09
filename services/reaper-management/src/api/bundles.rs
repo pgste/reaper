@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -297,35 +297,52 @@ pub struct OpenChangeRequest {
     pub notes: Option<String>,
 }
 
-/// Open a **promote** change request.
+/// Is a bundle in a state where this change kind may execute?
+fn transition_allowed(kind: ChangeKind, status: BundleStatus) -> bool {
+    match kind {
+        ChangeKind::Promote => status == BundleStatus::Staged,
+        // Rollback restores a previously-live bundle (now Deprecated), or a
+        // Staged one that was never promoted.
+        ChangeKind::Rollback => {
+            matches!(status, BundleStatus::Deprecated | BundleStatus::Staged)
+        }
+    }
+}
+
+/// Open a **promote** change request (or, under single-control, promote now).
 ///
-/// Promotion is a two-person control: this does not promote the bundle. It
-/// records a pending change request that a second, distinct principal must
-/// approve (`POST .../change-requests/{id}/approve`) before the bundle goes
-/// live. The requester needs `BundlePromote`, the org is resolved tenant-safe,
-/// and the bundle must belong to the org (404 otherwise).
+/// Behaviour depends on `bundles.promotion_approval`:
+/// - **single-control (default):** the caller with `bundle:promote` promotes
+///   immediately; a change record is still written (200, the promoted bundle).
+/// - **dual-control:** records a *pending* change request that a second,
+///   distinct principal must approve before the bundle goes live (201, the
+///   change request).
+///
+/// Either way the org is resolved tenant-safe and the bundle must belong to it
+/// (404 otherwise), and it must be in a promotable state (400 otherwise).
 async fn promote_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     body: Option<Json<OpenChangeRequest>>,
-) -> ApiResult<(StatusCode, Json<PromotionChangeRequest>)> {
+) -> ApiResult<Response> {
     open_change_request(state, user, org, bundle_id, body, ChangeKind::Promote).await
 }
 
-/// Open a **rollback** change request (restore a previously-good bundle). Same
-/// two-person control and authorization as promote; only the recorded kind
-/// (and the execution path taken at approval time) differ.
+/// Open a **rollback** change request (restore a previously-good bundle), or
+/// roll back now under single-control. Same authorization and governance as
+/// promote; only the recorded kind and the execution path differ.
 async fn rollback_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
     body: Option<Json<OpenChangeRequest>>,
-) -> ApiResult<(StatusCode, Json<PromotionChangeRequest>)> {
+) -> ApiResult<Response> {
     open_change_request(state, user, org, bundle_id, body, ChangeKind::Rollback).await
 }
 
-/// Shared body for opening a promote/rollback change request.
+/// Shared entry point for promote/rollback: record the change, then either
+/// return it pending (dual-control) or execute it immediately (single-control).
 async fn open_change_request(
     state: Arc<AppState>,
     user: AuthenticatedUser,
@@ -333,15 +350,26 @@ async fn open_change_request(
     bundle_id: Uuid,
     body: Option<Json<OpenChangeRequest>>,
     kind: ChangeKind,
-) -> ApiResult<(StatusCode, Json<PromotionChangeRequest>)> {
+) -> ApiResult<Response> {
     let org_id = authorize_org(&state, &user, &org, &[Scope::BundlePromote])
         .await?
         .id;
     // Tenant guard + pin the exact artifact (checksum) at request time so the
     // change record names *which* bundle content was approved, not just an id.
     let bundle = state.bundle_service.get_scoped(org_id, bundle_id).await?;
-    let notes = body.and_then(|Json(b)| b.notes);
 
+    // Reject an impossible change before recording it, so we don't leave a
+    // dangling pending request for a bundle that can't move.
+    if !transition_allowed(kind, bundle.status) {
+        return Err(ApiError::BadRequest(format!(
+            "bundle {} cannot be {}d from {} state",
+            bundle_id,
+            kind.as_str(),
+            bundle.status
+        )));
+    }
+
+    let notes = body.and_then(|Json(b)| b.notes);
     let repo = PromotionChangeRepository::new(&state.db);
     let cr = repo
         .create(
@@ -353,9 +381,67 @@ async fn open_change_request(
             notes.as_deref(),
         )
         .await?;
-
     audit(&state, &user, org_id, "bundle.change_request.open", &cr).await;
-    Ok((StatusCode::CREATED, Json(cr)))
+
+    if state.config.bundles.promotion_approval.is_dual_control() {
+        // Await a second, distinct principal.
+        return Ok((StatusCode::CREATED, Json(cr)).into_response());
+    }
+
+    // Single-control: the requester is also the executor. Execute now and still
+    // record the (self-approved) decision, so the change ledger is uniform.
+    let promoted = execute_promotion(&state, org_id, &cr, &user.id).await?;
+    let executed = repo.get_scoped(org_id, cr.id).await?.unwrap_or(cr);
+    audit(&state, &user, org_id, "bundle.promote", &executed).await;
+    Ok((StatusCode::OK, Json(promoted)).into_response())
+}
+
+/// Atomically claim a pending change request and apply it (promote or
+/// rollback). Returns `Conflict` if it was already decided (lost race), or
+/// `BadRequest` if the bundle drifted out of an executable state since the
+/// request was opened. Shared by single-control execution and dual-control
+/// approval.
+async fn execute_promotion(
+    state: &AppState,
+    org_id: Uuid,
+    cr: &PromotionChangeRequest,
+    approver_id: &str,
+) -> ApiResult<crate::domain::Bundle> {
+    // Re-check eligibility against the current bundle state — under dual-control
+    // the bundle may have moved between open and approve.
+    let bundle = state
+        .bundle_service
+        .get_scoped(org_id, cr.bundle_id)
+        .await?;
+    if !transition_allowed(cr.kind, bundle.status) {
+        return Err(ApiError::BadRequest(format!(
+            "bundle {} cannot be {}d from {} state",
+            cr.bundle_id,
+            cr.kind.as_str(),
+            bundle.status
+        )));
+    }
+
+    // Claim it (pending→executed). rows == 0 means someone else decided it
+    // between our read and here — a conflict, not a promotion.
+    let repo = PromotionChangeRepository::new(&state.db);
+    let claimed = repo.mark_executed(org_id, cr.id, approver_id).await?;
+    if claimed == 0 {
+        return Err(ApiError::Conflict(
+            "change request was already decided".to_string(),
+        ));
+    }
+
+    let request = PromotionRequest {
+        notes: cr.notes.clone(),
+        target_agents: None,
+        notify_only: false,
+    };
+    let promoted = match cr.kind {
+        ChangeKind::Promote => state.bundle_service.promote(cr.bundle_id, &request).await,
+        ChangeKind::Rollback => state.bundle_service.rollback(cr.bundle_id, &request).await,
+    }?;
+    Ok(promoted)
 }
 
 /// List an org's promotion change requests (newest first).
@@ -392,8 +478,10 @@ async fn get_change_request(
 /// Approve and execute a pending change request.
 ///
 /// The heart of the two-person control:
-/// - the approver needs `BundlePromote` and must be a **distinct** principal
-///   from the requester (self-approval is a 403);
+/// - the approver needs `BundlePromote` (which in practice comes from an IdP
+///   group / role for a change-approver team, or is held by a service account);
+/// - unless `bundles.allow_self_approval` is set, the approver must be a
+///   **distinct** principal from the requester (self-approval is a 403);
 /// - the request must still be pending (409 otherwise);
 /// - the pending→executed transition is a single atomic UPDATE, so two
 ///   concurrent approvals can't both promote — the loser sees a 409;
@@ -419,57 +507,18 @@ async fn approve_change_request(
             cr.status.as_str()
         )));
     }
-    // Two-person rule: the approver must not be the requester. Enforced on the
-    // stable principal id, so it holds across API keys / sessions of the same
-    // user only insofar as the id matches — which is the identity we audit.
-    if cr.requester_id == user.id {
+    // Four-eyes: the approver must not be the requester. Enforced on the stable
+    // principal id — which is the corporate subject for SSO/JWT callers and the
+    // key id for service accounts, i.e. the identity we audit. Orgs running a
+    // fully-automated pipeline can opt out with `allow_self_approval`.
+    if !state.config.bundles.allow_self_approval && cr.requester_id == user.id {
         return Err(ApiError::Forbidden(
             "a change request must be approved by a different principal than the requester"
                 .to_string(),
         ));
     }
 
-    // Existence + tenant check, and reject up front if the target isn't in a
-    // state the transition allows — so we don't claim a request we can't
-    // execute. The service re-checks under its own guard regardless.
-    let bundle = state
-        .bundle_service
-        .get_scoped(org_id, cr.bundle_id)
-        .await?;
-    let eligible = match cr.kind {
-        ChangeKind::Promote => bundle.status == BundleStatus::Staged,
-        ChangeKind::Rollback => matches!(
-            bundle.status,
-            BundleStatus::Deprecated | BundleStatus::Staged
-        ),
-    };
-    if !eligible {
-        return Err(ApiError::BadRequest(format!(
-            "bundle {} cannot be {}d from {} state",
-            cr.bundle_id,
-            cr.kind.as_str(),
-            bundle.status
-        )));
-    }
-
-    // Atomically claim the request (pending→executed). rows == 0 means someone
-    // else decided it between our read and here — a conflict, not a promotion.
-    let claimed = repo.mark_executed(org_id, cr_id, &user.id).await?;
-    if claimed == 0 {
-        return Err(ApiError::Conflict(
-            "change request was already decided".to_string(),
-        ));
-    }
-
-    let request = PromotionRequest {
-        notes: cr.notes.clone(),
-        target_agents: None,
-        notify_only: false,
-    };
-    let promoted = match cr.kind {
-        ChangeKind::Promote => state.bundle_service.promote(cr.bundle_id, &request).await,
-        ChangeKind::Rollback => state.bundle_service.rollback(cr.bundle_id, &request).await,
-    }?;
+    let promoted = execute_promotion(&state, org_id, &cr, &user.id).await?;
 
     // Re-read so the audit record carries the executed status + approver.
     let executed = repo.get_scoped(org_id, cr_id).await?.unwrap_or(cr);

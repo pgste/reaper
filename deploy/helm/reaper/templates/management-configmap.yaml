@@ -13,6 +13,11 @@ data:
   REAPER_MANAGEMENT_BIND_ADDRESS: "0.0.0.0"
   REAPER_STORAGE_TYPE: {{ .Values.management.config.storageType | quote }}
   REAPER_STORAGE_PATH: {{ .Values.management.config.storagePath | quote }}
+  # Governed promotion (two-person control). Defaults to dual_control for the
+  # managed control plane; set management.config.promotionApproval=disabled for
+  # single-control, or allowSelfApproval=true for a lone automated principal.
+  REAPER_PROMOTION_APPROVAL: {{ .Values.management.config.promotionApproval | default "dual_control" | quote }}
+  REAPER_PROMOTION_ALLOW_SELF_APPROVAL: {{ .Values.management.config.allowSelfApproval | default false | quote }}
   {{- if .Values.management.decisionLogs.clickhouseUrl }}
   REAPER_CLICKHOUSE_URL: {{ .Values.management.decisionLogs.clickhouseUrl | quote }}
   REAPER_CLICKHOUSE_DATABASE: {{ .Values.management.decisionLogs.clickhouseDatabase | default "reaper_audit" | quote }}

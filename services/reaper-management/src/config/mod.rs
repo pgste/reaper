@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 // Re-export all configuration types
 pub use auth::{AuthConfig, GatewayMode};
-pub use bundles::BundlesConfig;
+pub use bundles::{BundlesConfig, PromotionApproval};
 pub use database::DatabaseConfig;
 pub use error::ConfigError;
 pub use events::EventsConfig;
@@ -119,6 +119,21 @@ impl Config {
             .and_then(|v| v.parse().ok())
         {
             config.rate_limit.login_per_minute = v;
+        }
+
+        // Promotion governance overrides. Off (single-control) by default;
+        // `dual_control` turns on two-person approval. An unrecognised value is
+        // ignored (keeps the safe default) rather than failing startup.
+        if let Ok(mode) = std::env::var("REAPER_PROMOTION_APPROVAL") {
+            if let Some(policy) = bundles::PromotionApproval::parse(&mode) {
+                config.bundles.promotion_approval = policy;
+            }
+        }
+        if let Ok(v) = std::env::var("REAPER_PROMOTION_ALLOW_SELF_APPROVAL") {
+            config.bundles.allow_self_approval = matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
         }
 
         // Bundle signing overrides

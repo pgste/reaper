@@ -78,6 +78,13 @@ services:
       - REAPER_JWT_SECRET=${JWT_SECRET:-development-jwt-secret-change-in-production}
       - REAPER_STORAGE_TYPE=filesystem
       - REAPER_STORAGE_PATH=/var/lib/reaper/storage
+      # Governed promotion. The managed control plane defaults to dual-control
+      # (two-person / four-eyes): a promote/rollback opens a change request a
+      # *different* principal must approve. Override to `disabled` for a single
+      # operator / automated pipeline, or set REAPER_PROMOTION_ALLOW_SELF_APPROVAL=true
+      # for a lone service account that both requests and executes.
+      - REAPER_PROMOTION_APPROVAL=${PROMOTION_APPROVAL:-dual_control}
+      - REAPER_PROMOTION_ALLOW_SELF_APPROVAL=${PROMOTION_ALLOW_SELF_APPROVAL:-}
       # Per-IP signup abuse limit. Unset → server default (5/hour). E2E/CI
       # raises it because every test signs up from the same runner IP.
       - REAPER_RATE_LIMIT_SIGNUP_PER_HOUR=${RATE_LIMIT_SIGNUP_PER_HOUR:-}

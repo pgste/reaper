@@ -11,7 +11,7 @@ use reaper_management::{
     api::build_api_router,
     auth::api_key::{ApiKeyRepository, CreateApiKey},
     auth::jwks::JwksConfigRepository,
-    config::{AuthConfig, Config},
+    config::{AuthConfig, Config, PromotionApproval},
     db::repositories::{AgentRepository, OrganizationRepository},
     db::Database,
     domain::organization::CreateOrganization,
@@ -32,8 +32,15 @@ struct TestEnv {
     db: Arc<Database>,
 }
 
-/// Test helper to set up a test environment
+/// Test helper to set up a test environment (single-control promotion, the
+/// default).
 async fn setup_test_env() -> TestEnv {
+    setup_env_with(|_| {}).await
+}
+
+/// Set up a test environment, letting the caller tweak the config (e.g. to turn
+/// on dual-control promotion).
+async fn setup_env_with(customize: impl FnOnce(&mut Config)) -> TestEnv {
     let temp_dir = TempDir::new().unwrap();
     let storage_path = temp_dir.path().join("storage");
     std::fs::create_dir_all(&storage_path).unwrap();
@@ -48,13 +55,14 @@ async fn setup_test_env() -> TestEnv {
         as Arc<dyn reaper_management::storage::BundleStorage>;
 
     // Create config with JWT secret for testing
-    let config = Config {
+    let mut config = Config {
         auth: AuthConfig {
             jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
             ..AuthConfig::default()
         },
         ..Config::default()
     };
+    customize(&mut config);
 
     let state = AppState::new(db.clone(), config, storage);
     let app = build_api_router().with_state(Arc::new(state));
@@ -404,8 +412,9 @@ async fn test_bundle_workflow() {
     let body = parse_body(response).await;
     assert_eq!(body["status"], "staged");
 
-    // Governed promotion: opening a promote request does NOT promote — it
-    // records a pending change request for a second principal to approve.
+    // Single-control (default): promoting goes live immediately for a caller
+    // holding bundle:promote. (Dual-control / two-person approval is covered by
+    // the dedicated governance tests below.)
     let promote = authed_request(
         "POST",
         &format!("/orgs/bundle-org/bundles/{}/promote", bundle_id),
@@ -413,43 +422,21 @@ async fn test_bundle_workflow() {
         &key,
     );
     let response = env.app.clone().oneshot(promote).await.unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = parse_body(response).await;
-    assert_eq!(body["kind"], "promote");
-    assert_eq!(body["status"], "pending");
-    let cr_id = body["id"].as_str().unwrap().to_string();
-
-    // The bundle is still only staged until the request is approved.
-    let get_promoted = authed_request("GET", "/orgs/bundle-org/bundles/promoted", None, &key);
-    let response = env.app.clone().oneshot(get_promoted).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(parse_body(response).await.is_null());
-
-    // The requester cannot approve their own request (two-person rule).
-    let self_approve = authed_request(
-        "POST",
-        &format!("/orgs/bundle-org/change-requests/{}/approve", cr_id),
-        None,
-        &key,
-    );
-    let response = env.app.clone().oneshot(self_approve).await.unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    // A second, distinct principal approves — now the bundle goes live.
-    let key2 = create_named_api_key(&env.db, org_id, "approver-key").await;
-    let approve = authed_request(
-        "POST",
-        &format!("/orgs/bundle-org/change-requests/{}/approve", cr_id),
-        None,
-        &key2,
-    );
-    let response = env.app.clone().oneshot(approve).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = parse_body(response).await;
     assert_eq!(body["status"], "promoted");
     assert_eq!(body["id"], bundle_id);
 
-    // Get promoted bundle now returns it.
+    // A change record is still written even under single-control.
+    let list = authed_request("GET", "/orgs/bundle-org/change-requests", None, &key);
+    let response = env.app.clone().oneshot(list).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let crs = parse_body(response).await;
+    assert_eq!(crs.as_array().unwrap().len(), 1);
+    assert_eq!(crs[0]["status"], "executed");
+    assert_eq!(crs[0]["kind"], "promote");
+
+    // Get promoted bundle returns it.
     let get_promoted = authed_request("GET", "/orgs/bundle-org/bundles/promoted", None, &key);
     let response = env.app.clone().oneshot(get_promoted).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -744,9 +731,8 @@ async fn test_bundle_invalid_transitions() {
     let response = env.app.clone().oneshot(stage).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    // Opening a promote request for a draft bundle is allowed (it only records
-    // intent); the invalid transition is enforced when a second principal
-    // approves and execution is attempted.
+    // Try to promote draft bundle - should fail (it isn't staged, so a promote
+    // change request can't even be opened).
     let promote = authed_request(
         "POST",
         &format!("/orgs/transition-org/bundles/{}/promote", bundle_id),
@@ -754,20 +740,6 @@ async fn test_bundle_invalid_transitions() {
         &key,
     );
     let response = env.app.clone().oneshot(promote).await.unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let cr_id = parse_body(response).await["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let key2 = create_named_api_key(&env.db, org_id, "approver-key").await;
-    let approve = authed_request(
-        "POST",
-        &format!("/orgs/transition-org/change-requests/{}/approve", cr_id),
-        None,
-        &key2,
-    );
-    let response = env.app.clone().oneshot(approve).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -2931,6 +2903,76 @@ async fn approve_ok(env: &TestEnv, slug: &str, approver: &str, cr_id: &str, expe
     assert_eq!(body["id"], expect_bundle);
 }
 
+/// A test env with two-person (dual-control) promotion turned on.
+async fn dual_control_env() -> TestEnv {
+    setup_env_with(|c| c.bundles.promotion_approval = PromotionApproval::DualControl).await
+}
+
+/// Under dual-control, a promote opens a pending change request; the requester
+/// cannot self-approve, but a distinct principal can, which executes it.
+#[tokio::test]
+async fn test_dual_control_requires_distinct_approver() {
+    let env = dual_control_env().await;
+    let (org_id, key) = org_with_key(&env, "Dual Org", "dual-org").await;
+    let bundle = staged_bundle(&env, "dual-org", &key, "dual-bundle").await;
+
+    // Promote only opens a pending request — nothing is live yet.
+    let promote = authed_request(
+        "POST",
+        &format!("/orgs/dual-org/bundles/{bundle}/promote"),
+        Some(json!({ "notes": "please review" })),
+        &key,
+    );
+    let resp = env.app.clone().oneshot(promote).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = parse_body(resp).await;
+    assert_eq!(body["status"], "pending");
+    let cr = body["id"].as_str().unwrap().to_string();
+
+    let getp = authed_request("GET", "/orgs/dual-org/bundles/promoted", None, &key);
+    let resp = env.app.clone().oneshot(getp).await.unwrap();
+    assert!(parse_body(resp).await.is_null());
+
+    // The requester cannot approve their own request.
+    let self_approve = authed_request(
+        "POST",
+        &format!("/orgs/dual-org/change-requests/{cr}/approve"),
+        None,
+        &key,
+    );
+    let resp = env.app.clone().oneshot(self_approve).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // A distinct principal approves — now it's live.
+    let approver = create_named_api_key(&env.db, org_id, "approver-key").await;
+    approve_ok(&env, "dual-org", &approver, &cr, &bundle).await;
+}
+
+/// With `allow_self_approval`, a single principal (e.g. an automated pipeline's
+/// service account) may both open and approve — dual-control still records the
+/// change, but the four-eyes constraint is intentionally relaxed.
+#[tokio::test]
+async fn test_dual_control_allow_self_approval() {
+    let env = setup_env_with(|c| {
+        c.bundles.promotion_approval = PromotionApproval::DualControl;
+        c.bundles.allow_self_approval = true;
+    })
+    .await;
+    let (_org, key) = org_with_key(&env, "SelfOK Org", "selfok-org").await;
+    let bundle = staged_bundle(&env, "selfok-org", &key, "selfok-bundle").await;
+
+    let cr = open_change_request(
+        &env,
+        "selfok-org",
+        &key,
+        &format!("bundles/{bundle}/promote"),
+    )
+    .await;
+
+    // Same principal approves its own request — allowed here.
+    approve_ok(&env, "selfok-org", &key, &cr, &bundle).await;
+}
+
 /// Opening a promotion change request requires authentication.
 #[tokio::test]
 async fn test_promote_change_request_requires_auth() {
@@ -2951,7 +2993,7 @@ async fn test_promote_change_request_requires_auth() {
 /// another org (tenant isolation: 404, not another org's decision).
 #[tokio::test]
 async fn test_change_request_cross_org_isolation() {
-    let env = setup_test_env().await;
+    let env = dual_control_env().await;
     let (_a, a_key) = org_with_key(&env, "CR Org A", "cr-org-a").await;
     let (_b, b_key) = org_with_key(&env, "CR Org B", "cr-org-b").await;
 
@@ -3001,7 +3043,7 @@ async fn test_change_request_cross_org_isolation() {
 /// and executed only by a distinct approver.
 #[tokio::test]
 async fn test_rollback_change_request_flow() {
-    let env = setup_test_env().await;
+    let env = dual_control_env().await;
     let (org_id, key) = org_with_key(&env, "Rollback Org", "rollback-org").await;
     let approver = create_named_api_key(&env.db, org_id, "approver-key").await;
 
