@@ -123,9 +123,7 @@ impl<'a> SsoConfigStore<'a> {
         protocol: SsoProtocol,
     ) -> Result<Option<SsoConfig>, UserError> {
         let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
-        let sql = format!(
-            "SELECT {COLS} FROM sso_configs WHERE org_id = $1 AND protocol = $2"
-        );
+        let sql = format!("SELECT {COLS} FROM sso_configs WHERE org_id = $1 AND protocol = $2");
         let row: Option<Row> = sqlx::query_as(&sql)
             .bind(org_id.to_string())
             .bind(protocol.as_str())

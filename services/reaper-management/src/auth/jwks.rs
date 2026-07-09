@@ -44,6 +44,13 @@ fn is_disallowed_ip(ip: &IpAddr) -> bool {
 /// Note: this resolves the host and checks the addresses; a determined attacker
 /// could still attempt DNS rebinding between this check and the actual fetch.
 /// That residual risk is much smaller than the unrestricted fetch it replaces.
+/// SSRF guard for an outbound URL that must be a public https endpoint — the
+/// same check the JWKS fetch uses, exposed for the OIDC discovery/token
+/// endpoints so they can't be pointed at internal services or cloud metadata.
+pub(crate) async fn guard_public_https_url(url: &str) -> Result<(), JwksError> {
+    validate_jwks_url(url).await
+}
+
 async fn validate_jwks_url(url: &str) -> Result<(), JwksError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|_| JwksError::UrlNotAllowed("malformed URL".to_string()))?;

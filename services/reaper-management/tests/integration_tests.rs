@@ -3153,3 +3153,84 @@ async fn test_approve_scope_separated_from_promote() {
     // The dedicated approver (bundle:approve only) approves — and it executes.
     approve_ok(&env, "sod-org", &approver, &cr, &bundle).await;
 }
+
+// =============================================================================
+// Enterprise SSO — broker session (Plan 03, Phase 1)
+// =============================================================================
+
+/// A session minted by the SSO broker is a normal `rst_` session that
+/// `RequireAuth` accepts, the IdP group maps to the org role, and a repeat
+/// login for the same IdP subject reuses the same user (no duplicate).
+#[tokio::test]
+async fn test_sso_broker_session_is_accepted_and_stable() {
+    use reaper_management::auth::sso::broker::{establish_session, ExternalIdentity, LoginContext};
+    use reaper_management::auth::sso::{SsoConfig, SsoProtocol};
+
+    let env = setup_test_env().await;
+    let (org_id, _owner) = org_with_key(&env, "SSO Org", "sso-org").await;
+
+    let now = chrono::Utc::now();
+    let config = SsoConfig {
+        id: Uuid::new_v4(),
+        org_id,
+        protocol: SsoProtocol::Oidc,
+        enabled: true,
+        issuer: "https://idp.example.com".into(),
+        client_id: "reaper".into(),
+        client_secret_encrypted: None,
+        discovery_url: None,
+        jwks_url: None,
+        attr_map_json: Some(r#"{"group_map":{"reaper-admins":"owner"}}"#.into()),
+        allowed_domains_json: None,
+        default_role: "viewer".into(),
+        created_at: now,
+        updated_at: now,
+    };
+    let identity = ExternalIdentity {
+        issuer: "https://idp.example.com".into(),
+        subject: "idp-subject-123".into(),
+        email: "alice@example.com".into(),
+        email_verified: true,
+        groups: vec!["reaper-admins".into()],
+        display_name: Some("Alice".into()),
+    };
+
+    let est = establish_session(
+        &env.db,
+        org_id,
+        &identity,
+        &config,
+        &LoginContext::default(),
+    )
+    .await
+    .expect("broker should mint a session");
+    assert!(est.token.starts_with("rst_"));
+
+    // The minted token authenticates against a RequireAuth + scope-gated route.
+    // The "reaper-admins" group mapped to Owner, which carries bundle:read.
+    let req = authed_request_bearer("GET", "/orgs/sso-org/bundles", &est.token);
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // A second login for the same (issuer, subject) reuses the same user row.
+    let est2 = establish_session(
+        &env.db,
+        org_id,
+        &identity,
+        &config,
+        &LoginContext::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(est.user_id, est2.user_id);
+}
+
+/// Build a Bearer-authenticated request (session token, not an API key).
+fn authed_request_bearer(method: &str, uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method(method)
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}

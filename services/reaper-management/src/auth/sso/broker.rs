@@ -108,12 +108,8 @@ pub async fn establish_session(
     } else {
         ctx.session_ttl_hours
     };
-    let (session, token) = Session::new(
-        user.id,
-        ctx.ip_address.clone(),
-        ctx.user_agent.clone(),
-        ttl,
-    );
+    let (session, token) =
+        Session::new(user.id, ctx.ip_address.clone(), ctx.user_agent.clone(), ttl);
     SessionRepository::new(db).create(&session).await?;
 
     // Audit the login — best-effort: a logging hiccup must not deny access the
@@ -198,9 +194,9 @@ fn chrono_now() -> chrono::DateTime<chrono::Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::sso::{SsoConfig, SsoProtocol};
-    use crate::auth::scopes::{Permission, Scope};
     use crate::auth::middleware::role_to_scopes;
+    use crate::auth::scopes::{Permission, Scope};
+    use crate::auth::sso::{SsoConfig, SsoProtocol};
 
     fn config_with_map(default_role: &str, map_json: &str) -> SsoConfig {
         SsoConfig {
@@ -251,7 +247,12 @@ mod tests {
         let role = map_groups_to_role(&cfg, &["admin".into()]);
         assert_eq!(role, OrgRole::Owner);
 
-        for role in [OrgRole::Owner, OrgRole::Admin, OrgRole::Developer, OrgRole::Viewer] {
+        for role in [
+            OrgRole::Owner,
+            OrgRole::Admin,
+            OrgRole::Developer,
+            OrgRole::Viewer,
+        ] {
             let perm = Permission::from_strings(&role_to_scopes(role));
             assert!(
                 !perm.has(Scope::Admin),

@@ -111,7 +111,7 @@ fn derive_key(master_secret: &str) -> ApiResult<[u8; 32]> {
 /// Output is base64(nonce ‖ ciphertext‖tag). A fresh random 24-byte nonce is
 /// used per call, so encrypting the same token twice yields different output and
 /// there is no reusable keystream (unlike the previous XOR obfuscation).
-pub(super) fn encrypt_token(token: &str, master_secret: &str) -> ApiResult<String> {
+pub(crate) fn encrypt_token(token: &str, master_secret: &str) -> ApiResult<String> {
     let key = derive_key(master_secret)?;
     let cipher = XChaCha20Poly1305::new((&key).into());
 
@@ -137,7 +137,7 @@ pub(super) fn encrypt_token(token: &str, master_secret: &str) -> ApiResult<Strin
 ///
 /// Fails (rather than silently returning an empty string) on any tampering,
 /// wrong key, or legacy-format value — callers surface this as "reconnect".
-pub(super) fn decrypt_token(encrypted: &str, master_secret: &str) -> ApiResult<String> {
+pub(crate) fn decrypt_token(encrypted: &str, master_secret: &str) -> ApiResult<String> {
     let key = derive_key(master_secret)?;
     let cipher = XChaCha20Poly1305::new((&key).into());
 
