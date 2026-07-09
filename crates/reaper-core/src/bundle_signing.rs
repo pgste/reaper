@@ -507,7 +507,7 @@ pub fn verify_bundle_at(
 
 // -- small hex + constant-time helpers (no extra deps) ------------------------
 
-fn to_hex(bytes: &[u8]) -> String {
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push(char::from_digit((b >> 4) as u32, 16).unwrap());

@@ -23,8 +23,8 @@ mod settings;
 pub use error::ConfigError;
 pub use settings::{
     is_loopback_bind, AgentAuthMode, AgentAuthSettings, AgentSettings, CacheSettings, DataSettings,
-    ManagementSettings, ObservabilitySettings, PerformanceSettings, PolicySettings, TlsSettings,
-    UdsSettings,
+    ManagementSettings, ObservabilitySettings, PerformanceSettings, PolicySettings,
+    RevocationStaleness, TlsSettings, UdsSettings,
 };
 
 use serde::{Deserialize, Serialize};
@@ -240,6 +240,15 @@ impl ReaperAgentConfig {
         if let Ok(val) = std::env::var("REAPER_MANAGEMENT_REQUIRE_ENVELOPE_V2") {
             self.management.require_envelope_v2 =
                 matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_MANAGEMENT_REVOCATION_STALENESS") {
+            match val.to_lowercase().as_str() {
+                "enforce" => self.management.revocation_staleness = RevocationStaleness::Enforce,
+                "monitor" => self.management.revocation_staleness = RevocationStaleness::Monitor,
+                other => tracing::warn!(
+                    "Ignoring invalid REAPER_MANAGEMENT_REVOCATION_STALENESS '{other}' (expected monitor | enforce)"
+                ),
+            }
         }
 
         // UDS settings

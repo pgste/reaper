@@ -52,6 +52,8 @@ pub struct BundleVerifier {
     managed: bool,
     /// Persisted per-lineage anti-rollback floor (Plan 02 Phase B).
     anti_rollback: AntiRollbackStore,
+    /// Signed revocation list cache, checked at load (Plan 02 Phase B step 4).
+    revocation: super::revocation::RevocationStore,
 }
 
 impl BundleVerifier {
@@ -108,6 +110,22 @@ impl BundleVerifier {
             key_id_pin: config.bundle_key_id.clone(),
             managed: config.enabled,
             anti_rollback,
+            revocation: super::revocation::RevocationStore::new(config.revocation_staleness),
+        }
+    }
+
+    /// Apply a freshly-fetched signed revocation list (called by the sync
+    /// loop). No-op when no verification key is pinned — an unverifiable list
+    /// can't be trusted anyway.
+    pub fn apply_revocations(
+        &self,
+        signed: &reaper_core::revocation::SignedRevocationList,
+    ) -> Result<(), String> {
+        match &self.key {
+            Some(key) => self
+                .revocation
+                .apply(signed, key, self.key_id_pin.as_deref()),
+            None => Ok(()),
         }
     }
 
@@ -156,6 +174,13 @@ impl BundleVerifier {
                     self.require_v2,
                 )
                 .map_err(|e| e.to_string())?;
+                // Revocation: refuse a bundle whose bytes-digest or signing
+                // key id is on the (signed, cached) revocation list. `force`
+                // does NOT override revocation — a revoked bundle stays
+                // revoked. Checked before anti-rollback so a revoked bundle is
+                // reported as such, not as a downgrade.
+                self.revocation
+                    .check(&sig.sha256, &sig.key_id, bundle_signing::unix_now())?;
                 // Anti-rollback: reject a genuinely-signed but superseded
                 // version, and raise the persisted floor on success.
                 self.anti_rollback
@@ -226,6 +251,9 @@ mod tests {
             key_id_pin: pin.map(str::to_string),
             managed,
             anti_rollback: AntiRollbackStore::in_memory(),
+            revocation: crate::management::revocation::RevocationStore::new(
+                reaper_core::config::RevocationStaleness::Monitor,
+            ),
         }
     }
 

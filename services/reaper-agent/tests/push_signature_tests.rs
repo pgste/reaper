@@ -390,3 +390,78 @@ async fn force_overrides_anti_rollback_but_not_signature() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
 }
+
+#[tokio::test]
+async fn revoked_bundle_hash_and_key_are_rejected_at_load() {
+    use reaper_agent::management::verify::BundleVerifier;
+    use reaper_core::revocation::{bundle_hash_hex, RevocationList, SignedRevocationList};
+
+    let key = signing_key();
+
+    // Case 1: revoke by bundle hash.
+    {
+        let verifier = Arc::new(BundleVerifier::from_config(&managed_settings(&key)));
+        let bytes = bundle_bytes();
+        let signed_list = SignedRevocationList::sign(
+            RevocationList {
+                issued_at: "2026-01-01T00:00:00Z".into(),
+                serial: 1,
+                next_update: 0,
+                revoked_bundle_hashes: vec![bundle_hash_hex(&bytes)],
+                revoked_key_ids: vec![],
+            },
+            &key,
+            "k1",
+        );
+        verifier.apply_revocations(&signed_list).unwrap();
+
+        let (app, state) = make_app_with(verifier);
+        let sig = v2_signature(&key, &bytes);
+        let status = post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "1", "signature": sig}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "revoked hash rejected"
+        );
+        assert_eq!(state.policy_engine.get_stats().total_policies, 0);
+    }
+
+    // Case 2: revoke by signing key id — a correctly-signed, current bundle by
+    // the distrusted key is refused; force does not override revocation.
+    {
+        let verifier = Arc::new(BundleVerifier::from_config(&managed_settings(&key)));
+        let bytes = bundle_bytes();
+        let signed_list = SignedRevocationList::sign(
+            RevocationList {
+                issued_at: "2026-01-01T00:00:00Z".into(),
+                serial: 1,
+                next_update: 0,
+                revoked_bundle_hashes: vec![],
+                revoked_key_ids: vec!["k1".into()],
+            },
+            &key,
+            "k1",
+        );
+        verifier.apply_revocations(&signed_list).unwrap();
+
+        let (app, state) = make_app_with(verifier);
+        let sig = v2_signature_versioned(&key, &bytes, 9);
+        let status = post_json(
+            &app,
+            "/api/v1/bundles/deploy",
+            serde_json::json!({"bundle": bytes, "version": "9", "force": true, "signature": sig}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "revoked key rejected even with force"
+        );
+        assert_eq!(state.policy_engine.get_stats().total_policies, 0);
+    }
+}

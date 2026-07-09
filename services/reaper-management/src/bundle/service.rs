@@ -120,6 +120,22 @@ impl BundleService {
         self
     }
 
+    /// Whether bundle signing is configured.
+    pub fn is_signing_enabled(&self) -> bool {
+        self.signer.is_some()
+    }
+
+    /// Sign a revocation list with the control plane's bundle signing key.
+    /// Returns `None` when signing is disabled (no key configured).
+    pub fn sign_revocation_list(
+        &self,
+        list: reaper_core::revocation::RevocationList,
+    ) -> Option<reaper_core::revocation::SignedRevocationList> {
+        self.signer.as_ref().map(|signer| {
+            reaper_core::revocation::SignedRevocationList::sign(list, &signer.key, &signer.key_id)
+        })
+    }
+
     /// Create a new bundle
     pub async fn create(&self, org_id: Uuid, input: &CreateBundle) -> Result<Bundle, BundleError> {
         let repo = BundleRepository::new(&self.db);

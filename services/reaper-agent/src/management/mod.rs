@@ -11,6 +11,7 @@
 
 pub mod anti_rollback;
 mod client;
+pub mod revocation;
 mod sse;
 mod sync;
 mod types;

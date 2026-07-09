@@ -17,6 +17,7 @@ pub mod namespaces;
 pub mod oauth;
 pub mod orgs;
 pub mod policies;
+pub mod revocations;
 pub mod sources;
 pub mod teams;
 pub mod users;
@@ -49,6 +50,7 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
         .merge(datastore::routes())
         .merge(landscape::routes())
         .merge(billing::routes())
+        .merge(revocations::routes())
 }
 
 /// Build the v1 API routes (kept for backwards compat)
