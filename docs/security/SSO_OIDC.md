@@ -117,4 +117,54 @@ builds the exact redirect URI regardless of internal `Host` headers.
   set `groups_claim` accordingly. For large directories enable group claims or use
   app roles to avoid the overage indirection.
 - **Google Workspace:** no groups in the ID token by default — map by
-  `allowed_domains` + `default_role`, or supply groups via a later SCIM phase.
+  `allowed_domains` + `default_role`, or provision via SCIM (below).
+
+---
+
+# SCIM 2.0 Provisioning
+
+SCIM lets your IdP's **directory sync** create and — critically —
+**deprovision** Reaper users automatically. When a user is removed or
+deactivated in the IdP, Reaper drops their org membership **and revokes all their
+live sessions within the same request**, so a terminated employee loses access
+without an admin touching Reaper.
+
+## 1. Mint a SCIM token
+
+An org admin creates a per-org bearer token (`org:admin`):
+
+```bash
+curl -X POST https://<reaper-host>/orgs/<org>/scim/tokens \
+  -H "Authorization: Bearer <admin>" -H "Content-Type: application/json" \
+  -d '{"name":"okta-directory-sync"}'
+# → { "id": "...", "token": "scim_…" }   ← shown once; store it now
+```
+
+The token is stored only as a SHA-256 hash. `GET`/`DELETE
+/orgs/<org>/scim/tokens[/{id}]` list and revoke them. The org a token belongs to
+is the **only** tenant it can act on.
+
+## 2. Point your IdP at the SCIM base URL
+
+- **Base URL:** `https://<reaper-host>/scim/v2`
+- **Auth:** HTTP Header, `Authorization: Bearer scim_…`
+
+Supported: `Users` (`POST`, `GET` with `filter=userName eq "…"`, `GET/{id}`,
+`PUT`, `PATCH`, `DELETE`) and read-only `Groups` (the org's four roles, for
+discovery). Responses use the standard SCIM `ListResponse` / `Error` envelopes.
+
+## Lifecycle
+
+- **Create** (`POST /Users`) provisions the user (or adopts an existing
+  verified-email account) and adds them to the org at the default role.
+- **Deprovision** (`DELETE /Users/{id}` or `PATCH active=false`) removes the org
+  membership, **revokes every session** for that user, and suspends the account
+  if it has no remaining orgs.
+- Users are tenant-scoped: a token only ever sees/acts on members of its own org.
+
+Every SCIM operation writes an audit record (`scim.user_provision`,
+`scim.user_deprovision`, `scim.token_create`, …).
+
+> Role assignment via SCIM **Group** membership push (directory-driven roles) is
+> a later phase; today roles come from the OIDC group→role mapping at login or the
+> Reaper API. SCIM Group endpoints are read-only for discovery.

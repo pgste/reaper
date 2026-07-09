@@ -65,7 +65,7 @@ Trust, integrity, and change control for the control plane.
 
 - **[Bundle Signing](./security/BUNDLE_SIGNING.md)** - Sign bundles so agents only load control-plane-produced policy
 - **[Governed Promotion](./security/GOVERNED_PROMOTION.md)** - Two-person control, `bundle:approve` separation of duties, SSO/CAB approval
-- **[Enterprise SSO (OIDC)](./security/SSO_OIDC.md)** - OIDC login with PKCE, IdP group→role mapping, corporate-identity audit
+- **[Enterprise SSO (OIDC) + SCIM](./security/SSO_OIDC.md)** - OIDC login with PKCE, IdP group→role mapping, and SCIM provisioning / deprovision-revokes-sessions
 
 ### 🔧 [Advanced](./advanced/custom-evaluators.md)
 Advanced topics for power users.

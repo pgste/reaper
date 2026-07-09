@@ -25,8 +25,7 @@ type Row = (
     i32,            // revoked
 );
 
-const COLS: &str =
-    "id, org_id, name, token_hash, created_by, created_at, last_used_at, revoked";
+const COLS: &str = "id, org_id, name, token_hash, created_by, created_at, last_used_at, revoked";
 
 pub struct ScimTokenStore<'a> {
     db: &'a Database,
@@ -38,8 +37,9 @@ impl<'a> ScimTokenStore<'a> {
     }
 
     fn row_to_token(r: Row) -> Result<ScimToken, UserError> {
-        let parse_uuid =
-            |s: &str| -> Result<Uuid, UserError> { Uuid::parse_str(s).map_err(|_| UserError::NotFound) };
+        let parse_uuid = |s: &str| -> Result<Uuid, UserError> {
+            Uuid::parse_str(s).map_err(|_| UserError::NotFound)
+        };
         let parse_ts = |s: &str| -> Result<DateTime<Utc>, UserError> {
             DateTime::parse_from_rfc3339(s)
                 .map(|d| d.with_timezone(&Utc))
@@ -137,9 +137,8 @@ impl<'a> ScimTokenStore<'a> {
     /// List an org's tokens (metadata only; hashes never leave the store).
     pub async fn list(&self, org_id: Uuid) -> Result<Vec<ScimToken>, UserError> {
         let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
-        let sql = format!(
-            "SELECT {COLS} FROM scim_tokens WHERE org_id = $1 ORDER BY created_at DESC"
-        );
+        let sql =
+            format!("SELECT {COLS} FROM scim_tokens WHERE org_id = $1 ORDER BY created_at DESC");
         let rows: Vec<Row> = sqlx::query_as(&sql)
             .bind(org_id.to_string())
             .fetch_all(pool)
