@@ -29,7 +29,7 @@
 //! File/stdout serialization + I/O stay on the dedicated writer thread, fed an
 //! `Arc` (no deep clone) — never the request path.
 
-use crate::decision_log::{DecisionLogConfig, DecisionLogEntry};
+use crate::decision_log::{Checkpoint, DecisionLogConfig, DecisionLogEntry};
 use crate::decision_privacy::DataProtection;
 use crossbeam_utils::CachePadded;
 use parking_lot::RwLock;
@@ -39,8 +39,9 @@ use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Global seed source so each thread's sampling PRNG starts distinct without an
 /// RNG syscall or a time source on the hot path.
@@ -122,6 +123,112 @@ impl HashChain {
         let hash = record.compute_entry_hash(&self.last_hash);
         record.entry_hash = hash.clone();
         self.last_hash = hash;
+    }
+}
+
+/// Emits signed checkpoints over contiguous runs of the durable stream (Plan 04,
+/// step 3). Lives only on the writer thread (single-threaded, no sync). A window
+/// opens on the first record after the previous checkpoint and closes when the
+/// count threshold trips, the time threshold fires, or the writer shuts down.
+struct Checkpointer {
+    /// Per-boot chain identity, stamped into every checkpoint from this writer.
+    chain_id: String,
+    /// Signing key + key id. `None` ⇒ unsigned checkpoints (warned at startup).
+    signing: Option<(reaper_core::bundle_signing::SigningKey, String)>,
+    /// Close the window after this many records (0 = no count trigger).
+    every: usize,
+    /// Close the window at least this often when records are pending.
+    interval: Option<Duration>,
+    /// Monotonic base captured at writer start; checkpoint bounds are ns offsets
+    /// from it, so they only ever increase (wall-clock rollback is detectable).
+    base: Instant,
+    /// Chain head as of the last emitted checkpoint (the next window's start
+    /// hash). Empty before the first checkpoint. Threads the chain across
+    /// checkpoints so a verifier can prove no gap hides between two of them.
+    prev_checkpoint_hash: String,
+    // --- open-window state (None until the first record after a checkpoint) ---
+    seq_start: Option<u64>,
+    seq_end: u64,
+    count: u64,
+    monotonic_start_ns: u64,
+    last_hash: String,
+}
+
+impl Checkpointer {
+    fn new(
+        signing: Option<(reaper_core::bundle_signing::SigningKey, String)>,
+        every: usize,
+        interval_secs: u64,
+    ) -> Self {
+        Self {
+            chain_id: uuid::Uuid::new_v4().to_string(),
+            signing,
+            every,
+            interval: (interval_secs > 0).then(|| Duration::from_secs(interval_secs)),
+            base: Instant::now(),
+            prev_checkpoint_hash: String::new(),
+            seq_start: None,
+            seq_end: 0,
+            count: 0,
+            monotonic_start_ns: 0,
+            last_hash: String::new(),
+        }
+    }
+
+    /// Fold a just-stamped durable record into the open window; emit if the
+    /// count threshold trips.
+    fn on_entry(&mut self, seq: u64, entry_hash: &str, sinks: &mut WriterSinks) {
+        if self.seq_start.is_none() {
+            self.seq_start = Some(seq);
+            self.monotonic_start_ns = self.base.elapsed().as_nanos() as u64;
+        }
+        self.seq_end = seq;
+        self.count += 1;
+        self.last_hash = entry_hash.to_string();
+        if self.every > 0 && self.count >= self.every as u64 {
+            self.emit(sinks);
+        }
+    }
+
+    /// Time/shutdown trigger: emit a checkpoint if records are pending.
+    fn flush_window(&mut self, sinks: &mut WriterSinks) {
+        if self.count > 0 {
+            self.emit(sinks);
+        }
+    }
+
+    /// Build, sign, write, and reset the current window.
+    fn emit(&mut self, sinks: &mut WriterSinks) {
+        let Some(seq_start) = self.seq_start else {
+            return;
+        };
+        let monotonic_end_ns = self.base.elapsed().as_nanos() as u64;
+        let mut checkpoint = Checkpoint::new(
+            self.chain_id.clone(),
+            seq_start,
+            self.seq_end,
+            self.count,
+            self.prev_checkpoint_hash.clone(),
+            self.last_hash.clone(),
+            self.monotonic_start_ns,
+            monotonic_end_ns,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        if let Some((ref key, ref key_id)) = self.signing {
+            checkpoint.sign(key, key_id);
+        }
+        if let Ok(json) = serde_json::to_string(&checkpoint) {
+            if let Some(w) = sinks.file.as_mut() {
+                let _ = writeln!(w, "{}", json);
+            }
+            if let Some(w) = sinks.stdout.as_mut() {
+                let _ = writeln!(w, "{}", json);
+            }
+        }
+        // The chain head of this window becomes the next window's start hash.
+        self.prev_checkpoint_hash = self.last_hash.clone();
+        self.seq_start = None;
+        self.count = 0;
     }
 }
 
@@ -234,6 +341,12 @@ impl DecisionBuffer {
             };
             let mut sinks = WriterSinks { file, stdout };
 
+            // Signed-checkpoint emitter (Plan 04 step 3). Built here — with the
+            // durable sink — so the signing key is validated (fail closed) before
+            // the writer starts; moved into the writer thread which owns it.
+            let mut checkpointer = build_checkpointer(&config)?;
+            let tick = checkpointer.as_ref().and_then(|c| c.interval);
+
             let (tx, rx) = sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
 
             // Dedicated writer thread: it owns the sinks and does all
@@ -242,23 +355,53 @@ impl DecisionBuffer {
             std::thread::Builder::new()
                 .name("decision-log-writer".to_string())
                 .spawn(move || {
-                    // Chain state lives only here — the writer is single-threaded,
-                    // so no synchronization is needed.
+                    // Chain + checkpoint state live only here — the writer is
+                    // single-threaded, so no synchronization is needed.
                     let mut chain = HashChain::new();
-                    while let Ok(msg) = rx.recv() {
-                        Self::handle_writer_msg(&mut sinks, &mut chain, msg);
+                    loop {
+                        // With a time-based checkpoint interval, block only up to
+                        // the interval so a low-traffic tail still gets attested;
+                        // otherwise block indefinitely for the next message.
+                        let msg = match tick {
+                            Some(dt) => match rx.recv_timeout(dt) {
+                                Ok(m) => m,
+                                Err(RecvTimeoutError::Timeout) => {
+                                    if let Some(cp) = checkpointer.as_mut() {
+                                        cp.flush_window(&mut sinks);
+                                    }
+                                    sinks.flush_all();
+                                    continue;
+                                }
+                                Err(RecvTimeoutError::Disconnected) => break,
+                            },
+                            None => match rx.recv() {
+                                Ok(m) => m,
+                                Err(_) => break,
+                            },
+                        };
+                        Self::handle_writer_msg(&mut sinks, &mut chain, &mut checkpointer, msg);
                         // Drain anything already queued, then flush once.
                         while let Ok(msg) = rx.try_recv() {
-                            Self::handle_writer_msg(&mut sinks, &mut chain, msg);
+                            Self::handle_writer_msg(&mut sinks, &mut chain, &mut checkpointer, msg);
                         }
                         sinks.flush_all();
                     }
-                    // Channel closed (buffer dropped): final flush.
+                    // Channel closed (buffer dropped): attest the pending tail,
+                    // then final flush.
+                    if let Some(cp) = checkpointer.as_mut() {
+                        cp.flush_window(&mut sinks);
+                    }
                     sinks.flush_all();
                 })?;
 
             Some(tx)
         } else {
+            if config.checkpoint_every > 0 || config.checkpoint_interval_secs > 0 {
+                tracing::warn!(
+                    "decision-log checkpoints are configured but no durable sink \
+                     (REAPER_DECISION_LOG_FILE / _STDOUT) is set — no checkpoints will be emitted"
+                );
+            }
             None
         };
 
@@ -336,7 +479,12 @@ impl DecisionBuffer {
     /// the previous one in write order. The shared in-ring `Arc` is left
     /// hash-free (the chain describes the durable audit artifact, not the query
     /// ring), so we chain over a cheap writer-thread clone — off the hot path.
-    fn handle_writer_msg(sinks: &mut WriterSinks, chain: &mut HashChain, msg: WriterMsg) {
+    fn handle_writer_msg(
+        sinks: &mut WriterSinks,
+        chain: &mut HashChain,
+        checkpointer: &mut Option<Checkpointer>,
+        msg: WriterMsg,
+    ) {
         match msg {
             WriterMsg::Entry(entry) => {
                 let mut record = (*entry).clone();
@@ -348,6 +496,11 @@ impl DecisionBuffer {
                     if let Some(w) = sinks.stdout.as_mut() {
                         let _ = writeln!(w, "{}", json);
                     }
+                }
+                // Fold the just-stamped durable record into the checkpoint
+                // window (may emit a signed checkpoint over the same sinks).
+                if let Some(cp) = checkpointer.as_mut() {
+                    cp.on_entry(record.seq, &record.entry_hash, sinks);
                 }
             }
             WriterMsg::Flush => sinks.flush_all(),
@@ -546,6 +699,54 @@ impl DecisionBuffer {
     pub fn config(&self) -> &DecisionLogConfig {
         &self.config
     }
+}
+
+/// Build the checkpoint emitter from config (Plan 04 step 3), or `None` when no
+/// checkpoint trigger is configured. Fails closed if a signing key is present
+/// but invalid — the agent must not start emitting checkpoints under a bad key.
+/// With triggers set but no key, warns and returns an unsigned emitter.
+fn build_checkpointer(config: &DecisionLogConfig) -> std::io::Result<Option<Checkpointer>> {
+    use reaper_core::bundle_signing::{SigAlgorithm, SigningKey};
+
+    if config.checkpoint_every == 0 && config.checkpoint_interval_secs == 0 {
+        return Ok(None);
+    }
+
+    let signing = match config.checkpoint_signing_key.as_deref() {
+        Some(hex) if !hex.trim().is_empty() => {
+            let alg = SigAlgorithm::parse(&config.checkpoint_algorithm).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("checkpoint signing algorithm: {e}"),
+                )
+            })?;
+            let key = SigningKey::from_hex(alg, hex).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("checkpoint signing key: {e}"),
+                )
+            })?;
+            let key_id = config
+                .checkpoint_key_id
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            Some((key, key_id))
+        }
+        _ => {
+            tracing::warn!(
+                "decision-log checkpoints enabled without \
+                 REAPER_DECISION_LOG_CHECKPOINT_SIGNING_KEY — emitting UNSIGNED checkpoints \
+                 (completeness provable from count/last_entry_hash, authenticity is not)"
+            );
+            None
+        }
+    };
+
+    Ok(Some(Checkpointer::new(
+        signing,
+        config.checkpoint_every,
+        config.checkpoint_interval_secs,
+    )))
 }
 
 /// Resolve the configured shard count, applying the auto-detect default and
@@ -1067,5 +1268,97 @@ mod tests {
         let found = buffer.find_by_decision_id("wanted-id").expect("found");
         assert_eq!(found.decision, "deny");
         assert!(buffer.find_by_decision_id("missing").is_none());
+    }
+
+    #[test]
+    fn test_writer_emits_signed_checkpoints_that_verify() {
+        use crate::decision_log::{verify_checkpoint, Checkpoint, DecisionLogEntry};
+        use reaper_core::bundle_signing::{SigAlgorithm, SigningKey, VerifyingKey};
+
+        let signing = SigningKey::from_hex(SigAlgorithm::Ed25519Sha256, &"07".repeat(32)).unwrap();
+        let vk = VerifyingKey::from_hex(signing.algorithm(), &signing.public_key_hex()).unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "reaper_declog_ckpt_test_{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let config = DecisionLogConfig {
+            enabled: true,
+            buffer_capacity: 100,
+            file_path: Some(path.to_string_lossy().to_string()),
+            // A checkpoint every 5 durable records, signed.
+            checkpoint_every: 5,
+            checkpoint_signing_key: Some("07".repeat(32)),
+            checkpoint_key_id: Some("k1".to_string()),
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        for _ in 0..10 {
+            buffer.log(test_entry("allow"));
+        }
+        buffer.flush().unwrap();
+
+        // Poll until both checkpoint lines land (async writer thread).
+        let mut decisions: Vec<DecisionLogEntry> = Vec::new();
+        let mut checkpoints: Vec<Checkpoint> = Vec::new();
+        for _ in 0..200 {
+            decisions.clear();
+            checkpoints.clear();
+            let contents = std::fs::read_to_string(&path).unwrap_or_default();
+            for line in contents.lines() {
+                let v: serde_json::Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if v.get("record_type").and_then(|r| r.as_str()) == Some("checkpoint") {
+                    checkpoints.push(serde_json::from_value(v).unwrap());
+                } else {
+                    decisions.push(serde_json::from_value(v).unwrap());
+                }
+            }
+            if checkpoints.len() >= 2 && decisions.len() >= 10 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(checkpoints.len(), 2, "a checkpoint every 5 of 10 records");
+        assert_eq!(decisions.len(), 10);
+
+        // Both checkpoints share one chain id (single writer boot).
+        assert_eq!(checkpoints[0].chain_id, checkpoints[1].chain_id);
+        // Contiguous coverage: [0,4] then [5,9].
+        assert_eq!((checkpoints[0].seq_start, checkpoints[0].seq_end), (0, 4));
+        assert_eq!((checkpoints[1].seq_start, checkpoints[1].seq_end), (5, 9));
+
+        // Each checkpoint's signature verifies (key id pinned), and it proves the
+        // covered records hash-chain to its head.
+        for cp in &checkpoints {
+            cp.verify_signature(&vk, Some("k1")).unwrap();
+            let covered: Vec<DecisionLogEntry> = decisions
+                .iter()
+                .filter(|e| e.seq >= cp.seq_start && e.seq <= cp.seq_end)
+                .cloned()
+                .collect();
+            verify_checkpoint(cp, &covered, &vk, Some("k1")).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_invalid_checkpoint_key_fails_closed() {
+        // A malformed signing key must prevent buffer creation, never silently
+        // emit unsigned/garbage.
+        let config = DecisionLogConfig {
+            enabled: true,
+            emit_stdout: true,
+            checkpoint_every: 5,
+            checkpoint_signing_key: Some("nothex".to_string()),
+            ..Default::default()
+        };
+        assert!(DecisionBuffer::new(config).is_err());
     }
 }

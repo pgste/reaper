@@ -137,6 +137,43 @@ dedup by `decision_id`** (which every decision already carries) → `ReplacingMe
 retry duplicates on merge. That yields exactly-once *results* without the coordination cost that
 would poison a sub-µs path.
 
+## Tamper-evidence: hash chain + signed checkpoints (Plan 04)
+
+The durable stream is **tamper-evident**, so a regulator can prove the audit log wasn't edited
+after the fact — even by an insider with write access to the store.
+
+- **Per-record hash chain.** Each record carries `seq` (a monotonic per-agent counter), `prev_hash`,
+  and `entry_hash = sha256(canonical(record without hashes) || prev_hash)`. The chain is stamped on
+  the single-threaded **writer thread** (off the eval hot path) over the durable write order. Any
+  insertion, deletion, reordering, or field mutation breaks re-verification and names the offending
+  `seq`.
+- **Signed checkpoints.** Every `N` records or `T` seconds the writer emits a `Checkpoint` record
+  (`record_type = "checkpoint"`) over the covered `seq` range: `{chain_id, seq_start, seq_end, count,
+  prev_hash, last_entry_hash, monotonic_start_ns, monotonic_end_ns, wallclock, key_id, algorithm,
+  signature}`, signed with an agent signing key (reusing the bundle-signing Ed25519 / P-256
+  primitive). Checkpoints let a verifier prove **completeness** of a range (no silently dropped
+  record) from the checkpoints alone, and consecutive checkpoints chain end-to-end
+  (`prev_hash == the prior checkpoint's last_entry_hash`). The monotonic bounds make wall-clock
+  rollback between checkpoints detectable.
+
+Checkpoints ship as their own NDJSON line; Vector routes `record_type == "checkpoint"` to
+`reaper_audit.checkpoints` and decision records to `reaper_audit.decisions`.
+
+**Agent config (checkpoints are opt-in; off unless a trigger is set):**
+
+| Env var | Meaning |
+|---|---|
+| `REAPER_DECISION_LOG_CHECKPOINT_EVERY` | Emit a checkpoint every N durable records (0 = off by count) |
+| `REAPER_DECISION_LOG_CHECKPOINT_INTERVAL_SECS` | Emit at least every T seconds when records are pending (0 = off by time) |
+| `REAPER_DECISION_LOG_CHECKPOINT_SIGNING_KEY` | Hex private key (Ed25519 seed / P-256 scalar). Absent ⇒ **unsigned** checkpoints + a loud startup warning; **invalid ⇒ fail closed** at startup |
+| `REAPER_DECISION_LOG_CHECKPOINT_KEY_ID` | Key id stamped into checkpoints (rotation / verifier pinning) |
+| `REAPER_DECISION_LOG_CHECKPOINT_ALGORITHM` | `ed25519-sha256` (default) or `ecdsa-p256-sha256` |
+
+A verifier pins the matching **public** key (same key-distribution story as bundle signing) and
+runs `policy_engine::decision_log::verify_checkpoint(&checkpoint, &covered_entries, &vk,
+Some(key_id))`, which checks the signature, the covered records' chain, the count, the range
+coverage, and that they hash to `last_entry_hash`.
+
 ## ClickHouse schema (sketch)
 
 ```sql
