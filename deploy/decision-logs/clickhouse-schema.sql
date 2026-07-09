@@ -69,6 +69,46 @@ SETTINGS index_granularity = 8192;
 CREATE VIEW IF NOT EXISTS reaper_audit.decisions_deduped AS
 SELECT * FROM reaper_audit.decisions FINAL;
 
+-- Signed checkpoints (Plan 04, step 3). Each row attests a contiguous run of the
+-- decision stream: the covered seq range, the entry count, and the chain head
+-- (last_entry_hash), signed with an agent key. A verifier proves completeness of
+-- a range (no silently dropped record) from checkpoints alone, and consecutive
+-- checkpoints chain via prev_hash == the prior checkpoint's last_entry_hash.
+CREATE TABLE IF NOT EXISTS reaper_audit.checkpoints
+(
+    -- Injected by Vector from the agent->org mapping; empty for single-tenant.
+    tenant_id          LowCardinality(String) DEFAULT '',
+
+    -- Per-writer-boot chain identity (fresh UUID each agent/writer start).
+    chain_id           String                 CODEC(ZSTD(1)),
+    seq_start          UInt64                 CODEC(DoubleDelta, ZSTD(1)),
+    seq_end            UInt64                 CODEC(DoubleDelta, ZSTD(1)),
+    count              UInt64                 CODEC(T64, ZSTD(1)),
+
+    -- Chain head before this range (prior checkpoint's last_entry_hash) and at
+    -- its end: consecutive checkpoints link prev_hash -> last_entry_hash.
+    prev_hash          String                 DEFAULT '' CODEC(ZSTD(1)),
+    last_entry_hash    String                 CODEC(ZSTD(1)),
+
+    -- Monotonic clock bounds (ns since writer boot): only ever increase, so
+    -- wall-clock rollback between checkpoints is detectable.
+    monotonic_start_ns UInt64                 CODEC(DoubleDelta, ZSTD(1)),
+    monotonic_end_ns   UInt64                 CODEC(DoubleDelta, ZSTD(1)),
+    wallclock          DateTime64(3)          CODEC(DoubleDelta, ZSTD(1)),
+
+    -- Signature (empty ⇒ unsigned checkpoint: completeness provable, not authenticity).
+    key_id             LowCardinality(String) DEFAULT '',
+    algorithm          LowCardinality(String) DEFAULT '',
+    signature          String                 DEFAULT '' CODEC(ZSTD(1)),
+
+    ingested_at        DateTime               DEFAULT now()    CODEC(DoubleDelta, ZSTD(1))
+)
+ENGINE = ReplacingMergeTree(ingested_at)                     -- retries collapse per (chain, seq_start)
+PARTITION BY (tenant_id, toYYYYMM(wallclock))
+ORDER BY (tenant_id, chain_id, seq_start)
+TTL toDateTime(wallclock) + INTERVAL 90 DAY DELETE           -- keep >= the decisions retention
+SETTINGS index_granularity = 8192;
+
 -- Per-minute rollup so dashboards read aggregates, not raw rows.
 CREATE TABLE IF NOT EXISTS reaper_audit.decisions_rollup_1m
 (

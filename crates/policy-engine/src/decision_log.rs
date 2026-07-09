@@ -120,7 +120,15 @@ impl std::error::Error for ChainError {}
 /// hash chain. Detects mutation (`entry_hash` mismatch), and insertion /
 /// deletion / reordering (`prev_hash` mismatch), failing at the offending `seq`.
 pub fn verify_chain(entries: &[DecisionLogEntry]) -> Result<(), ChainError> {
-    let mut prev = String::new();
+    verify_chain_from(entries, "")
+}
+
+/// Like [`verify_chain`] but the run is expected to link from `start_prev` (the
+/// chain head just before the first entry) rather than the genesis empty hash.
+/// Used to verify a checkpoint's sub-range, which starts mid-stream from the
+/// previous checkpoint's `last_entry_hash`.
+pub fn verify_chain_from(entries: &[DecisionLogEntry], start_prev: &str) -> Result<(), ChainError> {
+    let mut prev = start_prev.to_string();
     for e in entries {
         if e.prev_hash != prev {
             return Err(ChainError {
@@ -139,6 +147,250 @@ pub fn verify_chain(entries: &[DecisionLogEntry]) -> Result<(), ChainError> {
         }
         prev = e.entry_hash.clone();
     }
+    Ok(())
+}
+
+/// Record-type discriminator for checkpoint lines in the NDJSON stream. Decision
+/// records carry no `record_type`; the shipper routes on its presence/value.
+pub const CHECKPOINT_RECORD_TYPE: &str = "checkpoint";
+
+/// A signed checkpoint over a contiguous run of the durable decision stream
+/// (Plan 04, step 3). It pins the covered `seq` range, the entry count, and the
+/// chain head (`last_entry_hash`) at a point in time, signed with an agent
+/// signing key. A verifier can then prove *completeness* of a range — no entry
+/// silently dropped — without every intervening record being online, and detect
+/// wall-clock rollback via the monotonic bounds.
+///
+/// Emitted as its own NDJSON line typed by [`CHECKPOINT_RECORD_TYPE`] so a
+/// single stream carries both decisions and checkpoints (Vector routes them to
+/// separate ClickHouse tables).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// Always [`CHECKPOINT_RECORD_TYPE`] — the shipper's routing discriminator.
+    pub record_type: String,
+    /// Per-writer-boot chain identity (a fresh UUID each agent/writer start), so
+    /// checkpoints from different boots are never confused for one chain.
+    pub chain_id: String,
+    /// First `seq` covered by this checkpoint (inclusive).
+    pub seq_start: u64,
+    /// Last `seq` covered by this checkpoint (inclusive).
+    pub seq_end: u64,
+    /// Number of records in `[seq_start, seq_end]` (`seq_end - seq_start + 1`
+    /// for a gapless range — a mismatch means the checkpoint's own range hides a
+    /// drop).
+    pub count: u64,
+    /// Chain head *before* this range (the previous checkpoint's
+    /// `last_entry_hash`, empty for the first checkpoint of a chain). The first
+    /// covered record must link to it, so consecutive checkpoints chain
+    /// end-to-end and no gap can hide between them.
+    #[serde(default)]
+    pub prev_hash: String,
+    /// `entry_hash` of the last record in the covered range: the chain head the
+    /// covered records must hash to.
+    pub last_entry_hash: String,
+    /// Monotonic clock (ns since writer start) at the first covered record.
+    pub monotonic_start_ns: u64,
+    /// Monotonic clock (ns since writer start) at checkpoint emission. Monotonic
+    /// bounds only ever increase, so wall-clock rollback between checkpoints is
+    /// detectable even if `wallclock` is tampered.
+    pub monotonic_end_ns: u64,
+    /// Wall-clock (RFC3339) at emission — for human/operational correlation.
+    pub wallclock: String,
+    /// Signing key id (for rotation / pinning). Empty ⇒ unsigned checkpoint.
+    #[serde(default)]
+    pub key_id: String,
+    /// Signature algorithm (`ed25519-sha256` / `ecdsa-p256-sha256`). Empty ⇒
+    /// unsigned.
+    #[serde(default)]
+    pub algorithm: String,
+    /// Lowercase-hex signature over `canonical(checkpoint sans signature)`.
+    /// Empty ⇒ unsigned (a loud warning was emitted at startup; completeness is
+    /// still checkable from `count`/`last_entry_hash`, authenticity is not).
+    #[serde(default)]
+    pub signature: String,
+}
+
+impl Checkpoint {
+    /// Build an unsigned checkpoint over `[seq_start, seq_end]`. Sign it with
+    /// [`Checkpoint::sign`] before emitting when a key is configured.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        chain_id: String,
+        seq_start: u64,
+        seq_end: u64,
+        count: u64,
+        prev_hash: String,
+        last_entry_hash: String,
+        monotonic_start_ns: u64,
+        monotonic_end_ns: u64,
+        wallclock: String,
+    ) -> Self {
+        Self {
+            record_type: CHECKPOINT_RECORD_TYPE.to_string(),
+            chain_id,
+            seq_start,
+            seq_end,
+            count,
+            prev_hash,
+            last_entry_hash,
+            monotonic_start_ns,
+            monotonic_end_ns,
+            wallclock,
+            key_id: String::new(),
+            algorithm: String::new(),
+            signature: String::new(),
+        }
+    }
+
+    /// Canonical bytes of the checkpoint with the `signature` field excluded —
+    /// the message that gets signed. `key_id` and `algorithm` stay *inside* the
+    /// signed message, so tampering with either breaks authenticity.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut clone = self.clone();
+        clone.signature = String::new();
+        let value = serde_json::to_value(&clone).unwrap_or(serde_json::Value::Null);
+        serde_json::to_vec(&canonicalize(&value)).unwrap_or_default()
+    }
+
+    /// Sign this checkpoint in place with `key`/`key_id`, reusing the bundle
+    /// signing primitive. Sets `algorithm` and `signature`.
+    pub fn sign(&mut self, key: &reaper_core::bundle_signing::SigningKey, key_id: &str) {
+        self.key_id = key_id.to_string();
+        self.algorithm = key.algorithm().as_str().to_string();
+        self.signature = String::new();
+        let canonical = self.canonical_bytes();
+        let envelope = reaper_core::bundle_signing::sign_bundle(&canonical, key, key_id);
+        self.signature = envelope.signature;
+    }
+
+    /// Verify the checkpoint's signature with `vk`, optionally pinning
+    /// `expected_key_id`. An unsigned checkpoint (`signature` empty) is rejected.
+    pub fn verify_signature(
+        &self,
+        vk: &reaper_core::bundle_signing::VerifyingKey,
+        expected_key_id: Option<&str>,
+    ) -> Result<(), reaper_core::bundle_signing::SignatureError> {
+        use reaper_core::bundle_signing::{BundleSignature, SignatureError};
+        if self.signature.is_empty() {
+            return Err(SignatureError::BadSignature);
+        }
+        let canonical = self.canonical_bytes();
+        let envelope = BundleSignature {
+            envelope_version: 1,
+            algorithm: self.algorithm.clone(),
+            key_id: self.key_id.clone(),
+            bundle_id: String::new(),
+            version: 0,
+            not_before: 0,
+            expires_at: 0,
+            sha256: hex::encode(reaper_core::bundle_signing::sha256(&canonical)),
+            signature: self.signature.clone(),
+        };
+        reaper_core::bundle_signing::verify_bundle(&canonical, &envelope, vk, expected_key_id)
+    }
+}
+
+/// A checkpoint-verification failure, naming the offending `seq` when the break
+/// is a specific covered record.
+#[derive(Debug, Clone)]
+pub struct CheckpointError {
+    pub seq: Option<u64>,
+    pub reason: String,
+}
+
+impl std::fmt::Display for CheckpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.seq {
+            Some(seq) => write!(
+                f,
+                "checkpoint verification failed at seq {seq}: {}",
+                self.reason
+            ),
+            None => write!(f, "checkpoint verification failed: {}", self.reason),
+        }
+    }
+}
+
+impl std::error::Error for CheckpointError {}
+
+/// Verify a signed checkpoint against the exact run of records it covers (in
+/// durable/write order). All must hold (fail closed): the signature is valid
+/// under `vk` (with `expected_key_id` pinned when given); `entries` form an
+/// intact hash chain; they cover `[seq_start, seq_end]` gaplessly with the
+/// claimed `count`; and the last record's `entry_hash` equals `last_entry_hash`.
+/// A tampered, missing, inserted, or reordered record fails, naming the seq.
+pub fn verify_checkpoint(
+    checkpoint: &Checkpoint,
+    entries: &[DecisionLogEntry],
+    vk: &reaper_core::bundle_signing::VerifyingKey,
+    expected_key_id: Option<&str>,
+) -> Result<(), CheckpointError> {
+    // 1. Authenticity of the checkpoint itself.
+    checkpoint
+        .verify_signature(vk, expected_key_id)
+        .map_err(|e| CheckpointError {
+            seq: None,
+            reason: format!("signature invalid: {e}"),
+        })?;
+
+    // 2. The covered records must be an intact chain that links from the
+    //    checkpoint's declared start hash (the previous checkpoint's head).
+    verify_chain_from(entries, &checkpoint.prev_hash).map_err(|e| CheckpointError {
+        seq: Some(e.seq),
+        reason: e.reason,
+    })?;
+
+    // 3. Count must match — a checkpoint can't hide a drop inside its own range.
+    if entries.len() as u64 != checkpoint.count {
+        return Err(CheckpointError {
+            seq: None,
+            reason: format!(
+                "count mismatch: checkpoint claims {} records, range has {}",
+                checkpoint.count,
+                entries.len()
+            ),
+        });
+    }
+
+    // 4. Range coverage: first/last seq must match the claimed bounds.
+    match (entries.first(), entries.last()) {
+        (Some(first), Some(last)) => {
+            if first.seq != checkpoint.seq_start {
+                return Err(CheckpointError {
+                    seq: Some(first.seq),
+                    reason: format!(
+                        "seq_start mismatch: checkpoint claims {}, range starts at {}",
+                        checkpoint.seq_start, first.seq
+                    ),
+                });
+            }
+            if last.seq != checkpoint.seq_end {
+                return Err(CheckpointError {
+                    seq: Some(last.seq),
+                    reason: format!(
+                        "seq_end mismatch: checkpoint claims {}, range ends at {}",
+                        checkpoint.seq_end, last.seq
+                    ),
+                });
+            }
+            // 5. The chain head must match the covered records.
+            if last.entry_hash != checkpoint.last_entry_hash {
+                return Err(CheckpointError {
+                    seq: Some(last.seq),
+                    reason: "last_entry_hash does not match the covered records".to_string(),
+                });
+            }
+        }
+        _ => {
+            if checkpoint.count != 0 {
+                return Err(CheckpointError {
+                    seq: None,
+                    reason: "checkpoint claims records but none were supplied".to_string(),
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -389,6 +641,38 @@ pub struct DecisionLogConfig {
     /// 32-byte hex AES-256-GCM key for `encrypt_input_data`. Never serialized.
     #[serde(skip_serializing, default)]
     pub encryption_key: Option<String>,
+
+    // ---- Signed checkpoints (Plan 04, step 3) ----
+    /// Emit a signed checkpoint every N durable records (0 = disabled by count).
+    /// Combine with `checkpoint_interval_secs` — whichever threshold trips first
+    /// closes the window.
+    #[serde(default)]
+    pub checkpoint_every: usize,
+
+    /// Emit a checkpoint at least every T seconds when records are pending
+    /// (0 = disabled by time). Bounds how long an unattested tail can sit
+    /// unproven on a low-traffic agent.
+    #[serde(default)]
+    pub checkpoint_interval_secs: u64,
+
+    /// Hex private signing key for checkpoints (Ed25519 seed / P-256 scalar).
+    /// Never serialized. Absent while checkpointing is on ⇒ unsigned checkpoints
+    /// with a loud startup warning. Invalid key ⇒ fail closed at buffer creation.
+    #[serde(skip_serializing, default)]
+    pub checkpoint_signing_key: Option<String>,
+
+    /// Key id stamped into checkpoints (for rotation / verifier pinning).
+    #[serde(default)]
+    pub checkpoint_key_id: Option<String>,
+
+    /// Signature algorithm for checkpoints: `ed25519-sha256` (default) or
+    /// `ecdsa-p256-sha256`.
+    #[serde(default = "default_checkpoint_algorithm")]
+    pub checkpoint_algorithm: String,
+}
+
+fn default_checkpoint_algorithm() -> String {
+    reaper_core::bundle_signing::ALGORITHM.to_string()
 }
 
 fn default_true() -> bool {
@@ -416,6 +700,11 @@ impl Default for DecisionLogConfig {
             mask_keys: Vec::new(),
             encrypt_input_data: false,
             encryption_key: None,
+            checkpoint_every: 0,
+            checkpoint_interval_secs: 0,
+            checkpoint_signing_key: None,
+            checkpoint_key_id: None,
+            checkpoint_algorithm: default_checkpoint_algorithm(),
         }
     }
 }
@@ -478,6 +767,19 @@ impl DecisionLogConfig {
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
             encryption_key: std::env::var("REAPER_DECISION_LOG_ENCRYPTION_KEY").ok(),
+            checkpoint_every: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_EVERY")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            checkpoint_interval_secs: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            checkpoint_signing_key: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_SIGNING_KEY")
+                .ok(),
+            checkpoint_key_id: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_KEY_ID").ok(),
+            checkpoint_algorithm: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_ALGORITHM")
+                .unwrap_or_else(|_| default_checkpoint_algorithm()),
         };
 
         // REAPER_DECISION_LOG_MODE: a one-word intent knob applied on top of
@@ -724,6 +1026,148 @@ mod tests {
         config.apply_mode("denies");
         assert!(!config.log_allows);
         assert!(config.log_denies);
+    }
+
+    // ---- Signed checkpoints (Plan 04 step 3) ----
+
+    fn test_signing_key() -> reaper_core::bundle_signing::SigningKey {
+        use reaper_core::bundle_signing::{SigAlgorithm, SigningKey};
+        SigningKey::from_hex(SigAlgorithm::Ed25519Sha256, &"07".repeat(32)).unwrap()
+    }
+
+    fn verifying_of(
+        key: &reaper_core::bundle_signing::SigningKey,
+    ) -> reaper_core::bundle_signing::VerifyingKey {
+        reaper_core::bundle_signing::VerifyingKey::from_hex(key.algorithm(), &key.public_key_hex())
+            .unwrap()
+    }
+
+    /// A signed checkpoint over the whole run.
+    fn checkpoint_over(
+        entries: &[DecisionLogEntry],
+        key: &reaper_core::bundle_signing::SigningKey,
+        key_id: &str,
+    ) -> Checkpoint {
+        let mut cp = Checkpoint::new(
+            "chain-boot-1".to_string(),
+            entries.first().unwrap().seq,
+            entries.last().unwrap().seq,
+            entries.len() as u64,
+            entries.first().unwrap().prev_hash.clone(),
+            entries.last().unwrap().entry_hash.clone(),
+            0,
+            1_000,
+            "2026-01-01T00:00:00+00:00".to_string(),
+        );
+        cp.sign(key, key_id);
+        cp
+    }
+
+    #[test]
+    fn test_checkpoint_sign_verify_roundtrip() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(10);
+        let cp = checkpoint_over(&entries, &key, "k1");
+
+        // Signature alone verifies (key_id pinned).
+        cp.verify_signature(&vk, Some("k1")).unwrap();
+        // Full verification against the covered records passes.
+        verify_checkpoint(&cp, &entries, &vk, Some("k1")).unwrap();
+        assert_eq!(cp.record_type, CHECKPOINT_RECORD_TYPE);
+        assert_eq!(cp.algorithm, reaper_core::bundle_signing::ALG_ED25519);
+    }
+
+    #[test]
+    fn test_checkpoint_unsigned_is_rejected() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(3);
+        // Never signed.
+        let cp = Checkpoint::new(
+            "c".to_string(),
+            0,
+            2,
+            3,
+            String::new(),
+            entries.last().unwrap().entry_hash.clone(),
+            0,
+            1,
+            "t".to_string(),
+        );
+        assert!(cp.verify_signature(&vk, None).is_err());
+        assert!(verify_checkpoint(&cp, &entries, &vk, None).is_err());
+    }
+
+    #[test]
+    fn test_checkpoint_key_id_pinning_enforced() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(4);
+        let cp = checkpoint_over(&entries, &key, "prod-2026");
+        // Pinning a different key id fails.
+        assert!(cp.verify_signature(&vk, Some("prod-2025")).is_err());
+        assert!(verify_checkpoint(&cp, &entries, &vk, Some("prod-2025")).is_err());
+        // The right pin passes.
+        verify_checkpoint(&cp, &entries, &vk, Some("prod-2026")).unwrap();
+    }
+
+    #[test]
+    fn test_checkpoint_forged_signature_fails() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(6);
+        let mut cp = checkpoint_over(&entries, &key, "k1");
+        // Flip a metadata field the signature covers, without re-signing.
+        cp.seq_end += 1;
+        assert!(verify_checkpoint(&cp, &entries, &vk, Some("k1")).is_err());
+
+        // Corrupt the signature bytes directly.
+        let mut cp = checkpoint_over(&entries, &key, "k1");
+        cp.signature = "00".repeat(64);
+        assert!(cp.verify_signature(&vk, Some("k1")).is_err());
+    }
+
+    #[test]
+    fn test_verify_checkpoint_detects_mutation_naming_seq() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(8);
+        let cp = checkpoint_over(&entries, &key, "k1");
+
+        // Mutate a covered record without re-chaining → chain break at that seq.
+        let mut tampered = entries.clone();
+        tampered[3].resource = "/api/hacked".to_string();
+        let err = verify_checkpoint(&cp, &tampered, &vk, Some("k1")).unwrap_err();
+        assert_eq!(err.seq, Some(3));
+    }
+
+    #[test]
+    fn test_verify_checkpoint_detects_dropped_entry() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(8);
+        let cp = checkpoint_over(&entries, &key, "k1");
+
+        // Delete a record from the middle → prev_hash no longer links.
+        let mut dropped = entries.clone();
+        dropped.remove(4);
+        let err = verify_checkpoint(&cp, &dropped, &vk, Some("k1")).unwrap_err();
+        // The break is named at the record whose prev_hash no longer matches.
+        assert_eq!(err.seq, Some(5));
+    }
+
+    #[test]
+    fn test_verify_checkpoint_detects_hidden_tail_drop() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run(8);
+        // Checkpoint claims 8 records, but only the first 7 are presented — an
+        // intact prefix. Count + last_entry_hash must catch the missing tail.
+        let cp = checkpoint_over(&entries, &key, "k1");
+        let short = &entries[..7];
+        let err = verify_checkpoint(&cp, short, &vk, Some("k1")).unwrap_err();
+        assert!(err.reason.contains("count mismatch"), "{}", err.reason);
     }
 
     #[test]

@@ -4,6 +4,11 @@
 # owns durability: an on-disk buffer that survives restarts + end-to-end acks so
 # a ClickHouse outage never blocks the agent, and client-side batching sized for
 # ClickHouse (few large inserts). See docs/architecture/DECISION_LOG_PIPELINE.md.
+#
+# The stream carries two record types: decision entries (no `record_type`) and
+# signed checkpoints (`record_type == "checkpoint"`, Plan 04 step 3), routed to
+# separate ClickHouse tables. Parse only the common fields before routing, since
+# checkpoints have no `timestamp`/`decision_id`.
 
 # --- source: pick ONE ------------------------------------------------------
 # (a) container-native: the agent logs decisions to stdout, collected by the
@@ -16,19 +21,41 @@ type = "remap"
 inputs = ["decisions"]
 source = '''
 . = parse_json!(.message)
-.timestamp = to_timestamp!(.timestamp)     # RFC3339 -> DateTime64
-.decision_id = string!(.decision_id)        # required for ReplacingMergeTree dedup
 # tenant_id is injected here from your agent->org mapping; empty = single-tenant.
 .tenant_id = .tenant_id || ""
+'''
+
+# Split decisions from checkpoints. Unmatched events (decision entries) flow to
+# `route._unmatched`.
+[transforms.route]
+type = "route"
+inputs = ["parse"]
+route.checkpoint = '.record_type == "checkpoint"'
+
+# Decision entries: finish the decision-specific shaping.
+[transforms.decisions_fmt]
+type = "remap"
+inputs = ["route._unmatched"]
+source = '''
+.timestamp = to_timestamp!(.timestamp)     # RFC3339 -> DateTime64
+.decision_id = string!(.decision_id)        # required for ReplacingMergeTree dedup
 # context/input_data may be objects; store them as JSON strings for the String columns.
 if is_object(.context)    { .context = encode_json(.context) }
 if is_object(.input_data) { .input_data = encode_json(.input_data) }
 '''
 
+# Checkpoints: RFC3339 wallclock -> DateTime64.
+[transforms.checkpoints_fmt]
+type = "remap"
+inputs = ["route.checkpoint"]
+source = '''
+.wallclock = to_timestamp!(.wallclock)
+'''
+
 # --- hot store: ClickHouse (queryable, 90d) --------------------------------
 [sinks.clickhouse]
 type = "clickhouse"
-inputs = ["parse"]
+inputs = ["decisions_fmt"]
 endpoint = "http://clickhouse:8123"
 database = "reaper_audit"
 table = "decisions"
@@ -44,12 +71,31 @@ when_full = "block"                  # at-least-once; "drop_newest" for best-eff
 [sinks.clickhouse.acknowledgements]
 enabled = true                       # release only after CH confirms
 
+# Checkpoints are low-volume; a smaller buffer suffices.
+[sinks.clickhouse_checkpoints]
+type = "clickhouse"
+inputs = ["checkpoints_fmt"]
+endpoint = "http://clickhouse:8123"
+database = "reaper_audit"
+table = "checkpoints"
+skip_unknown_fields = true
+batch.max_bytes = 1000000
+batch.timeout_secs = 1
+
+[sinks.clickhouse_checkpoints.buffer]
+type = "disk"
+max_size = 268435456
+when_full = "block"
+
+[sinks.clickhouse_checkpoints.acknowledgements]
+enabled = true
+
 # --- compliance archive: S3/MinIO WORM (complete, immutable, unsampled) -----
 # Enable for the at-least-once/compliance tier. Bucket should have Object Lock
 # (COMPLIANCE mode) with retention = strictest applicable (e.g. HIPAA 6y).
 # [sinks.s3_worm]
 # type = "aws_s3"
-# inputs = ["parse"]
+# inputs = ["decisions_fmt", "checkpoints_fmt"]
 # bucket = "reaper-audit-worm"
 # key_prefix = "decisions/date=%Y-%m-%d/"
 # compression = "zstd"

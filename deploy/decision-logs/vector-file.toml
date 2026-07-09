@@ -1,6 +1,11 @@
 # Vector: tail the agent's decision NDJSON file -> ClickHouse.
 # Used by the main docker-compose "audit" profile (agent and Vector share the
 # decision-logs volume). Reference variant with stdin source: vector.toml.
+#
+# The stream carries two record types: decision entries (no `record_type`) and
+# signed checkpoints (`record_type == "checkpoint"`, Plan 04 step 3). They are
+# routed to separate ClickHouse tables — parse only the fields common to both
+# before routing, since checkpoints have no `timestamp`/`decision_id`.
 
 data_dir = "/var/lib/vector"
 
@@ -14,16 +19,38 @@ type = "remap"
 inputs = ["decisions"]
 source = '''
 . = parse_json!(string!(.message))
+.tenant_id = "${REAPER_TENANT_ID:-}"
+'''
+
+# Split decisions from checkpoints. Unmatched events (decision entries) flow to
+# `route._unmatched`.
+[transforms.route]
+type = "route"
+inputs = ["parse"]
+route.checkpoint = '.record_type == "checkpoint"'
+
+# Decision entries: finish the decision-specific shaping.
+[transforms.decisions_fmt]
+type = "remap"
+inputs = ["route._unmatched"]
+source = '''
 .timestamp = to_timestamp!(.timestamp)
 .decision_id = string!(.decision_id)
-.tenant_id = "${REAPER_TENANT_ID:-}"
 if is_object(.context)    { .context = encode_json(.context) }
 if is_object(.input_data) { .input_data = encode_json(.input_data) }
 '''
 
+# Checkpoints: RFC3339 wallclock -> DateTime64.
+[transforms.checkpoints_fmt]
+type = "remap"
+inputs = ["route.checkpoint"]
+source = '''
+.wallclock = to_timestamp!(.wallclock)
+'''
+
 [sinks.clickhouse]
 type = "clickhouse"
-inputs = ["parse"]
+inputs = ["decisions_fmt"]
 endpoint = "${CLICKHOUSE_URL:-http://clickhouse:8123}"
 database = "reaper_audit"
 table = "decisions"
@@ -37,4 +64,22 @@ max_size = 1073741824
 when_full = "block"
 
 [sinks.clickhouse.acknowledgements]
+enabled = true
+
+[sinks.clickhouse_checkpoints]
+type = "clickhouse"
+inputs = ["checkpoints_fmt"]
+endpoint = "${CLICKHOUSE_URL:-http://clickhouse:8123}"
+database = "reaper_audit"
+table = "checkpoints"
+skip_unknown_fields = true
+batch.max_bytes = 1000000
+batch.timeout_secs = 1
+
+[sinks.clickhouse_checkpoints.buffer]
+type = "disk"
+max_size = 268435456
+when_full = "block"
+
+[sinks.clickhouse_checkpoints.acknowledgements]
 enabled = true
