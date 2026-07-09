@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
     tenant_id        LowCardinality(String) DEFAULT '',
 
     timestamp        DateTime64(3)          CODEC(DoubleDelta, ZSTD(1)),
+    -- Monotonic per-agent capture sequence: the exact ordering key and the
+    -- position in the tamper-evident hash chain (Plan 04). A gap signals a
+    -- dropped/deleted record.
+    seq              UInt64                 DEFAULT 0 CODEC(DoubleDelta, ZSTD(1)),
     decision_id      UUID                   CODEC(ZSTD(1)),   -- high entropy: no delta
     trace_id         String                 CODEC(ZSTD(1)),
 
@@ -41,6 +45,12 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
     -- attributes the evaluation branched on. Populated only in explain/denies-
     -- only/sampled mode (heavier). Empty otherwise. Makes a decision reproducible.
     input_data       String                 CODEC(ZSTD(3)) DEFAULT '',
+
+    -- Tamper-evident hash chain over the durable stream (Plan 04): entry_hash =
+    -- sha256(canonical(record without hashes) || prev_hash). A verifier
+    -- recomputes the chain to detect any insertion/deletion/reorder/mutation.
+    prev_hash        String                 DEFAULT '' CODEC(ZSTD(1)),
+    entry_hash       String                 DEFAULT '' CODEC(ZSTD(1)),
 
     ingested_at      DateTime               DEFAULT now()    CODEC(DoubleDelta, ZSTD(1))
 )

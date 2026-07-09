@@ -80,6 +80,86 @@ pub struct DecisionLogEntry {
     /// at evaluation time (REAPER_DATA_MAX_STALENESS_SECS, mode=flag).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub data_stale: bool,
+
+    /// Monotonic per-agent sequence number, assigned at capture time. It is the
+    /// exact global ordering key across the sharded ring and the position in the
+    /// tamper-evident hash chain (Plan 04). Strictly increasing; a gap in the
+    /// durable stream signals a dropped or deleted record.
+    #[serde(default)]
+    pub seq: u64,
+
+    /// Hash of the previous record in the durable stream. Empty on the in-memory
+    /// query ring (the chain is a property of the durable audit artifact, not
+    /// the ring); stamped by the writer thread. Plan 04.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prev_hash: String,
+
+    /// `sha256(canonical(record without hashes) || prev_hash)`. Together with
+    /// `prev_hash` this forms a hash chain: any insertion, deletion, reordering,
+    /// or mutation of the durable stream fails re-verification.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub entry_hash: String,
+}
+
+/// A hash-chain verification failure, naming the record where it broke.
+#[derive(Debug, Clone)]
+pub struct ChainError {
+    pub seq: u64,
+    pub reason: String,
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "audit chain broken at seq {}: {}", self.seq, self.reason)
+    }
+}
+
+impl std::error::Error for ChainError {}
+
+/// Verify a run of decision records (in durable/write order) forms an intact
+/// hash chain. Detects mutation (`entry_hash` mismatch), and insertion /
+/// deletion / reordering (`prev_hash` mismatch), failing at the offending `seq`.
+pub fn verify_chain(entries: &[DecisionLogEntry]) -> Result<(), ChainError> {
+    let mut prev = String::new();
+    for e in entries {
+        if e.prev_hash != prev {
+            return Err(ChainError {
+                seq: e.seq,
+                reason: "prev_hash does not link to the previous record \
+                         (insertion, deletion, or reordering)"
+                    .to_string(),
+            });
+        }
+        let recomputed = e.compute_entry_hash(&e.prev_hash);
+        if recomputed != e.entry_hash {
+            return Err(ChainError {
+                seq: e.seq,
+                reason: "entry_hash mismatch (record was mutated)".to_string(),
+            });
+        }
+        prev = e.entry_hash.clone();
+    }
+    Ok(())
+}
+
+/// Recursively sort object keys so the same record always hashes to the same
+/// bytes, regardless of `HashMap`/JSON iteration order.
+fn canonicalize(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                out.insert(k.clone(), canonicalize(&m[k]));
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(a) => {
+            serde_json::Value::Array(a.iter().map(canonicalize).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 impl DecisionLogEntry {
@@ -112,7 +192,30 @@ impl DecisionLogEntry {
             data_version: None,
             data_checksum: None,
             data_stale: false,
+            seq: 0,
+            prev_hash: String::new(),
+            entry_hash: String::new(),
         }
+    }
+
+    /// Canonical bytes of this record with the hash fields excluded — the input
+    /// that gets hashed. Object keys are sorted so it is byte-stable across runs
+    /// and platforms.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut clone = self.clone();
+        clone.prev_hash = String::new();
+        clone.entry_hash = String::new();
+        // to_value cannot fail for a plain serializable struct; fall back to an
+        // empty object rather than panicking on the audit path.
+        let value = serde_json::to_value(&clone).unwrap_or(serde_json::Value::Null);
+        serde_json::to_vec(&canonicalize(&value)).unwrap_or_default()
+    }
+
+    /// `entry_hash = sha256(canonical_bytes || prev_hash)`.
+    pub fn compute_entry_hash(&self, prev_hash: &str) -> String {
+        let mut bytes = self.canonical_bytes();
+        bytes.extend_from_slice(prev_hash.as_bytes());
+        hex::encode(reaper_core::bundle_signing::sha256(&bytes))
     }
 
     /// Attach the "explain" input-data snapshot.
@@ -431,6 +534,90 @@ fn csv_list(v: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a chained run of records exactly as the writer thread would.
+    fn chained_run(n: u64) -> Vec<DecisionLogEntry> {
+        let mut last = String::new();
+        (0..n)
+            .map(|i| {
+                let mut e = DecisionLogEntry::new(
+                    format!("user_{i}"),
+                    "read".to_string(),
+                    format!("/api/{i}"),
+                    if i % 2 == 0 { "allow" } else { "deny" }.to_string(),
+                    "policy_1".to_string(),
+                    "p".to_string(),
+                );
+                e.seq = i;
+                e.context.insert("z".into(), serde_json::json!(i));
+                e.context.insert("a".into(), serde_json::json!("x"));
+                e.prev_hash = last.clone();
+                let h = e.compute_entry_hash(&last);
+                e.entry_hash = h.clone();
+                last = h;
+                e
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_hash_chain_verifies_and_detects_tampering() {
+        let entries = chained_run(12);
+        // Intact chain verifies. (canonical_bytes is deterministic despite the
+        // HashMap context, or this would be flaky.)
+        assert!(verify_chain(&entries).is_ok());
+
+        // Mutation: flip a field in the middle → entry_hash mismatch at that seq.
+        let mut mutated = entries.clone();
+        mutated[5].decision = "allow".to_string();
+        assert_eq!(verify_chain(&mutated).unwrap_err().seq, 5);
+
+        // Mutation of the context (nested JSON) is also caught.
+        let mut ctx = entries.clone();
+        ctx[7].context.insert("a".into(), serde_json::json!("y"));
+        assert_eq!(verify_chain(&ctx).unwrap_err().seq, 7);
+
+        // Deletion: drop seq 5 → seq 6's prev_hash no longer links.
+        let mut deleted = entries.clone();
+        deleted.remove(5);
+        assert_eq!(verify_chain(&deleted).unwrap_err().seq, 6);
+
+        // Reordering: swap two records → prev_hash mismatch.
+        let mut reordered = entries.clone();
+        reordered.swap(5, 6);
+        assert!(verify_chain(&reordered).is_err());
+
+        // Insertion of a forged record breaks the following link.
+        let mut inserted = entries.clone();
+        let forged = inserted[3].clone();
+        inserted.insert(4, forged);
+        assert!(verify_chain(&inserted).is_err());
+    }
+
+    #[test]
+    fn test_canonical_bytes_stable_across_context_order() {
+        // Same logical record, context inserted in different orders → identical
+        // canonical bytes and hash.
+        let mut a = DecisionLogEntry::new(
+            "u".into(),
+            "read".into(),
+            "/r".into(),
+            "allow".into(),
+            "p".into(),
+            "n".into(),
+        );
+        let mut b = a.clone();
+        b.decision_id = a.decision_id.clone();
+        b.timestamp = a.timestamp.clone();
+        for (k, v) in [("m", 1), ("a", 2), ("z", 3)] {
+            a.context.insert(k.into(), serde_json::json!(v));
+        }
+        for (k, v) in [("z", 3), ("m", 1), ("a", 2)] {
+            b.context.insert(k.into(), serde_json::json!(v));
+        }
+        assert_eq!(a.canonical_bytes(), b.canonical_bytes());
+        assert_eq!(a.compute_entry_hash(""), b.compute_entry_hash(""));
+    }
 
     #[test]
     fn test_decision_log_entry_creation() {

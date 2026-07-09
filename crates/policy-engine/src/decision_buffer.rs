@@ -101,6 +101,30 @@ enum WriterMsg {
     Flush,
 }
 
+/// Running hash state for the durable decision stream. Lives only on the
+/// single-threaded writer, so it needs no synchronization. Stamps each record's
+/// `prev_hash`/`entry_hash` in write order — the tamper-evident chain a
+/// regulator verifies over the NDJSON/ClickHouse artifact (Plan 04).
+struct HashChain {
+    last_hash: String,
+}
+
+impl HashChain {
+    fn new() -> Self {
+        Self {
+            last_hash: String::new(),
+        }
+    }
+
+    /// Link `record` to the chain and advance it.
+    fn stamp(&mut self, record: &mut DecisionLogEntry) {
+        record.prev_hash = self.last_hash.clone();
+        let hash = record.compute_entry_hash(&self.last_hash);
+        record.entry_hash = hash.clone();
+        self.last_hash = hash;
+    }
+}
+
 /// Output sinks owned by the background writer thread. NDJSON is serialized once
 /// and fanned out to whichever sinks are configured (file and/or stdout). All
 /// serialization + I/O happens here, never on the request path.
@@ -218,11 +242,14 @@ impl DecisionBuffer {
             std::thread::Builder::new()
                 .name("decision-log-writer".to_string())
                 .spawn(move || {
+                    // Chain state lives only here — the writer is single-threaded,
+                    // so no synchronization is needed.
+                    let mut chain = HashChain::new();
                     while let Ok(msg) = rx.recv() {
-                        Self::handle_writer_msg(&mut sinks, msg);
+                        Self::handle_writer_msg(&mut sinks, &mut chain, msg);
                         // Drain anything already queued, then flush once.
                         while let Ok(msg) = rx.try_recv() {
-                            Self::handle_writer_msg(&mut sinks, msg);
+                            Self::handle_writer_msg(&mut sinks, &mut chain, msg);
                         }
                         sinks.flush_all();
                     }
@@ -303,10 +330,18 @@ impl DecisionBuffer {
 
     /// Serialize a message once and fan it out to all configured sinks, on the
     /// background writer thread.
-    fn handle_writer_msg(sinks: &mut WriterSinks, msg: WriterMsg) {
+    ///
+    /// The writer is the single serialization point, so it is where the
+    /// tamper-evident hash chain is stamped: each durable record is linked to
+    /// the previous one in write order. The shared in-ring `Arc` is left
+    /// hash-free (the chain describes the durable audit artifact, not the query
+    /// ring), so we chain over a cheap writer-thread clone — off the hot path.
+    fn handle_writer_msg(sinks: &mut WriterSinks, chain: &mut HashChain, msg: WriterMsg) {
         match msg {
             WriterMsg::Entry(entry) => {
-                if let Ok(json) = entry.to_ndjson() {
+                let mut record = (*entry).clone();
+                chain.stamp(&mut record);
+                if let Ok(json) = record.to_ndjson() {
                     if let Some(w) = sinks.file.as_mut() {
                         let _ = writeln!(w, "{}", json);
                     }
@@ -365,6 +400,10 @@ impl DecisionBuffer {
         // Update statistics. The sequence number doubles as the total-intake
         // counter and the exact global ordering key across shards.
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        // Persist the monotonic counter into the record itself, so the durable
+        // audit stream (NDJSON / ClickHouse) carries it — the ordering key and
+        // hash-chain position survive past the in-memory ring.
+        entry.seq = seq;
         if is_allow {
             self.allow_count.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -965,6 +1004,49 @@ mod tests {
         let page1 = buffer.get_page(0, expected / 2);
         let page2 = buffer.get_page(expected / 2, expected);
         assert_eq!(page1.len() + page2.len(), expected);
+    }
+
+    #[test]
+    fn test_seq_is_persisted_into_entries() {
+        // Every captured entry must carry its monotonic seq in the record (not
+        // just the in-ring tuple), so the durable audit stream keeps the
+        // ordering key and hash-chain position.
+        let config = DecisionLogConfig {
+            enabled: true,
+            buffer_capacity: 10_000,
+            capture_shards: 4,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        let n: usize = 500;
+        for i in 0..n {
+            let mut e = test_entry("allow");
+            e.principal = format!("p{i}");
+            buffer.log(e);
+        }
+
+        let all = buffer.get_recent(n + 10);
+        assert_eq!(all.len(), n);
+
+        // Seqs cover [0, n) exactly once — unique and contiguous (no gaps).
+        let mut seqs: Vec<u64> = all.iter().map(|e| e.seq).collect();
+        // As returned they are newest-first, i.e. strictly descending.
+        assert!(
+            seqs.windows(2).all(|w| w[0] > w[1]),
+            "get_recent is strictly descending by seq"
+        );
+        seqs.sort_unstable();
+        assert_eq!(
+            seqs,
+            (0..n as u64).collect::<Vec<_>>(),
+            "contiguous unique seq"
+        );
+
+        // NDJSON round-trips seq.
+        let json = all[0].to_ndjson().unwrap();
+        let back: DecisionLogEntry = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(back.seq, all[0].seq);
     }
 
     #[test]
