@@ -138,6 +138,11 @@ jobs:
           # Every E2E test signs up a fresh user from the runner's single IP;
           # the production default (5/hour/IP) would 429 the later tests.
           RATE_LIMIT_SIGNUP_PER_HOUR: 1000
+          # Run the E2E control plane single-control so a bundle promote goes
+          # live immediately (the deployment test asserts `promoted`). The
+          # compose default stays dual_control for production; two-person
+          # approval is covered by the in-process management integration tests.
+          PROMOTION_APPROVAL: disabled
         run: |
           # The `management` profile brings up postgres + management (:3000) +
           # agent (:8080) — the two services the E2E suite drives. `--wait`
