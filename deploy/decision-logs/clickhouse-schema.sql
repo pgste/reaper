@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
     -- only/sampled mode (heavier). Empty otherwise. Makes a decision reproducible.
     input_data       String                 CODEC(ZSTD(3)) DEFAULT '',
 
+    -- Tamper-evident hash chain over the durable stream (Plan 04): entry_hash =
+    -- sha256(canonical(record without hashes) || prev_hash). A verifier
+    -- recomputes the chain to detect any insertion/deletion/reorder/mutation.
+    prev_hash        String                 DEFAULT '' CODEC(ZSTD(1)),
+    entry_hash       String                 DEFAULT '' CODEC(ZSTD(1)),
+
     ingested_at      DateTime               DEFAULT now()    CODEC(DoubleDelta, ZSTD(1))
 )
 ENGINE = ReplacingMergeTree(ingested_at)                     -- retries collapse on decision_id

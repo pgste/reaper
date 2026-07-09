@@ -101,6 +101,30 @@ enum WriterMsg {
     Flush,
 }
 
+/// Running hash state for the durable decision stream. Lives only on the
+/// single-threaded writer, so it needs no synchronization. Stamps each record's
+/// `prev_hash`/`entry_hash` in write order — the tamper-evident chain a
+/// regulator verifies over the NDJSON/ClickHouse artifact (Plan 04).
+struct HashChain {
+    last_hash: String,
+}
+
+impl HashChain {
+    fn new() -> Self {
+        Self {
+            last_hash: String::new(),
+        }
+    }
+
+    /// Link `record` to the chain and advance it.
+    fn stamp(&mut self, record: &mut DecisionLogEntry) {
+        record.prev_hash = self.last_hash.clone();
+        let hash = record.compute_entry_hash(&self.last_hash);
+        record.entry_hash = hash.clone();
+        self.last_hash = hash;
+    }
+}
+
 /// Output sinks owned by the background writer thread. NDJSON is serialized once
 /// and fanned out to whichever sinks are configured (file and/or stdout). All
 /// serialization + I/O happens here, never on the request path.
@@ -218,11 +242,14 @@ impl DecisionBuffer {
             std::thread::Builder::new()
                 .name("decision-log-writer".to_string())
                 .spawn(move || {
+                    // Chain state lives only here — the writer is single-threaded,
+                    // so no synchronization is needed.
+                    let mut chain = HashChain::new();
                     while let Ok(msg) = rx.recv() {
-                        Self::handle_writer_msg(&mut sinks, msg);
+                        Self::handle_writer_msg(&mut sinks, &mut chain, msg);
                         // Drain anything already queued, then flush once.
                         while let Ok(msg) = rx.try_recv() {
-                            Self::handle_writer_msg(&mut sinks, msg);
+                            Self::handle_writer_msg(&mut sinks, &mut chain, msg);
                         }
                         sinks.flush_all();
                     }
@@ -303,10 +330,18 @@ impl DecisionBuffer {
 
     /// Serialize a message once and fan it out to all configured sinks, on the
     /// background writer thread.
-    fn handle_writer_msg(sinks: &mut WriterSinks, msg: WriterMsg) {
+    ///
+    /// The writer is the single serialization point, so it is where the
+    /// tamper-evident hash chain is stamped: each durable record is linked to
+    /// the previous one in write order. The shared in-ring `Arc` is left
+    /// hash-free (the chain describes the durable audit artifact, not the query
+    /// ring), so we chain over a cheap writer-thread clone — off the hot path.
+    fn handle_writer_msg(sinks: &mut WriterSinks, chain: &mut HashChain, msg: WriterMsg) {
         match msg {
             WriterMsg::Entry(entry) => {
-                if let Ok(json) = entry.to_ndjson() {
+                let mut record = (*entry).clone();
+                chain.stamp(&mut record);
+                if let Ok(json) = record.to_ndjson() {
                     if let Some(w) = sinks.file.as_mut() {
                         let _ = writeln!(w, "{}", json);
                     }
@@ -1002,7 +1037,11 @@ mod tests {
             "get_recent is strictly descending by seq"
         );
         seqs.sort_unstable();
-        assert_eq!(seqs, (0..n as u64).collect::<Vec<_>>(), "contiguous unique seq");
+        assert_eq!(
+            seqs,
+            (0..n as u64).collect::<Vec<_>>(),
+            "contiguous unique seq"
+        );
 
         // NDJSON round-trips seq.
         let json = all[0].to_ndjson().unwrap();
