@@ -595,6 +595,16 @@ jobs:
           cargo test -p reaper-e2e-tests --test data_plane_e2e \
             2>&1 | tee integration-reports/data-plane-e2e.txt
 
+      # Control-plane + agent E2E over real HTTP. The suite self-spawns the
+      # management + agent binaries (built above) on ephemeral ports — no
+      # docker or external stack — so all 14 tests actually run here instead
+      # of silently skipping. The dockerised variant (real images) still runs
+      # separately in the Docker workflow.
+      - name: Run Control-Plane E2E
+        run: |
+          cargo test -p reaper-e2e-tests --test e2e_tests \
+            2>&1 | tee integration-reports/e2e-tests.txt
+
       # Differential correctness program: random policies/worlds/documents,
       # compiled == AST == independent oracle, plus semantic laws
       # (rule-order invariance, deny monotonicity). These are the gate that
@@ -631,6 +641,13 @@ jobs:
           echo "## Process-Level Data-Plane E2E" >> integration-reports/integration-summary.md
           echo '```' >> integration-reports/integration-summary.md
           grep -E "test result:|test .* \.\.\. (ok|FAILED)|SKIP" integration-reports/data-plane-e2e.txt >> integration-reports/integration-summary.md || echo "not available" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          echo "" >> integration-reports/integration-summary.md
+
+          # Control-plane + agent E2E (self-spawned binaries over HTTP)
+          echo "## Control-Plane E2E" >> integration-reports/integration-summary.md
+          echo '```' >> integration-reports/integration-summary.md
+          grep -E "test result:|test .* \.\.\. (ok|FAILED)|SKIP" integration-reports/e2e-tests.txt >> integration-reports/integration-summary.md || echo "not available" >> integration-reports/integration-summary.md
           echo '```' >> integration-reports/integration-summary.md
           echo "" >> integration-reports/integration-summary.md
 

@@ -3,83 +3,235 @@
 //! These tests verify the complete flow from management server through agent
 //! policy deployment and evaluation.
 //!
-//! To run these tests, services must be running:
-//! - Management Server on port 3000
-//! - Agent on port 8080
-//! - Or use: docker compose -f docker-compose.yml --profile management up
+//! The suite is self-contained: each test spins up REAL `reaper-management`
+//! and `reaper-agent` binaries as child processes on ephemeral ports, backed
+//! by a throwaway SQLite database and storage dir. Just build the binaries
+//! and run the tests — no docker or manual stack required:
 //!
-//! Run with: cargo test -p reaper-e2e-tests --test e2e_tests
+//!   cargo build -p reaper-management -p reaper-agent
+//!   cargo test  -p reaper-e2e-tests --test e2e_tests
+//!
+//! To run against an already-running stack instead (e.g. the docker-compose
+//! `management` profile in CI), export the URLs and the suite binds to them
+//! rather than spawning:
+//!
+//!   REAPER_MANAGEMENT_URL=http://localhost:3000 \
+//!   REAPER_AGENT_URL=http://localhost:8080 \
+//!   cargo test -p reaper-e2e-tests --test e2e_tests
+//!
+//! When those env vars ARE set but the stack is unreachable, the tests FAIL
+//! loudly — they never silently skip, so a broken stack can't masquerade as a
+//! green run.
 
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use uuid::Uuid;
 
-// Service URLs - can be overridden with environment variables
-fn management_url() -> String {
-    std::env::var("REAPER_MANAGEMENT_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
+// =============================================================================
+// Process + stack management
+// =============================================================================
+
+/// A spawned child process that is killed and reaped when dropped.
+struct Proc(Child);
+impl Drop for Proc {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
-fn agent_url() -> String {
-    std::env::var("REAPER_AGENT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+/// Locate a built workspace binary (debug or release), honouring an explicit
+/// `REAPER_E2E_<NAME>_BIN` override.
+fn bin(name: &str) -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var(format!(
+        "REAPER_E2E_{}_BIN",
+        name.replace('-', "_").to_uppercase()
+    )) {
+        return Some(p.into());
+    }
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for profile in ["debug", "release"] {
+        let candidate = manifest.join(format!("../../target/{profile}/{name}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
-/// Test client with helper methods for API interaction
+/// Grab a free TCP port by binding to :0 and releasing it.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn http_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap()
+}
+
+/// Poll `{url}/health` until it returns success or we give up.
+async fn wait_healthy(client: &Client, url: &str) -> bool {
+    for _ in 0..100 {
+        if let Ok(resp) = client.get(format!("{url}/health")).send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    false
+}
+
+/// A running management + agent pair the test drives. Either self-spawned
+/// (owns the child processes and their temp dir) or bound to external URLs.
+struct TestStack {
+    // Declared before `_tmp` so the processes are killed before their
+    // backing SQLite file / storage dir is removed.
+    _mgmt: Option<Proc>,
+    _agent: Option<Proc>,
+    _tmp: Option<tempfile::TempDir>,
+    management_url: String,
+    agent_url: String,
+}
+
+impl TestStack {
+    /// Bring up a stack for one test. Binds to `REAPER_MANAGEMENT_URL` /
+    /// `REAPER_AGENT_URL` when set, otherwise spawns fresh binaries.
+    async fn spawn() -> TestStack {
+        if let Ok(management_url) = std::env::var("REAPER_MANAGEMENT_URL") {
+            let agent_url = std::env::var("REAPER_AGENT_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string());
+            let client = http_client();
+            assert!(
+                wait_healthy(&client, &management_url).await,
+                "REAPER_MANAGEMENT_URL is set but management is not reachable at {management_url}"
+            );
+            assert!(
+                wait_healthy(&client, &agent_url).await,
+                "REAPER_AGENT_URL is set but the agent is not reachable at {agent_url}"
+            );
+            return TestStack {
+                _mgmt: None,
+                _agent: None,
+                _tmp: None,
+                management_url,
+                agent_url,
+            };
+        }
+
+        let mgmt_bin = bin("reaper-management").expect(
+            "reaper-management binary not found — run `cargo build -p reaper-management` first",
+        );
+        let agent_bin = bin("reaper-agent")
+            .expect("reaper-agent binary not found — run `cargo build -p reaper-agent` first");
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let storage = tmp.path().join("storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        let db_config = reaper_management::db::ephemeral_test_config(tmp.path()).await;
+
+        let mgmt_port = free_port();
+        let agent_port = free_port();
+        let management_url = format!("http://127.0.0.1:{mgmt_port}");
+        let agent_url = format!("http://127.0.0.1:{agent_port}");
+
+        let mgmt = Proc(
+            Command::new(&mgmt_bin)
+                .env("REAPER_PORT", mgmt_port.to_string())
+                .env("REAPER_BIND_ADDRESS", "127.0.0.1")
+                .env("REAPER_DATABASE_TYPE", &db_config.db_type)
+                .env("REAPER_DATABASE_URL", &db_config.url)
+                .env("REAPER_STORAGE_TYPE", "filesystem")
+                .env("REAPER_STORAGE_PATH", storage.display().to_string())
+                .env(
+                    "REAPER_JWT_SECRET",
+                    "e2e-secret-not-for-prod-needs-32-chars-min",
+                )
+                .env("RUST_LOG", "warn")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn reaper-management"),
+        );
+        let agent = Proc(
+            Command::new(&agent_bin)
+                .env("REAPER_PORT", agent_port.to_string())
+                .env("REAPER_BIND_ADDRESS", "127.0.0.1")
+                .env("RUST_LOG", "warn")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn reaper-agent"),
+        );
+
+        let client = http_client();
+        assert!(
+            wait_healthy(&client, &management_url).await,
+            "self-spawned management failed to become healthy"
+        );
+        assert!(
+            wait_healthy(&client, &agent_url).await,
+            "self-spawned agent failed to become healthy"
+        );
+
+        TestStack {
+            _mgmt: Some(mgmt),
+            _agent: Some(agent),
+            _tmp: Some(tmp),
+            management_url,
+            agent_url,
+        }
+    }
+
+    /// A lightweight client bound to this stack's URLs. Cheap to call many
+    /// times (e.g. for concurrency tests) — it does not spawn anything.
+    fn client(&self) -> TestClient {
+        TestClient {
+            client: http_client(),
+            management_url: self.management_url.clone(),
+            agent_url: self.agent_url.clone(),
+        }
+    }
+}
+
+/// Test client with helper methods for API interaction.
 struct TestClient {
     client: Client,
     management_url: String,
     agent_url: String,
-    api_key: Option<String>,
 }
 
 impl TestClient {
-    fn new() -> Self {
-        Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .unwrap(),
-            management_url: management_url(),
-            agent_url: agent_url(),
-            api_key: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn with_api_key(mut self, key: String) -> Self {
-        self.api_key = Some(key);
-        self
-    }
-
     // Management API helpers
 
     async fn management_get(&self, path: &str) -> reqwest::Result<reqwest::Response> {
-        let mut req = self.client.get(format!("{}{}", self.management_url, path));
-        if let Some(ref key) = self.api_key {
-            req = req.header("X-API-Key", key);
-        }
-        req.send().await
+        self.client
+            .get(format!("{}{}", self.management_url, path))
+            .send()
+            .await
     }
 
     async fn management_post(&self, path: &str, body: Value) -> reqwest::Result<reqwest::Response> {
-        let mut req = self
-            .client
+        self.client
             .post(format!("{}{}", self.management_url, path))
-            .json(&body);
-        if let Some(ref key) = self.api_key {
-            req = req.header("X-API-Key", key);
-        }
-        req.send().await
+            .json(&body)
+            .send()
+            .await
     }
 
     async fn management_delete(&self, path: &str) -> reqwest::Result<reqwest::Response> {
-        let mut req = self
-            .client
-            .delete(format!("{}{}", self.management_url, path));
-        if let Some(ref key) = self.api_key {
-            req = req.header("X-API-Key", key);
-        }
-        req.send().await
+        self.client
+            .delete(format!("{}{}", self.management_url, path))
+            .send()
+            .await
     }
 
     // Agent API helpers
@@ -100,38 +252,14 @@ impl TestClient {
     }
 }
 
-/// Check if services are available
-async fn services_available() -> bool {
-    let client = TestClient::new();
-
-    let management_health = client.management_get("/health").await;
-    let agent_health = client.agent_get("/health").await;
-
-    management_health.is_ok()
-        && management_health.unwrap().status().is_success()
-        && agent_health.is_ok()
-        && agent_health.unwrap().status().is_success()
-}
-
-/// Skip test if services are not available
-macro_rules! skip_if_no_services {
-    () => {
-        if !services_available().await {
-            eprintln!("Skipping test: services not available");
-            return;
-        }
-    };
-}
-
 // =============================================================================
 // Health Check Tests
 // =============================================================================
 
 #[tokio::test]
 async fn test_management_health() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let response = client.management_get("/health").await.unwrap();
     assert!(response.status().is_success());
 
@@ -141,18 +269,16 @@ async fn test_management_health() {
 
 #[tokio::test]
 async fn test_agent_health() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let response = client.agent_get("/health").await.unwrap();
     assert!(response.status().is_success());
 }
 
 #[tokio::test]
 async fn test_management_metrics() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let response = client.management_get("/metrics/prometheus").await.unwrap();
     assert!(response.status().is_success());
 
@@ -163,9 +289,8 @@ async fn test_management_metrics() {
 
 #[tokio::test]
 async fn test_agent_metrics() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let response = client.agent_get("/metrics").await.unwrap();
     assert!(response.status().is_success());
 }
@@ -176,9 +301,8 @@ async fn test_agent_metrics() {
 
 #[tokio::test]
 async fn test_e2e_organization_lifecycle() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let slug = format!("e2e-org-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization
@@ -237,9 +361,8 @@ async fn test_e2e_organization_lifecycle() {
 
 #[tokio::test]
 async fn test_e2e_full_policy_deployment() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let slug = format!("e2e-deploy-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Step 1: Create organization
@@ -357,9 +480,8 @@ async fn test_e2e_full_policy_deployment() {
 
 #[tokio::test]
 async fn test_e2e_agent_registration_flow() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let slug = format!("e2e-agent-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization
@@ -399,9 +521,8 @@ async fn test_e2e_agent_registration_flow() {
 
 #[tokio::test]
 async fn test_e2e_policy_source_management() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
     let slug = format!("e2e-source-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization
@@ -437,9 +558,8 @@ async fn test_e2e_policy_source_management() {
 
 #[tokio::test]
 async fn test_e2e_agent_policy_evaluation() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
 
     // Test policy evaluation on agent (if agent has policies loaded)
     let response = client
@@ -461,9 +581,8 @@ async fn test_e2e_agent_policy_evaluation() {
 
 #[tokio::test]
 async fn test_e2e_agent_list_policies() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
 
     // List active policies on agent
     let response = client.agent_get("/api/v1/policies").await.unwrap();
@@ -480,9 +599,8 @@ async fn test_e2e_agent_list_policies() {
 
 #[tokio::test]
 async fn test_e2e_events_endpoint() {
-    skip_if_no_services!();
-
-    let test_client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let test_client = stack.client();
     let slug = format!("e2e-events-{}", &Uuid::new_v4().to_string()[..8]);
 
     // Create organization for events test
@@ -521,9 +639,8 @@ async fn test_e2e_events_endpoint() {
 
 #[tokio::test]
 async fn test_e2e_error_handling() {
-    skip_if_no_services!();
-
-    let client = TestClient::new();
+    let stack = TestStack::spawn().await;
+    let client = stack.client();
 
     // Test 404 for non-existent org
     let response = client
@@ -552,15 +669,13 @@ async fn test_e2e_error_handling() {
 
 #[tokio::test]
 async fn test_e2e_concurrent_requests() {
-    skip_if_no_services!();
+    let stack = TestStack::spawn().await;
 
-    let _client = TestClient::new();
-
-    // Send multiple health checks concurrently
+    // Send multiple health checks concurrently against the same stack.
     let futures: Vec<_> = (0..10)
-        .map(|_| async {
-            let c = TestClient::new();
-            c.management_get("/health").await
+        .map(|_| {
+            let c = stack.client();
+            async move { c.management_get("/health").await }
         })
         .collect();
 
@@ -575,21 +690,23 @@ async fn test_e2e_concurrent_requests() {
 
 #[tokio::test]
 async fn test_e2e_agent_concurrent_evaluations() {
-    skip_if_no_services!();
+    let stack = TestStack::spawn().await;
 
-    // Send multiple policy evaluations concurrently
+    // Send multiple policy evaluations concurrently against the same stack.
     let futures: Vec<_> = (0..10)
-        .map(|i| async move {
-            let c = TestClient::new();
-            c.agent_post(
-                "/api/v1/messages",
-                json!({
-                    "principal": format!("user-{}", i),
-                    "action": "read",
-                    "resource": format!("/api/resource-{}", i)
-                }),
-            )
-            .await
+        .map(|i| {
+            let c = stack.client();
+            async move {
+                c.agent_post(
+                    "/api/v1/messages",
+                    json!({
+                        "principal": format!("user-{}", i),
+                        "action": "read",
+                        "resource": format!("/api/resource-{}", i)
+                    }),
+                )
+                .await
+            }
         })
         .collect();
 
