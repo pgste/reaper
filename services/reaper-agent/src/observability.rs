@@ -128,12 +128,31 @@ lazy_static! {
     )
     .expect("Failed to register DECISION_LOG_SAMPLED_OUT metric");
 
-    /// Entries dropped because the background file-writer queue was full.
+    /// Durable-sink losses (writer queue saturated or a sink write error) — a
+    /// durable audit loss, distinct from in-memory ring eviction. Alert on any
+    /// increase; in mandatory-audit mode it drives fail-closed.
     pub static ref DECISION_LOG_WRITER_DROPPED: Gauge = register_gauge!(
         "reaper_decision_log_writer_dropped_total",
-        "Decision log entries dropped because the writer queue was full"
+        "Decision records lost from the durable sink (writer queue full or write error)"
     )
     .expect("Failed to register DECISION_LOG_WRITER_DROPPED metric");
+
+    /// In-memory query-ring evictions (buffer_capacity exceeded). Not a durable
+    /// audit loss (the durable sink still received them); a sign the query ring
+    /// is undersized for the desired retention.
+    pub static ref DECISION_LOG_DROPPED_ENTRIES: Gauge = register_gauge!(
+        "reaper_decision_log_dropped_entries_total",
+        "Decision log entries evicted from the in-memory query ring (buffer full)"
+    )
+    .expect("Failed to register DECISION_LOG_DROPPED_ENTRIES metric");
+
+    /// 1 when mandatory-audit mode has latched audit-compromised (a durable loss
+    /// occurred and the agent is failing eval closed), else 0. Page on 1.
+    pub static ref DECISION_LOG_AUDIT_COMPROMISED: Gauge = register_gauge!(
+        "reaper_decision_log_audit_compromised",
+        "1 if mandatory-audit mode has latched audit-compromised (failing eval closed), else 0"
+    )
+    .expect("Failed to register DECISION_LOG_AUDIT_COMPROMISED metric");
 }
 
 /// Record a policy decision in Prometheus metrics.

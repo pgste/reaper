@@ -29,7 +29,7 @@
 //! File/stdout serialization + I/O stay on the dedicated writer thread, fed an
 //! `Arc` (no deep clone) — never the request path.
 
-use crate::decision_log::{Checkpoint, DecisionLogConfig, DecisionLogEntry};
+use crate::decision_log::{Checkpoint, DecisionLogConfig, DecisionLogEntry, OnAuditUnavailable};
 use crate::decision_privacy::DataProtection;
 use crossbeam_utils::CachePadded;
 use parking_lot::RwLock;
@@ -38,7 +38,7 @@ use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -261,15 +261,72 @@ pub struct DecisionBufferStats {
     pub flush_count: u64,
     pub allow_count: u64,
     pub deny_count: u64,
-    /// Entries dropped because the background file-writer queue was full.
+    /// Records lost from the durable sink (writer queue saturated or a sink
+    /// write error) — a durable audit loss, not just a query-ring eviction.
     pub writer_dropped: u64,
     /// Allow decisions dropped by sampling (`sample_allow_rate < 1.0`).
     pub sampled_out: u64,
+    /// Mandatory-audit mode has latched audit-compromised (a durable loss
+    /// occurred): the agent is failing eval closed. Always false when audit is
+    /// not required.
+    pub audit_compromised: bool,
 }
 
 /// One entry in a shard's ring: the global sequence number pins exact ordering
 /// across shards; the `Arc` is shared with the writer thread (no deep clone).
 type SeqEntry = (u64, Arc<DecisionLogEntry>);
+
+/// Durable-audit health, shared between the producer path and the writer thread
+/// (Plan 04 steps 4-5). A "durable loss" — the writer queue was saturated or a
+/// sink write failed, so a record never reached the durable audit artifact — is
+/// counted, alarms once (`tracing::error!`), and in mandatory mode latches the
+/// agent audit-compromised so eval fails closed.
+#[derive(Clone)]
+struct AuditHealth {
+    /// Mandatory-audit mode: a durable loss is fatal to serving un-audited.
+    required: bool,
+    /// Count of durable losses (surfaced as the `writer_dropped` stat/metric).
+    durable_loss: Arc<AtomicU64>,
+    /// One-shot latch so the alarm logs once, not per dropped record.
+    alarmed: Arc<AtomicBool>,
+    /// Latched true on the first durable loss while `required` — readiness flips
+    /// not-ready and evaluation fails closed until the agent is restarted.
+    compromised: Arc<AtomicBool>,
+}
+
+impl AuditHealth {
+    fn new(required: bool) -> Self {
+        Self {
+            required,
+            durable_loss: Arc::new(AtomicU64::new(0)),
+            alarmed: Arc::new(AtomicBool::new(false)),
+            compromised: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Record a durable audit loss (writer-queue drop or sink write error).
+    fn note_loss(&self) {
+        self.durable_loss.fetch_add(1, Ordering::Relaxed);
+        if !self.alarmed.swap(true, Ordering::Relaxed) {
+            tracing::error!(
+                mandatory = self.required,
+                "decision-log DURABLE audit loss: a decision record did not reach the durable \
+                 sink (writer queue saturated or sink write error)"
+            );
+        }
+        if self.required {
+            self.compromised.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn durable_loss(&self) -> u64 {
+        self.durable_loss.load(Ordering::Relaxed)
+    }
+
+    fn is_healthy(&self) -> bool {
+        !self.compromised.load(Ordering::Relaxed)
+    }
+}
 
 /// A thread-safe ring buffer for decision log entries with per-thread sharded
 /// capture (see module docs for the design rationale).
@@ -291,12 +348,15 @@ pub struct DecisionBuffer {
 
     /// Statistics counters (atomic for lock-free updates)
     dropped_entries: AtomicU64,
+    /// One-shot alarm latch for in-memory ring eviction (query-history loss).
+    ring_alarmed: AtomicBool,
     flush_count: AtomicU64,
     allow_count: AtomicU64,
     deny_count: AtomicU64,
 
-    /// Entries dropped because the background writer queue was full.
-    writer_dropped: AtomicU64,
+    /// Durable-audit health: durable-loss count + mandatory fail-closed latch,
+    /// shared with the writer thread.
+    audit: AuditHealth,
 
     /// Allow decisions dropped by sampling (`sample_allow_rate < 1.0`).
     sampled_out: AtomicU64,
@@ -319,8 +379,17 @@ impl DecisionBuffer {
     /// encryption without a valid key) — the agent must not start logging
     /// unprotected data because a secret was missing.
     pub fn new(config: DecisionLogConfig) -> std::io::Result<Self> {
+        // Fail closed on invalid config (e.g. mandatory-audit invariants).
+        config
+            .validate()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
         let protection = DataProtection::from_config(&config)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+        // Durable-audit health, shared with the writer thread so a sink write
+        // error there also flags the loss.
+        let audit = AuditHealth::new(config.audit_required);
 
         let writer_tx = if config.file_path.is_some() || config.emit_stdout {
             let file = if let Some(ref path) = config.file_path {
@@ -348,6 +417,7 @@ impl DecisionBuffer {
             let tick = checkpointer.as_ref().and_then(|c| c.interval);
 
             let (tx, rx) = sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
+            let writer_audit = audit.clone();
 
             // Dedicated writer thread: it owns the sinks and does all
             // serialization + I/O. It drains the queue in batches and flushes
@@ -379,10 +449,22 @@ impl DecisionBuffer {
                                 Err(_) => break,
                             },
                         };
-                        Self::handle_writer_msg(&mut sinks, &mut chain, &mut checkpointer, msg);
+                        Self::handle_writer_msg(
+                            &mut sinks,
+                            &mut chain,
+                            &mut checkpointer,
+                            &writer_audit,
+                            msg,
+                        );
                         // Drain anything already queued, then flush once.
                         while let Ok(msg) = rx.try_recv() {
-                            Self::handle_writer_msg(&mut sinks, &mut chain, &mut checkpointer, msg);
+                            Self::handle_writer_msg(
+                                &mut sinks,
+                                &mut chain,
+                                &mut checkpointer,
+                                &writer_audit,
+                                msg,
+                            );
                         }
                         sinks.flush_all();
                     }
@@ -425,10 +507,11 @@ impl DecisionBuffer {
             shard_capacity,
             seq: AtomicU64::new(0),
             dropped_entries: AtomicU64::new(0),
+            ring_alarmed: AtomicBool::new(false),
             flush_count: AtomicU64::new(0),
             allow_count: AtomicU64::new(0),
             deny_count: AtomicU64::new(0),
-            writer_dropped: AtomicU64::new(0),
+            audit,
             sampled_out: AtomicU64::new(0),
             writer_tx,
             protection,
@@ -483,19 +566,29 @@ impl DecisionBuffer {
         sinks: &mut WriterSinks,
         chain: &mut HashChain,
         checkpointer: &mut Option<Checkpointer>,
+        audit: &AuditHealth,
         msg: WriterMsg,
     ) {
         match msg {
             WriterMsg::Entry(entry) => {
                 let mut record = (*entry).clone();
                 chain.stamp(&mut record);
-                if let Ok(json) = record.to_ndjson() {
-                    if let Some(w) = sinks.file.as_mut() {
-                        let _ = writeln!(w, "{}", json);
+                // A serialization or sink write failure means this record did
+                // not reach the durable artifact — a durable audit loss.
+                match record.to_ndjson() {
+                    Ok(json) => {
+                        let mut write_err = false;
+                        if let Some(w) = sinks.file.as_mut() {
+                            write_err |= writeln!(w, "{}", json).is_err();
+                        }
+                        if let Some(w) = sinks.stdout.as_mut() {
+                            write_err |= writeln!(w, "{}", json).is_err();
+                        }
+                        if write_err {
+                            audit.note_loss();
+                        }
                     }
-                    if let Some(w) = sinks.stdout.as_mut() {
-                        let _ = writeln!(w, "{}", json);
-                    }
+                    Err(_) => audit.note_loss(),
                 }
                 // Fold the just-stamped durable record into the checkpoint
                 // window (may emit a signed checkpoint over the same sinks).
@@ -565,23 +658,67 @@ impl DecisionBuffer {
 
         let arc = Arc::new(entry);
 
-        // Hand file persistence to the background writer thread — no JSON
+        // Hand durable persistence to the background writer thread — no JSON
         // serialization and no write syscall on the request path. The writer
-        // shares the Arc (no deep clone). If its queue is saturated the entry
-        // is dropped there (and counted) rather than blocking the request.
+        // shares the Arc (no deep clone).
+        //
+        // On a saturated writer queue the behavior depends on the audit policy:
+        //   - Block: backpressure the hand-off (blocking `send`) so a record is
+        //     never dropped — used with mandatory audit's `block` policy.
+        //   - otherwise: drop-and-count (never block the request), and in
+        //     mandatory `fail_closed` mode latch the agent audit-compromised so
+        //     eval fails closed instead of silently losing the record.
         if let Some(ref tx) = self.writer_tx {
-            if tx.try_send(WriterMsg::Entry(arc.clone())).is_err() {
-                self.writer_dropped.fetch_add(1, Ordering::Relaxed);
+            let block = self.config.audit_required
+                && self.config.on_audit_unavailable == OnAuditUnavailable::Block;
+            if block {
+                // A send error only happens if the writer thread is gone; that
+                // is itself a durable loss.
+                if tx.send(WriterMsg::Entry(arc.clone())).is_err() {
+                    self.audit.note_loss();
+                }
+            } else if tx.try_send(WriterMsg::Entry(arc.clone())).is_err() {
+                self.audit.note_loss();
             }
         }
 
-        // Push into this thread's shard (uncontended under concurrency).
+        // Push into this thread's shard (uncontended under concurrency). Ring
+        // eviction is in-memory query-history loss (not a durable-audit loss —
+        // the writer already has the record); count it and alarm once.
         let mut ring = self.shards[shard_index(self.shards.len())].write();
         if ring.len() >= self.shard_capacity {
             ring.pop_front();
             self.dropped_entries.fetch_add(1, Ordering::Relaxed);
+            if !self.ring_alarmed.swap(true, Ordering::Relaxed) {
+                tracing::error!(
+                    "decision-log in-memory ring is evicting entries \
+                     (buffer_capacity too small for query retention); durable sink unaffected"
+                );
+            }
         }
         ring.push_back((seq, arc));
+    }
+
+    /// Whether the durable audit trail is intact. In mandatory-audit mode a
+    /// durable loss latches this false; readiness and eval read it to fail
+    /// closed. Always true when audit is not required.
+    #[inline]
+    pub fn is_audit_healthy(&self) -> bool {
+        self.audit.is_healthy()
+    }
+
+    /// Whether mandatory-audit (fail-closed) mode is on.
+    #[inline]
+    pub fn audit_required(&self) -> bool {
+        self.audit.required
+    }
+
+    /// Test hook: simulate a durable-sink loss deterministically (the real path
+    /// triggers this on a saturated writer queue or a sink write error, which
+    /// can't be forced reliably in a unit test).
+    #[cfg(test)]
+    fn force_durable_loss_for_test(&self) {
+        self.audit.note_loss();
     }
 
     /// Collect `(seq, entry)` pairs from every shard that pass `keep`, sorted
@@ -661,8 +798,9 @@ impl DecisionBuffer {
             flush_count: self.flush_count.load(Ordering::Relaxed),
             allow_count: self.allow_count.load(Ordering::Relaxed),
             deny_count: self.deny_count.load(Ordering::Relaxed),
-            writer_dropped: self.writer_dropped.load(Ordering::Relaxed),
+            writer_dropped: self.audit.durable_loss(),
             sampled_out: self.sampled_out.load(Ordering::Relaxed),
+            audit_compromised: !self.audit.is_healthy(),
         }
     }
 
@@ -1360,5 +1498,94 @@ mod tests {
             ..Default::default()
         };
         assert!(DecisionBuffer::new(config).is_err());
+    }
+
+    /// A fully valid mandatory-audit config (stdout sink + signed checkpoints).
+    fn mandatory_config() -> DecisionLogConfig {
+        DecisionLogConfig {
+            enabled: true,
+            audit_required: true,
+            emit_stdout: true,
+            checkpoint_every: 100,
+            checkpoint_signing_key: Some("07".repeat(32)),
+            checkpoint_key_id: Some("k1".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_mandatory_config_conflicts_fail_creation() {
+        // Sampling conflicts with mandatory audit.
+        let mut c = mandatory_config();
+        c.sample_allow_rate = 0.5;
+        assert!(DecisionBuffer::new(c).is_err());
+
+        // No durable sink.
+        let mut c = mandatory_config();
+        c.emit_stdout = false;
+        c.file_path = None;
+        assert!(DecisionBuffer::new(c).is_err());
+
+        // No checkpoint signing key.
+        let mut c = mandatory_config();
+        c.checkpoint_signing_key = None;
+        assert!(DecisionBuffer::new(c).is_err());
+
+        // The valid config creates fine and starts healthy.
+        let buffer = DecisionBuffer::new(mandatory_config()).unwrap();
+        assert!(buffer.audit_required());
+        assert!(buffer.is_audit_healthy());
+    }
+
+    #[test]
+    fn test_mandatory_durable_loss_latches_fail_closed() {
+        let buffer = DecisionBuffer::new(mandatory_config()).unwrap();
+        assert!(buffer.is_audit_healthy());
+
+        // A durable loss latches the agent audit-compromised (fail closed).
+        buffer.force_durable_loss_for_test();
+        assert!(
+            !buffer.is_audit_healthy(),
+            "mandatory loss must fail closed"
+        );
+        let stats = buffer.stats();
+        assert!(stats.audit_compromised);
+        assert_eq!(stats.writer_dropped, 1);
+    }
+
+    #[test]
+    fn test_non_mandatory_durable_loss_counts_but_stays_healthy() {
+        // Without mandatory audit, a durable loss is counted/alarmed but does
+        // not fail eval closed (best-effort observability tier).
+        let config = DecisionLogConfig {
+            enabled: true,
+            emit_stdout: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        buffer.force_durable_loss_for_test();
+        assert!(buffer.is_audit_healthy(), "non-mandatory stays healthy");
+        assert_eq!(buffer.stats().writer_dropped, 1);
+        assert!(!buffer.stats().audit_compromised);
+    }
+
+    #[test]
+    fn test_ring_eviction_is_not_a_durable_loss() {
+        // In-memory ring eviction (dropped_entries) is query-history loss, not a
+        // durable-audit loss: it must not flip audit health.
+        let config = DecisionLogConfig {
+            enabled: true,
+            buffer_capacity: 3,
+            capture_shards: 1,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        for _ in 0..10 {
+            buffer.log(test_entry("allow"));
+        }
+        let stats = buffer.stats();
+        assert!(stats.dropped_entries >= 1, "ring evicted");
+        assert_eq!(stats.writer_dropped, 0, "no durable loss");
+        assert!(buffer.is_audit_healthy());
     }
 }

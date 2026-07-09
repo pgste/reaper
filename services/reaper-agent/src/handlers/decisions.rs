@@ -17,7 +17,8 @@ use std::sync::Arc;
 use tracing::instrument;
 
 use crate::observability::{
-    DECISION_LOG_BUFFER_SIZE, DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DECISION_LOG_SAMPLED_OUT,
+    DECISION_LOG_AUDIT_COMPROMISED, DECISION_LOG_BUFFER_SIZE, DECISION_LOG_DROPPED_ENTRIES,
+    DECISION_LOG_ENTRIES, DECISION_LOG_FLUSHES, DECISION_LOG_SAMPLED_OUT,
     DECISION_LOG_WRITER_DROPPED,
 };
 use crate::state::AgentState;
@@ -152,6 +153,8 @@ pub async fn get_decision_stats(
     DECISION_LOG_FLUSHES.set(stats.flush_count as f64);
     DECISION_LOG_SAMPLED_OUT.set(stats.sampled_out as f64);
     DECISION_LOG_WRITER_DROPPED.set(stats.writer_dropped as f64);
+    DECISION_LOG_DROPPED_ENTRIES.set(stats.dropped_entries as f64);
+    DECISION_LOG_AUDIT_COMPROMISED.set(if stats.audit_compromised { 1.0 } else { 0.0 });
 
     Ok(Json(json!({
         "enabled": true,
@@ -164,6 +167,8 @@ pub async fn get_decision_stats(
         "flush_count": stats.flush_count,
         "allow_count": stats.allow_count,
         "deny_count": stats.deny_count,
+        "audit_required": buffer.audit_required(),
+        "audit_compromised": stats.audit_compromised,
         "config": buffer.config()
     })))
 }

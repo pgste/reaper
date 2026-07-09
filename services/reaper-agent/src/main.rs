@@ -488,11 +488,25 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize decision logging buffer from environment config
     let decision_log_config = DecisionLogConfig::from_env();
+    let audit_required = decision_log_config.audit_required;
     let decision_buffer = if decision_log_config.enabled {
         match create_shared_buffer(decision_log_config) {
             Ok(buffer) => {
-                info!("Decision logging enabled");
+                if audit_required {
+                    info!("Decision logging enabled (MANDATORY audit — fail-closed)");
+                } else {
+                    info!("Decision logging enabled");
+                }
                 Some(buffer)
+            }
+            Err(e) if audit_required => {
+                // Fail closed: in mandatory-audit mode a misconfigured or
+                // unavailable audit sink must abort startup, never silently run
+                // without the required audit trail.
+                anyhow::bail!(
+                    "mandatory audit mode configured but the decision buffer could not be \
+                     created: {e}"
+                );
             }
             Err(e) => {
                 warn!(error = %e, "Failed to create decision buffer, decision logging disabled");
