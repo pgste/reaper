@@ -81,6 +81,13 @@ pub async fn readiness_check(State(state): State<Arc<AgentState>>) -> (StatusCod
     // First blocking reason wins, ordered cold-start → steady-state:
     // no policies yet, then the data cold-start gate, then enforce-mode
     // staleness (fail closed at the traffic layer too).
+    // Mandatory-audit fail-closed: if the durable audit trail was lost, the
+    // agent must drain — it can no longer serve audited decisions (Plan 04).
+    let audit_compromised = state
+        .decision_buffer
+        .as_ref()
+        .is_some_and(|b| b.audit_required() && !b.is_audit_healthy());
+
     let reason = if engine_stats.total_policies == 0 {
         Some("no_policies_loaded")
     } else if state.data_sync.awaiting_initial_sync() {
@@ -88,6 +95,8 @@ pub async fn readiness_check(State(state): State<Arc<AgentState>>) -> (StatusCod
         Some("awaiting_initial_data_sync")
     } else if stale && state.data_sync.mode == crate::state::StalenessMode::Enforce {
         Some("data_staleness_exceeded")
+    } else if audit_compromised {
+        Some("audit_sink_unavailable")
     } else {
         None
     };

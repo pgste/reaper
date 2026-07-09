@@ -669,6 +669,47 @@ pub struct DecisionLogConfig {
     /// `ecdsa-p256-sha256`.
     #[serde(default = "default_checkpoint_algorithm")]
     pub checkpoint_algorithm: String,
+
+    // ---- Mandatory-audit (fail-closed) mode (Plan 04, step 4) ----
+    /// When true, the audit trail is a hard requirement: sampling is forbidden,
+    /// every decision must be logged, a durable sink and signed checkpoints are
+    /// required, and a durable-sink loss at runtime is NOT silently dropped —
+    /// the agent fails closed per `on_audit_unavailable`. Validated at startup
+    /// (`validate()`), which rejects any conflicting config.
+    #[serde(default)]
+    pub audit_required: bool,
+
+    /// What to do in mandatory mode when the durable sink cannot accept a record
+    /// (writer queue saturated / file unwritable): fail eval closed (default) or
+    /// block the log call for backpressure. Ignored unless `audit_required`.
+    #[serde(default)]
+    pub on_audit_unavailable: OnAuditUnavailable,
+}
+
+/// Fail-closed behavior for mandatory audit mode when the durable sink cannot
+/// accept a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnAuditUnavailable {
+    /// Latch the agent as audit-compromised: readiness flips to not-ready and
+    /// evaluation fails closed (`503`), so no decision is served un-audited.
+    /// Keeps the eval path non-blocking. This is the default.
+    #[default]
+    FailClosed,
+    /// Block the (writer-thread-bound) log hand-off until the sink drains, so a
+    /// record is never dropped. Trades tail latency under sink pressure for
+    /// zero loss; never returns a wrong decision, only a slower one.
+    Block,
+}
+
+impl OnAuditUnavailable {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().trim() {
+            "fail_closed" | "fail-closed" | "unhealthy" | "503" => Some(Self::FailClosed),
+            "block" | "backpressure" => Some(Self::Block),
+            _ => None,
+        }
+    }
 }
 
 fn default_checkpoint_algorithm() -> String {
@@ -705,6 +746,8 @@ impl Default for DecisionLogConfig {
             checkpoint_signing_key: None,
             checkpoint_key_id: None,
             checkpoint_algorithm: default_checkpoint_algorithm(),
+            audit_required: false,
+            on_audit_unavailable: OnAuditUnavailable::default(),
         }
     }
 }
@@ -780,6 +823,11 @@ impl DecisionLogConfig {
             checkpoint_key_id: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_KEY_ID").ok(),
             checkpoint_algorithm: std::env::var("REAPER_DECISION_LOG_CHECKPOINT_ALGORITHM")
                 .unwrap_or_else(|_| default_checkpoint_algorithm()),
+            audit_required: false,
+            on_audit_unavailable: std::env::var("REAPER_DECISION_LOG_ON_AUDIT_UNAVAILABLE")
+                .ok()
+                .and_then(|v| OnAuditUnavailable::parse(&v))
+                .unwrap_or_default(),
         };
 
         // REAPER_DECISION_LOG_MODE: a one-word intent knob applied on top of
@@ -814,14 +862,66 @@ impl DecisionLogConfig {
                 self.log_allows = false;
                 self.log_denies = true;
             }
+            "mandatory" => {
+                // Mandatory audit implies enabled + audit_required. It does NOT
+                // silently relax sampling/log flags: `validate()` rejects a
+                // conflicting explicit setting rather than masking it, so an
+                // operator's wrong mental model surfaces as a startup error.
+                self.enabled = true;
+                self.audit_required = true;
+            }
             "" => {}
             other => {
                 tracing::warn!(
                     mode = other,
-                    "unknown REAPER_DECISION_LOG_MODE (use full|sampled|denies); ignoring"
+                    "unknown REAPER_DECISION_LOG_MODE (use full|sampled|denies|mandatory); ignoring"
                 );
             }
         }
+    }
+
+    /// Validate the config (fail closed). Currently enforces the mandatory-audit
+    /// invariants: no sampling, complete capture, a durable sink, and signed
+    /// checkpoints. Returns a human-readable reason on the first violation.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.audit_required {
+            if !self.enabled {
+                return Err("mandatory audit mode requires decision logging enabled".to_string());
+            }
+            if self.sample_allow_rate < 1.0 {
+                return Err(format!(
+                    "mandatory audit mode forbids allow sampling \
+                     (sample_allow_rate = {}, must be 1.0)",
+                    self.sample_allow_rate
+                ));
+            }
+            if !self.log_allows || !self.log_denies {
+                return Err(
+                    "mandatory audit mode must log every decision (log_allows and log_denies \
+                     must both be true)"
+                        .to_string(),
+                );
+            }
+            if self.file_path.is_none() && !self.emit_stdout {
+                return Err("mandatory audit mode requires a durable sink (set \
+                     REAPER_DECISION_LOG_FILE or REAPER_DECISION_LOG_STDOUT)"
+                    .to_string());
+            }
+            if self.checkpoint_every == 0 && self.checkpoint_interval_secs == 0 {
+                return Err("mandatory audit mode requires signed checkpoints (set \
+                     REAPER_DECISION_LOG_CHECKPOINT_EVERY or _INTERVAL_SECS)"
+                    .to_string());
+            }
+            match self.checkpoint_signing_key.as_deref() {
+                Some(k) if !k.trim().is_empty() => {}
+                _ => {
+                    return Err("mandatory audit mode requires a checkpoint signing key \
+                         (REAPER_DECISION_LOG_CHECKPOINT_SIGNING_KEY) so checkpoints are signed"
+                        .to_string())
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1026,6 +1126,90 @@ mod tests {
         config.apply_mode("denies");
         assert!(!config.log_allows);
         assert!(config.log_denies);
+    }
+
+    // ---- Mandatory-audit mode (Plan 04 step 4) ----
+
+    fn valid_mandatory() -> DecisionLogConfig {
+        DecisionLogConfig {
+            enabled: true,
+            audit_required: true,
+            emit_stdout: true,
+            checkpoint_every: 100,
+            checkpoint_signing_key: Some("07".repeat(32)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_mode_mandatory_sets_audit_required() {
+        let mut config = DecisionLogConfig::default();
+        config.apply_mode("mandatory");
+        assert!(config.enabled);
+        assert!(config.audit_required);
+    }
+
+    #[test]
+    fn test_mandatory_validate_ok() {
+        valid_mandatory().validate().unwrap();
+    }
+
+    #[test]
+    fn test_mandatory_validate_rejects_sampling() {
+        let mut c = valid_mandatory();
+        c.sample_allow_rate = 0.5;
+        assert!(c.validate().unwrap_err().contains("sampling"));
+    }
+
+    #[test]
+    fn test_mandatory_validate_requires_complete_capture() {
+        let mut c = valid_mandatory();
+        c.log_allows = false;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_mandatory_validate_requires_sink_and_signed_checkpoints() {
+        // No durable sink.
+        let mut c = valid_mandatory();
+        c.emit_stdout = false;
+        c.file_path = None;
+        assert!(c.validate().unwrap_err().contains("durable sink"));
+
+        // No checkpoint trigger.
+        let mut c = valid_mandatory();
+        c.checkpoint_every = 0;
+        c.checkpoint_interval_secs = 0;
+        assert!(c.validate().unwrap_err().contains("checkpoints"));
+
+        // No signing key.
+        let mut c = valid_mandatory();
+        c.checkpoint_signing_key = None;
+        assert!(c.validate().unwrap_err().contains("signing key"));
+    }
+
+    #[test]
+    fn test_non_mandatory_validate_is_lenient() {
+        // Sampling is fine when audit isn't mandatory.
+        let c = DecisionLogConfig {
+            enabled: true,
+            sample_allow_rate: 0.1,
+            ..Default::default()
+        };
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn test_on_audit_unavailable_parse() {
+        assert_eq!(
+            OnAuditUnavailable::parse("block"),
+            Some(OnAuditUnavailable::Block)
+        );
+        assert_eq!(
+            OnAuditUnavailable::parse("fail_closed"),
+            Some(OnAuditUnavailable::FailClosed)
+        );
+        assert_eq!(OnAuditUnavailable::parse("nonsense"), None);
     }
 
     // ---- Signed checkpoints (Plan 04 step 3) ----

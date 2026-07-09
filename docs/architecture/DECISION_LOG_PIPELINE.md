@@ -174,6 +174,37 @@ runs `policy_engine::decision_log::verify_checkpoint(&checkpoint, &covered_entri
 Some(key_id))`, which checks the signature, the covered records' chain, the count, the range
 coverage, and that they hash to `last_entry_hash`.
 
+## Mandatory-audit (fail-closed) mode + drop alarms (Plan 04)
+
+By default a dropped audit record is a best-effort loss. **Mandatory-audit mode**
+(`REAPER_DECISION_LOG_MODE=mandatory`) makes the audit trail a hard requirement — for regulated
+deployments where an un-audited decision must never be served:
+
+- **Startup validation (fail closed).** Mandatory mode requires complete capture (no allow
+  sampling, `log_allows` and `log_denies` both on), a durable sink, and **signed checkpoints** (a
+  checkpoint trigger + a signing key). Any conflicting setting aborts startup rather than being
+  silently overridden — so an operator's wrong mental model surfaces immediately. A buffer-creation
+  failure in this mode is fatal (the agent refuses to run un-audited).
+- **Runtime fail-closed.** If the durable sink can't accept a record (writer queue saturated or a
+  sink write error), the agent does **not** silently drop it. Per `REAPER_DECISION_LOG_ON_AUDIT_UNAVAILABLE`:
+  - `fail_closed` (default): latch audit-compromised → `/ready` flips `not_ready`
+    (`reason: audit_sink_unavailable`) and evaluation returns **`503`**, so callers and load
+    balancers drain the instance instead of trusting un-audited decisions.
+  - `block`: backpressure the writer hand-off so a record is never dropped (trades tail latency
+    under sink pressure for zero loss).
+
+**Drop counters & alarms (always on).** Two distinct losses are counted, alarmed once via
+`tracing::error!`, and exported for alerting:
+
+| Metric | Meaning |
+|---|---|
+| `reaper_decision_log_writer_dropped_total` | **Durable** loss (writer queue full / sink write error). Page on any increase; drives mandatory fail-closed |
+| `reaper_decision_log_dropped_entries_total` | In-memory **query-ring** eviction (`buffer_capacity` too small) — not a durable loss |
+| `reaper_decision_log_audit_compromised` | `1` when mandatory mode has latched fail-closed, else `0` — page on `1` |
+
+Both counts (plus `audit_required` / `audit_compromised`) are also in the `/api/v1/decisions/stats`
+payload.
+
 ## ClickHouse schema (sketch)
 
 ```sql

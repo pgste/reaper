@@ -153,10 +153,26 @@ fn evaluate_policy_set(
 /// request costs ~200-800ns, which is a large fraction of the sub-µs budget (the
 /// engine dropped it for the same reason). Tracing attributes are attached to
 /// the ambient span only when the trace is actually sampled.
+/// Mandatory-audit fail-closed gate (Plan 04 step 4). Once the durable audit
+/// trail is compromised (a record was lost from the durable sink in mandatory
+/// mode), the agent must not serve further decisions — they would be
+/// un-audited. Returns `503` so callers fail closed; readiness also flips
+/// not-ready so load balancers drain the instance.
+#[inline]
+fn audit_gate(state: &AgentState) -> Result<(), StatusCode> {
+    if let Some(ref buffer) = state.decision_buffer {
+        if buffer.audit_required() && !buffer.is_audit_healthy() {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+    Ok(())
+}
+
 pub async fn evaluate_policy(
     State(state): State<Arc<AgentState>>,
     Json(mut payload): Json<EvaluateRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    audit_gate(&state)?;
     // Track concurrent evaluations
     CONCURRENT_EVALUATIONS.inc();
     let _guard = scopeguard::guard((), |_| {
@@ -532,6 +548,7 @@ pub async fn fast_evaluate_policy(
 ) -> Result<impl IntoResponse, StatusCode> {
     use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
+    audit_gate(&state)?;
     // Track concurrent evaluations
     CONCURRENT_EVALUATIONS.inc();
     let _guard = scopeguard::guard((), |_| {
@@ -777,6 +794,7 @@ pub async fn batch_evaluate_policy(
     State(state): State<Arc<AgentState>>,
     Json(payload): Json<crate::types::BatchEvaluateRequest>,
 ) -> Result<Json<Value>, StatusCode> {
+    audit_gate(&state)?;
     let start_time = std::time::Instant::now();
 
     // Find the policy to evaluate
