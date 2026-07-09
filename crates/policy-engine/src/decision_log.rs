@@ -80,6 +80,13 @@ pub struct DecisionLogEntry {
     /// at evaluation time (REAPER_DATA_MAX_STALENESS_SECS, mode=flag).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub data_stale: bool,
+
+    /// Monotonic per-agent sequence number, assigned at capture time. It is the
+    /// exact global ordering key across the sharded ring and the position in the
+    /// tamper-evident hash chain (Plan 04). Strictly increasing; a gap in the
+    /// durable stream signals a dropped or deleted record.
+    #[serde(default)]
+    pub seq: u64,
 }
 
 impl DecisionLogEntry {
@@ -112,6 +119,7 @@ impl DecisionLogEntry {
             data_version: None,
             data_checksum: None,
             data_stale: false,
+            seq: 0,
         }
     }
 

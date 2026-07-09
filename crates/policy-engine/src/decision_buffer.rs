@@ -365,6 +365,10 @@ impl DecisionBuffer {
         // Update statistics. The sequence number doubles as the total-intake
         // counter and the exact global ordering key across shards.
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        // Persist the monotonic counter into the record itself, so the durable
+        // audit stream (NDJSON / ClickHouse) carries it — the ordering key and
+        // hash-chain position survive past the in-memory ring.
+        entry.seq = seq;
         if is_allow {
             self.allow_count.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -965,6 +969,45 @@ mod tests {
         let page1 = buffer.get_page(0, expected / 2);
         let page2 = buffer.get_page(expected / 2, expected);
         assert_eq!(page1.len() + page2.len(), expected);
+    }
+
+    #[test]
+    fn test_seq_is_persisted_into_entries() {
+        // Every captured entry must carry its monotonic seq in the record (not
+        // just the in-ring tuple), so the durable audit stream keeps the
+        // ordering key and hash-chain position.
+        let config = DecisionLogConfig {
+            enabled: true,
+            buffer_capacity: 10_000,
+            capture_shards: 4,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        let n: usize = 500;
+        for i in 0..n {
+            let mut e = test_entry("allow");
+            e.principal = format!("p{i}");
+            buffer.log(e);
+        }
+
+        let all = buffer.get_recent(n + 10);
+        assert_eq!(all.len(), n);
+
+        // Seqs cover [0, n) exactly once — unique and contiguous (no gaps).
+        let mut seqs: Vec<u64> = all.iter().map(|e| e.seq).collect();
+        // As returned they are newest-first, i.e. strictly descending.
+        assert!(
+            seqs.windows(2).all(|w| w[0] > w[1]),
+            "get_recent is strictly descending by seq"
+        );
+        seqs.sort_unstable();
+        assert_eq!(seqs, (0..n as u64).collect::<Vec<_>>(), "contiguous unique seq");
+
+        // NDJSON round-trips seq.
+        let json = all[0].to_ndjson().unwrap();
+        let back: DecisionLogEntry = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(back.seq, all[0].seq);
     }
 
     #[test]
