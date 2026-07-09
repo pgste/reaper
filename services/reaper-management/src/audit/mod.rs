@@ -204,6 +204,14 @@ pub mod actions {
     // SSO / enterprise identity actions
     pub const SSO_LOGIN: &str = "sso.login";
     pub const SSO_CONFIG_UPDATE: &str = "sso.config_update";
+
+    // SCIM provisioning actions
+    pub const SCIM_USER_PROVISION: &str = "scim.user_provision";
+    pub const SCIM_USER_UPDATE: &str = "scim.user_update";
+    pub const SCIM_USER_DEPROVISION: &str = "scim.user_deprovision";
+    pub const SCIM_GROUP_SYNC: &str = "scim.group_sync";
+    pub const SCIM_TOKEN_CREATE: &str = "scim.token_create";
+    pub const SCIM_TOKEN_REVOKE: &str = "scim.token_revoke";
 }
 
 /// Audit log entry
