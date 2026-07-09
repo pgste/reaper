@@ -478,8 +478,11 @@ async fn get_change_request(
 /// Approve and execute a pending change request.
 ///
 /// The heart of the two-person control:
-/// - the approver needs `BundlePromote` (which in practice comes from an IdP
-///   group / role for a change-approver team, or is held by a service account);
+/// - the approver needs the dedicated `bundle:approve` scope — separate from
+///   `bundle:promote` so approval authority can be granted independently of the
+///   authority to request a promotion (an IdP group / role for a change-approval
+///   board, or a service account, holds `bundle:approve` *without*
+///   `bundle:promote`);
 /// - unless `bundles.allow_self_approval` is set, the approver must be a
 ///   **distinct** principal from the requester (self-approval is a 403);
 /// - the request must still be pending (409 otherwise);
@@ -492,7 +495,7 @@ async fn approve_change_request(
     RequireAuth(user): RequireAuth,
     Path((org, cr_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<crate::domain::Bundle>> {
-    let org_id = authorize_org(&state, &user, &org, &[Scope::BundlePromote])
+    let org_id = authorize_org(&state, &user, &org, &[Scope::BundleApprove])
         .await?
         .id;
     let repo = PromotionChangeRepository::new(&state.db);
@@ -534,17 +537,23 @@ async fn approve_change_request(
     Ok(Json(promoted))
 }
 
-/// Reject a pending change request. Rejection needs the same `BundlePromote`
-/// authority as approval; unlike approval it may be done by the requester
-/// (withdrawing their own request).
+/// Reject a pending change request. Accepted from either an approver
+/// (`bundle:approve`) declining it, or the requester (`bundle:promote`)
+/// withdrawing their own — rejection is non-destructive, so either authority
+/// suffices.
 async fn reject_change_request(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, cr_id)): Path<(String, Uuid)>,
 ) -> ApiResult<Json<PromotionChangeRequest>> {
-    let org_id = authorize_org(&state, &user, &org, &[Scope::BundlePromote])
-        .await?
-        .id;
+    let org_id = authorize_org(
+        &state,
+        &user,
+        &org,
+        &[Scope::BundleApprove, Scope::BundlePromote],
+    )
+    .await?
+    .id;
     let repo = PromotionChangeRepository::new(&state.db);
     let cr = repo
         .get_scoped(org_id, cr_id)

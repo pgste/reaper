@@ -3092,3 +3092,64 @@ async fn test_rollback_change_request_flow() {
     assert!(body["approver_id"].is_string());
     assert_ne!(body["approver_id"], body["requester_id"]);
 }
+
+/// Compliance / separation-of-duties: `bundle:approve` is a distinct authority
+/// from `bundle:promote`, so an org can grant "can request a promotion" and
+/// "can approve one" to different principals. A promote-only principal cannot
+/// approve, and an approve-only principal cannot originate a promotion.
+#[tokio::test]
+async fn test_approve_scope_separated_from_promote() {
+    let env = dual_control_env().await;
+    let (org_id, _owner) = org_with_key(&env, "SoD Org", "sod-org").await;
+
+    // Requester: authors/stages and OPENS a promotion — but cannot approve.
+    let requester = create_scoped_api_key(
+        &env.db,
+        org_id,
+        &[
+            "policy:read",
+            "policy:write",
+            "bundle:read",
+            "bundle:write",
+            "bundle:promote",
+        ],
+    )
+    .await;
+    // Approver: can ONLY approve — no authority to originate a promotion.
+    let approver = create_scoped_api_key(&env.db, org_id, &["bundle:read", "bundle:approve"]).await;
+
+    let bundle = staged_bundle(&env, "sod-org", &requester, "sod-bundle").await;
+
+    // The approve-only principal cannot OPEN a promote request (no promote).
+    let open_as_approver = authed_request(
+        "POST",
+        &format!("/orgs/sod-org/bundles/{bundle}/promote"),
+        Some(json!({})),
+        &approver,
+    );
+    let resp = env.app.clone().oneshot(open_as_approver).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // The requester opens the promote request.
+    let cr = open_change_request(
+        &env,
+        "sod-org",
+        &requester,
+        &format!("bundles/{bundle}/promote"),
+    )
+    .await;
+
+    // The requester cannot approve it — they lack bundle:approve. This is a
+    // scope failure, independent of the distinct-principal rule.
+    let approve_as_requester = authed_request(
+        "POST",
+        &format!("/orgs/sod-org/change-requests/{cr}/approve"),
+        None,
+        &requester,
+    );
+    let resp = env.app.clone().oneshot(approve_as_requester).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // The dedicated approver (bundle:approve only) approves — and it executes.
+    approve_ok(&env, "sod-org", &approver, &cr, &bundle).await;
+}
