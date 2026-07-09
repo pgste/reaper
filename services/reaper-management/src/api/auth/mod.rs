@@ -5,6 +5,7 @@
 mod api_keys;
 mod certificates;
 mod jwks;
+mod sso;
 pub mod types;
 
 use axum::{
@@ -73,4 +74,6 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/orgs/{org}/auth/certificates/{cert_id}/unbind",
             post(certificates::unbind_certificate),
         )
+        // Enterprise SSO (OIDC login + per-org IdP config)
+        .merge(sso::routes())
 }

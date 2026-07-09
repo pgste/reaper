@@ -3153,3 +3153,218 @@ async fn test_approve_scope_separated_from_promote() {
     // The dedicated approver (bundle:approve only) approves — and it executes.
     approve_ok(&env, "sod-org", &approver, &cr, &bundle).await;
 }
+
+// =============================================================================
+// Enterprise SSO — broker session (Plan 03, Phase 1)
+// =============================================================================
+
+/// A session minted by the SSO broker is a normal `rst_` session that
+/// `RequireAuth` accepts, the IdP group maps to the org role, and a repeat
+/// login for the same IdP subject reuses the same user (no duplicate).
+#[tokio::test]
+async fn test_sso_broker_session_is_accepted_and_stable() {
+    use reaper_management::auth::sso::broker::{establish_session, ExternalIdentity, LoginContext};
+    use reaper_management::auth::sso::{SsoConfig, SsoProtocol};
+
+    let env = setup_test_env().await;
+    let (org_id, _owner) = org_with_key(&env, "SSO Org", "sso-org").await;
+
+    let now = chrono::Utc::now();
+    let config = SsoConfig {
+        id: Uuid::new_v4(),
+        org_id,
+        protocol: SsoProtocol::Oidc,
+        enabled: true,
+        issuer: "https://idp.example.com".into(),
+        client_id: "reaper".into(),
+        client_secret_encrypted: None,
+        discovery_url: None,
+        jwks_url: None,
+        attr_map_json: Some(r#"{"group_map":{"reaper-admins":"owner"}}"#.into()),
+        allowed_domains_json: None,
+        default_role: "viewer".into(),
+        created_at: now,
+        updated_at: now,
+    };
+    let identity = ExternalIdentity {
+        issuer: "https://idp.example.com".into(),
+        subject: "idp-subject-123".into(),
+        email: "alice@example.com".into(),
+        email_verified: true,
+        groups: vec!["reaper-admins".into()],
+        display_name: Some("Alice".into()),
+    };
+
+    let est = establish_session(
+        &env.db,
+        org_id,
+        &identity,
+        &config,
+        &LoginContext::default(),
+    )
+    .await
+    .expect("broker should mint a session");
+    assert!(est.token.starts_with("rst_"));
+
+    // The minted token authenticates against a RequireAuth + scope-gated route.
+    // The "reaper-admins" group mapped to Owner, which carries bundle:read.
+    let req = authed_request_bearer("GET", "/orgs/sso-org/bundles", &est.token);
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // A second login for the same (issuer, subject) reuses the same user row.
+    let est2 = establish_session(
+        &env.db,
+        org_id,
+        &identity,
+        &config,
+        &LoginContext::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(est.user_id, est2.user_id);
+}
+
+/// Build a Bearer-authenticated request (session token, not an API key).
+fn authed_request_bearer(method: &str, uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method(method)
+        .header("Authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+// =============================================================================
+// Enterprise SCIM — provisioning + deprovision-revokes-sessions (Plan 03, Ph 2)
+// =============================================================================
+
+/// A Bearer-authenticated request with an optional JSON body (SCIM token or
+/// session token).
+fn bearer_request(method: &str, uri: &str, body: Option<Value>, token: &str) -> Request<Body> {
+    let mut b = Request::builder()
+        .uri(uri)
+        .method(method)
+        .header("Authorization", format!("Bearer {token}"));
+    if body.is_some() {
+        b = b.header("content-type", "application/json");
+    }
+    let body = body
+        .map(|v| Body::from(serde_json::to_vec(&v).unwrap()))
+        .unwrap_or(Body::empty());
+    b.body(body).unwrap()
+}
+
+/// Mint a SCIM token for an org via the admin endpoint; return its plaintext.
+async fn mint_scim_token(env: &TestEnv, slug: &str, admin_key: &str) -> String {
+    let req = authed_request(
+        "POST",
+        &format!("/orgs/{slug}/scim/tokens"),
+        Some(json!({ "name": "test-idp" })),
+        admin_key,
+    );
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    parse_body(resp).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// SCIM provisioning makes a user an org member, and deprovisioning
+/// (`active=false`) revokes their live sessions within one request.
+#[tokio::test]
+async fn test_scim_provision_and_deprovision_revokes_sessions() {
+    use reaper_management::auth::{Session, SessionRepository};
+
+    let env = setup_test_env().await;
+    let (_org, owner_key) = org_with_key(&env, "SCIM Org", "scim-org").await;
+    let scim_token = mint_scim_token(&env, "scim-org", &owner_key).await;
+
+    // Provision a user via SCIM.
+    let create = bearer_request(
+        "POST",
+        "/scim/v2/Users",
+        Some(json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "alice@example.com",
+            "active": true
+        })),
+        &scim_token,
+    );
+    let resp = env.app.clone().oneshot(create).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = parse_body(resp).await;
+    assert_eq!(body["active"], true);
+    let user_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
+
+    // The user shows up in a filtered SCIM list.
+    let list = bearer_request(
+        "GET",
+        "/scim/v2/Users?filter=userName%20eq%20%22alice@example.com%22",
+        None,
+        &scim_token,
+    );
+    let resp = env.app.clone().oneshot(list).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(parse_body(resp).await["totalResults"], 1);
+
+    // Give the user a live session; as a Viewer they can read bundles.
+    let (session, session_token) = Session::new(user_id, None, None, 24);
+    SessionRepository::new(&env.db)
+        .create(&session)
+        .await
+        .unwrap();
+    let req = bearer_request("GET", "/orgs/scim-org/bundles", None, &session_token);
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Deprovision via SCIM PATCH active=false.
+    let patch = bearer_request(
+        "PATCH",
+        &format!("/scim/v2/Users/{user_id}"),
+        Some(json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{ "op": "replace", "path": "active", "value": false }]
+        })),
+        &scim_token,
+    );
+    let resp = env.app.clone().oneshot(patch).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The previously-valid session is now revoked — terminated user is denied.
+    let req = bearer_request("GET", "/orgs/scim-org/bundles", None, &session_token);
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// An unknown SCIM token is rejected, and a token only ever acts on its own org.
+#[tokio::test]
+async fn test_scim_token_tenant_isolation() {
+    let env = setup_test_env().await;
+    let (_a, a_key) = org_with_key(&env, "SCIM A", "scim-iso-a").await;
+    let (_b, _b_key) = org_with_key(&env, "SCIM B", "scim-iso-b").await;
+    let token_a = mint_scim_token(&env, "scim-iso-a", &a_key).await;
+
+    // Unknown token → 401.
+    let req = bearer_request("GET", "/scim/v2/Users", None, "scim_deadbeefdeadbeef");
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Provision a user with A's token; it lands in org A only.
+    let create = bearer_request(
+        "POST",
+        "/scim/v2/Users",
+        Some(json!({ "userName": "bob@a.example.com", "active": true })),
+        &token_a,
+    );
+    let resp = env.app.clone().oneshot(create).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // A's token lists exactly its own org's members (bob), and org B sees none.
+    let list = bearer_request("GET", "/scim/v2/Users", None, &token_a);
+    let resp = env.app.clone().oneshot(list).await.unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["totalResults"], 1);
+    assert_eq!(body["Resources"][0]["userName"], "bob@a.example.com");
+}

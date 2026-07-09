@@ -5,7 +5,7 @@
 
 mod connections;
 mod github;
-mod helpers;
+pub(crate) mod helpers;
 mod types;
 
 use axum::{
