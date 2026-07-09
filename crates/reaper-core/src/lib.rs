@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod platform;
 pub mod policy;
+pub mod revocation;
 
 pub use agent::{Agent, AgentConfig, AgentId, AgentStatus};
 pub use config::{

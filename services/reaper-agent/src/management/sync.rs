@@ -105,6 +105,25 @@ impl SyncService {
             .map_err(ManagementError::SignatureVerification)
     }
 
+    /// Pull the signed revocation list and hand it to the verifier. Best-effort
+    /// per poll: a fetch/verify failure keeps the last-good list (the staleness
+    /// policy decides fail-open vs fail-closed at load time).
+    async fn refresh_revocations(&self) {
+        match self.client.get_revocations().await {
+            Ok(Some(signed)) => {
+                if let Err(e) = self.verifier.apply_revocations(&signed) {
+                    warn!(error = %e, "Rejected fetched revocation list");
+                }
+            }
+            Ok(None) => {
+                debug!("No revocation list served (signing not configured upstream)");
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to fetch revocation list (keeping last-good)");
+            }
+        }
+    }
+
     /// Run the sync service
     pub async fn run(mut self) {
         info!("Starting management sync service");
@@ -120,6 +139,9 @@ impl SyncService {
             if let Err(e) = self.sync_bundle().await {
                 warn!(error = %e, "Initial bundle sync failed");
             }
+            // Fetch the revocation list before serving so the first load is
+            // already checked against it.
+            self.refresh_revocations().await;
         }
 
         // Determine poll interval based on SSE configuration
@@ -204,6 +226,9 @@ impl SyncService {
                     if let Err(e) = self.sync_bundle().await {
                         warn!(error = %e, "Bundle sync failed");
                     }
+                    // Refresh the revocation list on the same cadence (ADR-2:
+                    // list-pull, no per-load online check).
+                    self.refresh_revocations().await;
                 }
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {

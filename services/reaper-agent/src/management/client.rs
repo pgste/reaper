@@ -323,6 +323,56 @@ impl ManagementClient {
         Ok(Some(bundle))
     }
 
+    /// Fetch the org's signed revocation list. `Ok(None)` when the endpoint
+    /// reports the control plane has no signing configured (nothing to
+    /// enforce); the signature is verified by the caller against the pinned
+    /// key before the list is trusted.
+    pub async fn get_revocations(
+        &self,
+    ) -> ManagementResult<Option<reaper_core::revocation::SignedRevocationList>> {
+        let state = self.state.read().await;
+        let token = state
+            .token
+            .as_ref()
+            .ok_or(ManagementError::NotRegistered)?
+            .clone();
+        drop(state);
+
+        let url = format!("{}/orgs/{}/revocations", self.base_url, self.org);
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ManagementError::AuthFailed("Token expired".to_string()));
+        }
+        // 500 here means the control plane can't sign the list (no key). There
+        // is nothing to enforce that agents don't already reject at load, so
+        // treat it as "no list" rather than a hard error.
+        if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            || status == reqwest::StatusCode::NOT_FOUND
+        {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let message = response.text().await.unwrap_or_default();
+            return Err(ManagementError::ServerError {
+                status: status.as_u16(),
+                message,
+            });
+        }
+
+        let signed: reaper_core::revocation::SignedRevocationList =
+            response.json().await.map_err(|e| {
+                ManagementError::Parse(format!("Failed to parse revocation list: {}", e))
+            })?;
+        Ok(Some(signed))
+    }
+
     /// Download a bundle by ID
     pub async fn download_bundle(&self, bundle_id: Uuid) -> ManagementResult<BundleDownload> {
         let state = self.state.read().await;

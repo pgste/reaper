@@ -493,6 +493,28 @@ pub struct ManagementSettings {
     /// is being upgraded — legacy v1 envelopes carry no anti-replay metadata.
     #[serde(default = "default_true")]
     pub require_envelope_v2: bool,
+
+    /// What to do when the cached revocation list is past its `next_update`
+    /// and cannot be refreshed. `monitor` (default) keeps serving on the
+    /// last-good list and warns; `enforce` fails closed (refuses all bundle
+    /// loads) for regulated deployments that prefer availability loss over a
+    /// possibly-stale revocation view.
+    #[serde(default = "default_revocation_staleness")]
+    pub revocation_staleness: RevocationStaleness,
+}
+
+/// Behaviour when the cached revocation list is stale and cannot refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevocationStaleness {
+    /// Keep serving on the last-good list; warn only (fail open).
+    Monitor,
+    /// Refuse all bundle loads while the list is stale (fail closed).
+    Enforce,
+}
+
+fn default_revocation_staleness() -> RevocationStaleness {
+    RevocationStaleness::Monitor
 }
 
 impl Default for ManagementSettings {
@@ -518,6 +540,7 @@ impl Default for ManagementSettings {
             bundle_key_id: None,
             require_signed_bundles: true,
             require_envelope_v2: true,
+            revocation_staleness: default_revocation_staleness(),
         }
     }
 }

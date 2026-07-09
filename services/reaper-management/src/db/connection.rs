@@ -36,6 +36,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "change_log_retention",
         include_str!("migrations_pg/0002_change_log_retention.sql"),
     ),
+    (
+        3,
+        "revocations",
+        include_str!("migrations_pg/0003_revocations.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -181,6 +186,7 @@ impl Database {
             include_str!("migrations/007_change_log.sql"),
             include_str!("migrations/008_agent_data_sync.sql"),
             include_str!("migrations/009_change_log_retention.sql"),
+            include_str!("migrations/010_revocations.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

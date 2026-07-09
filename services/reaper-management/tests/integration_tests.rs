@@ -2653,3 +2653,141 @@ async fn test_org_create_grants_owner_and_multi_org_sessions_work() {
         "no membership in the addressed org must be rejected"
     );
 }
+
+/// Revocation endpoints (Plan 02 Phase B step 4): an org admin revokes a
+/// bundle hash and a key id; the served list is signed with the control
+/// plane's bundle key, carries both entries, and its serial advances.
+#[tokio::test]
+async fn test_revocation_list_served_signed_and_updates() {
+    use reaper_core::bundle_signing::{SigAlgorithm, SigningKey, VerifyingKey};
+    use reaper_core::revocation::SignedRevocationList;
+
+    let temp_dir = TempDir::new().unwrap();
+    let storage_path = temp_dir.path().join("storage");
+    std::fs::create_dir_all(&storage_path).unwrap();
+    let db_config = reaper_management::db::ephemeral_test_config(temp_dir.path()).await;
+    let db = Arc::new(Database::new(&db_config).await.unwrap());
+    db.run_migrations().await.unwrap();
+    let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap())
+        as Arc<dyn reaper_management::storage::BundleStorage>;
+
+    // Signing key the control plane will sign the revocation list with.
+    let signing_key = SigningKey::generate(SigAlgorithm::Ed25519Sha256);
+    let pub_hex = signing_key.public_key_hex();
+
+    let config = Config {
+        auth: AuthConfig {
+            jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
+            ..AuthConfig::default()
+        },
+        bundles: reaper_management::config::BundlesConfig {
+            signing_key: Some(signing_key.private_key_hex()),
+            signing_key_id: "k1".to_string(),
+            signing_algorithm: reaper_core::bundle_signing::ALG_ED25519.to_string(),
+            ..Default::default()
+        },
+        ..Config::default()
+    };
+    let state = AppState::new(db.clone(), config, storage);
+    let app = build_api_router().with_state(Arc::new(state));
+
+    // Org + admin key.
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Rev Org", "slug": "rev-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&db, org_id).await;
+
+    // Empty list first: signed, serial 0.
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/rev-org/revocations",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let signed: SignedRevocationList = serde_json::from_value(parse_body(response).await).unwrap();
+    let vk = VerifyingKey::from_hex(SigAlgorithm::Ed25519Sha256, &pub_hex).unwrap();
+    let list = signed
+        .verify(&vk, Some("k1"))
+        .expect("list signature verifies");
+    assert_eq!(list.serial, 0);
+    assert!(list.revoked_bundle_hashes.is_empty());
+
+    // Revoke a hash and a key id.
+    for body in [
+        json!({"kind": "hash", "value": "deadbeef", "reason": "bad bundle"}),
+        json!({"kind": "key_id", "value": "leaked-key"}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/rev-org/revocations",
+                Some(body),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    // The served list now reflects both, still signed, with a higher serial.
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/rev-org/revocations",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let signed: SignedRevocationList = serde_json::from_value(parse_body(response).await).unwrap();
+    let list = signed.verify(&vk, Some("k1")).expect("still verifies");
+    assert!(list.serial >= 2, "serial advanced: {}", list.serial);
+    assert!(list.is_revoked("deadbeef", "other"));
+    assert!(list.is_revoked("aaaa", "leaked-key"));
+
+    // A different org's admin key cannot read this org's list (tenant guard).
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Other", "slug": "other-org"})),
+        ))
+        .await
+        .unwrap();
+    let other_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let other_key = create_scoped_api_key(&db, other_id, &["agent:read"]).await;
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/rev-org/revocations",
+            None,
+            &other_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
