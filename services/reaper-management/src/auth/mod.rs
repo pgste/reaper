@@ -16,6 +16,7 @@ pub mod jwt;
 pub mod middleware;
 pub mod mtls;
 pub mod scopes;
+pub mod sso;
 pub mod users;
 
 pub use api_key::{ApiKey, ApiKeyGenerator, ApiKeyRepository};
