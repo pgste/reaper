@@ -1236,20 +1236,17 @@ impl ReaperDSLEvaluator {
                 }
             }
             CompiledIterationSource::Variable { variable } => {
-                if let Some(var_name) = interner.resolve(*variable) {
-                    if let Some(attr_val) = variables.get(&*var_name) {
-                        match attr_val {
-                            AttributeValue::List(items) => items.clone(),
-                            AttributeValue::Set(items) => items.iter().cloned().collect(),
-                            // Total iteration: non-collection = empty.
-                            _ => Vec::new(),
-                        }
-                    } else {
-                        // Total iteration: unbound variable = empty.
-                        Vec::new()
+                let var_name = interner.resolve(*variable)?;
+                if let Some(attr_val) = variables.get(&*var_name) {
+                    match attr_val {
+                        AttributeValue::List(items) => items.clone(),
+                        AttributeValue::Set(items) => items.iter().cloned().collect(),
+                        // Total iteration: non-collection = empty.
+                        _ => Vec::new(),
                     }
                 } else {
-                    return None;
+                    // Total iteration: unbound variable = empty.
+                    Vec::new()
                 }
             }
         };

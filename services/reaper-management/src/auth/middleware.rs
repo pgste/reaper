@@ -529,7 +529,7 @@ impl RequireScope {
 }
 
 /// Convert an OrgRole to a list of permission scope strings
-fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
+pub(crate) fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
     use super::users::OrgRole;
     match role {
         // An org Owner has FULL control of their OWN organization, but is NOT a

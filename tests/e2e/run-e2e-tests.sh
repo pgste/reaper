@@ -82,6 +82,15 @@ main() {
         echo_info "Building Docker images..."
         docker compose -f docker-compose.yml --profile management build
 
+        # E2E stack tuning (matches the CI docker workflow):
+        #  - single-control promotion so a bundle promote goes live immediately
+        #    (the deployment test asserts `promoted`; dual-control four-eyes is
+        #    covered by the in-process management integration tests)
+        #  - a high signup rate limit so many fresh-user signups from one IP
+        #    don't get 429'd
+        export PROMOTION_APPROVAL="${PROMOTION_APPROVAL:-disabled}"
+        export RATE_LIMIT_SIGNUP_PER_HOUR="${RATE_LIMIT_SIGNUP_PER_HOUR:-1000}"
+
         # Start services
         echo_info "Starting services..."
         docker compose -f docker-compose.yml --profile management up -d

@@ -145,7 +145,28 @@ pub struct User {
     pub last_login_at: Option<DateTime<Utc>>,
 }
 
+/// Sentinel stored in `password_hash` for externally-provisioned (SSO) users.
+/// It is deliberately **not** a valid Argon2 PHC string, so `verify_password`
+/// always returns false — an SSO user can never authenticate with a local
+/// password, only through its IdP.
+pub const EXTERNAL_USER_PASSWORD_SENTINEL: &str = "!external-idp:no-local-password";
+
 impl User {
+    /// Build an externally-provisioned (SSO) user: active, no usable local
+    /// password, email-verified as asserted by the IdP.
+    pub fn external(email: String, email_verified: bool) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            email,
+            email_verified,
+            password_hash: EXTERNAL_USER_PASSWORD_SENTINEL.to_string(),
+            status: UserStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_login_at: None,
+        }
+    }
+
     /// Create a new user with hashed password
     pub fn new(email: String, password: &str) -> Result<Self, UserError> {
         let password_hash = hash_password(password).map_err(UserError::PasswordHash)?;
