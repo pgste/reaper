@@ -336,7 +336,9 @@ async fn test_e2e_full_policy_deployment() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["status"], "staged");
 
-    // Step 6: Promote bundle
+    // Step 6: Promote bundle. The E2E server runs single-control (the default),
+    // so this goes live immediately for the owner. (Two-person / dual-control
+    // approval is exercised in the in-process management integration tests.)
     let response = client
         .management_post(
             &format!("/orgs/{}/bundles/{}/promote", slug, bundle_id),

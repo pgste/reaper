@@ -445,6 +445,69 @@ impl BundleService {
         Ok(updated)
     }
 
+    /// Roll back to a previously-good bundle.
+    ///
+    /// Unlike `promote` (which only advances a freshly-`Staged` bundle), a
+    /// rollback re-promotes a bundle that was already live and has since been
+    /// `Deprecated` — the classic "the new bundle is bad, restore the last
+    /// known-good one" path. The target must be a real, compiled artifact of
+    /// this org (Deprecated or still Staged); anything else is an invalid
+    /// transition. The currently-promoted bundle is archived, exactly as in
+    /// `promote`, so there is always at most one live bundle.
+    pub async fn rollback(
+        &self,
+        bundle_id: Uuid,
+        request: &PromotionRequest,
+    ) -> Result<Bundle, BundleError> {
+        let bundle = self.get(bundle_id).await?;
+
+        // A rollback target is a bundle that was (or could have been) live: it
+        // has a compiled artifact and is Deprecated or Staged. Draft/Compiled
+        // were never promotable, and re-"rolling back" to the already-live
+        // bundle is a no-op we reject rather than silently accept.
+        if !matches!(
+            bundle.status,
+            BundleStatus::Deprecated | BundleStatus::Staged
+        ) {
+            return Err(BundleError::InvalidTransition(
+                "rollback".to_string(),
+                bundle.status.to_string(),
+            ));
+        }
+
+        let repo = BundleRepository::new(&self.db);
+
+        // Archive the currently-promoted bundle (the bad one we're backing out).
+        if let Some(current_promoted) = repo.get_promoted(bundle.org_id).await? {
+            if current_promoted.id != bundle_id {
+                repo.update_status(
+                    current_promoted.id,
+                    BundleStatus::Deprecated,
+                    None,
+                    Some("Rolled back to a previous bundle"),
+                )
+                .await?;
+                info!(
+                    old_bundle_id = %current_promoted.id,
+                    restored_bundle_id = %bundle_id,
+                    "Promoted bundle deprecated by rollback"
+                );
+            }
+        }
+
+        let updated = repo
+            .update_status(
+                bundle_id,
+                BundleStatus::Promoted,
+                None,
+                request.notes.as_deref(),
+            )
+            .await?;
+
+        info!(bundle_id = %bundle_id, "Bundle restored via rollback");
+        Ok(updated)
+    }
+
     /// Deprecate a bundle
     pub async fn deprecate(
         &self,

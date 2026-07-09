@@ -67,6 +67,14 @@ management:
     logLevel: info
     storageType: filesystem
     storagePath: /var/lib/reaper/storage
+    # Governed promotion. The managed control plane defaults to dual-control
+    # (two-person / four-eyes): a promote/rollback opens a change request that a
+    # *different* principal must approve before the bundle goes live. Set to
+    # "disabled" for a single operator / fully-automated pipeline, or keep
+    # dual-control and set allowSelfApproval=true for a lone service account
+    # that both requests and executes.
+    promotionApproval: dual_control
+    allowSelfApproval: false
 
   secrets:
     jwtSecret: ""  # Must be set in production

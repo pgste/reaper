@@ -551,9 +551,18 @@ fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
             "bundle:read".to_string(),
             "bundle:write".to_string(),
             "bundle:promote".to_string(),
+            // Owner has full control, so may both request and approve. Real
+            // separation of duties for a change-approval board is achieved by
+            // granting `bundle:approve` to a dedicated IdP group / API key
+            // *without* `bundle:promote`, not by relying on the Owner role.
+            "bundle:approve".to_string(),
             "apikey:read".to_string(),
             "apikey:write".to_string(),
         ],
+        // Org Admin can manage bundles but deliberately cannot *originate* a
+        // promotion (no `bundle:promote`); giving it `bundle:approve` makes it
+        // the built-in approver role — a clean separation from the Developers /
+        // Owner who stage and request a change.
         OrgRole::Admin => vec![
             "org:admin".to_string(),
             "agent:read".to_string(),
@@ -562,6 +571,7 @@ fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
             "policy:write".to_string(),
             "bundle:read".to_string(),
             "bundle:write".to_string(),
+            "bundle:approve".to_string(),
             "apikey:read".to_string(),
             "apikey:write".to_string(),
         ],

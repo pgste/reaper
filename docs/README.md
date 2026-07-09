@@ -60,6 +60,12 @@ Deploy Reaper in different patterns.
 - **[Sidecar Mode](./deployment/sidecar.md)** - Sidecar deployment
 - **[Standalone Mode](./deployment/standalone.md)** - Standalone deployment
 
+### 🔐 [Security](./security/)
+Trust, integrity, and change control for the control plane.
+
+- **[Bundle Signing](./security/BUNDLE_SIGNING.md)** - Sign bundles so agents only load control-plane-produced policy
+- **[Governed Promotion](./security/GOVERNED_PROMOTION.md)** - Two-person control, `bundle:approve` separation of duties, SSO/CAB approval
+
 ### 🔧 [Advanced](./advanced/custom-evaluators.md)
 Advanced topics for power users.
 
@@ -79,6 +85,8 @@ Advanced topics for power users.
 | **See performance numbers** | [Performance/Benchmarks](./performance/benchmarks.md) |
 | **Understand the architecture** | [Concepts/Architecture](./concepts/architecture.md) |
 | **Deploy to production** | [Deployment/Patterns](./deployment/deployment-patterns.md) |
+| **Require two-person approval to promote** | [Security/Governed Promotion](./security/GOVERNED_PROMOTION.md) |
+| **Sign & verify bundles** | [Security/Bundle Signing](./security/BUNDLE_SIGNING.md) |
 | **Optimize performance** | [Performance/Optimization](./performance/optimization.md) |
 | **Write custom evaluators** | [Advanced/Custom Evaluators](./advanced/custom-evaluators.md) |
 

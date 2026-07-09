@@ -11,6 +11,7 @@ pub mod deployment;
 pub mod namespace;
 pub mod organization;
 pub mod policy;
+pub mod promotion;
 pub mod source;
 pub mod team;
 pub mod webhook;
@@ -38,6 +39,7 @@ pub use namespace::{
 };
 pub use organization::{CreateOrganization, Organization, UpdateOrganization};
 pub use policy::{CreatePolicy, Policy, PolicyVersion, UpdatePolicy};
+pub use promotion::{ChangeKind, ChangeStatus, PromotionChangeRequest};
 pub use source::{
     ApiConfig, BundleUrlConfig, CreatePolicySource, GitConfig, PolicySource, S3Config, SourceType,
     SyncResult, SyncStatus, UpdatePolicySource,

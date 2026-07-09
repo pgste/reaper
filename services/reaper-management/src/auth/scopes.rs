@@ -30,6 +30,13 @@ pub enum Scope {
     BundleWrite,
     #[serde(rename = "bundle:promote")]
     BundlePromote,
+    /// Approve a promotion/rollback change request under dual-control. Kept
+    /// **separate** from `bundle:promote` so separation-of-duties can grant the
+    /// authority to *request* a promotion and the authority to *approve* one to
+    /// different principals (e.g. a deploy pipeline holds `bundle:promote`; a
+    /// change-approval board holds `bundle:approve`).
+    #[serde(rename = "bundle:approve")]
+    BundleApprove,
 
     // Organization permissions
     #[serde(rename = "org:read")]
@@ -62,6 +69,7 @@ impl Scope {
             Self::BundleRead => "bundle:read",
             Self::BundleWrite => "bundle:write",
             Self::BundlePromote => "bundle:promote",
+            Self::BundleApprove => "bundle:approve",
             Self::OrgRead => "org:read",
             Self::OrgWrite => "org:write",
             Self::OrgAdmin => "org:admin",
@@ -82,6 +90,7 @@ impl Scope {
             "bundle:read" => Some(Self::BundleRead),
             "bundle:write" => Some(Self::BundleWrite),
             "bundle:promote" => Some(Self::BundlePromote),
+            "bundle:approve" => Some(Self::BundleApprove),
             "org:read" => Some(Self::OrgRead),
             "org:write" => Some(Self::OrgWrite),
             "org:admin" => Some(Self::OrgAdmin),
@@ -103,6 +112,7 @@ impl Scope {
             Self::BundleRead,
             Self::BundleWrite,
             Self::BundlePromote,
+            Self::BundleApprove,
             Self::OrgRead,
             Self::OrgWrite,
             Self::OrgAdmin,
@@ -225,5 +235,29 @@ mod tests {
 
         assert!(perm.has_any(&[Scope::AgentRead, Scope::PolicyRead]));
         assert!(!perm.has_any(&[Scope::PolicyRead, Scope::PolicyWrite]));
+    }
+
+    #[test]
+    fn test_bundle_approve_is_separate_from_promote() {
+        // Round-trips and, crucially for separation of duties, is a distinct
+        // authority: holding one does not confer the other.
+        assert_eq!(Scope::parse("bundle:approve"), Some(Scope::BundleApprove));
+        assert_eq!(Scope::BundleApprove.as_str(), "bundle:approve");
+
+        let promoter = Permission::from_scopes(vec![Scope::BundlePromote]);
+        assert!(!promoter.has(Scope::BundleApprove));
+
+        let approver = Permission::from_scopes(vec![Scope::BundleApprove]);
+        assert!(!approver.has(Scope::BundlePromote));
+
+        // A genuine platform admin still covers approval.
+        assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::BundleApprove));
+    }
+
+    #[test]
+    fn test_all_scopes_round_trip() {
+        for scope in Scope::all() {
+            assert_eq!(Scope::parse(scope.as_str()), Some(scope), "{scope}");
+        }
     }
 }
