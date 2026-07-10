@@ -139,8 +139,14 @@ jobs:
       # storage backends (see deny.toml / VULN_RESPONSE.md for the per-ID risk):
       #   0104 — CRL-parse panic, unreachable (no CRL use)
       #   0098/0099 — cert name-constraint bugs, low residual risk (needs CA misissuance)
+      # RUSTSEC-2023-0071 (rsa Marvin timing attack): rsa is pulled ONLY by
+      # sqlx-mysql, which Reaper does NOT enable (postgres/sqlite only) — `cargo
+      # tree -i sqlx-mysql` shows it's not in the compiled graph, it's a
+      # lockfile-only optional dep. cargo-deny's feature-aware graph correctly
+      # ignores it; cargo-audit scans the raw lock, hence this ignore. Not
+      # compiled, not reachable, no upstream fix.
       - name: cargo-audit (Cargo.lock)
-        run: cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
+        run: cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2023-0071
 
   # Dependency freshness — INFORMATIONAL, never blocks. Prints the latest
   # available version of every direct dependency alongside what we currently
