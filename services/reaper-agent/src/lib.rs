@@ -21,6 +21,7 @@ pub mod handlers;
 pub mod management;
 pub mod metrics_cache;
 pub mod observability;
+pub mod panic_guard;
 pub mod state;
 pub mod tls;
 pub mod types;

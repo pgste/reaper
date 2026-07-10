@@ -1,3 +1,8 @@
+// Cucumber step functions are ordinary async fns, not `#[test]` fns, so
+// clippy's `allow-unwrap-in-tests` does not exempt them. This whole file is
+// test scaffolding, where unwrap/expect are the idiom (Plan 05 gate).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use cucumber::{given, then, when, World};
 use reaper_core::*;
 

@@ -260,6 +260,39 @@ spec:
         - containerPort: 8080
 ```
 
+## Failure Modes: Fail-Open vs Fail-Closed
+
+Every failure mode of the enforcement path has a defined, tested posture. The
+default is **fail closed** — when the agent cannot be sure a request is allowed,
+it denies. The one deliberate exception is availability of the *audit* trail,
+which is an operator-configurable posture (best-effort by default, so an audit
+outage does not stop enforcement; opt into deny-on-audit-loss for regulated
+tenants).
+
+| Failure mode | Posture | Behavior | Enforced by | Config | Test |
+|---|---|---|---|---|---|
+| No policy loaded / no policy matched | **Fail closed** | Default deny (nil policy id) | `PolicyEngine::evaluate_set` (initial `Deny`) | — | `failure_modes_tests::no_policy_denies` |
+| Evaluator error (runtime error in a policy) | **Fail closed** | Deny, evaluation stops, error recorded | `PolicyEngine::evaluate_set` (`Err => Deny`) | — | `failure_modes_tests::evaluator_error_denies` |
+| Handler panic (unwrap/index/etc. on any route) | **Fail closed** | HTTP 500 for that request; process stays up | `CatchPanicLayer` (Step 1) | — | `panic_guard::tests::panic_becomes_500_and_process_survives` |
+| Crafted deeply-nested policy | **Fail closed** | Rejected `InvalidPolicy` at parse/compile, before deploy | DSL depth guard (Step 2) | `REAPER_MAX_NESTING_DEPTH` | `dsl_depth_limit_tests` |
+| Oversized batch | **Fail closed** | 413 before any evaluation | Batch cap (Step 3) | `REAPER_MAX_BATCH_REQUESTS` | `batch_limits_tests::batch_over_cap_is_rejected_with_413` |
+| Policy load/compile failure at deploy | **Fail closed** | Deploy rejected; last-good policy stays live (atomic hot-swap) | `EnhancedPolicy::build_evaluator` + `validate()` | — | `failure_modes_tests::deploy_failure_keeps_last_good` |
+| Data plane stale / first sync not yet landed | **Fail closed** | Deny with `matched_rule` naming the gate | agent data-sync guard | `REAPER_DATA_STALENESS_MODE`, `REAPER_DATA_MAX_STALENESS_SECS`, `REAPER_DATA_REQUIRE_SYNC` | `failure_modes_tests::data_gate_denies_before_first_sync` (agent) |
+| Audit sink down/full — **default** | **Fail open (audit only)** | Decision is served; the dropped record is counted and alarms once | `DecisionBuffer` best-effort path | default (`audit_required = false`) | `decision_buffer::tests::test_non_mandatory_durable_loss_counts_but_stays_healthy` |
+| Audit sink down/full — **mandatory mode** | **Fail closed** | Agent latches audit-compromised; further requests get 503 and readiness flips not-ready | `audit_gate` + `DecisionBuffer` latch | `REAPER_DECISION_LOG_MODE=mandatory` (+ `REAPER_DECISION_LOG_ON_AUDIT_UNAVAILABLE=fail_closed\|block`) | `decision_buffer::tests::test_mandatory_durable_loss_latches_fail_closed` |
+| Control plane / sync server unreachable | **Fail available (intentional)** | Agent keeps serving the last-good bundle; no new deploys until it returns | agent management/sync client | — | documented; anti-rollback tracked in the distribution plan |
+
+Notes:
+
+- "Fail available" for a control-plane outage is a deliberate availability
+  choice: an enforcement node must keep answering from its last-good bundle
+  rather than fail shut when the management plane blips. Anti-rollback (refusing
+  a *stale* bundle) is handled separately in the distribution plan.
+- Mandatory audit ties availability to compliance: in `mandatory` mode a lost
+  durable record means subsequent decisions would be un-audited, so the agent
+  stops serving (503) rather than mint un-auditable allows. Choose the posture
+  per tenant; the code does not decide for you.
+
 ## Troubleshooting
 
 ### Common Issues

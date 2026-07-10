@@ -20,9 +20,9 @@ is *missing wiring around correct primitives*, so the path back is tractable.
 | # | Plan | Prio | Moves gate | Findings closed | Effort | Depends on |
 |---|------|------|-----------|-----------------|--------|-----------|
 | 01 | [AuthN/AuthZ Foundation](01-authn-authz-foundation.md) ✅ **shipped** (PRs #10/#11; Phase D dogfooding deferred — see plan header) | **P0** | →CONDITIONAL | Synth #1,#2; Sec P0-1/P0-3/P0-3b; API-1/API-2 | M | — |
-| 02 | [Policy Integrity & Distribution](02-policy-integrity-and-distribution.md) | **P0** | →CONDITIONAL | Synth #3,#6; Sec P0-2/P1-1 | M | 01 (promotion authz) |
-| 03 | [Enterprise Identity: SSO + SCIM](03-enterprise-identity-sso-scim.md) | **P0** | →CONDITIONAL | Synth #4; Prod F1 | M | 01 (session/RequireAuth seam) |
-| 04 | [Audit Integrity & Replay](04-audit-integrity-and-replay.md) | P1 | →CONDITIONAL | Sec P1-2; Prod F7/F10 | M–L | 02 (signing primitive for checkpoints); 03 (actor identity) |
+| 02 | [Policy Integrity & Distribution](02-policy-integrity-and-distribution.md) ✅ **shipped** (PRs #12–#14, #16 governed promotion) | **P0** | →CONDITIONAL | Synth #3,#6; Sec P0-2/P1-1 | M | 01 (promotion authz) |
+| 03 | [Enterprise Identity: SSO + SCIM](03-enterprise-identity-sso-scim.md) ✅ **shipped** (PR #17; SAML deferred by decision) | **P0** | →CONDITIONAL | Synth #4; Prod F1 | M | 01 (session/RequireAuth seam) |
+| 04 | [Audit Integrity & Replay](04-audit-integrity-and-replay.md) ✅ **shipped** (PRs #18–#23: seq+chain, signed checkpoints, mandatory fail-closed + alarms, retention/legal holds, replay capture + counterfactual engine) | P1 | →CONDITIONAL | Sec P1-2; Prod F7/F10 | M–L | 02 (signing primitive for checkpoints); 03 (actor identity) |
 | 05 | [Availability & Resilience](05-availability-and-resilience.md) | P1 (1 borderline P0) | →CONDITIONAL | Synth #8; API-3/API-11; Sec P2-1; Perf P1-2 | S–M | — |
 | 06 | [Software Supply Chain](06-software-supply-chain.md) | P2 (elevated, 3-way) | →CONDITIONAL | Synth #9; Sec P2-2 = API-9 = F9 | S–M | 05 (fuzz targets test 05's DSL depth bound) |
 | 07 | [API Governance](07-api-governance.md) | P1 | →READY | Synth #9; API-4/5/6/7/8/13/14 | M | 01 (auth is a hard prereq) |

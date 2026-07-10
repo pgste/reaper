@@ -5,6 +5,7 @@ mod handlers;
 mod management;
 mod metrics_cache;
 mod observability;
+mod panic_guard;
 mod state;
 mod tls;
 mod types;
@@ -558,19 +559,32 @@ async fn main() -> anyhow::Result<()> {
         bundle_verifier: bundle_verifier.clone(),
     });
 
+    // Evaluation endpoints accept authorization *requests*, not entity
+    // datasets, so they get a far tighter body limit than the 256 MB bulk-data
+    // limit below. Without this, a 256 MB body of tiny requests is a pure
+    // CPU-exhaustion vector (Plan 05, Step 3 / ADR-4). The batch *count* cap
+    // (performance.max_batch_requests) is the primary bound; this body limit is
+    // the secondary one. `route_layer` here overrides the global 256 MB layer
+    // for exactly these routes (the inner limit wins at extraction time).
+    const EVAL_BODY_LIMIT: usize = 16 * 1024 * 1024; // 16 MB
+    let eval_routes = Router::new()
+        // Policy evaluation - the core agent functionality
+        .route(endpoints::API_V1_MESSAGES, post(evaluate_policy))
+        // Fast path with SIMD JSON parsing (3-5x faster parsing)
+        .route("/api/v1/fast-messages", post(fast_evaluate_policy))
+        // Batch evaluation endpoint (bounded + offloaded)
+        .route("/api/v1/batch-messages", post(batch_evaluate_policy))
+        .route("/api/v1/check", post(check_document))
+        .route_layer(axum::extract::DefaultBodyLimit::max(EVAL_BODY_LIMIT));
+
     let app = Router::new()
         // Health and metrics
         .route(endpoints::HEALTH, get(health_check))
         .route("/ready", get(readiness_check))
         .route("/live", get(liveness_check))
         .route(endpoints::METRICS, get(metrics))
-        // Policy evaluation - the core agent functionality
-        .route(endpoints::API_V1_MESSAGES, post(evaluate_policy))
-        // Fast path with SIMD JSON parsing (3-5x faster parsing)
-        .route("/api/v1/fast-messages", post(fast_evaluate_policy))
-        // Batch evaluation endpoint (parallel processing)
-        .route("/api/v1/batch-messages", post(batch_evaluate_policy))
-        .route("/api/v1/check", post(check_document))
+        // Evaluation endpoints (tighter per-route body limit, merged below)
+        .merge(eval_routes)
         // Data management - load entities
         .route("/api/v1/data", post(load_data_handler))
         .route("/api/v1/data/stream", post(load_data_stream_handler))
@@ -632,6 +646,15 @@ async fn main() -> anyhow::Result<()> {
 
     let app = app
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)) // 256MB: bulk data loads (100k+ entity benchmark datasets) exceed 100MB
+        // OUTERMOST (added last = wraps everything): a handler panic becomes a
+        // fail-closed 500 for that one request instead of killing the process
+        // — an enforcement sidecar aborting takes down every co-located
+        // workload that trusts it (Plan 05, Step 1). Requires the unwind panic
+        // strategy (the workspace release profile deliberately does NOT set
+        // panic="abort").
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            panic_guard::catch_panic_response,
+        ))
         .with_state(state);
 
     // Clone router for UDS listener before the TCP server consumes it

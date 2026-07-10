@@ -233,6 +233,12 @@ fn build_router(
         .with_state(state.clone())
         // Apply security headers to all responses
         .layer(middleware::from_fn(app_middleware::security_headers))
+        // Handler panics become fail-closed 500s instead of killing the
+        // control plane (Plan 05, Step 1; pairs with the unwind panic
+        // strategy in the workspace release profile).
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            app_middleware::catch_panic_response,
+        ))
         // Apply correlation ID middleware
         .layer(middleware::from_fn(app_middleware::correlation_id))
         // Apply request metrics middleware

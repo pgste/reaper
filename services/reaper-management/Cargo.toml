@@ -72,7 +72,7 @@ axum-extra = { version = "0.10", features = ["typed-header"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower = { workspace = true }
-tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "catch-panic"] }
 async-stream = "0.3"
 async-trait = "0.1"
 
@@ -96,3 +96,9 @@ mongodb = { version = "3.1", optional = true }
 tokio-test = { workspace = true }
 tempfile = "3.8"
 wiremock = "0.6"
+
+# Plan 05, Step 6 burn-down: this crate carries legacy reachable unwrap()/expect()
+# debt and has NOT yet opted into the workspace panic-safety gate. Once the debt
+# is retired, enable it here:
+#   [lints]
+#   workspace = true

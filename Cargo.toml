@@ -17,6 +17,17 @@ exclude = [
     "benchmarks/reaper-vs-opa",
 ]
 
+# Panic-safety gate (Plan 05, Step 6). A reachable `unwrap()`/`expect()` on an
+# enforcement node is a latent availability hazard: the panic is caught and
+# turned into a fail-closed 500 by the service routers' CatchPanicLayer (Step 1),
+# but new reachable panics should not be introduced silently. Crates opt in with
+# `[lints]\nworkspace = true`; `clippy.toml` (allow-unwrap/expect-in-tests) keeps
+# the idiom ergonomic inside `#[cfg(test)]`. Burn-down: crates still carrying
+# legacy unwrap debt have deliberately NOT opted in yet — see their Cargo.toml.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
 [workspace.dependencies]
 # Core async runtime
 tokio = { version = "1.0", features = ["full"] }
@@ -81,13 +92,18 @@ post-release-commit-message = "chore: Bump to next dev version"
 
 # Release profile tuned for the sub-microsecond hot path. Fat LTO and a single
 # codegen unit let the optimizer inline across crate boundaries (engine ->
-# evaluators -> data store); `panic = "abort"` removes landing pads from the hot
-# path and shrinks the binary. These matter most for an allocation- and
-# call-heavy workload like policy evaluation.
+# evaluators -> data store) — these are where the performance lives.
+#
+# `panic = "abort"` is deliberately ABSENT (Plan 05, ADR-1): the service
+# binaries are network-facing sidecars, and abort turns any reachable panic
+# into a process kill that takes down every co-located workload trusting the
+# agent. With unwinding, a handler panic becomes a fail-closed HTTP 500 via
+# CatchPanicLayer (see the service routers) and the process stays up. The
+# hot-path cost is landing pads only — measured within noise on the eval
+# microbench; LTO/codegen-units (the wins that matter) are retained.
 [profile.release]
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
 
 # Benchmarks need unwinding (criterion) and must not abort on panic; otherwise

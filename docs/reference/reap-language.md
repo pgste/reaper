@@ -162,6 +162,33 @@ rule allow_all {
 }
 ```
 
+## Totality & Limits
+
+The Reaper DSL is **total and terminating by construction**. Every well-formed
+policy evaluates to a decision in bounded time and bounded stack; there is no
+input — however adversarial — that can make the parser, compiler, or evaluator
+recurse without limit.
+
+- **Maximum nesting depth = 64** (default). This bounds the *syntactic* nesting
+  of a condition or expression: parenthesised groups `(...)`, prefix negations
+  `!`, method-call chains, and function-argument nesting. Chained `&&`/`||` are
+  flat (not nested) and do not count toward the depth, so ordinary policies with
+  many `AND`/`OR` terms are unaffected.
+- A policy whose nesting exceeds the limit is **rejected with an
+  `InvalidPolicy` error at parse or compile time** — before it is ever
+  deployed or evaluated. It never fails at request time.
+- The limit is enforced identically for every policy format: `.reap` source,
+  and the YAML/JSON representations (which construct the same AST).
+- The cap is configurable via the `REAPER_MAX_NESTING_DEPTH` environment
+  variable for the rare deployment that needs deeper (or shallower) policies;
+  raising or lowering it requires no code change. A value of `0` or an
+  unparseable value falls back to the default of 64.
+
+This is a deliberate design choice (Plan 05, ADR-2): an authorization language
+should be a total function of its input, not a general-purpose language that can
+diverge. A hard, documented cap is simpler and safer than growing the stack to
+accommodate pathologically deep policies.
+
 ## Data Types
 
 ### Supported Types

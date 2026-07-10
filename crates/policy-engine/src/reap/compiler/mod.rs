@@ -37,6 +37,12 @@ pub fn compile_policy(
     policy: Policy,
     store: Arc<DataStore>,
 ) -> Result<ReaperDSLEvaluator, ReaperError> {
+    // Bound structural nesting before the recursive compile walk. Covers ASTs
+    // that reach the compiler without going through the pest parser's pre-scan
+    // (the YAML/JSON policy formats, or a directly-constructed AST) — Plan 05,
+    // Step 2.
+    crate::reap::limits::enforce_policy_depth(&policy)?;
+
     // Convert default decision
     let default_decision = match policy.default_decision {
         Decision::Allow => PolicyAction::Allow,

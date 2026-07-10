@@ -32,17 +32,17 @@ Non-goal: control-plane HA/DR/backup (that is Product F5, a separate plan). This
 
 ## 3. Definition of Done — testable checkboxes
 
-- [ ] `Cargo.toml` no longer sets `panic = "abort"` for the **service** binaries (agent, management, platform); the engine/bench may keep abort only where no network surface exists. `cargo metadata`/build confirms unwind for the service targets.
-- [ ] Both the agent router (`reaper-agent/src/main.rs`) and the management router carry a `CatchPanicLayer` that converts a handler panic into an HTTP **500** (never a 2xx), and the panic is logged with the correlation id. An integration test that hits a deliberately-panicking test route asserts a 500 and a still-alive process.
-- [ ] A network-reachable panic on a real handler (malformed bundle name, malformed policy) returns 500 and the process stays up — verified by a test that fires the request then a follow-up `/health` and gets 200.
-- [ ] The DSL rejects input whose syntactic nesting depth exceeds a configured limit (default e.g. 64) with a typed `InvalidPolicy` error at **parse or compile time** — before evaluation. A test feeds `"(" * 100_000` and `"!" * 100_000` and asserts a clean error, not a crash, on `ReapParser::parse` and on `compile_policy`.
-- [ ] The evaluator/compiler carries an independent runtime depth guard (defense-in-depth) so any tree that reaches it (e.g. via YAML/JSON policy formats bypassing the pest grammar) is bounded too. A test constructs a deep AST directly and asserts bounded behavior.
-- [ ] The DSL depth guarantee is documented in `docs/reference/reap-language.md` (or DSL_V2_DESIGN.md) as a normative "the language is total/terminating; max nesting depth = N" statement.
-- [ ] The batch endpoint enforces a `max_batch_requests` cap (config, default e.g. 1000) checked **before** evaluation, returning 400/413 on exceed; a test with `cap+1` requests asserts rejection.
-- [ ] Batch CPU work runs via `tokio::task::spawn_blocking` (and optionally rayon) so it cannot starve the async reactor; the eval endpoints carry a **smaller** `DefaultBodyLimit` than the bulk data-load endpoints (per-route layer), verified by a test.
-- [ ] The `download_bundle` header path sanitizes/escapes `bundle.name` and returns `ApiError::Internal` (500) instead of `unwrap()` on builder error; a test with a bundle name containing `"\r\n"` and quotes asserts a well-formed response or a clean 500, never a panic.
-- [ ] A committed **failure-mode matrix** (in `docs/deployment/OPERATIONS_GUIDE.md`) documents fail-open vs fail-closed for: policy load failure, control-plane/sync unreachable, audit sink down/full, evaluator error, and no-policy-loaded — each with the code path that enforces it and a test reference.
-- [ ] A clippy gate denies `unwrap_used`/`expect_used` in non-test reachable code (allowed in `#[cfg(test)]`), wired into `ci.yml`'s `lint-and-analyze` job.
+- [x] `Cargo.toml` no longer sets `panic = "abort"` for the **service** binaries (agent, management, platform); the engine/bench may keep abort only where no network surface exists. `cargo metadata`/build confirms unwind for the service targets.
+- [x] Both the agent router (`reaper-agent/src/main.rs`) and the management router carry a `CatchPanicLayer` that converts a handler panic into an HTTP **500** (never a 2xx), and the panic is logged with the correlation id. An integration test that hits a deliberately-panicking test route asserts a 500 and a still-alive process.
+- [x] A network-reachable panic on a real handler (malformed bundle name, malformed policy) returns 500 and the process stays up — verified by a test that fires the request then a follow-up `/health` and gets 200.
+- [x] The DSL rejects input whose syntactic nesting depth exceeds a configured limit (default e.g. 64) with a typed `InvalidPolicy` error at **parse or compile time** — before evaluation. A test feeds `"(" * 100_000` and `"!" * 100_000` and asserts a clean error, not a crash, on `ReapParser::parse` and on `compile_policy`.
+- [x] The evaluator/compiler carries an independent runtime depth guard (defense-in-depth) so any tree that reaches it (e.g. via YAML/JSON policy formats bypassing the pest grammar) is bounded too. A test constructs a deep AST directly and asserts bounded behavior.
+- [x] The DSL depth guarantee is documented in `docs/reference/reap-language.md` (or DSL_V2_DESIGN.md) as a normative "the language is total/terminating; max nesting depth = N" statement.
+- [x] The batch endpoint enforces a `max_batch_requests` cap (config, default e.g. 1000) checked **before** evaluation, returning 400/413 on exceed; a test with `cap+1` requests asserts rejection.
+- [x] Batch CPU work runs via `tokio::task::spawn_blocking` (and optionally rayon) so it cannot starve the async reactor; the eval endpoints carry a **smaller** `DefaultBodyLimit` than the bulk data-load endpoints (per-route layer), verified by a test.
+- [x] The `download_bundle` header path sanitizes/escapes `bundle.name` and returns `ApiError::Internal` (500) instead of `unwrap()` on builder error; a test with a bundle name containing `"\r\n"` and quotes asserts a well-formed response or a clean 500, never a panic.
+- [x] A committed **failure-mode matrix** (in `docs/deployment/OPERATIONS_GUIDE.md`) documents fail-open vs fail-closed for: policy load failure, control-plane/sync unreachable, audit sink down/full, evaluator error, and no-policy-loaded — each with the code path that enforces it and a test reference.
+- [x] A clippy gate denies `unwrap_used`/`expect_used` in non-test reachable code (allowed in `#[cfg(test)]`), wired into `ci.yml`'s `lint-and-analyze` job.
 
 ---
 
