@@ -106,6 +106,49 @@ jobs:
             See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
 
   # ==========================================================================
+  # Software Bill of Materials (Plan 06, Step 3 / ADR-2)
+  # ==========================================================================
+  # A CycloneDX SBOM is attached to every release so a buyer's third-party-risk
+  # reviewer can ingest the full dependency graph. cargo-cyclonedx emits one
+  # CycloneDX JSON per workspace crate (each service is its own dependency root),
+  # so we bundle them into a single asset that covers every shipped component.
+  sbom:
+    name: Generate SBOM
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+
+      - name: Generate CycloneDX SBOMs
+        run: |
+          # One CycloneDX JSON per crate, each listing its full transitive tree.
+          cargo cyclonedx --format json --all --all-features
+          mkdir -p sbom
+          find . -name '*.cdx.json' -not -path './target/*' -exec cp {} sbom/ \;
+          tar -czf "reaper-sbom-${{ needs.create-release.outputs.version }}.tar.gz" -C sbom .
+          ls -la sbom/
+
+      - name: Attach SBOM to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: reaper-sbom-${{ needs.create-release.outputs.version }}.tar.gz
+          asset_name: reaper-sbom-${{ needs.create-release.outputs.version }}.tar.gz
+          asset_content_type: application/gzip
+
+  # ==========================================================================
   # Build Release Binaries
   # ==========================================================================
   build-binaries:

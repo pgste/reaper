@@ -2,6 +2,9 @@
 name = "reaper-sdk"
 version = "0.1.0"
 edition = "2021"
+# Not published to crates.io — internal workspace crate (Plan 06: lets
+# cargo-deny treat it as private for license/wildcard checks).
+publish = false
 authors = ["Reaper Contributors"]
 description = "High-performance SDK for Reaper policy evaluation"
 license = "MIT OR Apache-2.0"
@@ -22,7 +25,7 @@ serde_json = { workspace = true }
 sonic-rs = "0.3"
 
 # Error handling
-thiserror = "1.0"
+thiserror = { workspace = true }
 anyhow = "1.0"
 
 # UDS transport (hyper-based)

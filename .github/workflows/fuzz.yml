@@ -1,0 +1,117 @@
+# DSL parser/compiler fuzzing (Plan 06, Step 4).
+#
+# Coverage-guided (libFuzzer) fuzzing of the highest-value untrusted-input
+# surface in an authorization product. Two modes:
+#   - PR/push: a short bounded smoke run per target — catches an obviously
+#     broken parser/compiler fast, without gating merge on a long campaign.
+#   - schedule: a longer nightly campaign against main, with the corpus cached
+#     across runs so coverage accumulates.
+#
+# This is the live acceptance test for Plan 05's DSL nesting-depth bound:
+# reverting that guard should make the fuzzer find a crash.
+
+name: Fuzz (DSL)
+
+on:
+  pull_request:
+    paths:
+      - "crates/policy-engine/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/policy-engine/**"
+      - "fuzz/**"
+  schedule:
+    - cron: "41 4 * * *" # nightly, 04:41 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Use the latest nightly rather than a fixed date: cargo-fuzz needs nightly,
+  # and the workspace's dependencies (cedar-policy, etc.) keep raising their
+  # minimum rustc, so a stale pin fails to build the tree. Latest nightly tracks
+  # those MSRVs. `-Zsanitizer` is stable-shaped, so nightly-to-nightly churn here
+  # is low-risk; a bad nightly is a re-run, not a stuck pin.
+  NIGHTLY: nightly
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_reap, compile_reap]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.NIGHTLY }}
+          # rust-src + the host gnu target so cargo-fuzz can build the sanitizer
+          # runtime against a target whose std is present (avoids E0463 when it
+          # would otherwise pick a musl target with no installed std).
+          components: rust-src
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # Seed the corpus from the committed .reap example policies so the fuzzer
+      # starts from valid, structurally diverse inputs instead of random bytes.
+      - name: Seed corpus
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }}
+          i=0
+          while IFS= read -r f; do
+            cp "$f" "fuzz/corpus/${{ matrix.target }}/seed_$i.reap"
+            i=$((i+1))
+          done < <(find . -name '*.reap' -not -path './target/*' -not -path './fuzz/*')
+          echo "seeded $i corpus files"
+
+      - name: Restore/persist corpus cache
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      # PR/push: 60s smoke. schedule/dispatch: 15min campaign.
+      - name: Set fuzz duration
+        id: dur
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "seconds=900" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=60" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run fuzzer
+        # Pin the target to the host gnu triple: cargo-fuzz otherwise defaults to
+        # a musl target here whose std isn't installed, failing with E0463.
+        run: |
+          cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} \
+            --target x86_64-unknown-linux-gnu \
+            -- -max_total_time=${{ steps.dur.outputs.seconds }} -rss_limit_mb=4096
+
+      # A crash leaves a reproducer under fuzz/artifacts — surface it so the
+      # failure is actionable, not just a red X.
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

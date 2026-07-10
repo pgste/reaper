@@ -2,6 +2,9 @@
 name = "reaper-ebpf"
 version = "0.1.0"
 edition = "2021"
+# Not published to crates.io — internal workspace crate (Plan 06: lets
+# cargo-deny treat it as private for license/wildcard checks).
+publish = false
 description = "eBPF LSM policy enforcement for Reaper - kernel-level <100ns evaluation"
 
 [dependencies]

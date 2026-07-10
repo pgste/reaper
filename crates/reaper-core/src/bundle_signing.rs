@@ -216,7 +216,7 @@ impl SigningKey {
             // generation rather than propagate. Justified panic (Plan 05 gate).
             #[allow(clippy::expect_used)]
             {
-                getrandom::getrandom(&mut seed).expect("OS RNG unavailable");
+                getrandom::fill(&mut seed).expect("OS RNG unavailable");
             }
             // For Ed25519 any 32 bytes is a valid seed; for P-256 a random
             // 32-byte scalar is valid with overwhelming probability (retry the

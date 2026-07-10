@@ -15,6 +15,9 @@ members = [
 ]
 exclude = [
     "benchmarks/reaper-vs-opa",
+    # cargo-fuzz crate: needs a nightly toolchain + libfuzzer; kept out of the
+    # default workspace so normal `cargo build/test --workspace` never touches it.
+    "fuzz",
 ]
 
 # Panic-safety gate (Plan 05, Step 6). A reachable `unwrap()`/`expect()` on an
@@ -82,7 +85,7 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 rand = "0.8"
-postcard = { version = "1.1", features = ["alloc"] }
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 
 [workspace.metadata.release]
 shared-version = true

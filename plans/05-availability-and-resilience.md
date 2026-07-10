@@ -1,5 +1,13 @@
 # Availability & Resilience
 
+> **STATUS: ✅ SHIPPED** — all 6 steps landed via PR #24 (2026-07-10). The
+> `unwrap_used`/`expect_used` clippy gate ships as an opt-in ratchet (reaper-core
+> and reaper-sdk gated now; ~420 legacy call sites tracked for burn-down per
+> crate) rather than a full workspace hard-deny — Step 1's CatchPanicLayer already
+> neutralizes those at runtime as fail-closed 500s. A coverage-guided fuzz target
+> on the now-depth-bounded parser is the natural acceptance test and lands with
+> Plan 06 Step 4.
+
 **Readiness gate:** Operational resilience (Bank of England SS2/21, DORA Art. 11–12). Blocks enterprise/regulated deployment.
 **Priority:** P1 (Synthesis #8) — one finding is borderline P0 (`panic = "abort"` on an enforcement sidecar).
 **Findings closed:** Synthesis #8; Code API-3, API-11; Security P2-1; Perf P1-2.

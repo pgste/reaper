@@ -108,6 +108,78 @@ jobs:
           name: clippy-report
           path: clippy-report.txt
 
+  # Stage 1: Supply-chain assurance (BLOCKS pipeline — Plan 06)
+  # cargo-deny is the blocking PR gate across advisories + licenses + bans +
+  # sources; cargo-audit is the continuous-watch companion (also run on a
+  # schedule in supply-chain-nightly.yml so a CVE disclosed AFTER merge still
+  # turns main red). They overlap on advisories deliberately (ADR-1) — do not
+  # dedupe them away. Never continue-on-error: a supply-chain finding must stop
+  # the build, not be swallowed.
+  supply-chain:
+    name: Supply Chain (deny + audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+
+      - name: cargo-deny (advisories, licenses, bans, sources)
+        run: cargo deny check advisories licenses bans sources
+
+      # `cargo audit` fails on vulnerabilities/unsound advisories against the
+      # committed Cargo.lock. Unmaintained crates are reported but do not fail
+      # the build; a real vulnerability blocks. Ignored advisories are dated,
+      # justified acknowledgements kept in lockstep with deny.toml and
+      # docs/security/VULN_RESPONSE.md — never blanket mutes. All three below are
+      # rustls-webpki 0.101.7, pulled only via the AWS SDK behind optional
+      # storage backends (see deny.toml / VULN_RESPONSE.md for the per-ID risk):
+      #   0104 — CRL-parse panic, unreachable (no CRL use)
+      #   0098/0099 — cert name-constraint bugs, low residual risk (needs CA misissuance)
+      # RUSTSEC-2023-0071 (rsa Marvin timing attack): rsa is pulled ONLY by
+      # sqlx-mysql, which Reaper does NOT enable (postgres/sqlite only) — `cargo
+      # tree -i sqlx-mysql` shows it's not in the compiled graph, it's a
+      # lockfile-only optional dep. cargo-deny's feature-aware graph correctly
+      # ignores it; cargo-audit scans the raw lock, hence this ignore. Not
+      # compiled, not reachable, no upstream fix.
+      - name: cargo-audit (Cargo.lock)
+        run: cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2023-0071
+
+  # Dependency freshness — INFORMATIONAL, never blocks. Prints the latest
+  # available version of every direct dependency alongside what we currently
+  # pin, so upgrade paths (and advisory remediations — a newer version is often
+  # the fix) are visible at a glance in the job's Summary. Read it; don't gate
+  # on it — a green build should not depend on being on the bleeding edge.
+  dependency-freshness:
+    name: Dependency Freshness (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cargo-outdated
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-outdated
+
+      - name: Report outdated dependencies
+        run: |
+          {
+            echo "## Dependency freshness (\`cargo outdated\`)"
+            echo ""
+            echo "Direct dependencies where a newer version is available. Use this"
+            echo "to plan upgrades and to check whether an advisory has a fixed"
+            echo "release. Informational only — this job never fails the build."
+            echo ""
+            echo '```'
+            # --root-deps-only: only the deps WE declare (the actionable ones).
+            cargo outdated --workspace --root-deps-only || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:
     name: Unit Tests
