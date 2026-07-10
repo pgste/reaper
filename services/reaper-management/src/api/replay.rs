@@ -9,11 +9,10 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
-    Router,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -27,10 +26,10 @@ use crate::{
     state::AppState,
 };
 
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/orgs/{org}/replay", post(start_replay))
-        .route("/orgs/{org}/replay/{job_id}", get(get_replay))
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(start_replay))
+        .routes(routes!(get_replay))
 }
 
 /// Admin-only, tenant-scoped (same posture as audit governance).
@@ -63,6 +62,18 @@ fn actor_type_of(user: &AuthenticatedUser) -> ActorType {
 }
 
 /// POST /orgs/{org}/replay — start a counterfactual replay job.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/replay",
+    tag = "replay",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 202, description = "Replay job started")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn start_replay(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -102,6 +113,20 @@ async fn start_replay(
 }
 
 /// GET /orgs/{org}/replay/{job_id} — poll a job (tenant-scoped).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/replay/{job_id}",
+    tag = "replay",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("job_id" = Uuid, Path, description = "Replay job ID")
+    ),
+    responses(
+        (status = 200, description = "Replay job status"),
+        (status = 404, description = "Replay job not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_replay(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

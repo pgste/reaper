@@ -180,6 +180,62 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # Stage 1: API contract (Plan 07, Phase A) — the control-plane OpenAPI 3.1
+  # document is GENERATED from the handlers (utoipa + utoipa-axum), so the served
+  # routes and the published contract share one source of truth. This job BLOCKS:
+  # it fails if the spec is structurally invalid, or if a route is served without
+  # a `#[utoipa::path]` annotation (a raw `.route(..)` that bypasses the contract
+  # — see tests/api_contract.rs).
+  api-contract:
+    name: API Contract (OpenAPI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-ci"
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Contract-parity test (every served route is documented)
+        run: cargo test -p reaper-management --test api_contract
+
+      - name: Generate OpenAPI 3.1 document
+        run: cargo run -p reaper-management --example dump_openapi > openapi-management.json
+
+      - name: Validate OpenAPI 3.1 document
+        run: |
+          python3 -m pip install --quiet openapi-spec-validator
+          openapi-spec-validator openapi-management.json
+
+      - name: Upload OpenAPI document
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openapi-management
+          path: openapi-management.json
+
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:
     name: Unit Tests

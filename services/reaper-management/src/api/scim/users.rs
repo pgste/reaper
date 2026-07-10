@@ -14,6 +14,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::{authenticate_scim, list_response, ScimContext, ScimError, SCHEMA_USER};
@@ -25,7 +26,7 @@ use crate::state::AppState;
 
 // ---------- SCIM resource shapes ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ScimUserInput {
     #[serde(rename = "userName", default)]
     user_name: Option<String>,
@@ -35,7 +36,7 @@ pub struct ScimUserInput {
     active: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct ScimEmail {
     #[serde(default)]
     value: Option<String>,
@@ -50,13 +51,13 @@ pub struct ListQuery {
     filter: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ScimPatch {
     #[serde(rename = "Operations", default)]
     operations: Vec<ScimPatchOp>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct ScimPatchOp {
     #[serde(default)]
     op: String,
@@ -85,6 +86,15 @@ fn user_to_scim(user: &User) -> serde_json::Value {
 // ---------- Handlers ----------
 
 /// List users in the caller's org. Supports `filter=userName eq "x"`.
+#[utoipa::path(
+    get,
+    path = "/scim/v2/Users",
+    tag = "scim",
+    responses(
+        (status = 200, description = "SCIM ListResponse of users")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_users(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -118,6 +128,16 @@ pub async fn list_users(
 }
 
 /// Provision (or adopt) a user and add them to the caller's org.
+#[utoipa::path(
+    post,
+    path = "/scim/v2/Users",
+    tag = "scim",
+    request_body = ScimUserInput,
+    responses(
+        (status = 201, description = "User provisioned")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -186,6 +206,18 @@ pub async fn create_user(
     Ok((StatusCode::CREATED, Json(user_to_scim(&fresh))).into_response())
 }
 
+#[utoipa::path(
+    get,
+    path = "/scim/v2/Users/{id}",
+    tag = "scim",
+    params(
+        ("id" = Uuid, Path, description = "User ID")
+    ),
+    responses(
+        (status = 200, description = "SCIM User resource")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -198,6 +230,19 @@ pub async fn get_user(
 
 /// Replace: the only mutable attribute we honor is `active` (deprovision when
 /// false).
+#[utoipa::path(
+    put,
+    path = "/scim/v2/Users/{id}",
+    tag = "scim",
+    params(
+        ("id" = Uuid, Path, description = "User ID")
+    ),
+    request_body = ScimUserInput,
+    responses(
+        (status = 200, description = "Updated SCIM User resource")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn put_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -213,6 +258,19 @@ pub async fn put_user(
 
 /// PATCH: we honor `active` toggles (the deprovision signal). Other ops are
 /// accepted as no-ops so a conformant client isn't rejected.
+#[utoipa::path(
+    patch,
+    path = "/scim/v2/Users/{id}",
+    tag = "scim",
+    params(
+        ("id" = Uuid, Path, description = "User ID")
+    ),
+    request_body = ScimPatch,
+    responses(
+        (status = 200, description = "Patched SCIM User resource")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn patch_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -231,6 +289,18 @@ pub async fn patch_user(
 
 /// Deprovision: remove from the org, revoke every session, suspend if the user
 /// has no orgs left.
+#[utoipa::path(
+    delete,
+    path = "/scim/v2/Users/{id}",
+    tag = "scim",
+    params(
+        ("id" = Uuid, Path, description = "User ID")
+    ),
+    responses(
+        (status = 204, description = "User deprovisioned")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

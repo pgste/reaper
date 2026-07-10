@@ -27,6 +27,15 @@ use super::types::{
 };
 
 /// Refresh a JWT token
+#[utoipa::path(
+    post,
+    path = "/auth/token/refresh",
+    tag = "auth",
+    request_body = RefreshTokenRequest,
+    responses(
+        (status = 200, description = "New JWT token issued", body = TokenResponse)
+    )
+)]
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
     Json(request): Json<RefreshTokenRequest>,
@@ -63,6 +72,18 @@ pub async fn refresh_token(
 }
 
 /// List API keys for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/api-keys",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of API keys", body = ListApiKeysResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -94,6 +115,19 @@ pub async fn list_api_keys(
 }
 
 /// Create a new API key
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/api-keys",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateApiKeyRequest,
+    responses(
+        (status = 201, description = "API key created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_api_key(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -155,6 +189,19 @@ pub async fn create_api_key(
 }
 
 /// Get an API key by ID
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/api-keys/{key_id}",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("key_id" = Uuid, Path, description = "API key ID")
+    ),
+    responses(
+        (status = 200, description = "API key details", body = ApiKeySummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_api_key(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -190,6 +237,19 @@ pub async fn get_api_key(
 }
 
 /// Revoke an API key
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/api-keys/{key_id}/revoke",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("key_id" = Uuid, Path, description = "API key ID")
+    ),
+    responses(
+        (status = 204, description = "API key revoked")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn revoke_api_key(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -230,6 +290,19 @@ pub async fn revoke_api_key(
 }
 
 /// Delete an API key
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/api-keys/{key_id}",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("key_id" = Uuid, Path, description = "API key ID")
+    ),
+    responses(
+        (status = 204, description = "API key deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_api_key(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

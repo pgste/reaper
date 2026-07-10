@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -27,13 +27,10 @@ use super::policies;
 use super::teams;
 
 /// Build organization routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/orgs", get(list_orgs).post(create_org))
-        .route(
-            "/orgs/{org}",
-            get(get_org).put(update_org).delete(delete_org),
-        )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(list_orgs, create_org))
+        .routes(routes!(get_org, update_org, delete_org))
         // Nested team routes
         .merge(teams::routes())
         // Nested policy routes
@@ -57,7 +54,7 @@ pub struct ListOrgsResponse {
 }
 
 /// Request to create an organization
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateOrgRequest {
     pub name: String,
     pub slug: String,
@@ -68,7 +65,7 @@ pub struct CreateOrgRequest {
 }
 
 /// Request to update an organization
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateOrgRequest {
     pub display_name: Option<String>,
     pub description: Option<String>,
@@ -77,6 +74,15 @@ pub struct UpdateOrgRequest {
 
 /// List organizations. Platform admins see every org; everyone else sees
 /// only the org they belong to (org enumeration is a tenant-isolation leak).
+#[utoipa::path(
+    get,
+    path = "/orgs",
+    tag = "orgs",
+    responses(
+        (status = 200, description = "List of organizations")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_orgs(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -115,6 +121,16 @@ async fn list_orgs(
 /// (session principal), they are recorded as the org's Owner so the org is
 /// immediately manageable by them — orgs created by platform automation
 /// (API keys) have no user to bind.
+#[utoipa::path(
+    post,
+    path = "/orgs",
+    tag = "orgs",
+    request_body = CreateOrgRequest,
+    responses(
+        (status = 201, description = "Organization created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_org(
     State(state): State<Arc<AppState>>,
     OptionalAuth(caller): OptionalAuth,
@@ -184,6 +200,18 @@ async fn create_org(
 }
 
 /// Get an organization by ID or slug (any authenticated member of the org)
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}",
+    tag = "orgs",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Organization details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_org(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -195,6 +223,19 @@ async fn get_org(
 }
 
 /// Update an organization
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}",
+    tag = "orgs",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = UpdateOrgRequest,
+    responses(
+        (status = 200, description = "Organization updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_org(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -220,6 +261,18 @@ async fn update_org(
 }
 
 /// Delete an organization
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}",
+    tag = "orgs",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 204, description = "Organization deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_org(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

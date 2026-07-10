@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -24,13 +24,10 @@ use crate::{
 };
 
 /// Build team routes (nested under orgs)
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/orgs/{org}/teams", get(list_teams).post(create_team))
-        .route(
-            "/orgs/{org}/teams/{team}",
-            get(get_team).put(update_team).delete(delete_team),
-        )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(list_teams, create_team))
+        .routes(routes!(get_team, update_team, delete_team))
 }
 
 /// Query parameters for listing teams
@@ -50,7 +47,7 @@ pub struct ListTeamsResponse {
 }
 
 /// Request to create a team
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTeamRequest {
     pub name: String,
     pub slug: String,
@@ -58,13 +55,25 @@ pub struct CreateTeamRequest {
 }
 
 /// Request to update a team
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateTeamRequest {
     pub name: Option<String>,
     pub description: Option<String>,
 }
 
 /// List teams for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/teams",
+    tag = "teams",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of teams")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_teams(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -92,6 +101,19 @@ async fn list_teams(
 }
 
 /// Create a new team
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/teams",
+    tag = "teams",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateTeamRequest,
+    responses(
+        (status = 201, description = "Team created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_team(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -134,6 +156,19 @@ async fn create_team(
 }
 
 /// Get a team by ID or slug
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/teams/{team}",
+    tag = "teams",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("team" = String, Path, description = "Team ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Team details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_team(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -148,6 +183,20 @@ async fn get_team(
 }
 
 /// Update a team
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/teams/{team}",
+    tag = "teams",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("team" = String, Path, description = "Team ID or slug")
+    ),
+    request_body = UpdateTeamRequest,
+    responses(
+        (status = 200, description = "Team updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_team(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -174,6 +223,19 @@ async fn update_team(
 }
 
 /// Delete a team
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/teams/{team}",
+    tag = "teams",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("team" = String, Path, description = "Team ID or slug")
+    ),
+    responses(
+        (status = 204, description = "Team deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_team(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

@@ -8,12 +8,12 @@ use axum::{
     extract::{Path, State},
     http::HeaderMap,
     response::Json,
-    routing::post,
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info};
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -25,17 +25,14 @@ use crate::{
 };
 
 /// Build webhook routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/webhooks/bundle-update", post(bundle_update_webhook))
-        .route(
-            "/webhooks/bundle-update/{source_id}",
-            post(bundle_update_webhook_with_source),
-        )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(bundle_update_webhook))
+        .routes(routes!(bundle_update_webhook_with_source))
 }
 
 /// Request body for bundle update webhook
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct BundleUpdateRequest {
     /// Source ID (optional if included in URL)
     pub source_id: Option<Uuid>,
@@ -56,7 +53,7 @@ pub struct BundleUpdateRequest {
 }
 
 /// Response for bundle update webhook
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BundleUpdateResponse {
     pub success: bool,
     pub message: String,
@@ -67,6 +64,15 @@ pub struct BundleUpdateResponse {
 }
 
 /// Handle bundle update webhook (source_id in body)
+#[utoipa::path(
+    post,
+    path = "/webhooks/bundle-update",
+    tag = "webhooks",
+    request_body = BundleUpdateRequest,
+    responses(
+        (status = 200, description = "Bundle fetched and stored", body = BundleUpdateResponse)
+    )
+)]
 async fn bundle_update_webhook(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -84,6 +90,18 @@ async fn bundle_update_webhook(
 }
 
 /// Handle bundle update webhook (source_id in URL)
+#[utoipa::path(
+    post,
+    path = "/webhooks/bundle-update/{source_id}",
+    tag = "webhooks",
+    params(
+        ("source_id" = Uuid, Path, description = "Source ID")
+    ),
+    request_body = BundleUpdateRequest,
+    responses(
+        (status = 200, description = "Bundle fetched and stored", body = BundleUpdateResponse)
+    )
+)]
 async fn bundle_update_webhook_with_source(
     State(state): State<Arc<AppState>>,
     Path(source_id): Path<Uuid>,

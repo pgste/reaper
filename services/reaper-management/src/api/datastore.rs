@@ -10,12 +10,11 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{get, post, put},
-    Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -29,52 +28,19 @@ use crate::{
     state::{AppState, ServerEvent},
 };
 
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore",
-            get(get_datastore).post(provision),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/model",
-            get(get_model).put(put_model),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/entities",
-            get(list_entities).post(upsert_entity),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}",
-            get(get_entity).delete(delete_entity),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}/attributes",
-            put(put_attributes),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
-            get(list_bindings).post(add_binding).delete(remove_binding),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/tuples",
-            get(list_tuples).post(write_tuple).delete(remove_tuple),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/publish",
-            post(publish),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/changes",
-            get(get_changes),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/versions",
-            get(list_versions),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{ns}/datastore/versions/{version}",
-            get(get_version),
-        )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(get_datastore, provision))
+        .routes(routes!(get_model, put_model))
+        .routes(routes!(list_entities, upsert_entity))
+        .routes(routes!(get_entity, delete_entity))
+        .routes(routes!(put_attributes))
+        .routes(routes!(list_bindings, add_binding, remove_binding))
+        .routes(routes!(list_tuples, write_tuple, remove_tuple))
+        .routes(routes!(publish))
+        .routes(routes!(get_changes))
+        .routes(routes!(list_versions))
+        .routes(routes!(get_version))
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +101,17 @@ struct ProvisionRequest {
     template: DatastoreTemplate,
 }
 
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Datastore provisioned")),
+    security(("bearer_jwt" = []))
+)]
 async fn provision(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -163,6 +140,17 @@ async fn provision(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Datastore summary")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_datastore(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -189,6 +177,17 @@ async fn get_datastore(
 // Model
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/model",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Datastore model definition")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_model(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -199,6 +198,17 @@ async fn get_model(
     Ok(Json(store.model))
 }
 
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/model",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Model updated")),
+    security(("bearer_jwt" = []))
+)]
 async fn put_model(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -223,6 +233,17 @@ struct EntityListParams {
     entity_type: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/entities",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "List of entities")),
+    security(("bearer_jwt" = []))
+)]
 async fn list_entities(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -237,6 +258,17 @@ async fn list_entities(
     Ok(Json(json!({"entities": entities, "count": entities.len()})))
 }
 
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/entities",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Entity upserted")),
+    security(("bearer_jwt" = []))
+)]
 async fn upsert_entity(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -257,6 +289,18 @@ async fn upsert_entity(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("entity_id" = String, Path, description = "Entity ID")
+    ),
+    responses((status = 200, description = "Entity detail")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_entity(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -271,6 +315,18 @@ async fn get_entity(
     Ok(Json(entity))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("entity_id" = String, Path, description = "Entity ID")
+    ),
+    responses((status = 200, description = "Entity deleted (with cascade)")),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_entity(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -289,6 +345,18 @@ async fn delete_entity(
 
 /// Replace an entity's attribute map (typed, validated). PUT semantics keep
 /// the contract obvious; PATCH-merge can layer on later without breakage.
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}/attributes",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("entity_id" = String, Path, description = "Entity ID")
+    ),
+    responses((status = 200, description = "Entity attributes replaced")),
+    security(("bearer_jwt" = []))
+)]
 async fn put_attributes(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -321,6 +389,17 @@ struct BindingListParams {
     role: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "List of role bindings")),
+    security(("bearer_jwt" = []))
+)]
 async fn list_bindings(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -337,6 +416,17 @@ async fn list_bindings(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Role binding added")),
+    security(("bearer_jwt" = []))
+)]
 async fn add_binding(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -367,6 +457,17 @@ async fn add_binding(
     Ok(Json(json!({"bound": true})))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Role binding removed")),
+    security(("bearer_jwt" = []))
+)]
 async fn remove_binding(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -392,6 +493,17 @@ struct TupleListParams {
     subject: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/tuples",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "List of relationship tuples")),
+    security(("bearer_jwt" = []))
+)]
 async fn list_tuples(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -411,6 +523,17 @@ async fn list_tuples(
     Ok(Json(json!({"tuples": tuples, "count": tuples.len()})))
 }
 
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/tuples",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Relationship tuple written")),
+    security(("bearer_jwt" = []))
+)]
 async fn write_tuple(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -431,6 +554,17 @@ async fn write_tuple(
     Ok(Json(json!({"written": true})))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/tuples",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Relationship tuple removed")),
+    security(("bearer_jwt" = []))
+)]
 async fn remove_tuple(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -449,6 +583,17 @@ async fn remove_tuple(
 // Publish + versions
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/publish",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "New immutable data-bundle version published")),
+    security(("bearer_jwt" = []))
+)]
 async fn publish(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -508,6 +653,17 @@ struct ChangesParams {
 /// materialized fresh via three indexed point queries. When `since` is
 /// older than the compaction floor the response says snapshot_required —
 /// the replica falls back to a full verified deploy.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/changes",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Durable delta pull since a sequence")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_changes(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -569,6 +725,18 @@ async fn get_changes(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/versions",
+    tag = "datastore",
+    operation_id = "datastore_list_versions",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "List of published versions")),
+    security(("bearer_jwt" = []))
+)]
 async fn list_versions(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -584,6 +752,19 @@ async fn list_versions(
 
 /// Returns the materialized document — the exact payload an agent POSTs to
 /// its own /api/v1/data endpoint (or reaper-sync applies).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/versions/{version}",
+    tag = "datastore",
+    operation_id = "datastore_get_version",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("version" = i64, Path, description = "Version number")
+    ),
+    responses((status = 200, description = "Materialized version document")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_version(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

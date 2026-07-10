@@ -9,12 +9,11 @@
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::error::{ApiError, ApiResult},
@@ -26,13 +25,13 @@ use crate::{
 };
 
 /// Build decision-query routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/orgs/{org}/decisions", get(list_decisions))
-        .route("/orgs/{org}/decisions/stats", get(decision_stats))
-        .route("/orgs/{org}/decisions/timeseries", get(decision_timeseries))
-        .route("/orgs/{org}/decisions/facets", get(decision_facets))
-        .route("/orgs/{org}/decisions/{decision_id}", get(get_decision))
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(list_decisions))
+        .routes(routes!(decision_stats))
+        .routes(routes!(decision_timeseries))
+        .routes(routes!(decision_facets))
+        .routes(routes!(get_decision))
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +94,18 @@ fn store_or_unavailable(state: &AppState) -> ApiResult<&crate::decisions::Decisi
 }
 
 /// GET /api/v1/orgs/{org}/decisions — full-history, cross-agent, tenant-scoped.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/decisions",
+    tag = "decisions",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Decisions for the organization")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_decisions(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -111,6 +122,18 @@ async fn list_decisions(
 }
 
 /// GET /api/v1/orgs/{org}/decisions/stats
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/decisions/stats",
+    tag = "decisions",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Decision statistics for the organization")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn decision_stats(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -127,6 +150,18 @@ async fn decision_stats(
 }
 
 /// GET /api/v1/orgs/{org}/decisions/timeseries — bucketed counts for charts.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/decisions/timeseries",
+    tag = "decisions",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Bucketed decision counts for charts")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn decision_timeseries(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -153,6 +188,18 @@ async fn decision_timeseries(
 
 /// GET /api/v1/orgs/{org}/decisions/facets — distinct filter values with
 /// counts (actions, decisions, policy names, agent ids) for UI dropdowns.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/decisions/facets",
+    tag = "decisions",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Distinct filter values with counts")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn decision_facets(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -171,6 +218,20 @@ async fn decision_facets(
 /// GET /api/v1/orgs/{org}/decisions/{decision_id} — explain view for one
 /// decision (includes `input_data`, possibly an encryption envelope the
 /// tenant's key holder can open).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/decisions/{decision_id}",
+    tag = "decisions",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("decision_id" = String, Path, description = "Decision ID")
+    ),
+    responses(
+        (status = 200, description = "Explain view for one decision"),
+        (status = 404, description = "Decision not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_decision(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

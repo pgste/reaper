@@ -24,6 +24,18 @@ use super::types::{
 };
 
 /// List members of an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/members",
+    tag = "users",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of organization members")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_org_members(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -64,6 +76,19 @@ pub async fn list_org_members(
 }
 
 /// Get a specific member
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/members/{user_id}",
+    tag = "users",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("user_id" = Uuid, Path, description = "Member user ID")
+    ),
+    responses(
+        (status = 200, description = "Member details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_member(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -112,6 +137,18 @@ pub async fn get_member(
 }
 
 /// Invite a member to an organization
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/members",
+    tag = "users",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 201, description = "Member invited")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn invite_member(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -208,6 +245,19 @@ pub async fn invite_member(
 }
 
 /// Update a member's role
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/members/{user_id}/role",
+    tag = "users",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("user_id" = Uuid, Path, description = "Member user ID")
+    ),
+    responses(
+        (status = 204, description = "Member role updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_member_role(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -284,6 +334,19 @@ pub async fn update_member_role(
 }
 
 /// Remove a member from an organization
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/members/{user_id}",
+    tag = "users",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("user_id" = Uuid, Path, description = "Member user ID")
+    ),
+    responses(
+        (status = 204, description = "Member removed")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn remove_member(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,

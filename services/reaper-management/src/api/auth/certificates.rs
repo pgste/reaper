@@ -26,6 +26,18 @@ use super::types::{
 };
 
 /// List client certificates for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/auth/certificates",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of client certificates", body = ListCertificatesResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_certificates(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -57,6 +69,19 @@ pub async fn list_certificates(
 }
 
 /// Register a new client certificate
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/certificates",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = RegisterCertificateRequest,
+    responses(
+        (status = 201, description = "Certificate registered", body = CertificateSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn register_certificate(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -115,6 +140,19 @@ pub async fn register_certificate(
 }
 
 /// Get a client certificate by ID
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/auth/certificates/{cert_id}",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("cert_id" = Uuid, Path, description = "Certificate ID")
+    ),
+    responses(
+        (status = 200, description = "Certificate details", body = CertificateSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_certificate(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -150,6 +188,19 @@ pub async fn get_certificate(
 }
 
 /// Delete a client certificate
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/auth/certificates/{cert_id}",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("cert_id" = Uuid, Path, description = "Certificate ID")
+    ),
+    responses(
+        (status = 204, description = "Certificate deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_certificate(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -188,6 +239,20 @@ pub async fn delete_certificate(
 }
 
 /// Revoke a client certificate
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/certificates/{cert_id}/revoke",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("cert_id" = Uuid, Path, description = "Certificate ID")
+    ),
+    request_body = RevokeCertificateRequest,
+    responses(
+        (status = 204, description = "Certificate revoked")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn revoke_certificate(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -233,6 +298,20 @@ pub async fn revoke_certificate(
 }
 
 /// Bind a certificate to an agent
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/certificates/{cert_id}/bind",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("cert_id" = Uuid, Path, description = "Certificate ID")
+    ),
+    request_body = BindCertificateRequest,
+    responses(
+        (status = 204, description = "Certificate bound to agent")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn bind_certificate(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -283,6 +362,19 @@ pub async fn bind_certificate(
 }
 
 /// Unbind a certificate from its agent
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/certificates/{cert_id}/unbind",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("cert_id" = Uuid, Path, description = "Certificate ID")
+    ),
+    responses(
+        (status = 204, description = "Certificate unbound from agent")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn unbind_certificate(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

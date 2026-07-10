@@ -17,6 +17,20 @@ use crate::{
 use super::types::{CreatePinRequest, PinResponse};
 
 /// Create a version pin
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/agents/{agent_id}/pin",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 201, description = "Version pin created"),
+        (status = 404, description = "Agent or bundle not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_pin(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -60,6 +74,19 @@ pub async fn create_pin(
 }
 
 /// Get version pin for an agent
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents/{agent_id}/pin",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "Version pin (or null if none)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_pin(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -86,6 +113,20 @@ pub async fn get_pin(
 }
 
 /// Delete a version pin
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/agents/{agent_id}/pin",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 204, description = "Pin deleted"),
+        (status = 404, description = "Pin not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_pin(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -114,6 +155,18 @@ pub async fn delete_pin(
 }
 
 /// List all version pins
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/pins",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of version pins")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_pins(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

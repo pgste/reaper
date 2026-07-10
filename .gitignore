@@ -53,3 +53,4 @@ test-data.json
 
 /benchmarks/reaper-vs-opa/.archive
 /benchmarks/reaper-vs-opa/results
+.build-tmp/

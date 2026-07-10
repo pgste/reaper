@@ -17,6 +17,15 @@ use crate::{
 use super::types::{VerifyEmailRequest, VerifyEmailResponse};
 
 /// Verify email with token
+#[utoipa::path(
+    post,
+    path = "/auth/email/verify",
+    tag = "users",
+    request_body = VerifyEmailRequest,
+    responses(
+        (status = 200, description = "Email verification result", body = VerifyEmailResponse)
+    )
+)]
 pub async fn verify_email(
     State(state): State<Arc<AppState>>,
     Json(request): Json<VerifyEmailRequest>,
@@ -79,6 +88,15 @@ pub async fn verify_email(
 }
 
 /// Resend verification email
+#[utoipa::path(
+    post,
+    path = "/auth/email/resend",
+    tag = "users",
+    responses(
+        (status = 204, description = "Verification email resent")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn resend_verification(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,

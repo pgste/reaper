@@ -13,13 +13,14 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
-    routing::{get, put},
-    Json, Router,
+    Json,
 };
 use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::oauth::helpers::{decrypt_token, encrypt_token};
@@ -63,22 +64,19 @@ struct TokenResponse {
 }
 
 /// Build the SSO routes.
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // Login flow (unauthenticated — this is how a user logs in).
-        .route("/auth/sso/{org}/start", get(oidc_start))
-        .route("/auth/sso/{org}/callback", get(oidc_callback))
+        .routes(routes!(oidc_start))
+        .routes(routes!(oidc_callback))
         // Per-org IdP configuration (org admin).
-        .route(
-            "/orgs/{org}/sso/config",
-            put(put_sso_config).get(get_sso_config),
-        )
+        .routes(routes!(put_sso_config, get_sso_config))
 }
 
 // ==================== Config CRUD ====================
 
 /// Body for registering/updating an org's OIDC IdP.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct SsoConfigBody {
     #[serde(default = "default_protocol")]
     protocol: String,
@@ -112,6 +110,19 @@ fn default_role() -> String {
 }
 
 /// Register or update the org's SSO configuration (org admin only).
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/sso/config",
+    tag = "sso",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = SsoConfigBody,
+    responses(
+        (status = 200, description = "SSO configuration stored")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn put_sso_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -178,6 +189,18 @@ async fn put_sso_config(
 }
 
 /// Read the org's OIDC config (secret is never serialized).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/sso/config",
+    tag = "sso",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "SSO configuration (null if unset)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_sso_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -193,6 +216,17 @@ async fn get_sso_config(
 // ==================== OIDC login flow ====================
 
 /// Begin OIDC login: 302 to the IdP authorize endpoint with PKCE + signed state.
+#[utoipa::path(
+    get,
+    path = "/auth/sso/{org}/start",
+    tag = "sso",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 303, description = "Redirect to the IdP authorize endpoint")
+    )
+)]
 async fn oidc_start(
     State(state): State<Arc<AppState>>,
     Path(org): Path<String>,
@@ -246,6 +280,17 @@ struct CallbackQuery {
 
 /// Complete OIDC login: validate state, exchange the code, validate the ID
 /// token, then establish a Reaper session.
+#[utoipa::path(
+    get,
+    path = "/auth/sso/{org}/callback",
+    tag = "sso",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Session established; returns a session token")
+    )
+)]
 async fn oidc_callback(
     State(state): State<Arc<AppState>>,
     Path(org): Path<String>,

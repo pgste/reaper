@@ -12,10 +12,10 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::error::{ApiError, ApiResult},
@@ -27,19 +27,24 @@ use crate::{
 };
 use reaper_core::revocation::{RevocationList, SignedRevocationList};
 
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route(
-        "/orgs/{org}/revocations",
-        get(get_revocations)
-            .post(add_revocation)
-            .delete(remove_revocation),
-    )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new().routes(routes!(get_revocations, add_revocation, remove_revocation))
 }
 
 /// Fetch the org's signed revocation list. Agents call this (agent:read); an
 /// org admin can read it too. Errors when signing is not configured — a list
 /// that can't be signed is one agents can't trust, so we refuse to serve a
 /// forgeable one rather than pretend.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/revocations",
+    tag = "revocations",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Signed revocation list")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_revocations(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -77,7 +82,7 @@ async fn get_revocations(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct RevokeRequest {
     /// "hash" (bundle-bytes sha256, lowercase hex) or "key_id".
     kind: String,
@@ -86,6 +91,17 @@ struct RevokeRequest {
 }
 
 /// Revoke a bundle hash or signing key id (org admin). Bumps the list serial.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/revocations",
+    tag = "revocations",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = RevokeRequest,
+    responses((status = 201, description = "Revocation added; serial bumped")),
+    security(("bearer_jwt" = []))
+)]
 async fn add_revocation(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -116,13 +132,24 @@ async fn add_revocation(
     ))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct UnrevokeRequest {
     kind: String,
     value: String,
 }
 
 /// Un-revoke (org admin). Bumps the serial so agents refetch.
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/revocations",
+    tag = "revocations",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = UnrevokeRequest,
+    responses((status = 200, description = "Revocation removed; serial bumped")),
+    security(("bearer_jwt" = []))
+)]
 async fn remove_revocation(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

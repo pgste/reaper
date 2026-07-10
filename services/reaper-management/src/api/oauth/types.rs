@@ -5,6 +5,7 @@ use hmac::{Hmac, Mac};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -137,7 +138,7 @@ pub(super) struct GitHubUser {
 }
 
 /// GitHub repository
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct GitHubRepo {
     pub id: i64,
     pub name: String,
@@ -151,7 +152,7 @@ pub struct GitHubRepo {
 }
 
 /// Request to create a source from GitHub repo
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateSourceFromGitHubRequest {
     pub repo_full_name: String, // e.g., "owner/repo"
     pub branch: Option<String>,
@@ -160,13 +161,13 @@ pub struct CreateSourceFromGitHubRequest {
 }
 
 /// List connections response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListConnectionsResponse {
     pub connections: Vec<ConnectionSummary>,
 }
 
 /// Connection summary (without sensitive data)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ConnectionSummary {
     pub provider: String,
     pub provider_username: Option<String>,

@@ -14,9 +14,9 @@ use std::sync::Arc;
 use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
-    Json, Router,
+    Json,
 };
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::auth::scim::store::ScimTokenStore;
@@ -122,29 +122,19 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Build the SCIM + token-admin routes.
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // SCIM protocol (token-authenticated; org from the token).
-        .route(
-            "/scim/v2/Users",
-            get(users::list_users).post(users::create_user),
-        )
-        .route(
-            "/scim/v2/Users/{id}",
-            get(users::get_user)
-                .put(users::put_user)
-                .patch(users::patch_user)
-                .delete(users::delete_user),
-        )
-        .route("/scim/v2/Groups", get(groups::list_groups))
-        .route("/scim/v2/Groups/{id}", get(groups::get_group))
+        .routes(routes!(users::list_users, users::create_user))
+        .routes(routes!(
+            users::get_user,
+            users::put_user,
+            users::patch_user,
+            users::delete_user
+        ))
+        .routes(routes!(groups::list_groups))
+        .routes(routes!(groups::get_group))
         // Token administration (org admin; standard auth).
-        .route(
-            "/orgs/{org}/scim/tokens",
-            post(tokens::create_token).get(tokens::list_tokens),
-        )
-        .route(
-            "/orgs/{org}/scim/tokens/{token_id}",
-            axum::routing::delete(tokens::revoke_token),
-        )
+        .routes(routes!(tokens::create_token, tokens::list_tokens))
+        .routes(routes!(tokens::revoke_token))
 }

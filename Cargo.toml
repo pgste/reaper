@@ -71,6 +71,17 @@ futures = "0.3"
 # Web framework for API services
 axum = { version = "0.8.7", features = ["json", "tokio"] }
 tower = "0.5.2"
+
+# OpenAPI 3.1 contract generation (Plan 07: API governance)
+# utoipa-axum keeps the axum route table and the generated spec a single
+# source of truth, so the contract-parity gate cannot drift.
+# NOTE: `axum_extras` is deliberately NOT enabled. It makes utoipa introspect
+# handler extractor args (`Json<T>`, `Bytes`) and demand `T: ToSchema` even
+# without an explicit `request_body =`, which would force `ToSchema` onto every
+# foreign domain type a handler happens to accept. We drive the contract purely
+# from the explicit `#[utoipa::path]` annotations instead.
+utoipa = { version = "5", features = ["uuid", "chrono"] }
+utoipa-axum = "0.2"
 hyper = "1.8.1"
 hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
 http-body-util = "0.1"

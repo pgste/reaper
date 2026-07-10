@@ -19,6 +19,18 @@ use crate::{
 use super::types::{CreateJwksConfigRequest, JwksConfigSummary, ListJwksConfigsResponse};
 
 /// List JWKS configurations for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/auth/jwks",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of JWKS configurations", body = ListJwksConfigsResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_jwks_configs(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -48,6 +60,19 @@ pub async fn list_jwks_configs(
 }
 
 /// Create a new JWKS configuration
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/jwks",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateJwksConfigRequest,
+    responses(
+        (status = 201, description = "JWKS configuration created", body = JwksConfigSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_jwks_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -89,6 +114,19 @@ pub async fn create_jwks_config(
 }
 
 /// Get a JWKS configuration by ID
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/auth/jwks/{config_id}",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("config_id" = Uuid, Path, description = "JWKS configuration ID")
+    ),
+    responses(
+        (status = 200, description = "JWKS configuration details", body = JwksConfigSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_jwks_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -126,6 +164,19 @@ pub async fn get_jwks_config(
 }
 
 /// Delete a JWKS configuration
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/auth/jwks/{config_id}",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("config_id" = Uuid, Path, description = "JWKS configuration ID")
+    ),
+    responses(
+        (status = 204, description = "JWKS configuration deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_jwks_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -171,6 +222,19 @@ pub async fn delete_jwks_config(
 }
 
 /// Activate a JWKS configuration
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/jwks/{config_id}/activate",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("config_id" = Uuid, Path, description = "JWKS configuration ID")
+    ),
+    responses(
+        (status = 204, description = "JWKS configuration activated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn activate_jwks_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -211,6 +275,19 @@ pub async fn activate_jwks_config(
 }
 
 /// Deactivate a JWKS configuration
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auth/jwks/{config_id}/deactivate",
+    tag = "auth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("config_id" = Uuid, Path, description = "JWKS configuration ID")
+    ),
+    responses(
+        (status = 204, description = "JWKS configuration deactivated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn deactivate_jwks_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

@@ -17,6 +17,18 @@ use crate::{
 use super::types::{CreateStrategyRequest, StrategiesQuery, StrategyResponse};
 
 /// List deployment strategies
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/deployment-strategies",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of deployment strategies")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_strategies(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -45,6 +57,18 @@ pub async fn list_strategies(
 }
 
 /// Create a deployment strategy
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/deployment-strategies",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 201, description = "Deployment strategy created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_strategy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -80,6 +104,20 @@ pub async fn create_strategy(
 }
 
 /// Get a deployment strategy
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/deployment-strategies/{strategy_id}",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("strategy_id" = Uuid, Path, description = "Strategy ID")
+    ),
+    responses(
+        (status = 200, description = "Deployment strategy details"),
+        (status = 404, description = "Strategy not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_strategy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -116,6 +154,20 @@ pub async fn get_strategy(
 }
 
 /// Delete a deployment strategy
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/deployment-strategies/{strategy_id}",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("strategy_id" = Uuid, Path, description = "Strategy ID")
+    ),
+    responses(
+        (status = 204, description = "Strategy deleted"),
+        (status = 404, description = "Strategy not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_strategy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

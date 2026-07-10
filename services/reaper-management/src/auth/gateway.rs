@@ -36,12 +36,15 @@ fn is_public_path(path: &str) -> bool {
     let p = if p.is_empty() { "/" } else { p };
 
     // Liveness/readiness/metrics — orchestrators scrape these unauthenticated.
+    // `/openapi.json` is the public API contract (Plan 07) — the spec describes
+    // the surface, it does not expose data.
     if p == "/health"
         || p.starts_with("/health/")
         || p == "/live"
         || p == "/ready"
         || p == "/metrics"
         || p.starts_with("/metrics/")
+        || p == "/openapi.json"
     {
         return true;
     }

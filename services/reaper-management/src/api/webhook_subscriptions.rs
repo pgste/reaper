@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -26,20 +26,11 @@ use crate::{
 };
 
 /// Build webhook subscription routes (nested under orgs)
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/orgs/{org}/webhooks",
-            get(list_webhooks).post(create_webhook),
-        )
-        .route(
-            "/orgs/{org}/webhooks/{webhook}",
-            get(get_webhook).put(update_webhook).delete(delete_webhook),
-        )
-        .route(
-            "/orgs/{org}/webhooks/{webhook}/test",
-            axum::routing::post(test_webhook),
-        )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(list_webhooks, create_webhook))
+        .routes(routes!(get_webhook, update_webhook, delete_webhook))
+        .routes(routes!(test_webhook))
 }
 
 /// Query parameters for listing webhooks
@@ -105,7 +96,7 @@ pub struct UpdateWebhookRequest {
 }
 
 /// Response for webhook test
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TestWebhookResponse {
     pub success: bool,
     pub delivery_id: Uuid,
@@ -127,6 +118,18 @@ impl From<WebhookDeliveryResult> for TestWebhookResponse {
 }
 
 /// List webhook subscriptions for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/webhooks",
+    tag = "webhooks",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of webhook subscriptions")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_webhooks(
     State(state): State<Arc<AppState>>,
     Path(org): Path<String>,
@@ -150,6 +153,18 @@ async fn list_webhooks(
 }
 
 /// Create a new webhook subscription
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/webhooks",
+    tag = "webhooks",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 201, description = "Webhook subscription created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_webhook(
     State(state): State<Arc<AppState>>,
     Path(org): Path<String>,
@@ -207,6 +222,19 @@ async fn create_webhook(
 }
 
 /// Get a webhook subscription by ID or name
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/webhooks/{webhook}",
+    tag = "webhooks",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("webhook" = String, Path, description = "Webhook ID or name")
+    ),
+    responses(
+        (status = 200, description = "Webhook subscription")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
@@ -221,6 +249,19 @@ async fn get_webhook(
 }
 
 /// Update a webhook subscription
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/webhooks/{webhook}",
+    tag = "webhooks",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("webhook" = String, Path, description = "Webhook ID or name")
+    ),
+    responses(
+        (status = 200, description = "Webhook subscription updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
@@ -267,6 +308,19 @@ async fn update_webhook(
 }
 
 /// Delete a webhook subscription
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/webhooks/{webhook}",
+    tag = "webhooks",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("webhook" = String, Path, description = "Webhook ID or name")
+    ),
+    responses(
+        (status = 204, description = "Webhook subscription deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
@@ -287,6 +341,19 @@ async fn delete_webhook(
 }
 
 /// Test a webhook by sending a test payload
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/webhooks/{webhook}/test",
+    tag = "webhooks",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("webhook" = String, Path, description = "Webhook ID or name")
+    ),
+    responses(
+        (status = 200, description = "Webhook test delivery result", body = TestWebhookResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn test_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,

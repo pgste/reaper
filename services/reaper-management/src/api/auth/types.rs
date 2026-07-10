@@ -1,6 +1,7 @@
 //! Request and response types for authentication API endpoints.
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::{jwks::JwksConfig, mtls::ClientCertificate, ApiKey};
@@ -8,13 +9,13 @@ use crate::auth::{jwks::JwksConfig, mtls::ClientCertificate, ApiKey};
 // ==================== API Key Types ====================
 
 /// Response for listing API keys
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListApiKeysResponse {
     pub api_keys: Vec<ApiKeySummary>,
 }
 
 /// Summary of an API key (without sensitive data)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ApiKeySummary {
     pub id: Uuid,
     pub name: String,
@@ -42,7 +43,7 @@ impl From<ApiKey> for ApiKeySummary {
 }
 
 /// Request to create an API key
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateApiKeyRequest {
     pub name: String,
     #[serde(default)]
@@ -53,13 +54,13 @@ pub struct CreateApiKeyRequest {
 // ==================== Token Types ====================
 
 /// Request to refresh a token
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RefreshTokenRequest {
     pub token: String,
 }
 
 /// Response with new token
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TokenResponse {
     pub token: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
@@ -68,13 +69,13 @@ pub struct TokenResponse {
 // ==================== JWKS Types ====================
 
 /// Response for listing JWKS configurations
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListJwksConfigsResponse {
     pub configs: Vec<JwksConfigSummary>,
 }
 
 /// Summary of a JWKS configuration
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct JwksConfigSummary {
     pub id: Uuid,
     pub name: String,
@@ -104,7 +105,7 @@ impl From<JwksConfig> for JwksConfigSummary {
 }
 
 /// Request to create a JWKS configuration
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateJwksConfigRequest {
     /// Display name for this configuration
     pub name: String,
@@ -119,13 +120,13 @@ pub struct CreateJwksConfigRequest {
 // ==================== Client Certificate Types ====================
 
 /// Response for listing client certificates
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListCertificatesResponse {
     pub certificates: Vec<CertificateSummary>,
 }
 
 /// Summary of a client certificate
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CertificateSummary {
     pub id: Uuid,
     pub fingerprint: String,
@@ -162,7 +163,7 @@ impl From<ClientCertificate> for CertificateSummary {
 }
 
 /// Request to register a client certificate
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterCertificateRequest {
     /// SHA-256 fingerprint of the certificate (hex encoded)
     pub fingerprint: String,
@@ -179,13 +180,13 @@ pub struct RegisterCertificateRequest {
 }
 
 /// Request to revoke a certificate
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RevokeCertificateRequest {
     pub reason: Option<String>,
 }
 
 /// Request to bind a certificate to an agent
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct BindCertificateRequest {
     pub agent_id: Uuid,
 }

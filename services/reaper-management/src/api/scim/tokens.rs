@@ -9,6 +9,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::api::error::{ApiError, ApiResult};
@@ -19,12 +20,25 @@ use crate::auth::scim::store::ScimTokenStore;
 use crate::auth::scopes::Scope;
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTokenRequest {
     pub name: String,
 }
 
 /// Mint a SCIM token. The plaintext is returned **once** in this response.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/scim/tokens",
+    tag = "scim",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateTokenRequest,
+    responses(
+        (status = 201, description = "SCIM token created (plaintext returned once)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_token(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -61,6 +75,18 @@ pub async fn create_token(
 }
 
 /// List an org's SCIM tokens (metadata only — never the secret).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/scim/tokens",
+    tag = "scim",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of SCIM token metadata")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_tokens(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -85,6 +111,19 @@ pub async fn list_tokens(
 }
 
 /// Revoke a SCIM token.
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/scim/tokens/{token_id}",
+    tag = "scim",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("token_id" = Uuid, Path, description = "SCIM token ID")
+    ),
+    responses(
+        (status = 204, description = "SCIM token revoked")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn revoke_token(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
