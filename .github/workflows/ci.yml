@@ -142,6 +142,38 @@ jobs:
       - name: cargo-audit (Cargo.lock)
         run: cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
 
+  # Dependency freshness — INFORMATIONAL, never blocks. Prints the latest
+  # available version of every direct dependency alongside what we currently
+  # pin, so upgrade paths (and advisory remediations — a newer version is often
+  # the fix) are visible at a glance in the job's Summary. Read it; don't gate
+  # on it — a green build should not depend on being on the bleeding edge.
+  dependency-freshness:
+    name: Dependency Freshness (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cargo-outdated
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-outdated
+
+      - name: Report outdated dependencies
+        run: |
+          {
+            echo "## Dependency freshness (\`cargo outdated\`)"
+            echo ""
+            echo "Direct dependencies where a newer version is available. Use this"
+            echo "to plan upgrades and to check whether an advisory has a fixed"
+            echo "release. Informational only — this job never fails the build."
+            echo ""
+            echo '```'
+            # --root-deps-only: only the deps WE declare (the actionable ones).
+            cargo outdated --workspace --root-deps-only || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:
     name: Unit Tests

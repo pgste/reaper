@@ -57,6 +57,16 @@ ignore = [
     # wiremock 0.6), proc-macro-error (→ tabled 0.17). Revisit when axum-server
     # migrates off rustls-pemfile.
     "RUSTSEC-2025-0134",
+
+    # RUSTSEC-2026-0173: proc-macro-error2 is UNMAINTAINED (the maintained fork of
+    # proc-macro-error was itself just archived) — a maintenance signal, NOT a
+    # vulnerability (no CVE). It is a BUILD-TIME proc-macro helper pulled by
+    # tabled_derive → tabled (reaper-cli table rendering); it is not in any
+    # shipped binary. Every tabled version pulls an unmaintained proc-macro-error
+    # variant (0.16 pulled the original, 0.21 pulls this fork), so there is no
+    # better option short of replacing tabled — not warranted for a build-time
+    # dep. Revisit if tabled migrates (e.g. to manyhow) or we swap table crates.
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]

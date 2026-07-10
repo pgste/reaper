@@ -57,6 +57,11 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.NIGHTLY }}
+          # rust-src + the host gnu target so cargo-fuzz can build the sanitizer
+          # runtime against a target whose std is present (avoids E0463 when it
+          # would otherwise pick a musl target with no installed std).
+          components: rust-src
+          targets: x86_64-unknown-linux-gnu
 
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@v2
@@ -94,8 +99,11 @@ jobs:
           fi
 
       - name: Run fuzzer
+        # Pin the target to the host gnu triple: cargo-fuzz otherwise defaults to
+        # a musl target here whose std isn't installed, failing with E0463.
         run: |
           cargo +${{ env.NIGHTLY }} fuzz run ${{ matrix.target }} \
+            --target x86_64-unknown-linux-gnu \
             -- -max_total_time=${{ steps.dur.outputs.seconds }} -rss_limit_mb=4096
 
       # A crash leaves a reproducer under fuzz/artifacts — surface it so the
