@@ -615,14 +615,12 @@ async fn download_bundle(
     let bundle = state.bundle_service.get_scoped(org_id, bundle_id).await?;
     let download = state.bundle_service.download(bundle_id).await?;
 
-    let filename = format!("{}-{}.rbb", bundle.name, bundle_id);
-
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename),
+            bundle_content_disposition(&bundle.name, &bundle_id),
         )
         .header(header::CONTENT_LENGTH, download.data.len());
 
@@ -639,7 +637,37 @@ async fn download_bundle(
         }
     }
 
-    Ok(builder.body(Body::from(download.data)).unwrap())
+    // A malformed header earlier in the chain poisons the builder; surface a
+    // clean 500 instead of `.unwrap()` panicking the process (Plan 05, Step 4).
+    builder
+        .body(Body::from(download.data))
+        .map_err(|e| ApiError::Internal(format!("failed to build bundle download response: {e}")))
+}
+
+/// Build a safe `Content-Disposition` value for a bundle download.
+///
+/// `bundle.name` is user-controlled and flows into a response header. A raw
+/// name containing CR/LF, quotes, or other bytes invalid in a header value
+/// would either inject a header (response splitting) or make `HeaderValue`
+/// construction fail and poison the response builder. Per RFC 6266 we emit a
+/// sanitized ASCII `filename` fallback (only `[A-Za-z0-9._-]`, everything else
+/// collapsed to `_`) plus an RFC 5987 `filename*` that percent-encodes the real
+/// name, so Unicode survives without ever placing a raw control byte in the
+/// header. The result is always a valid header value.
+fn bundle_content_disposition(name: &str, bundle_id: &Uuid) -> String {
+    let raw = format!("{name}-{bundle_id}.rbb");
+    let ascii_fallback: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let encoded = urlencoding::encode(&raw);
+    format!("attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 /// Get the currently promoted bundle
@@ -873,4 +901,61 @@ async fn get_bundle_diff(
         policies_unchanged: unchanged_count,
         summary,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bundle_content_disposition;
+    use axum::http::HeaderValue;
+    use uuid::Uuid;
+
+    #[test]
+    fn content_disposition_neutralizes_header_injection() {
+        let id = Uuid::nil();
+        // A name that tries to split the response (CRLF) and break out of the
+        // quoted filename token (embedded `"`) to smuggle another directive.
+        let evil = "evil\r\nSet-Cookie: pwned=1\"; attachment";
+        let value = bundle_content_disposition(evil, &id);
+
+        // Response-splitting is dead: no raw CR/LF survives, so the value is a
+        // single legal header value (`HeaderValue` rejects CR/LF outright).
+        let hv = HeaderValue::from_str(&value).expect("sanitized value is a valid header");
+        assert!(
+            !hv.as_bytes().contains(&b'\r') && !hv.as_bytes().contains(&b'\n'),
+            "no CR/LF"
+        );
+
+        // Quote-injection is dead: the embedded `"` was collapsed to `_`, so the
+        // only quotes are the two we add around the ASCII fallback — the
+        // attacker cannot close the token early and append a directive.
+        assert_eq!(
+            value.matches('"').count(),
+            2,
+            "no stray quote escapes token"
+        );
+    }
+
+    #[test]
+    fn content_disposition_preserves_unicode_via_rfc5987() {
+        let id = Uuid::nil();
+        let value = bundle_content_disposition("policy-café-😀", &id);
+
+        // Valid header value.
+        HeaderValue::from_str(&value).expect("valid header value");
+        // ASCII fallback present; non-ASCII collapsed to `_`.
+        assert!(value.contains("filename=\""));
+        // RFC 5987 form preserves the real (percent-encoded) name.
+        assert!(value.contains("filename*=UTF-8''"));
+        let expected =
+            urlencoding::encode(&format!("policy-café-😀-{}.rbb", Uuid::nil())).into_owned();
+        assert!(value.contains(&expected), "percent-encoded name present");
+    }
+
+    #[test]
+    fn content_disposition_plain_name_roundtrips() {
+        let id = Uuid::nil();
+        let value = bundle_content_disposition("my-bundle", &id);
+        assert!(value.contains(&format!("filename=\"my-bundle-{}.rbb\"", Uuid::nil())));
+        HeaderValue::from_str(&value).expect("valid header value");
+    }
 }

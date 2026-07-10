@@ -72,7 +72,7 @@ axum-extra = { version = "0.10", features = ["typed-header"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower = { workspace = true }
-tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "catch-panic"] }
 async-stream = "0.3"
 async-trait = "0.1"
 

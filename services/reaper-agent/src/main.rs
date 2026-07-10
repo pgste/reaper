@@ -5,6 +5,7 @@ mod handlers;
 mod management;
 mod metrics_cache;
 mod observability;
+mod panic_guard;
 mod state;
 mod tls;
 mod types;
@@ -632,6 +633,15 @@ async fn main() -> anyhow::Result<()> {
 
     let app = app
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)) // 256MB: bulk data loads (100k+ entity benchmark datasets) exceed 100MB
+        // OUTERMOST (added last = wraps everything): a handler panic becomes a
+        // fail-closed 500 for that one request instead of killing the process
+        // — an enforcement sidecar aborting takes down every co-located
+        // workload that trusts it (Plan 05, Step 1). Requires the unwind panic
+        // strategy (the workspace release profile deliberately does NOT set
+        // panic="abort").
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            panic_guard::catch_panic_response,
+        ))
         .with_state(state);
 
     // Clone router for UDS listener before the TCP server consumes it

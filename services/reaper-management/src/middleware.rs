@@ -280,9 +280,60 @@ pub async fn access_log(request: Request, next: Next) -> Response<Body> {
     response
 }
 
+/// Deny-equivalent body for a caught panic. No internal detail leaks to the
+/// client; the panic message goes to the error log.
+const PANIC_BODY: &str =
+    r#"{"error":"internal_error","message":"request handler panicked; the request was denied"}"#;
+
+/// Map a caught handler panic to a fail-closed 500 (never a 2xx) and log it
+/// loudly. Wired as `CatchPanicLayer::custom(catch_panic_response)` on the
+/// control-plane router so a reachable panic returns 500 instead of aborting
+/// the process (Plan 05, Step 1; pairs with the `unwind` release profile).
+pub fn catch_panic_response(err: Box<dyn std::any::Any + Send + 'static>) -> Response<Body> {
+    let detail = if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "non-string panic payload".to_string()
+    };
+    tracing::error!(panic = %detail, "handler panicked; returning 500 (fail closed)");
+
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(PANIC_BODY))
+        // status + header are constants, so the builder cannot fail here; the
+        // fallback still returns a 500, never a 2xx.
+        .unwrap_or_else(|_| {
+            let mut resp = Response::new(Body::from("internal error"));
+            *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            resp
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catch_panic_maps_payloads_to_500() {
+        // String payload (panic!("...")).
+        let resp = catch_panic_response(Box::new(String::from("boom")));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // &str payload.
+        let resp = catch_panic_response(Box::new("boom"));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Non-string payload.
+        let resp = catch_panic_response(Box::new(42u32));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+    }
 
     #[test]
     fn test_normalize_path() {

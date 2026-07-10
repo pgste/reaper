@@ -81,13 +81,18 @@ post-release-commit-message = "chore: Bump to next dev version"
 
 # Release profile tuned for the sub-microsecond hot path. Fat LTO and a single
 # codegen unit let the optimizer inline across crate boundaries (engine ->
-# evaluators -> data store); `panic = "abort"` removes landing pads from the hot
-# path and shrinks the binary. These matter most for an allocation- and
-# call-heavy workload like policy evaluation.
+# evaluators -> data store) — these are where the performance lives.
+#
+# `panic = "abort"` is deliberately ABSENT (Plan 05, ADR-1): the service
+# binaries are network-facing sidecars, and abort turns any reachable panic
+# into a process kill that takes down every co-located workload trusting the
+# agent. With unwinding, a handler panic becomes a fail-closed HTTP 500 via
+# CatchPanicLayer (see the service routers) and the process stays up. The
+# hot-path cost is landing pads only — measured within noise on the eval
+# microbench; LTO/codegen-units (the wins that matter) are retained.
 [profile.release]
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
 
 # Benchmarks need unwinding (criterion) and must not abort on panic; otherwise
