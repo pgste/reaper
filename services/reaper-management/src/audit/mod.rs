@@ -74,6 +74,7 @@ pub enum ResourceType {
     Webhook,
     JwksConfig,
     Certificate,
+    LegalHold,
 }
 
 impl std::fmt::Display for ResourceType {
@@ -92,6 +93,7 @@ impl std::fmt::Display for ResourceType {
             ResourceType::Webhook => write!(f, "webhook"),
             ResourceType::JwksConfig => write!(f, "jwks_config"),
             ResourceType::Certificate => write!(f, "certificate"),
+            ResourceType::LegalHold => write!(f, "legal_hold"),
         }
     }
 }
@@ -114,6 +116,7 @@ impl std::str::FromStr for ResourceType {
             "webhook" => Ok(ResourceType::Webhook),
             "jwks_config" => Ok(ResourceType::JwksConfig),
             "certificate" => Ok(ResourceType::Certificate),
+            "legal_hold" => Ok(ResourceType::LegalHold),
             _ => Err(format!("Invalid resource type: {}", s)),
         }
     }
@@ -212,6 +215,12 @@ pub mod actions {
     pub const SCIM_GROUP_SYNC: &str = "scim.group_sync";
     pub const SCIM_TOKEN_CREATE: &str = "scim.token_create";
     pub const SCIM_TOKEN_REVOKE: &str = "scim.token_revoke";
+
+    // Audit governance (Plan 04 step 6): retention windows + legal holds
+    pub const AUDIT_RETENTION_UPDATE: &str = "audit.retention_update";
+    pub const AUDIT_LEGAL_HOLD_CREATE: &str = "audit.legal_hold_create";
+    pub const AUDIT_LEGAL_HOLD_RELEASE: &str = "audit.legal_hold_release";
+    pub const AUDIT_PURGE: &str = "audit.purge";
 }
 
 /// Audit log entry

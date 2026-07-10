@@ -57,13 +57,18 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
 ENGINE = ReplacingMergeTree(ingested_at)                     -- retries collapse on decision_id
 PARTITION BY (tenant_id, toYYYYMM(timestamp))                -- monthly; drop = instant purge
 ORDER BY (tenant_id, toStartOfHour(timestamp), action, resource, principal, decision_id)
-TTL toDateTime(timestamp) + INTERVAL 90 DAY DELETE           -- retention (archive to WORM first for compliance)
 SETTINGS index_granularity = 8192;
--- PRODUCTION TIERING: with a storage_policy that has an s3 disk, replace the
--- TTL above with hot->cold tiering + long retention, e.g.
---   TTL toDateTime(timestamp) + INTERVAL 90 DAY TO VOLUME 's3',
---       toDateTime(timestamp) + INTERVAL 6 YEAR DELETE
--- (the plain DELETE default keeps this schema runnable on single-disk setups).
+-- RETENTION (Plan 04 step 6): deliberately NO static `TTL ... DELETE` here.
+-- A static TTL deletes legal-held rows regardless — the exact failure legal
+-- holds exist to prevent. Retention is enforced by the management server's
+-- application-driven purge (per-tenant window, skips rows matched by active
+-- holds): the background sweeper + `POST /orgs/{org}/audit/purge`.
+-- Upgrading an existing deployment? Drop the old TTL:
+--   ALTER TABLE reaper_audit.decisions REMOVE TTL;
+-- PRODUCTION TIERING: hot->cold `TO VOLUME` TTLs remain safe with holds (they
+-- move data, never delete it), e.g. with an s3 storage_policy:
+--   ALTER TABLE reaper_audit.decisions
+--     MODIFY TTL toDateTime(timestamp) + INTERVAL 90 DAY TO VOLUME 's3';
 
 -- Deduped view (collapse at-least-once retries at query time).
 CREATE VIEW IF NOT EXISTS reaper_audit.decisions_deduped AS
@@ -106,8 +111,12 @@ CREATE TABLE IF NOT EXISTS reaper_audit.checkpoints
 ENGINE = ReplacingMergeTree(ingested_at)                     -- retries collapse per (chain, seq_start)
 PARTITION BY (tenant_id, toYYYYMM(wallclock))
 ORDER BY (tenant_id, chain_id, seq_start)
-TTL toDateTime(wallclock) + INTERVAL 90 DAY DELETE           -- keep >= the decisions retention
 SETTINGS index_granularity = 8192;
+-- No static TTL (same rationale as `decisions`): checkpoints attest decision
+-- ranges, so they must outlive any held decisions they cover. The application
+-- purge deletes a tenant's checkpoints alongside its decisions — and only
+-- when the tenant has NO active legal holds.
+-- Upgrading? ALTER TABLE reaper_audit.checkpoints REMOVE TTL;
 
 -- Per-minute rollup so dashboards read aggregates, not raw rows.
 CREATE TABLE IF NOT EXISTS reaper_audit.decisions_rollup_1m

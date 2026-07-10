@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod agent_deployment;
+pub mod audit_governance;
 pub mod bundle;
 pub mod datastore;
 pub mod deployment;
@@ -18,6 +19,7 @@ pub mod webhook;
 
 pub use agent::AgentRepository;
 pub use agent_deployment::{AgentDeploymentRepository, RollbackConfigRepository};
+pub use audit_governance::{AuditGovernanceRepository, AuditRetention, LegalHold};
 pub use bundle::BundleRepository;
 pub use datastore::DatastoreRepository;
 pub use deployment::DeploymentRepository;

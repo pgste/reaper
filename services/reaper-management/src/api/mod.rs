@@ -3,6 +3,7 @@
 //! Provides RESTful endpoints for managing organizations, policies, and bundles.
 
 pub mod agents;
+pub mod audit;
 pub mod auth;
 pub mod billing;
 pub mod bundles;
@@ -48,6 +49,7 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
         .merge(namespaces::routes())
         .merge(deployments::routes())
         .merge(decisions::routes())
+        .merge(audit::routes())
         .merge(datastore::routes())
         .merge(landscape::routes())
         .merge(billing::routes())
