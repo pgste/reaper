@@ -74,6 +74,7 @@ becomes available.
 | Advisory | Component | Reason | Owner | Review by |
 |----------|-----------|--------|-------|-----------|
 | RUSTSEC (unmaintained) | `serde_yaml` | Unmaintained but still-functioning YAML policy parser; no vulnerability, migration to an alternative tracked. Not muted — reported as a warning, does not fail the build. | maintainers | next dependency review |
+| RUSTSEC-2026-0104 | `rustls-webpki` 0.101.7 | Reachable panic in CRL parsing (`from_der`). Pulled only transitively via `aws-smithy-http-client` (the AWS SDK's pinned rustls 0.21 connector) and only behind the optional `storage-s3`/`storage-dynamodb` features. The advisory states applications that do not use CRLs are unaffected; Reaper uses the AWS SDK purely as an HTTPS client and never parses CRLs, so the panic is unreachable. No downstream fix exists (the AWS SDK controls the rustls version). Ignored in `deny.toml` and `cargo audit`. | maintainers | when the AWS SDK moves to rustls 0.23 |
 
 ## Reporting a vulnerability
 

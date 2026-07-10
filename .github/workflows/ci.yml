@@ -130,12 +130,14 @@ jobs:
       - name: cargo-deny (advisories, licenses, bans, sources)
         run: cargo deny check advisories licenses bans sources
 
-      # Plain `cargo audit` fails on vulnerabilities/unsound advisories against
-      # the committed Cargo.lock. Unmaintained crates are reported but do not
-      # fail the build here (tracked in docs/security/VULN_RESPONSE.md); a real
-      # vulnerability blocks.
+      # `cargo audit` fails on vulnerabilities/unsound advisories against the
+      # committed Cargo.lock. Unmaintained crates are reported but do not fail
+      # the build; a real vulnerability blocks. Ignored advisories are dated,
+      # justified acknowledgements kept in lockstep with deny.toml and
+      # docs/security/VULN_RESPONSE.md — never blanket mutes:
+      #   RUSTSEC-2026-0104 — rustls-webpki CRL panic, unreachable (no CRL use).
       - name: cargo-audit (Cargo.lock)
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0104
 
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:

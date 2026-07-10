@@ -35,8 +35,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pin the nightly so a toolchain bump can't silently break the fuzz job.
-  NIGHTLY: nightly-2025-01-15
+  # Use the latest nightly rather than a fixed date: cargo-fuzz needs nightly,
+  # and the workspace's dependencies (cedar-policy, etc.) keep raising their
+  # minimum rustc, so a stale pin fails to build the tree. Latest nightly tracks
+  # those MSRVs. `-Zsanitizer` is stable-shaped, so nightly-to-nightly churn here
+  # is low-risk; a bad nightly is a re-run, not a stuck pin.
+  NIGHTLY: nightly
 
 jobs:
   fuzz:
@@ -49,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pinned nightly
+      - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.NIGHTLY }}
