@@ -69,11 +69,26 @@ advisory:
 Each acknowledgement is a reviewed, dated decision and is revisited when a fix
 becomes available.
 
+### Fixed at source (preferred over acknowledgement)
+
+When the supply-chain gate was first enabled it surfaced the tree's accumulated
+advisory backlog. The policy is to **remediate, not mute**. Everything below was
+fixed by upgrading — an acknowledgement was used only where no maintained option
+exists (next section):
+
+| Advisory(ies) | Component | Fix |
+|---------------|----------|-----|
+| RUSTSEC-2024-0437 (vulnerability: stack overflow on untrusted input) | `protobuf` 2.28 | `prometheus` 0.13 → 0.14 (pulls `protobuf` 3.7.2) |
+| RUSTSEC-2026-0008 / -0183 / -0184 (unsound: null-pointer UB) | `git2` 0.19 | `git2` 0.19 → 0.21 |
+| RUSTSEC-2023-0089 (unmaintained) | `atomic-polyfill` | `postcard` built with `default-features = false` (drops `heapless` 0.7) |
+| RUSTSEC-2024-0384 (unmaintained), RUSTSEC-2026-0174 (notice) | `instant`, `http-types` | `wiremock` 0.5 → 0.6 in reaper-sync dev-deps |
+| RUSTSEC-2024-0370 (unmaintained) | `proc-macro-error` | `tabled` 0.16 → 0.17 (uses maintained `proc-macro-error2`) |
+
 ### Known acknowledged items
 
 | Advisory | Component | Reason | Owner | Review by |
 |----------|-----------|--------|-------|-----------|
-| RUSTSEC (unmaintained) | `serde_yaml` | Unmaintained but still-functioning YAML policy parser; no vulnerability, migration to an alternative tracked. Not muted — reported as a warning, does not fail the build. | maintainers | next dependency review |
+| RUSTSEC-2025-0134 | `rustls-pemfile` 2.2 | **Unmaintained, not a vulnerability** (no CVE) — a thin wrapper over `rustls-pki-types` PEM parsing. Pulled by `axum-server` (latest, 0.8) for TLS cert loading; cannot be dropped without replacing axum-server. Low priority (maintenance signal only). | maintainers | axum-server migrates off rustls-pemfile |
 | RUSTSEC-2026-0104 | `rustls-webpki` 0.101.7 | Reachable panic in CRL parsing (`from_der`). The advisory states applications that do not use CRLs are unaffected; Reaper uses the AWS SDK purely as an HTTPS client and never parses CRLs → **unreachable**. | maintainers | AWS SDK → rustls 0.23 |
 | RUSTSEC-2026-0098, RUSTSEC-2026-0099 | `rustls-webpki` 0.101.7 | Certificate **name-constraint** validation bugs (URI-name constraints ignored; constraints wrongly accepted for wildcard names). Unlike 0104 these are in the cert-verification path the AWS TLS client uses, so *not* "cannot affect us". **Residual risk is low**: exploiting them requires a trusted, name-constrained CA to mis-issue a cert outside its constraints (post-signature-verification) plus a MITM of the AWS endpoint. Accepted as low risk. | maintainers | AWS SDK → rustls 0.23 |
 

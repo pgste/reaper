@@ -34,7 +34,7 @@ tower-http = { version = "0.6", features = ["catch-panic"] }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 jsonwebtoken = "9.3"
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"
 scopeguard = "1.2"
 opentelemetry = { version = "0.21", features = ["trace", "metrics"] }
@@ -58,7 +58,7 @@ sysinfo = "0.32"
 core_affinity = "0.8"  # pin thread-per-core UDS shards to cores
 
 # TLS/mTLS support
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = "0.23"
 rustls-pemfile = "2.1"
 tokio-rustls = "0.26"

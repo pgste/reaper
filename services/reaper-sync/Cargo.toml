@@ -34,7 +34,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.8"
-wiremock = "0.5"
+wiremock = "0.6"
 tokio-test = { workspace = true }
 
 # Plan 05, Step 6 burn-down: this crate carries legacy reachable unwrap()/expect()

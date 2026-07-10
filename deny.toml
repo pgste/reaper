@@ -46,6 +46,17 @@ ignore = [
     # storage backends. Accepted as low risk pending the AWS SDK rustls bump.
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
+
+    # RUSTSEC-2025-0134: rustls-pemfile is UNMAINTAINED (archived Aug 2025) — a
+    # maintenance signal, NOT a vulnerability (no CVE). It is a thin wrapper over
+    # rustls-pki-types' PEM parsing, pulled by axum-server (latest, 0.8) for TLS
+    # cert loading; there is no way to drop it without replacing axum-server.
+    # Every other advisory the gate surfaced was fixed at the source instead of
+    # ignored — protobuf (→ prometheus 0.14), git2 unsound (→ 0.21),
+    # atomic-polyfill/http-types/instant (→ postcard no-default-features +
+    # wiremock 0.6), proc-macro-error (→ tabled 0.17). Revisit when axum-server
+    # migrates off rustls-pemfile.
+    "RUSTSEC-2025-0134",
 ]
 
 [licenses]
