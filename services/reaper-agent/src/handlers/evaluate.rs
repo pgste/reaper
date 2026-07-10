@@ -755,15 +755,18 @@ pub async fn fast_evaluate_policy(
     Ok(([(header::CONTENT_TYPE, "application/json")], resp_body))
 }
 
-/// Batch policy evaluation using parallel processing.
+/// Batch policy evaluation.
 ///
-/// This endpoint evaluates multiple policy requests in parallel using rayon.
-/// Ideal for bulk authorization checks where latency is less critical than throughput.
+/// Evaluates multiple policy requests against a single policy. Intended for bulk
+/// authorization checks where throughput matters more than per-request latency.
 ///
-/// Performance characteristics:
-/// - Parallel evaluation across all CPU cores
-/// - Optional decision cache integration
-/// - Returns results in same order as input requests
+/// Behavior:
+/// - Batch size is capped at `performance.max_batch_requests` (default 1000);
+///   an over-cap batch is rejected with 413 before any evaluation.
+/// - The evaluation loop runs on a `spawn_blocking` thread so it cannot starve
+///   the async reactor or block unrelated request latency (Plan 05, Step 3).
+/// - Optional decision-cache integration; results preserve input order via an
+///   explicit `index` field.
 #[instrument(skip(state, payload))]
 pub async fn batch_evaluate_policy(
     State(state): State<Arc<AgentState>>,
@@ -771,6 +774,21 @@ pub async fn batch_evaluate_policy(
 ) -> Result<Json<Value>, StatusCode> {
     audit_gate(&state)?;
     let start_time = std::time::Instant::now();
+
+    // Bound the batch BEFORE any work: the 256 MB body limit exists for bulk
+    // entity loads, not as a batch bound, so a body full of tiny requests could
+    // otherwise drive millions of synchronous evals on one worker. Reject
+    // over-cap batches with 413 up front (Plan 05, Step 3 / ADR-4).
+    let max_batch = state.agent_config.performance.max_batch_requests;
+    if payload.requests.len() > max_batch {
+        ERRORS_TOTAL.with_label_values(&["batch_too_large"]).inc();
+        warn!(
+            requested = payload.requests.len(),
+            max = max_batch,
+            "batch evaluation rejected: request count exceeds max_batch_requests"
+        );
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
 
     // Find the policy to evaluate
     let policy = if let Some(ref name) = payload.policy_name {
@@ -816,9 +834,6 @@ pub async fn batch_evaluate_policy(
 
     let request_count = requests.len();
 
-    // Resolve the per-policy metric handles once for the whole batch.
-    let metrics = state.decision_metrics.for_policy(&policy_name);
-
     // Scope the cache to this policy and capture the generation before evaluating.
     let cache_scope = policy_engine::scope_hash(std::iter::once(policy_id));
     let cache_generation = state
@@ -827,60 +842,80 @@ pub async fn batch_evaluate_policy(
         .map(|c| c.generation())
         .unwrap_or(0);
 
-    // Evaluate requests with decision cache support
-    let results: Vec<Value> = requests
-        .iter()
-        .enumerate()
-        .map(|(i, req)| {
-            let eval_start = std::time::Instant::now();
+    // Offload the synchronous evaluation loop to a blocking thread so a large
+    // batch (up to `max_batch_requests`) cannot starve the async reactor and
+    // block unrelated single-eval / health traffic on a low-core sidecar
+    // (Plan 05, Step 3). Result order is preserved by the explicit `index`.
+    let eval_state = state.clone();
+    let eval_policy_name = policy_name.clone();
+    let results: Vec<Value> = match tokio::task::spawn_blocking(move || {
+        let state = eval_state;
+        // Resolve the per-policy metric handle once for the whole batch.
+        let metrics = state.decision_metrics.for_policy(&eval_policy_name);
+        requests
+            .iter()
+            .enumerate()
+            .map(|(i, req)| {
+                let eval_start = std::time::Instant::now();
 
-            // Check decision cache first
-            let (decision, cache_hit) = if let Some(ref cache) = state.decision_cache {
-                if let Some(cached) = cache.get(req, cache_scope) {
-                    state.stats.record_decision_cache_hit();
-                    CACHE_HITS.with_label_values(&["decision"]).inc();
-                    (cached, true)
+                // Check decision cache first
+                let (decision, cache_hit) = if let Some(ref cache) = state.decision_cache {
+                    if let Some(cached) = cache.get(req, cache_scope) {
+                        state.stats.record_decision_cache_hit();
+                        CACHE_HITS.with_label_values(&["decision"]).inc();
+                        (cached, true)
+                    } else {
+                        state.stats.record_decision_cache_miss();
+                        CACHE_MISSES.with_label_values(&["decision"]).inc();
+
+                        // Evaluate and cache
+                        let result = state.policy_engine.evaluate(&policy_id, req);
+                        let decision = match result {
+                            Ok(d) => d.decision,
+                            Err(_) => PolicyAction::Deny,
+                        };
+                        cache.insert(req, cache_scope, decision.clone(), cache_generation);
+                        (decision, false)
+                    }
                 } else {
-                    state.stats.record_decision_cache_miss();
-                    CACHE_MISSES.with_label_values(&["decision"]).inc();
-
-                    // Evaluate and cache
+                    // No cache - evaluate directly
                     let result = state.policy_engine.evaluate(&policy_id, req);
                     let decision = match result {
                         Ok(d) => d.decision,
                         Err(_) => PolicyAction::Deny,
                     };
-                    cache.insert(req, cache_scope, decision.clone(), cache_generation);
                     (decision, false)
-                }
-            } else {
-                // No cache - evaluate directly
-                let result = state.policy_engine.evaluate(&policy_id, req);
-                let decision = match result {
-                    Ok(d) => d.decision,
-                    Err(_) => PolicyAction::Deny,
                 };
-                (decision, false)
-            };
 
-            let duration = eval_start.elapsed();
-            let decision_str = match decision {
-                PolicyAction::Allow => "allow",
-                PolicyAction::Deny => "deny",
-                PolicyAction::Log => "log",
-            };
+                let duration = eval_start.elapsed();
+                let decision_str = match decision {
+                    PolicyAction::Allow => "allow",
+                    PolicyAction::Deny => "deny",
+                    PolicyAction::Log => "log",
+                };
 
-            // Record metrics via the cached per-policy handle.
-            metrics.counter(&decision).inc();
+                // Record metrics via the cached per-policy handle.
+                metrics.counter(&decision).inc();
 
-            json!({
-                "index": i,
-                "decision": decision_str,
-                "evaluation_time_microseconds": duration.as_nanos() as f64 / 1000.0,
-                "cache_hit": cache_hit
+                json!({
+                    "index": i,
+                    "decision": decision_str,
+                    "evaluation_time_microseconds": duration.as_nanos() as f64 / 1000.0,
+                    "cache_hit": cache_hit
+                })
             })
-        })
-        .collect();
+            .collect()
+    })
+    .await
+    {
+        Ok(results) => results,
+        Err(join_err) => {
+            // The blocking task panicked or was cancelled — fail closed.
+            ERRORS_TOTAL.with_label_values(&["batch_eval_join"]).inc();
+            error!(error = %join_err, "batch evaluation task failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     let total_time = start_time.elapsed();
 

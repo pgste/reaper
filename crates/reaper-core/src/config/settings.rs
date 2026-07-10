@@ -291,6 +291,13 @@ pub struct PerformanceSettings {
     /// Enable SIMD optimizations
     #[serde(default = "default_true")]
     pub enable_simd: bool,
+
+    /// Maximum number of requests accepted in a single batch evaluation.
+    /// Bounds per-request CPU work independently of the body-size limit so a
+    /// single batch cannot monopolize a runtime worker (Plan 05, Step 3).
+    /// Over-cap batches are rejected with 413 before any evaluation.
+    #[serde(default = "default_max_batch_requests")]
+    pub max_batch_requests: usize,
 }
 
 impl Default for PerformanceSettings {
@@ -299,12 +306,17 @@ impl Default for PerformanceSettings {
             target_latency_microseconds: default_target_latency(),
             worker_threads: 0,
             enable_simd: true,
+            max_batch_requests: default_max_batch_requests(),
         }
     }
 }
 
 fn default_target_latency() -> f64 {
     1.0
+}
+
+fn default_max_batch_requests() -> usize {
+    1000
 }
 
 // ============================================================================

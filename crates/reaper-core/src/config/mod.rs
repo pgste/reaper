@@ -157,6 +157,15 @@ impl ReaperAgentConfig {
             }
         }
 
+        // Performance settings
+        if let Ok(val) = std::env::var("REAPER_MAX_BATCH_REQUESTS") {
+            if let Ok(max) = val.parse::<usize>() {
+                if max > 0 {
+                    self.performance.max_batch_requests = max;
+                }
+            }
+        }
+
         // Observability settings
         if let Ok(val) = std::env::var("REAPER_LOG_LEVEL") {
             self.observability.log_level = val;
