@@ -25,15 +25,15 @@ Establish a **blocking**, auditable software-supply-chain assurance pipeline so 
 
 ## 3. Definition of Done — testable checkboxes
 
-- [ ] A committed `deny.toml` at the repo root configures `cargo-deny` with all four checks: `advisories` (deny vulnerabilities + unmaintained), `licenses` (allowlist), `bans` (deny duplicate/banned crates), and `sources` (only allowed registries/git hosts).
-- [ ] A new CI job runs `cargo deny check` as a **required, blocking** gate on every PR and push (not `continue-on-error`), wired into `ci.yml` alongside `lint-and-analyze`.
-- [ ] `cargo audit` runs in CI against the committed `Cargo.lock` and fails on any RUSTSEC advisory not explicitly acknowledged (advisory-DB kept fresh); a scheduled (nightly/weekly) run catches newly-disclosed CVEs against already-shipped commits.
-- [ ] A CycloneDX SBOM (`bom.json` / `bom.xml`) is generated for the workspace and **attached to every GitHub Release** as an asset (and, ideally, for each container image).
-- [ ] At least one `cargo-fuzz` target exists for the DSL: a `fuzz/` crate with a `fuzz_targets/parse_reap.rs` harness driving `ReapParser::parse` (and a second driving `compile_policy`), building in CI and running a bounded smoke iteration on every PR plus a longer scheduled run.
-- [ ] The Trivy image scan is **blocking**: `continue-on-error` removed, `severity: CRITICAL,HIGH` and `exit-code: 1` (with `ignore-unfixed` as chosen), and it runs on PRs (the `if: != pull_request` guard removed or replaced by a PR-appropriate path).
-- [ ] Any git dependency in `Cargo.toml`/`Cargo.lock` is pinned to a specific rev and allow-listed in `deny.toml`'s `[sources]`; `cargo deny check sources` passes.
-- [ ] A written vulnerability-response SLA (triage window, severity→patch-window mapping, who owns it) is committed under `docs/security/` (e.g. `SECURITY.md` / `VULN_RESPONSE.md`) and referenced from the repo `SECURITY.md`.
-- [ ] All new gates are documented in `CLAUDE.md`/CONTRIBUTING so a red build is understood as a supply-chain stop, not flakiness.
+- [x] A committed `deny.toml` at the repo root configures `cargo-deny` with all four checks: `advisories` (deny vulnerabilities + unmaintained), `licenses` (allowlist), `bans` (deny duplicate/banned crates), and `sources` (only allowed registries/git hosts).
+- [x] A new CI job runs `cargo deny check` as a **required, blocking** gate on every PR and push (not `continue-on-error`), wired into `ci.yml` alongside `lint-and-analyze`.
+- [x] `cargo audit` runs in CI against the committed `Cargo.lock` and fails on any RUSTSEC advisory not explicitly acknowledged (advisory-DB kept fresh); a scheduled (nightly/weekly) run catches newly-disclosed CVEs against already-shipped commits.
+- [x] A CycloneDX SBOM (`bom.json` / `bom.xml`) is generated for the workspace and **attached to every GitHub Release** as an asset (and, ideally, for each container image).
+- [x] At least one `cargo-fuzz` target exists for the DSL: a `fuzz/` crate with a `fuzz_targets/parse_reap.rs` harness driving `ReapParser::parse` (and a second driving `compile_policy`), building in CI and running a bounded smoke iteration on every PR plus a longer scheduled run.
+- [x] The Trivy image scan is **blocking**: `continue-on-error` removed, `severity: CRITICAL,HIGH` and `exit-code: 1` (with `ignore-unfixed` as chosen), and it runs on PRs (the `if: != pull_request` guard removed or replaced by a PR-appropriate path).
+- [x] Any git dependency in `Cargo.toml`/`Cargo.lock` is pinned to a specific rev and allow-listed in `deny.toml`'s `[sources]`; `cargo deny check sources` passes.
+- [x] A written vulnerability-response SLA (triage window, severity→patch-window mapping, who owns it) is committed under `docs/security/` (e.g. `SECURITY.md` / `VULN_RESPONSE.md`) and referenced from the repo `SECURITY.md`.
+- [x] All new gates are documented in `CLAUDE.md`/CONTRIBUTING so a red build is understood as a supply-chain stop, not flakiness.
 
 ---
 
