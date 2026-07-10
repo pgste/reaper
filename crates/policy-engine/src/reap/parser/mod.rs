@@ -33,6 +33,12 @@ pub struct ReapParser;
 impl ReapParser {
     /// Parse a .reap policy from a string
     pub fn parse(input: &str) -> Result<Policy, ReaperError> {
+        // Bound syntactic nesting BEFORE handing the input to pest: pest parses
+        // by recursive descent, so deeply nested `(...)`/`!...` would overflow
+        // the stack during parsing itself. This lexical pre-scan rejects such
+        // input first, keeping the DSL total/terminating (Plan 05, Step 2).
+        crate::reap::limits::enforce_source_nesting(input)?;
+
         let pairs = <Self as PestParser<Rule>>::parse(Rule::policy, input).map_err(|e| {
             ReaperError::InvalidPolicy {
                 reason: format!("Parse error: {}", e),
@@ -78,12 +84,19 @@ impl ReapParser {
             reason: "Missing 'default' field".to_string(),
         })?;
 
-        Ok(Policy {
+        let policy = Policy {
             name: policy_name,
             metadata,
             default_decision,
             rules,
-        })
+        };
+
+        // Belt-and-suspenders: the pre-scan bounds the source, but re-check the
+        // built AST so the depth guarantee holds even if the lexical accounting
+        // and the true tree shape ever diverge.
+        crate::reap::limits::enforce_policy_depth(&policy)?;
+
+        Ok(policy)
     }
 }
 

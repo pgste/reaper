@@ -6,6 +6,7 @@ mod ast;
 mod ast_evaluator;
 mod bundle;
 mod compiler;
+mod limits;
 mod parser;
 mod yaml_parser;
 
@@ -19,6 +20,10 @@ pub use bundle::{
     PrecompilationHints,
 };
 pub use compiler::compile_policy;
+pub use limits::{
+    configured_max_nesting_depth, enforce_policy_depth, enforce_source_nesting,
+    DEFAULT_MAX_NESTING_DEPTH,
+};
 pub use parser::ReapParser;
 pub use yaml_parser::YamlPolicy;
 

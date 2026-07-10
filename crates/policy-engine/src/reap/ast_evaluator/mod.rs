@@ -305,8 +305,12 @@ impl crate::evaluators::PolicyEvaluator for ReapAstEvaluator {
     }
 
     fn validate(&self) -> Result<(), reaper_core::ReaperError> {
-        // AST evaluator is always valid if it was constructed successfully
-        // The parser validates syntax, and the evaluator handles runtime errors gracefully
+        // The interpreter recurses over this AST at eval time (evaluate_condition
+        // / evaluate_expr), so a tree that reached us via a non-pest path (YAML/
+        // JSON policy formats, or a directly-built AST) must be depth-bounded
+        // here — validate() runs once at deploy, before the policy serves any
+        // request (see EnhancedPolicy::build_evaluator). Plan 05, Step 2.
+        super::limits::enforce_policy_depth(&self.policy)?;
         Ok(())
     }
 
