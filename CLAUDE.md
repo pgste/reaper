@@ -520,11 +520,36 @@ tests:
 
 - The workspace uses Rust 2021 edition
 - All crates share dependencies via workspace.dependencies in root Cargo.toml
+- Workspace crates set `publish = false` (none are published to crates.io); this
+  also lets cargo-deny treat them as private for license/wildcard checks
 - BDD tests use `harness = false` in Cargo.toml [[test]] sections
 - Agent observability uses Prometheus + OpenTelemetry directly
 - eBPF integration is experimental (Linux only)
 - Decision logging provides OPA-style audit trails
 - Docker profiles enable flexible deployment patterns
+
+## Supply-Chain Gates (blocking — not flakiness)
+
+A red build on any of these is a **supply-chain stop**, not a transient failure.
+Fix the finding; do not retry or mute without a documented, dated acknowledgement
+(see `docs/security/VULN_RESPONSE.md`).
+
+- **`cargo deny check`** (`deny.toml`, CI `supply-chain` job): advisories,
+  licenses (permissive allow-list), bans (no third-party wildcards), sources
+  (crates.io only). A new dependency with a non-allow-listed license, a git
+  source, or a known advisory fails the build. Run locally with `cargo deny check`.
+- **`cargo audit`** (same CI job + weekly `supply-chain-nightly.yml`): fails on a
+  RUSTSEC vulnerability in `Cargo.lock`. The scheduled run catches CVEs disclosed
+  *after* merge — kept alongside cargo-deny deliberately, not redundant.
+- **Trivy image scan** (`docker.yml`, blocking): fails on a fixable CRITICAL/HIGH
+  CVE in a service image, on PRs and pushes (`ignore-unfixed`).
+- **CycloneDX SBOM**: `bom.json` is generated and attached to every GitHub
+  Release (`release.yml`).
+- **`unwrap_used`/`expect_used` clippy gate** (Plan 05): denied in reachable code
+  for opted-in crates; ergonomic in `#[cfg(test)]` via `clippy.toml`.
+
+Vulnerability triage windows and how to acknowledge an unactionable advisory:
+`docs/security/VULN_RESPONSE.md`. Private disclosure: root `SECURITY.md`.
 
 ## Architecture Evolution Plan
 
