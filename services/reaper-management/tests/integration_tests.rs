@@ -3725,3 +3725,205 @@ async fn test_audit_purge_unavailable_without_decision_store() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// ============================================================================
+// Counterfactual replay (Plan 04, step 8)
+// ============================================================================
+
+/// Full bundle→headless-engine load (the replay engine's policy path), plus
+/// the API's error posture. The row-scan side is covered by unit tests over
+/// `replay_row` (flip counting, reproduction sanity, encryption) — this test
+/// proves a REAL compiled bundle loads into a REAL engine.
+#[tokio::test]
+async fn test_replay_engine_loads_real_bundle_and_api_guards() {
+    let env = setup_test_env().await;
+
+    // Org + compiled bundle via the same API journey operators take.
+    let create_org = json_request(
+        "POST",
+        "/orgs",
+        Some(json!({"name": "Replay Org", "slug": "replay-org"})),
+    );
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let create_policy = authed_request(
+        "POST",
+        "/orgs/replay-org/policies",
+        Some(json!({
+            "name": "replay-policy",
+            "language": "reaper",
+            "content": "policy replaytest {\n    default: deny,\n    rule allow_user_read {\n        allow if {\n            context.action == \"read\" && context.principal == \"user\"\n        }\n    }\n}"
+        })),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_policy).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let create_bundle = authed_request(
+        "POST",
+        "/orgs/replay-org/bundles",
+        Some(json!({"name": "replay-bundle", "policy_ids": [policy_id]})),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_bundle).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bundle_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let compile = authed_request(
+        "POST",
+        &format!("/orgs/replay-org/bundles/{bundle_id}/compile"),
+        None,
+        &key,
+    );
+    let response = env.app.clone().oneshot(compile).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Namespace + datastore + published snapshot: the DSL evaluator resolves
+    // principals as entities (like a production agent with synced data), so
+    // replay pins the same data_version the decisions recorded.
+    for (uri, body) in [
+        ("/orgs/replay-org/namespaces", json!({"slug": "prod"})),
+        (
+            "/orgs/replay-org/namespaces/prod/datastore",
+            json!({"template": "combined"}),
+        ),
+        (
+            "/orgs/replay-org/namespaces/prod/datastore/entities",
+            json!({"entity_id": "user", "entity_type": "user", "attributes": {}}),
+        ),
+    ] {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request("POST", uri, Some(body), &key))
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "{uri}");
+    }
+    let publish = authed_request(
+        "POST",
+        "/orgs/replay-org/namespaces/prod/datastore/publish",
+        None,
+        &key,
+    );
+    let response = env.app.clone().oneshot(publish).await.unwrap();
+    assert!(response.status().is_success());
+    let published_version = parse_body(response).await["version"].as_i64().unwrap();
+    assert_eq!(published_version, 1);
+
+    // A second AppState over the SAME db + storage dir stands in for the
+    // running server (TestEnv only exposes the router).
+    let storage = Arc::new(FilesystemStorage::new(&env.temp_dir.path().join("storage")).unwrap())
+        as Arc<dyn reaper_management::storage::BundleStorage>;
+    let config = Config {
+        auth: AuthConfig {
+            jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
+            ..AuthConfig::default()
+        },
+        ..Config::default()
+    };
+    let state = AppState::new(env.db.clone(), config, storage);
+
+    let request = |bundle_id: Uuid| reaper_management::replay::ReplayRequest {
+        bundle_id,
+        from: None,
+        to: None,
+        filter: Default::default(),
+        namespace: Some("prod".to_string()),
+        data_version: Some(1),
+        decryption_key: None,
+        max_rows: None,
+    };
+
+    // The compiled artifact loads into a headless engine, policies deployed.
+    let (engine, policy_ids, data_version) =
+        reaper_management::replay::build_headless_engine(&state, org_id, &request(bundle_id))
+            .await
+            .expect("compiled bundle must load");
+    assert_eq!(policy_ids.len(), 1);
+    assert_eq!(data_version, Some(1), "pinned snapshot loaded");
+    assert_eq!(engine.get_stats().total_policies, 1);
+
+    // And the loaded engine actually DECIDES — a true headless evaluation of
+    // the real compiled artifact, with the production set semantics.
+    let eval = |principal: &str, action: &str| {
+        let mut context = std::collections::HashMap::new();
+        context.insert("principal".to_string(), principal.to_string());
+        engine.evaluate_set(
+            &policy_ids,
+            &policy_engine::PolicyRequest {
+                resource: "/api".to_string(),
+                action: action.to_string(),
+                context,
+            },
+        )
+    };
+    assert_eq!(
+        eval("user", "read").decision,
+        policy_engine::PolicyAction::Allow,
+        "the pinned snapshot resolves the principal"
+    );
+    // A principal absent from the snapshot fails closed — same as production.
+    assert_eq!(
+        eval("intruder", "read").decision,
+        policy_engine::PolicyAction::Deny
+    );
+    assert_eq!(
+        eval("user", "write").decision,
+        policy_engine::PolicyAction::Deny
+    );
+
+    // Unknown bundle → clear not-found, tenant-scoped.
+    let err =
+        reaper_management::replay::build_headless_engine(&state, org_id, &request(Uuid::new_v4()))
+            .await
+            .unwrap_err();
+    assert!(err.contains("not found"), "{err}");
+
+    // API posture: no ClickHouse in the test env → POST replay is 503 with
+    // setup guidance, never a fake success.
+    let post = authed_request(
+        "POST",
+        "/orgs/replay-org/replay",
+        Some(json!({"bundle_id": bundle_id})),
+        &key,
+    );
+    let response = env.app.clone().oneshot(post).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // Non-admin credential → 403 (replay reads audit data wholesale).
+    let reader = create_scoped_api_key(&env.db, org_id, &["agent:read"]).await;
+    let post = authed_request(
+        "POST",
+        "/orgs/replay-org/replay",
+        Some(json!({"bundle_id": bundle_id})),
+        &reader,
+    );
+    let response = env.app.clone().oneshot(post).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // Unknown job id → 404.
+    let get = authed_request(
+        "GET",
+        &format!("/orgs/replay-org/replay/{}", Uuid::new_v4()),
+        None,
+        &key,
+    );
+    let response = env.app.clone().oneshot(get).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

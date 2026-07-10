@@ -131,7 +131,7 @@ pub enum PurgeOutcome {
 
 /// One decision row as returned to API clients (matches the agent's
 /// DecisionLogEntry fields plus ingest metadata).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionRow {
     pub timestamp: String,
     pub decision_id: String,

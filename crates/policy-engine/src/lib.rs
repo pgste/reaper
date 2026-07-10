@@ -23,7 +23,8 @@ pub use engine::PolicyVersion as EngineVersion;
 pub use engine::{
     AllPoliciesEvaluationResult, DenyInfo, EnhancedPolicy, PackageEvaluationResult, PackageInfo,
     PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage, PolicyRequest,
-    PolicyRule, PolicySource, PolicySourceMetadata, SimpleAction, SimpleRule, StagedPackage,
+    PolicyRule, PolicySource, PolicySourceMetadata, SetEvalOutcome, SimpleAction, SimpleRule,
+    StagedPackage,
 };
 
 pub use evaluators::{

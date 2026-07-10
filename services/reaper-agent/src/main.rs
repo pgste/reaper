@@ -367,7 +367,7 @@ async fn main() -> anyhow::Result<()> {
 
                 // Spawn bundle update handler
                 let policy_engine_for_updates = policy_engine.clone();
-                let _data_store_for_updates = data_store.clone();
+                let data_store_for_updates = data_store.clone();
                 let client_for_updates = client.clone();
                 tokio::spawn(async move {
                     while update_rx.changed().await.is_ok() {
@@ -410,6 +410,24 @@ async fn main() -> anyhow::Result<()> {
                                             "simple" => policy_engine::PolicyLanguage::Simple,
                                             _ => policy_engine::PolicyLanguage::ReaperDsl,
                                         };
+
+                                        // REBUILD the evaluator now that content/language are set:
+                                        // `EnhancedPolicy::new` built a Simple evaluator over the
+                                        // EMPTY rules vec, so without this every management-synced
+                                        // policy evaluated as "no rules" (deny-by-default) instead
+                                        // of its actual content. Built against the agent's
+                                        // DataStore so DSL entity lookups resolve.
+                                        if let Err(e) = policy.build_evaluator_with_data(Some(
+                                            data_store_for_updates.clone(),
+                                        )) {
+                                            warn!(
+                                                policy = %policy_entry.id,
+                                                error = %e,
+                                                "Failed to compile policy from bundle"
+                                            );
+                                            failed += 1;
+                                            continue;
+                                        }
 
                                         if let Err(e) =
                                             policy_engine_for_updates.deploy_policy(policy)
