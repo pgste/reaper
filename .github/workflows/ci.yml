@@ -134,10 +134,13 @@ jobs:
       # committed Cargo.lock. Unmaintained crates are reported but do not fail
       # the build; a real vulnerability blocks. Ignored advisories are dated,
       # justified acknowledgements kept in lockstep with deny.toml and
-      # docs/security/VULN_RESPONSE.md — never blanket mutes:
-      #   RUSTSEC-2026-0104 — rustls-webpki CRL panic, unreachable (no CRL use).
+      # docs/security/VULN_RESPONSE.md — never blanket mutes. All three below are
+      # rustls-webpki 0.101.7, pulled only via the AWS SDK behind optional
+      # storage backends (see deny.toml / VULN_RESPONSE.md for the per-ID risk):
+      #   0104 — CRL-parse panic, unreachable (no CRL use)
+      #   0098/0099 — cert name-constraint bugs, low residual risk (needs CA misissuance)
       - name: cargo-audit (Cargo.lock)
-        run: cargo audit --ignore RUSTSEC-2026-0104
+        run: cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
 
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:

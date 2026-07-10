@@ -21,17 +21,31 @@ version = 2
 # `ignore`, per docs/security/VULN_RESPONSE.md — never blanket-mute.
 yanked = "deny"
 ignore = [
-    # RUSTSEC-2026-0104: reachable panic in rustls-webpki 0.101.7 CRL parsing
-    # (BorrowedCertRevocationList::from_der). Pulled ONLY transitively via
-    # aws-smithy-http-client 1.1.13 (the AWS SDK's pinned rustls 0.21 connector),
-    # and ONLY behind the optional `storage-s3`/`storage-dynamodb` features. The
-    # advisory states "applications that do not use CRLs are not affected" —
-    # Reaper uses the AWS SDK purely as an HTTPS client to S3/DynamoDB and never
-    # parses CRLs, so the panic is unreachable. No downstream fix exists (the AWS
-    # SDK controls the rustls version; feature unification prevents removing the
-    # 0.21 connector). Not affected — maintainers — revisit when the AWS SDK
-    # moves to rustls 0.23 (see docs/security/VULN_RESPONSE.md).
+    # ── rustls-webpki 0.101.7 (three advisories, one root cause) ──────────────
+    # ALL of these come from a SINGLE vulnerable crate, rustls-webpki 0.101.7,
+    # pulled ONLY transitively via aws-smithy-http-client (the AWS Rust SDK's
+    # HTTPS connector, still on the legacy hyper-0.14 + rustls-0.21 stack even at
+    # its latest version), and ONLY behind reaper-management's OPTIONAL
+    # `storage-s3`/`storage-dynamodb` features. A default build (filesystem /
+    # Postgres storage) never compiles this code. No downstream fix exists — the
+    # AWS SDK controls the rustls version and feature unification prevents
+    # swapping the connector. Tracked for a clean `cargo update` removal once the
+    # AWS SDK adopts rustls 0.23. See docs/security/VULN_RESPONSE.md.
+    #
+    # RUSTSEC-2026-0104: reachable panic in CRL parsing (…::from_der). The
+    # advisory states applications that do not use CRLs are unaffected; Reaper
+    # uses the AWS SDK purely as a TLS client and never parses CRLs → unreachable.
     "RUSTSEC-2026-0104",
+    # RUSTSEC-2026-0098 / -0099: certificate name-constraint validation bugs
+    # (URI-name constraints ignored; constraints wrongly accepted for wildcard
+    # names). These ARE in the cert-verification path the AWS TLS client uses, so
+    # unlike -0104 they are not "cannot affect us". Residual risk is very low:
+    # exploiting them requires a TRUSTED, name-constrained CA to mis-issue a cert
+    # outside its constraints (post-signature-verification) and an attacker able
+    # to MITM the AWS endpoint — and, again, only in builds that opt into the AWS
+    # storage backends. Accepted as low risk pending the AWS SDK rustls bump.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
 ]
 
 [licenses]

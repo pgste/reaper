@@ -39,5 +39,7 @@ jobs:
 
       - name: cargo-audit
         # Ignored advisories mirror deny.toml / VULN_RESPONSE.md (dated,
-        # justified). RUSTSEC-2026-0104: rustls-webpki CRL panic, unreachable.
-        run: cargo audit --ignore RUSTSEC-2026-0104
+        # justified). All three are rustls-webpki 0.101.7 via the AWS SDK behind
+        # optional storage backends: 0104 CRL panic (unreachable); 0098/0099 cert
+        # name-constraint bugs (low residual risk, needs CA misissuance).
+        run: cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
