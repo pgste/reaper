@@ -495,6 +495,19 @@ pub async fn evaluate_policy(
                     capture_input_data(&state.data_store, &payload.principal, &payload.resource);
             }
 
+            // Replayable-capture tier (opt-in): the full resolved request as a
+            // self-contained blob, so the counterfactual replay engine can
+            // re-evaluate this decision under a different policy/data version.
+            // Protection (mask/hash/encrypt) applies in buffer.log().
+            if buffer.should_capture_replay(decision_str == "allow") {
+                entry.replay_input = Some(serde_json::json!({
+                    "principal": payload.principal,
+                    "action": payload.action,
+                    "resource": payload.resource,
+                    "context": payload.context.clone().unwrap_or_default(),
+                }));
+            }
+
             // Use the same decision_id across response, logs, and audit trail
             entry.decision_id = decision_id.to_string();
 
@@ -748,6 +761,20 @@ pub async fn fast_evaluate_policy(
                         .unwrap_or_default(),
                     &request.resource,
                 );
+            }
+            // Replayable-capture tier: the full resolved request (see the
+            // canonical handler above). Protection applies in buffer.log().
+            if buffer.should_capture_replay(decision_str == "allow") {
+                entry.replay_input = Some(serde_json::json!({
+                    "principal": request
+                        .context
+                        .get("principal")
+                        .cloned()
+                        .unwrap_or_default(),
+                    "action": request.action,
+                    "resource": request.resource,
+                    "context": request.context,
+                }));
             }
             entry.decision_id = decision_id.to_string();
             buffer.log(entry);

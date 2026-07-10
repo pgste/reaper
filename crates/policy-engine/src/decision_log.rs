@@ -66,6 +66,18 @@ pub struct DecisionLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_data: Option<serde_json::Value>,
 
+    /// Replayable-capture tier (Plan 04, step 7): the full resolved request as
+    /// a self-contained blob — `{"principal", "action", "resource", "context"}`
+    /// — so the counterfactual replay engine can re-evaluate this decision
+    /// under a different policy/data version. Distinct from `context`, which is
+    /// display-oriented and may be allowlisted/dropped; this snapshot is meant
+    /// to be faithful. Protection still applies identically (mask/pseudonymize/
+    /// encrypt): tenants that need BOTH privacy and full-fidelity replay use
+    /// encryption (reversible by the tenant key holder at replay time), not
+    /// masking/hashing (irreversible). Off unless the tier is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_input: Option<serde_json::Value>,
+
     /// Data-plane provenance: the datastore version this decision evaluated
     /// against (audits can pin exactly what data a decision saw).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -441,6 +453,7 @@ impl DecisionLogEntry {
             agent_id: None,
             matched_rule: None,
             input_data: None,
+            replay_input: None,
             data_version: None,
             data_checksum: None,
             data_stale: false,
@@ -473,6 +486,12 @@ impl DecisionLogEntry {
     /// Attach the "explain" input-data snapshot.
     pub fn with_input_data(mut self, input: serde_json::Value) -> Self {
         self.input_data = Some(input);
+        self
+    }
+
+    /// Attach the replayable-capture snapshot (the full resolved request).
+    pub fn with_replay_input(mut self, input: serde_json::Value) -> Self {
+        self.replay_input = Some(input);
         self
     }
 
@@ -596,6 +615,20 @@ pub struct DecisionLogConfig {
     /// the cost off the allow firehose.
     #[serde(default = "default_true")]
     pub input_data_denies_only: bool,
+
+    /// Replayable-capture tier (Plan 04 step 7): snapshot the FULL resolved
+    /// request into `replay_input` so decisions can be re-evaluated under a
+    /// different policy/data version (counterfactual replay). Off by default —
+    /// it stores the whole request context per captured decision. Protection
+    /// (mask/hash/encrypt) applies to it exactly like everything else.
+    #[serde(default)]
+    pub include_replay_input: bool,
+
+    /// When the replay tier is on, capture denies only (default FALSE, unlike
+    /// the explain tier: replay's whole point is finding flips in BOTH
+    /// directions — denies-only could never surface an allow→deny flip).
+    #[serde(default)]
+    pub replay_input_denies_only: bool,
 
     /// Number of ring shards. Each request thread maps to a stable shard, so
     /// concurrent producers take disjoint, uncontended locks. 0 = auto (detected
@@ -734,6 +767,8 @@ impl Default for DecisionLogConfig {
             include_context: true,
             include_input_data: false,
             input_data_denies_only: true,
+            include_replay_input: false,
+            replay_input_denies_only: false,
             capture_shards: 0,
             hash_principal: false,
             hash_salt: None,
@@ -791,6 +826,12 @@ impl DecisionLogConfig {
             input_data_denies_only: std::env::var("REAPER_DECISION_LOG_INPUT_DATA_DENIES_ONLY")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
+            include_replay_input: std::env::var("REAPER_DECISION_LOG_REPLAY_INPUT")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            replay_input_denies_only: std::env::var("REAPER_DECISION_LOG_REPLAY_INPUT_DENIES_ONLY")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
             capture_shards: std::env::var("REAPER_DECISION_LOG_SHARDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
