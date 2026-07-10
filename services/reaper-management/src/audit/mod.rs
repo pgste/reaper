@@ -221,6 +221,7 @@ pub mod actions {
     pub const AUDIT_LEGAL_HOLD_CREATE: &str = "audit.legal_hold_create";
     pub const AUDIT_LEGAL_HOLD_RELEASE: &str = "audit.legal_hold_release";
     pub const AUDIT_PURGE: &str = "audit.purge";
+    pub const AUDIT_REPLAY: &str = "audit.replay";
 }
 
 /// Audit log entry

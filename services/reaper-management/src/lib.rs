@@ -28,6 +28,7 @@ pub mod landscape;
 pub mod metrics;
 pub mod middleware;
 pub mod rate_limit;
+pub mod replay;
 pub mod state;
 pub mod storage;
 pub mod sync;

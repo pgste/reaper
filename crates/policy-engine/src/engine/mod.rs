@@ -27,7 +27,7 @@ pub use policy::EnhancedPolicy;
 pub use types::{
     AllPoliciesEvaluationResult, DenyInfo, PackageEvaluationResult, PackageInfo, PolicyAction,
     PolicyDecision, PolicyEngineStats, PolicyLanguage, PolicyRequest, PolicyRule, PolicySource,
-    PolicySourceMetadata, PolicyVersion, SimpleAction, SimpleRule, StagedPackage,
+    PolicySourceMetadata, PolicyVersion, SetEvalOutcome, SimpleAction, SimpleRule, StagedPackage,
 };
 
 use arc_swap::ArcSwap;
@@ -331,6 +331,66 @@ impl PolicyEngine {
             evaluation_time_ns,
             matched_rule,
         })
+    }
+
+    /// Evaluate one request against a SET of policies with the production
+    /// decision-combination semantics — the single source of truth shared by
+    /// the agent's serving path and the control plane's counterfactual replay
+    /// engine, so the two can never diverge:
+    ///
+    /// - **Deny overrides.** Any policy denying ends evaluation with Deny.
+    /// - **First allow wins** (among allows) — sets the attribution, but a
+    ///   later deny still overrides it.
+    /// - **Log matches don't decide.**
+    /// - **No policy matched ⇒ default deny** (nil policy id).
+    /// - **Errors deny** (fail closed) and stop evaluation.
+    pub fn evaluate_set(&self, policy_ids: &[PolicyId], request: &PolicyRequest) -> SetEvalOutcome {
+        let mut outcome = SetEvalOutcome {
+            decision: PolicyAction::Deny,
+            policy_id: PolicyId::nil(),
+            policy_name: String::new(),
+            policy_version: 0,
+            matched_rule: None,
+            total_eval_time_ns: 0,
+            error: None,
+        };
+        let mut any_allow = false;
+
+        for policy_id in policy_ids {
+            match self.evaluate(policy_id, request) {
+                Ok(d) => {
+                    outcome.total_eval_time_ns += d.evaluation_time_ns;
+                    match d.decision {
+                        PolicyAction::Deny => {
+                            outcome.decision = PolicyAction::Deny;
+                            outcome.policy_id = d.policy_id;
+                            outcome.policy_name = d.policy_name;
+                            outcome.policy_version = d.policy_version;
+                            outcome.matched_rule = d.matched_rule;
+                            return outcome;
+                        }
+                        PolicyAction::Allow => {
+                            if !any_allow {
+                                any_allow = true;
+                                outcome.decision = PolicyAction::Allow;
+                                outcome.policy_id = d.policy_id;
+                                outcome.policy_name = d.policy_name;
+                                outcome.policy_version = d.policy_version;
+                                outcome.matched_rule = d.matched_rule;
+                            }
+                        }
+                        PolicyAction::Log => {}
+                    }
+                }
+                Err(e) => {
+                    outcome.decision = PolicyAction::Deny;
+                    outcome.error = Some(e.to_string());
+                    return outcome;
+                }
+            }
+        }
+
+        outcome
     }
 
     /// Get engine statistics for monitoring

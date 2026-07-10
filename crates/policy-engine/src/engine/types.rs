@@ -225,6 +225,22 @@ pub struct PolicyDecision {
     pub matched_rule: Option<usize>,
 }
 
+/// Outcome of evaluating one request against a SET of policies with the
+/// production decision-combination semantics (see [`super::PolicyEngine::evaluate_set`]).
+#[derive(Debug, Clone)]
+pub struct SetEvalOutcome {
+    pub decision: PolicyAction,
+    /// Policy that determined the decision (nil when nothing matched).
+    pub policy_id: PolicyId,
+    pub policy_name: String,
+    pub policy_version: u64,
+    pub matched_rule: Option<usize>,
+    /// Sum of per-policy evaluation times.
+    pub total_eval_time_ns: u64,
+    /// Set when an evaluation errored (the decision is then Deny — fail closed).
+    pub error: Option<String>,
+}
+
 /// Information about a denial (which policy denied the request)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DenyInfo {

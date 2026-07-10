@@ -18,6 +18,7 @@ pub mod namespaces;
 pub mod oauth;
 pub mod orgs;
 pub mod policies;
+pub mod replay;
 pub mod revocations;
 pub mod scim;
 pub mod sources;
@@ -50,6 +51,7 @@ pub fn build_api_router() -> Router<Arc<AppState>> {
         .merge(deployments::routes())
         .merge(decisions::routes())
         .merge(audit::routes())
+        .merge(replay::routes())
         .merge(datastore::routes())
         .merge(landscape::routes())
         .merge(billing::routes())

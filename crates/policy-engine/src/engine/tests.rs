@@ -810,3 +810,65 @@ fn test_stable_policy_id_is_deterministic() {
     );
     assert_ne!(a, c);
 }
+
+#[test]
+fn test_evaluate_set_production_semantics() {
+    // The decision-combination contract shared by the agent's serving path
+    // and the control plane's replay engine: default deny, first allow wins,
+    // deny overrides, unknown policy id errors -> deny (fail closed).
+    let engine = PolicyEngine::new();
+
+    let allow_a = EnhancedPolicy::new(
+        "allow-a".to_string(),
+        "".to_string(),
+        vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: "/a".to_string(),
+            conditions: vec![],
+        }],
+    );
+    let deny_all = EnhancedPolicy::new(
+        "deny-all".to_string(),
+        "".to_string(),
+        vec![PolicyRule {
+            action: PolicyAction::Deny,
+            resource: "*".to_string(),
+            conditions: vec![],
+        }],
+    );
+    let (allow_id, deny_id) = (allow_a.id, deny_all.id);
+    engine.deploy_policy(allow_a).unwrap();
+    engine.deploy_policy(deny_all).unwrap();
+
+    let request = |resource: &str| PolicyRequest {
+        resource: resource.to_string(),
+        action: "read".to_string(),
+        context: Default::default(),
+    };
+
+    // Allow-only set: first allow wins, attribution carried.
+    let out = engine.evaluate_set(&[allow_id], &request("/a"));
+    assert_eq!(out.decision, PolicyAction::Allow);
+    assert_eq!(out.policy_name, "allow-a");
+
+    // No rule matched: the Simple evaluator itself default-denies (with the
+    // evaluated policy's attribution and no matched rule) — identical to what
+    // the agent serves.
+    let out = engine.evaluate_set(&[allow_id], &request("/other"));
+    assert_eq!(out.decision, PolicyAction::Deny);
+    assert_eq!(out.matched_rule, None);
+
+    // Deny overrides a prior allow, and attribution moves to the denier.
+    let out = engine.evaluate_set(&[allow_id, deny_id], &request("/a"));
+    assert_eq!(out.decision, PolicyAction::Deny);
+    assert_eq!(out.policy_name, "deny-all");
+
+    // Unknown policy id -> error -> deny (fail closed), error surfaced.
+    let out = engine.evaluate_set(&[uuid::Uuid::new_v4()], &request("/a"));
+    assert_eq!(out.decision, PolicyAction::Deny);
+    assert!(out.error.is_some());
+
+    // Empty set -> default deny.
+    let out = engine.evaluate_set(&[], &request("/a"));
+    assert_eq!(out.decision, PolicyAction::Deny);
+}

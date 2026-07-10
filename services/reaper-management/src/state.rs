@@ -234,6 +234,8 @@ pub struct AppState {
     pub jwks_validator: Option<Arc<JwksValidator>>,
     /// ClickHouse-backed decision-log store (None until REAPER_CLICKHOUSE_URL is set)
     pub decision_store: Option<Arc<crate::decisions::DecisionStore>>,
+    /// In-memory counterfactual-replay job registry (Plan 04 step 8).
+    pub replay_jobs: crate::replay::ReplayJobs,
     /// Shutdown signal for graceful shutdown
     shutdown_signal: ShutdownSignal,
     /// Flag indicating server is shutting down
@@ -288,6 +290,7 @@ impl AppState {
             started_at: chrono::Utc::now(),
             jwks_validator: Some(jwks_validator),
             decision_store,
+            replay_jobs: std::sync::Arc::new(dashmap::DashMap::new()),
             shutdown_signal: ShutdownSignal::new(),
             is_shutting_down: Arc::new(AtomicBool::new(false)),
         }

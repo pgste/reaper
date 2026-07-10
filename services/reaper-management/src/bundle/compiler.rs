@@ -160,32 +160,34 @@ impl Default for BundleCompiler {
     }
 }
 
-/// Internal bundle content structure
+/// The compiled `.rbb` artifact schema — what `compile()` serializes and what
+/// agents (and the control plane's replay engine) parse back. Public because
+/// it IS the wire format.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct BundleContent {
-    version: i32,
-    format: String,
-    policies: Vec<BundledPolicy>,
-    metadata: BundleMetadata,
+pub struct BundleContent {
+    pub version: i32,
+    pub format: String,
+    pub policies: Vec<BundledPolicy>,
+    pub metadata: BundleMetadata,
 }
 
-/// Internal bundled policy structure
+/// One policy inside a compiled bundle: raw policy text + provenance.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct BundledPolicy {
-    id: String,
-    version: i32,
-    priority: i32,
-    content: String,
-    content_hash: String,
-    language: String,
+pub struct BundledPolicy {
+    pub id: String,
+    pub version: i32,
+    pub priority: i32,
+    pub content: String,
+    pub content_hash: String,
+    pub language: String,
 }
 
 /// Bundle metadata
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct BundleMetadata {
-    created_at: String,
-    policy_count: i32,
-    include_debug: bool,
+pub struct BundleMetadata {
+    pub created_at: String,
+    pub policy_count: i32,
+    pub include_debug: bool,
 }
 
 #[cfg(test)]

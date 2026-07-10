@@ -263,6 +263,38 @@ the replay blob is sealed AES-256-GCM at capture and opened by the tenant key ho
 time. The blob is also inside the hash-chained record, so it is tamper-evident like every other
 field.
 
+## Counterfactual replay (Plan 04)
+
+`POST /orgs/{org}/replay` answers **"what would bundle X have decided on real historical
+traffic?"** — the safety net for policy changes: replay last month's decisions under the candidate
+bundle before promoting it, and see exactly what flips.
+
+```json
+{ "bundle_id": "…", "from": "…", "to": "…", "filter": {…},
+  "namespace": "prod", "data_version": 3, "max_rows": 10000 }
+```
+
+Returns `202 {job_id}`; poll `GET /orgs/{org}/replay/{job_id}` for progress and the diff:
+scanned / replayed / skipped counts, `allow_to_deny` / `deny_to_allow` flip totals, and sample
+flipped records with old and new rule attribution.
+
+**Fidelity guarantees** (what makes the counterfactual trustworthy):
+- **Decision semantics** come from `PolicyEngine::evaluate_set` — the *same function* the agent's
+  serving path calls (default deny, first allow, deny overrides, errors deny). Replay and
+  production cannot combine policies differently.
+- **Requests** come from the replayable capture tier's `replay_input` blobs; encrypted blobs are
+  opened with the tenant key passed per-job (never persisted). Rows captured without the tier are
+  counted as `skipped_not_replayable`; a range with none fails with a clear "enable the tier" error.
+- **Data** is pinned by `data_version` — the exact published snapshot document agents loaded (the
+  same provenance every decision row records). A principal absent from the snapshot fails closed
+  (deny + error), exactly as production would.
+- **Policies** load from the bundle's compiled artifact through the same construction the agent's
+  bundle apply uses.
+
+Admin-only, tenant-isolated, audited (`audit.replay`, recording the range/bundle — never the key).
+Jobs are ephemeral in-memory analyses (re-run after a control-plane restart). Scan cap 10k rows by
+default, 100k max per job.
+
 ## ClickHouse schema (sketch)
 
 ```sql

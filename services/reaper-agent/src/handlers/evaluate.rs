@@ -63,17 +63,10 @@ fn capture_input_data(
     (!input.is_empty()).then_some(Value::Object(input))
 }
 
-/// Outcome of evaluating a request against a set of policies.
-struct EvalOutcome {
-    decision: PolicyAction,
-    policy_id: Uuid,
-    policy_name: String,
-    policy_version: u64,
-    matched_rule: Option<usize>,
-    total_eval_time_ns: u64,
-    /// Set when an evaluator errored; the request is denied (fail closed).
-    error: Option<String>,
-}
+/// Outcome of evaluating a request against a set of policies — the engine's
+/// [`policy_engine::SetEvalOutcome`], re-exported under the handler-local name
+/// the endpoints already use.
+type EvalOutcome = policy_engine::SetEvalOutcome;
 
 /// Evaluate `request` against every policy in `policy_ids` and combine the
 /// results with a single, fail-closed rule shared by every endpoint:
@@ -90,55 +83,10 @@ fn evaluate_policy_set(
     policy_ids: &[Uuid],
     request: &PolicyRequest,
 ) -> EvalOutcome {
-    let mut outcome = EvalOutcome {
-        decision: PolicyAction::Deny,
-        policy_id: Uuid::nil(),
-        policy_name: String::new(),
-        policy_version: 0,
-        matched_rule: None,
-        total_eval_time_ns: 0,
-        error: None,
-    };
-    let mut any_allow = false;
-
-    for policy_id in policy_ids {
-        match engine.evaluate(policy_id, request) {
-            Ok(d) => {
-                outcome.total_eval_time_ns += d.evaluation_time_ns;
-                match d.decision {
-                    PolicyAction::Deny => {
-                        // Deny overrides everything — fail closed and stop.
-                        outcome.decision = PolicyAction::Deny;
-                        outcome.policy_id = d.policy_id;
-                        outcome.policy_name = d.policy_name;
-                        outcome.policy_version = d.policy_version;
-                        outcome.matched_rule = d.matched_rule;
-                        return outcome;
-                    }
-                    PolicyAction::Allow => {
-                        // First allow sets the decision; a later deny can still
-                        // override it above.
-                        if !any_allow {
-                            any_allow = true;
-                            outcome.decision = PolicyAction::Allow;
-                            outcome.policy_id = d.policy_id;
-                            outcome.policy_name = d.policy_name;
-                            outcome.policy_version = d.policy_version;
-                            outcome.matched_rule = d.matched_rule;
-                        }
-                    }
-                    PolicyAction::Log => {}
-                }
-            }
-            Err(e) => {
-                outcome.decision = PolicyAction::Deny;
-                outcome.error = Some(e.to_string());
-                return outcome;
-            }
-        }
-    }
-
-    outcome
+    // The combination semantics live in the ENGINE (PolicyEngine::evaluate_set)
+    // as the single source of truth, shared with the control plane's
+    // counterfactual replay engine — the two can never diverge.
+    engine.evaluate_set(policy_ids, request)
 }
 
 /// Standard policy evaluation.
