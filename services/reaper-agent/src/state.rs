@@ -381,7 +381,7 @@ impl AgentStats {
 
             // Refresh only process CPU info for efficiency
             let refresh_kind =
-                RefreshKind::new().with_processes(ProcessRefreshKind::new().with_cpu());
+                RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_cpu());
             system.refresh_specifics(refresh_kind);
 
             if let Some(process) = system.process(pid) {
@@ -405,7 +405,7 @@ impl AgentStats {
 
             // Refresh only process memory info
             let refresh_kind =
-                RefreshKind::new().with_processes(ProcessRefreshKind::new().with_memory());
+                RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_memory());
             system.refresh_specifics(refresh_kind);
 
             if let Some(process) = system.process(pid) {
