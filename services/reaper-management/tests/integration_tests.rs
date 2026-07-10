@@ -3368,3 +3368,360 @@ async fn test_scim_token_tenant_isolation() {
     assert_eq!(body["totalResults"], 1);
     assert_eq!(body["Resources"][0]["userName"], "bob@a.example.com");
 }
+
+// ============================================================================
+// Audit governance: retention windows + legal holds (Plan 04, step 6)
+// ============================================================================
+
+/// Create an org directly through the repository (the governance tests don't
+/// exercise org CRUD).
+async fn seed_org(env: &TestEnv, name: &str, slug: &str) -> Uuid {
+    OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: name.to_string(),
+            slug: slug.to_string(),
+            display_name: None,
+            description: None,
+            settings: serde_json::json!({}),
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+/// Count audit records for (org, action) — proves governance changes are audited.
+async fn audit_count(env: &TestEnv, org_id: Uuid, action: &str) -> usize {
+    reaper_management::audit::AuditRepository::new(&env.db)
+        .query(&reaper_management::audit::AuditQuery {
+            org_id: Some(org_id),
+            action: Some(action.to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn test_audit_retention_lifecycle_and_validation() {
+    let env = setup_test_env().await;
+    let org_id = seed_org(&env, "Retention Org", "retention-org").await;
+    let key = create_scoped_api_key(&env.db, org_id, &["org:admin"]).await;
+
+    // Unset → the default window, marked as such.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/retention-org/audit/retention",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = parse_body(resp).await;
+    assert_eq!(body["source"], "default");
+    assert_eq!(
+        body["days"], 90,
+        "default window matches the old schema TTL"
+    );
+
+    // Set an explicit window.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            "/orgs/retention-org/audit/retention",
+            Some(json!({"days": 30})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = parse_body(resp).await;
+    assert_eq!(body["days"], 30);
+    assert_eq!(body["source"], "explicit");
+
+    // Read-back is the explicit setting.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/retention-org/audit/retention",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["days"], 30);
+    assert_eq!(body["source"], "explicit");
+
+    // Out-of-range windows are rejected: a typo must not configure
+    // instant-delete or near-infinite retention.
+    for bad in [0, -5, 4000] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "PUT",
+                "/orgs/retention-org/audit/retention",
+                Some(json!({"days": bad})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "days={bad}");
+    }
+
+    // The change was audited.
+    assert_eq!(audit_count(&env, org_id, "audit.retention_update").await, 1);
+}
+
+#[tokio::test]
+async fn test_audit_legal_hold_lifecycle() {
+    let env = setup_test_env().await;
+    let org_id = seed_org(&env, "Hold Org", "hold-org").await;
+    let key = create_scoped_api_key(&env.db, org_id, &["org:admin"]).await;
+
+    // A hold requires a reason — it is itself a compliance record.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/hold-org/audit/legal-holds",
+            Some(json!({"reason": "   "})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Place a scoped hold.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/hold-org/audit/legal-holds",
+            Some(json!({
+                "reason": "Litigation #2026-114",
+                "filter": {"principal": "alice", "decision": "deny"}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let hold = parse_body(resp).await;
+    let hold_id = hold["id"].as_str().unwrap().to_string();
+    assert_eq!(hold["reason"], "Litigation #2026-114");
+    assert_eq!(hold["filter"]["principal"], "alice");
+    assert!(hold["released_at"].is_null(), "created active");
+
+    // Listed, active.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/hold-org/audit/legal-holds",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["active"], 1);
+
+    // Fetchable by id.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("/orgs/hold-org/audit/legal-holds/{hold_id}"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Release: 204; the record survives as released (compliance history),
+    // and a second release is a visible 404, not a silent no-op.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "DELETE",
+            &format!("/orgs/hold-org/audit/legal-holds/{hold_id}"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "DELETE",
+            &format!("/orgs/hold-org/audit/legal-holds/{hold_id}"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "double release surfaces"
+    );
+
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/hold-org/audit/legal-holds",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["count"], 1, "released hold stays in the record");
+    assert_eq!(body["active"], 0);
+    assert!(!body["holds"][0]["released_at"].is_null());
+
+    // Both lifecycle events were audited.
+    assert_eq!(
+        audit_count(&env, org_id, "audit.legal_hold_create").await,
+        1
+    );
+    assert_eq!(
+        audit_count(&env, org_id, "audit.legal_hold_release").await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn test_audit_governance_tenant_isolation_and_scopes() {
+    let env = setup_test_env().await;
+    let org_a = seed_org(&env, "Gov Org A", "gov-org-a").await;
+    let org_b = seed_org(&env, "Gov Org B", "gov-org-b").await;
+    let key_a = create_scoped_api_key(&env.db, org_a, &["org:admin"]).await;
+    let reader_a = create_scoped_api_key(&env.db, org_a, &["agent:read"]).await;
+
+    // Org A's admin cannot read or mutate org B's governance.
+    for (method, uri, body) in [
+        ("GET", "/orgs/gov-org-b/audit/retention", None),
+        (
+            "PUT",
+            "/orgs/gov-org-b/audit/retention",
+            Some(json!({"days": 7})),
+        ),
+        ("GET", "/orgs/gov-org-b/audit/legal-holds", None),
+        (
+            "POST",
+            "/orgs/gov-org-b/audit/legal-holds",
+            Some(json!({"reason": "cross-tenant probe"})),
+        ),
+        ("POST", "/orgs/gov-org-b/audit/purge", None),
+    ] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(authed_request(method, uri, body, &key_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {uri} must be tenant-isolated"
+        );
+    }
+
+    // A read-only (agent:read) credential is rejected even on its OWN org:
+    // governance is admin surface (holds reveal litigation posture).
+    for (method, uri, body) in [
+        ("GET", "/orgs/gov-org-a/audit/retention", None),
+        (
+            "PUT",
+            "/orgs/gov-org-a/audit/retention",
+            Some(json!({"days": 7})),
+        ),
+        ("GET", "/orgs/gov-org-a/audit/legal-holds", None),
+    ] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(authed_request(method, uri, body, &reader_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {uri} must require org:admin"
+        );
+    }
+
+    // And org B remains untouched by the probes: no holds, default retention.
+    let key_b = create_scoped_api_key(&env.db, org_b, &["org:admin"]).await;
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/gov-org-b/audit/legal-holds",
+            None,
+            &key_b,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["count"], 0);
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/gov-org-b/audit/retention",
+            None,
+            &key_b,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(resp).await;
+    assert_eq!(body["source"], "default");
+}
+
+#[tokio::test]
+async fn test_audit_purge_unavailable_without_decision_store() {
+    // The test env has no REAPER_CLICKHOUSE_URL → the manual purge answers 503
+    // with setup guidance instead of pretending to have purged anything.
+    let env = setup_test_env().await;
+    let org_id = seed_org(&env, "Purge Org", "purge-org").await;
+    let key = create_scoped_api_key(&env.db, org_id, &["org:admin"]).await;
+
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/purge-org/audit/purge",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

@@ -172,6 +172,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Audit retention sweeper (Plan 04 step 6): the application-driven purge
+    // that replaced the static ClickHouse TTL, so legal holds are honored.
+    // No-op unless the decision store (REAPER_CLICKHOUSE_URL) is configured.
+    reaper_management::decisions::purge::spawn_retention_sweeper(state.clone());
+
     // Create rate limiter
     let rate_limiter = rate_limit::create_rate_limiter(&config.rate_limit);
 

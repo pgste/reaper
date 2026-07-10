@@ -93,6 +93,10 @@ services:
       - REAPER_CLICKHOUSE_DATABASE=${REAPER_CLICKHOUSE_DATABASE:-reaper_audit}
       - REAPER_CLICKHOUSE_USER=${REAPER_CLICKHOUSE_USER:-}
       - REAPER_CLICKHOUSE_PASSWORD=${REAPER_CLICKHOUSE_PASSWORD:-}
+      # Audit retention purge (application-driven; honors legal holds).
+      # Defaults: 90-day window, 6h sweep. 0 disables either.
+      - REAPER_AUDIT_DEFAULT_RETENTION_DAYS=${AUDIT_DEFAULT_RETENTION_DAYS:-}
+      - REAPER_AUDIT_PURGE_INTERVAL_SECS=${AUDIT_PURGE_INTERVAL_SECS:-}
     volumes:
       - management-storage:/var/lib/reaper/storage
     networks:

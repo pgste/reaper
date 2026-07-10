@@ -205,6 +205,41 @@ deployments where an un-audited decision must never be served:
 Both counts (plus `audit_required` / `audit_compromised`) are also in the `/api/v1/decisions/stats`
 payload.
 
+## Retention & legal holds (Plan 04)
+
+Retention is enforced by an **application-driven purge** on the management server, not by a static
+ClickHouse `TTL ... DELETE` — a static TTL deletes legal-held rows regardless, the exact failure
+legal holds exist to prevent. (Upgrading an existing store? `ALTER TABLE reaper_audit.decisions
+REMOVE TTL;` — hot→cold `TO VOLUME` tiering TTLs remain safe: they move data, never delete it.)
+
+**Governance state lives in the management DB** (transactional, tenant-scoped, audited); the purge
+it governs executes against ClickHouse with parameter-bound `ALTER TABLE ... DELETE` mutations.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`/`PUT` | `/orgs/{org}/audit/retention` | Read / set the tenant window `{days}` (1–3650) |
+| `POST`/`GET` | `/orgs/{org}/audit/legal-holds` | Place a hold `{reason, filter?}` / list (active + released) |
+| `GET`/`DELETE` | `/orgs/{org}/audit/legal-holds/{id}` | Inspect / **release** (the record survives, released) |
+| `POST` | `/orgs/{org}/audit/purge` | Run the org's retention purge now |
+
+All routes are **admin-only** (`org:admin`), tenant-isolated, and every mutation writes an audit
+record (`audit.retention_update`, `audit.legal_hold_create`, `audit.legal_hold_release`,
+`audit.purge`).
+
+- A hold's `filter` selects rows on the decision dimensions (principal / action / resource /
+  decision / policy_name / agent_id / time range). An **empty filter is a blanket hold**: it
+  protects everything and suspends the org's purge entirely while active.
+- Held rows are excluded from the purge with a `NOT (...)` clause per active hold; releasing a hold
+  makes its rows purgeable on the next sweep. Releases are non-idempotent (a double release
+  surfaces as 404, never masks a race).
+- **Checkpoints** attest decision ranges, so a tenant's checkpoints are purged only when it has
+  *no* active holds — while anything is held, the whole attestation chain is kept.
+- The **background sweeper** (`REAPER_AUDIT_PURGE_INTERVAL_SECS`, default 6h, `0` = off) applies
+  each org's explicit window, falling back to `REAPER_AUDIT_DEFAULT_RETENTION_DAYS` (default 90 —
+  the window the old static TTL enforced; `0` = no default purging). Single-tenant stores
+  (`REAPER_CLICKHOUSE_TENANT_FILTER=false`) run one global pass under the default window honoring
+  every org's holds — per-org windows would race each other on unscoped deletes.
+
 ## ClickHouse schema (sketch)
 
 ```sql
