@@ -1,0 +1,41 @@
+# Scheduled supply-chain watch (Plan 06, Step 2).
+#
+# The PR-time supply-chain job (ci.yml) only sees advisories that were known
+# when a commit merged. This weekly run re-checks `main` against a freshly
+# fetched advisory DB so a CVE disclosed AFTER merge still turns the build red
+# and pages the owner (per docs/security/VULN_RESPONSE.md). It is the continuous
+# watch that complements — never replaces — the blocking PR gate (ADR-1).
+
+name: Supply Chain (scheduled watch)
+
+on:
+  schedule:
+    - cron: "23 6 * * 1" # weekly, Mondays 06:23 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-nightly
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Advisory watch (deny + audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+
+      # Re-run the full advisory surface against main with a fresh DB.
+      - name: cargo-deny advisories
+        run: cargo deny check advisories
+
+      - name: cargo-audit
+        run: cargo audit

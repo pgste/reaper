@@ -108,6 +108,35 @@ jobs:
           name: clippy-report
           path: clippy-report.txt
 
+  # Stage 1: Supply-chain assurance (BLOCKS pipeline — Plan 06)
+  # cargo-deny is the blocking PR gate across advisories + licenses + bans +
+  # sources; cargo-audit is the continuous-watch companion (also run on a
+  # schedule in supply-chain-nightly.yml so a CVE disclosed AFTER merge still
+  # turns main red). They overlap on advisories deliberately (ADR-1) — do not
+  # dedupe them away. Never continue-on-error: a supply-chain finding must stop
+  # the build, not be swallowed.
+  supply-chain:
+    name: Supply Chain (deny + audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+
+      - name: cargo-deny (advisories, licenses, bans, sources)
+        run: cargo deny check advisories licenses bans sources
+
+      # Plain `cargo audit` fails on vulnerabilities/unsound advisories against
+      # the committed Cargo.lock. Unmaintained crates are reported but do not
+      # fail the build here (tracked in docs/security/VULN_RESPONSE.md); a real
+      # vulnerability blocks.
+      - name: cargo-audit (Cargo.lock)
+        run: cargo audit
+
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:
     name: Unit Tests

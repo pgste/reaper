@@ -3,6 +3,9 @@
 name = "policy-engine"
 version = "0.1.0"
 edition = "2021"
+# Not published to crates.io — internal workspace crate (Plan 06: lets
+# cargo-deny treat it as private for license/wildcard checks).
+publish = false
 description = "High-performance policy evaluation engine"
 license = "MIT OR Apache-2.0"
 

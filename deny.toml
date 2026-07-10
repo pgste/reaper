@@ -1,0 +1,81 @@
+# cargo-deny configuration — the blocking supply-chain gate (Plan 06, Step 1).
+#
+# Run locally with: `cargo deny check`
+# CI runs `cargo deny check advisories licenses bans sources` as a required gate.
+#
+# Complementary to the scheduled `cargo audit` run (Step 2): cargo-deny is the
+# blocking PR gate across advisories+licenses+bans+sources; cargo-audit's cron
+# is the continuous watch that catches CVEs disclosed AFTER a commit merges.
+# Do not "dedupe" them by deleting the scheduled audit — they have distinct jobs.
+
+[graph]
+# Check all target triples we actually ship / build for, so a platform-specific
+# advisory or license is not missed.
+all-features = true
+
+[advisories]
+version = 2
+# RustSec advisory DB (https://github.com/rustsec/advisory-db). In version 2,
+# vulnerabilities and unsound advisories are always errors; yanked crates are
+# denied here. Suppress a specific advisory only with a dated justification in
+# `ignore`, per docs/security/VULN_RESPONSE.md — never blanket-mute.
+yanked = "deny"
+ignore = [
+    # "RUSTSEC-YYYY-NNNN", # <reason> — <owner> — <review date>
+]
+
+[licenses]
+version = 2
+# Permissive-only allow-list, seeded from the actual dependency tree
+# (`cargo metadata` license survey, 2026-07). Every crate resolves to one of
+# these; copyleft-triggering terms are intentionally absent. `r-efi`'s
+# "MIT OR Apache-2.0 OR LGPL-2.1-or-later" resolves via MIT/Apache — no
+# copyleft obligation is taken.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "BSL-1.0",
+    "BlueOak-1.0.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+# Per-crate license carve-outs go here with a justification. Empty by design —
+# a new copyleft dep must be an explicit, reviewed decision, not a silent add.
+exceptions = []
+# Reaper's own workspace crates are unpublished and carry no `license` field;
+# don't license-check our first-party code, only third-party dependencies.
+private = { ignore = true }
+
+[bans]
+# Duplicate transitive versions are common and mostly benign; surface them as a
+# warning (visibility) rather than blocking. Escalate to "deny" for specific
+# crates via `deny` below if a duplication becomes a real hazard.
+multiple-versions = "warn"
+# Deny `version = "*"` on third-party crates (an unpinned supply-chain hole),
+# but allow it for our own intra-workspace path deps, which legitimately use it.
+wildcards = "deny"
+allow-wildcard-paths = true
+# Crates we never want pulled in (add with a reason as needed).
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# Supply-chain source control (ADR-5): only the public crates.io registry is
+# allowed. There are currently NO git dependencies; a new one must be added here
+# AND rev-pinned in Cargo.toml, or `cargo deny check sources` fails.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
