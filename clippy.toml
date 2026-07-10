@@ -1,0 +1,5 @@
+# Reachable-code panic gate (Plan 05, Step 6): unwrap()/expect() in non-test
+# code are denied via [workspace.lints]; these allowances keep the ergonomic
+# unwrap/expect idiom available inside #[cfg(test)] and integration tests.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

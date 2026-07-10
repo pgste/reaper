@@ -17,6 +17,17 @@ exclude = [
     "benchmarks/reaper-vs-opa",
 ]
 
+# Panic-safety gate (Plan 05, Step 6). A reachable `unwrap()`/`expect()` on an
+# enforcement node is a latent availability hazard: the panic is caught and
+# turned into a fail-closed 500 by the service routers' CatchPanicLayer (Step 1),
+# but new reachable panics should not be introduced silently. Crates opt in with
+# `[lints]\nworkspace = true`; `clippy.toml` (allow-unwrap/expect-in-tests) keeps
+# the idiom ergonomic inside `#[cfg(test)]`. Burn-down: crates still carrying
+# legacy unwrap debt have deliberately NOT opted in yet — see their Cargo.toml.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
 [workspace.dependencies]
 # Core async runtime
 tokio = { version = "1.0", features = ["full"] }
