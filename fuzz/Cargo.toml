@@ -1,0 +1,39 @@
+[package]
+name = "reaper-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Coverage-guided fuzzing of the DSL parser/compiler — the largest
+# untrusted-input surface in an authorization product (Plan 06, Step 4 /
+# ADR-4). These targets are the live acceptance test for Plan 05's DSL
+# nesting-depth bound: a crash here means the parser/compiler can be driven to
+# panic/abort on crafted input.
+#
+# Kept OUT of the default workspace (root Cargo.toml `exclude`) so the nightly
+# toolchain cargo-fuzz requires never touches the normal build/test path.
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+policy-engine = { path = "../crates/policy-engine" }
+
+[[bin]]
+name = "parse_reap"
+path = "fuzz_targets/parse_reap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compile_reap"
+path = "fuzz_targets/compile_reap.rs"
+test = false
+doc = false
+bench = false
+
+# Own workspace so it does not inherit the parent workspace's lints/profiles
+# and is not built by `cargo build --workspace`.
+[workspace]

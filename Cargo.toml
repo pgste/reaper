@@ -15,6 +15,9 @@ members = [
 ]
 exclude = [
     "benchmarks/reaper-vs-opa",
+    # cargo-fuzz crate: needs a nightly toolchain + libfuzzer; kept out of the
+    # default workspace so normal `cargo build/test --workspace` never touches it.
+    "fuzz",
 ]
 
 # Panic-safety gate (Plan 05, Step 6). A reachable `unwrap()`/`expect()` on an
