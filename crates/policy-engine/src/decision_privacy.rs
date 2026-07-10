@@ -120,13 +120,27 @@ impl DataProtection {
     pub fn apply(&self, entry: &mut DecisionLogEntry) -> Result<(), String> {
         if let Some(ref salt) = self.hash_salt {
             entry.principal = pseudonymize(salt, &entry.principal);
+            // The replay blob carries its own principal copy: it must show the
+            // SAME pseudonym — pseudonymization is a promise about every sink,
+            // and the join key must stay consistent across views.
+            if let Some(Value::Object(replay)) = entry.replay_input.as_mut() {
+                if let Some(Value::String(p)) = replay.get_mut("principal") {
+                    *p = entry.principal.clone();
+                }
+            }
         }
 
-        // Context: allowlist first, then masking.
+        // Context: allowlist first, then masking. The replay blob's context
+        // gets the identical treatment — protection semantics never differ by
+        // sink (an operator who masked `token` masked it EVERYWHERE; tenants
+        // needing full-fidelity replay + privacy use encryption instead).
         if let Some(ref allow) = self.context_allowlist {
             entry
                 .context
                 .retain(|k, _| allow.iter().any(|a| a == &k.to_lowercase()));
+            if let Some(Value::Object(ctx)) = replay_context_mut(&mut entry.replay_input) {
+                ctx.retain(|k, _| allow.iter().any(|a| a == &k.to_lowercase()));
+            }
         }
         if !self.mask_keys.is_empty() {
             for (k, v) in entry.context.iter_mut() {
@@ -137,12 +151,22 @@ impl DataProtection {
             if let Some(ref mut input) = entry.input_data {
                 mask_input_data(input, |k| self.is_masked(k));
             }
+            if let Some(Value::Object(ctx)) = replay_context_mut(&mut entry.replay_input) {
+                for (k, v) in ctx.iter_mut() {
+                    if self.is_masked(k) {
+                        *v = Value::String(MASKED.to_string());
+                    }
+                }
+            }
         }
 
-        // Encryption last, over the already-masked snapshot.
+        // Encryption last, over the already-masked snapshots.
         if let Some(ref cipher) = self.cipher {
             if let Some(input) = entry.input_data.take() {
                 entry.input_data = Some(encrypt_value(cipher, &input)?);
+            }
+            if let Some(replay) = entry.replay_input.take() {
+                entry.replay_input = Some(encrypt_value(cipher, &replay)?);
             }
         }
 
@@ -164,6 +188,15 @@ pub fn pseudonymize(salt: &[u8], value: &str) -> String {
     let digest = mac.finalize().into_bytes();
     // 128 bits is ample for joinability without collisions; keeps lines short.
     format!("sha256:{}", hex::encode(&digest[..16]))
+}
+
+/// Mutable access to the replay blob's `context` object
+/// (`{"principal", "action", "resource", "context": {...}}`), if present.
+fn replay_context_mut(replay_input: &mut Option<Value>) -> Option<&mut Value> {
+    replay_input
+        .as_mut()
+        .and_then(|v| v.as_object_mut())
+        .and_then(|o| o.get_mut("context"))
 }
 
 /// Mask matching attribute keys inside the explain snapshot
@@ -436,5 +469,105 @@ mod tests {
             json.contains("hash_principal"),
             "non-secret flags still echo"
         );
+    }
+
+    // ---- Replayable-capture tier protection (Plan 04 step 7) ----
+
+    fn entry_with_replay() -> DecisionLogEntry {
+        let mut e = entry_with_context();
+        e.replay_input = Some(json!({
+            "principal": "alice@example.com",
+            "action": "read",
+            "resource": "/records/42",
+            "context": {
+                "ip": "10.0.0.1",
+                "session_token": "secret-token-xyz",
+                "request_id": "req-1"
+            }
+        }));
+        e
+    }
+
+    #[test]
+    fn replay_input_masking_matches_context_masking() {
+        // The identical protection promise: a masked key is masked in EVERY
+        // sink, the replay blob included.
+        let config = DecisionLogConfig {
+            mask_keys: vec!["session_token".to_string()],
+            ..Default::default()
+        };
+        let p = protection(&config);
+        let mut e = entry_with_replay();
+        p.apply(&mut e).unwrap();
+
+        let replay_ctx = &e.replay_input.as_ref().unwrap()["context"];
+        assert_eq!(replay_ctx["session_token"], json!("***"));
+        assert_eq!(replay_ctx["ip"], json!("10.0.0.1"), "unmasked keys intact");
+        assert_eq!(e.context["session_token"], json!("***"));
+    }
+
+    #[test]
+    fn replay_input_allowlist_matches_context_allowlist() {
+        let config = DecisionLogConfig {
+            context_allowlist: Some(vec!["request_id".to_string()]),
+            ..Default::default()
+        };
+        let p = protection(&config);
+        let mut e = entry_with_replay();
+        p.apply(&mut e).unwrap();
+
+        let replay_ctx = e.replay_input.as_ref().unwrap()["context"]
+            .as_object()
+            .unwrap();
+        assert_eq!(replay_ctx.len(), 1, "only allowlisted keys survive");
+        assert!(replay_ctx.contains_key("request_id"));
+    }
+
+    #[test]
+    fn replay_input_principal_gets_the_same_pseudonym() {
+        let config = DecisionLogConfig {
+            hash_principal: true,
+            hash_salt: Some("tenant-secret".to_string()),
+            ..Default::default()
+        };
+        let p = protection(&config);
+        let mut e = entry_with_replay();
+        p.apply(&mut e).unwrap();
+
+        let replay_principal = e.replay_input.as_ref().unwrap()["principal"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            replay_principal, e.principal,
+            "pseudonym must be identical across views (join key consistency)"
+        );
+        assert!(
+            !replay_principal.contains("alice"),
+            "raw identity never leaks"
+        );
+    }
+
+    #[test]
+    fn replay_input_is_encrypted_and_round_trips() {
+        // Encryption is the fidelity-preserving option: the sealed blob opens
+        // back to the exact request for the tenant key holder at replay time.
+        let key_hex = "22".repeat(32);
+        let config = DecisionLogConfig {
+            encrypt_input_data: true,
+            encryption_key: Some(key_hex.clone()),
+            ..Default::default()
+        };
+        let p = protection(&config);
+        let mut e = entry_with_replay();
+        let original = e.replay_input.clone().unwrap();
+        p.apply(&mut e).unwrap();
+
+        let sealed = e.replay_input.as_ref().unwrap();
+        assert_eq!(sealed["enc"], json!("aes256gcm"), "sealed envelope");
+        assert!(sealed.get("context").is_none(), "no plaintext leaks");
+
+        let opened = decrypt_input_data(sealed, &key_hex).unwrap();
+        assert_eq!(opened, original, "replay fidelity survives encryption");
     }
 }

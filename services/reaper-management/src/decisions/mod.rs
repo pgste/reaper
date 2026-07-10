@@ -160,6 +160,12 @@ pub struct DecisionRow {
     /// `policy_engine::decrypt_input_data`.
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub input_data: Value,
+    /// Replayable-capture snapshot (Plan 04 step 7): the full resolved request
+    /// (`{"principal","action","resource","context"}`), possibly an encryption
+    /// envelope. Null when the tier was off at capture — such rows are NOT
+    /// replayable.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub replay_input: Value,
 }
 
 /// Aggregate stats for a tenant + time range.
@@ -547,7 +553,7 @@ fn parse_row(mut v: Value) -> Result<DecisionRow, String> {
     }
     // ClickHouse returns context/input_data as JSON *strings*; decode them so
     // API clients get structured objects (leave as null when empty).
-    for key in ["context", "input_data"] {
+    for key in ["context", "input_data", "replay_input"] {
         let decoded = match v.get(key).and_then(Value::as_str) {
             Some(s) if !s.trim().is_empty() && s != "{}" => {
                 serde_json::from_str(s).unwrap_or(Value::Null)
@@ -563,7 +569,7 @@ fn parse_row(mut v: Value) -> Result<DecisionRow, String> {
 
 const LIST_COLUMNS: &str = "timestamp, decision_id, trace_id, principal, action, resource, \
      decision, policy_id, policy_name, policy_version, matched_rule, \
-     evaluation_time_ns, cache_hit, agent_id, context, input_data";
+     evaluation_time_ns, cache_hit, agent_id, context, input_data, replay_input";
 
 /// Shared WHERE-clause builder. Every branch appends a `{name:Type}`
 /// placeholder and the bound value — never string-spliced input.
@@ -926,6 +932,39 @@ mod tests {
         let row = parse_row(raw).unwrap();
         assert_eq!(row.context["ip"], "10.0.0.1");
         assert_eq!(row.input_data["enc"], "aes256gcm");
+    }
+
+    #[test]
+    fn parse_row_decodes_replay_input() {
+        let mut raw = serde_json::json!({
+            "timestamp": "2026-07-04 10:00:00.000",
+            "decision_id": "d-2",
+            "trace_id": "",
+            "principal": "alice",
+            "action": "read",
+            "resource": "/x",
+            "decision": "allow",
+            "policy_id": "p-1",
+            "policy_name": "pol",
+            "policy_version": "3",
+            "matched_rule": "",
+            "evaluation_time_ns": 450u64,
+            "cache_hit": 0u8,
+            "agent_id": "agent-1",
+            "context": "{}",
+            "input_data": "",
+        });
+        // Tier off at capture → null (row is NOT replayable).
+        let row = parse_row(raw.clone()).unwrap();
+        assert!(row.replay_input.is_null());
+
+        // Tier on → the full request decodes structured.
+        raw["replay_input"] = serde_json::json!(
+            "{\"principal\":\"alice\",\"action\":\"read\",\"resource\":\"/x\",\"context\":{\"region\":\"eu\"}}"
+        );
+        let row = parse_row(raw).unwrap();
+        assert_eq!(row.replay_input["context"]["region"], "eu");
+        assert_eq!(row.replay_input["principal"], "alice");
     }
 
     #[test]

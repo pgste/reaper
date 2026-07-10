@@ -554,6 +554,15 @@ impl DecisionBuffer {
         self.config.include_input_data && (!self.config.input_data_denies_only || !is_allow)
     }
 
+    /// Whether the replayable-capture snapshot (the full resolved request)
+    /// should be captured for this decision (Plan 04 step 7). Cheap boolean;
+    /// the snapshot is built by the caller only when this returns true — the
+    /// hot path pays nothing while the tier is off (default).
+    #[inline]
+    pub fn should_capture_replay(&self, is_allow: bool) -> bool {
+        self.config.include_replay_input && (!self.config.replay_input_denies_only || !is_allow)
+    }
+
     /// Serialize a message once and fan it out to all configured sinks, on the
     /// background writer thread.
     ///
@@ -1587,5 +1596,112 @@ mod tests {
         assert!(stats.dropped_entries >= 1, "ring evicted");
         assert_eq!(stats.writer_dropped, 0, "no durable loss");
         assert!(buffer.is_audit_healthy());
+    }
+
+    // ---- Replayable-capture tier (Plan 04 step 7) ----
+
+    #[test]
+    fn test_replay_gate_off_by_default() {
+        let config = DecisionLogConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(!buffer.should_capture_replay(true));
+        assert!(!buffer.should_capture_replay(false));
+    }
+
+    #[test]
+    fn test_replay_gate_on_captures_both_directions_by_default() {
+        // Unlike the explain tier, replay defaults to BOTH decisions: flips
+        // happen in both directions, denies-only could never surface an
+        // allow→deny flip.
+        let config = DecisionLogConfig {
+            enabled: true,
+            include_replay_input: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(buffer.should_capture_replay(true));
+        assert!(buffer.should_capture_replay(false));
+
+        let config = DecisionLogConfig {
+            enabled: true,
+            include_replay_input: true,
+            replay_input_denies_only: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(!buffer.should_capture_replay(true));
+        assert!(buffer.should_capture_replay(false));
+    }
+
+    #[test]
+    fn test_replay_input_reaches_the_durable_sink_protected() {
+        // End to end through the writer thread: the replay blob lands in the
+        // NDJSON sink, with capture-time protection applied (masked key never
+        // stored raw — the same guarantee the context/input_data sinks have).
+        let path = std::env::temp_dir().join(format!(
+            "reaper_declog_replay_test_{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let config = DecisionLogConfig {
+            enabled: true,
+            file_path: Some(path.to_string_lossy().to_string()),
+            include_replay_input: true,
+            mask_keys: vec!["token".to_string()],
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        let mut entry = test_entry("deny");
+        entry.replay_input = Some(serde_json::json!({
+            "principal": "user",
+            "action": "read",
+            "resource": "resource",
+            "context": {"token": "s3cr3t-replay", "region": "eu"}
+        }));
+        buffer.log(entry);
+        buffer.flush().unwrap();
+
+        let mut contents = String::new();
+        for _ in 0..200 {
+            contents = std::fs::read_to_string(&path).unwrap_or_default();
+            if !contents.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            !contents.contains("s3cr3t-replay"),
+            "masked value never raw"
+        );
+        let row: DecisionLogEntry = serde_json::from_str(contents.trim()).unwrap();
+        let replay = row.replay_input.expect("replay blob persisted");
+        assert_eq!(replay["context"]["token"], serde_json::json!("***"));
+        assert_eq!(replay["context"]["region"], serde_json::json!("eu"));
+        assert_eq!(replay["action"], serde_json::json!("read"));
+        // The ring view carries it too (same Arc).
+        let recent = buffer.get_recent(1);
+        assert!(recent[0].replay_input.is_some());
+    }
+
+    #[test]
+    fn test_replay_tier_off_stores_no_field() {
+        let config = DecisionLogConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        buffer.log(test_entry("deny"));
+        let recent = buffer.get_recent(1);
+        assert!(recent[0].replay_input.is_none());
+        // And the NDJSON line omits the key entirely (skip_serializing_if).
+        let json = recent[0].to_ndjson().unwrap();
+        assert!(!json.contains("replay_input"));
     }
 }

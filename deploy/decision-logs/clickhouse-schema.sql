@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
     -- only/sampled mode (heavier). Empty otherwise. Makes a decision reproducible.
     input_data       String                 CODEC(ZSTD(3)) DEFAULT '',
 
+    -- OPTIONAL replayable-capture tier (Plan 04 step 7): the full resolved
+    -- request as a self-contained JSON blob ({"principal","action","resource",
+    -- "context"}), enough to re-evaluate the decision under a different
+    -- policy/data version (counterfactual replay). May be an encryption
+    -- envelope when the tenant encrypts at capture. Empty when the tier is off.
+    replay_input     String                 CODEC(ZSTD(3)) DEFAULT '',
+
     -- Tamper-evident hash chain over the durable stream (Plan 04): entry_hash =
     -- sha256(canonical(record without hashes) || prev_hash). A verifier
     -- recomputes the chain to detect any insertion/deletion/reorder/mutation.

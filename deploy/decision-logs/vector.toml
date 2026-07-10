@@ -42,6 +42,7 @@ source = '''
 # context/input_data may be objects; store them as JSON strings for the String columns.
 if is_object(.context)    { .context = encode_json(.context) }
 if is_object(.input_data) { .input_data = encode_json(.input_data) }
+if is_object(.replay_input) { .replay_input = encode_json(.replay_input) }
 '''
 
 # Checkpoints: RFC3339 wallclock -> DateTime64.

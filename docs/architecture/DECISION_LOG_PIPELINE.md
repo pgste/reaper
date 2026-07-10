@@ -240,6 +240,29 @@ record (`audit.retention_update`, `audit.legal_hold_create`, `audit.legal_hold_r
   (`REAPER_CLICKHOUSE_TENANT_FILTER=false`) run one global pass under the default window honoring
   every org's holds — per-org windows would race each other on unscoped deletes.
 
+## Replayable capture tier (Plan 04)
+
+Opt-in tier that stores the **full resolved request** per captured decision —
+`replay_input = {"principal","action","resource","context"}` — the raw material for
+**counterfactual replay** ("what would policy vX have decided on last month's traffic?").
+Distinct from the display-oriented `context` (which may be allowlisted/dropped) and the explain
+tier's `input_data` (resolved *entity attributes*, not the request). Combined with the
+`data_version`/`data_checksum` provenance every row already carries, a replayable row pins exactly
+what ran: request + policy version + data snapshot.
+
+| Env var | Meaning |
+|---|---|
+| `REAPER_DECISION_LOG_REPLAY_INPUT` | Enable the tier (default off — zero hot-path cost when off) |
+| `REAPER_DECISION_LOG_REPLAY_INPUT_DENIES_ONLY` | Capture denies only (default **false**, unlike the explain tier: flips happen in both directions) |
+
+**Privacy is identical across sinks.** `mask_keys`, the context allowlist, and principal
+pseudonymization apply to the replay blob exactly as everywhere else — a masked key is masked in
+every view. That means masking/hashing *degrade replay fidelity* by design (the protected value is
+what replays). Tenants that need **both** privacy and full-fidelity replay use `encrypt_input_data`:
+the replay blob is sealed AES-256-GCM at capture and opened by the tenant key holder at replay
+time. The blob is also inside the hash-chained record, so it is tamper-evident like every other
+field.
+
 ## ClickHouse schema (sketch)
 
 ```sql
