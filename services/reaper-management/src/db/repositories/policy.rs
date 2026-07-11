@@ -178,11 +178,19 @@ impl<'a> PolicyRepository<'a> {
         Ok(row.0)
     }
 
-    /// Update a policy (optionally creates new version if content provided)
+    /// Update a policy (optionally creates a new version if content provided).
+    ///
+    /// `expected_version` is the optimistic-concurrency guard (Plan 07 Phase C):
+    /// when `Some(v)`, the UPDATE carries `AND current_version = v`, so a
+    /// concurrent writer that already bumped the version makes this write match
+    /// zero rows and the call returns [`DatabaseError::VersionConflict`] instead
+    /// of silently clobbering. `None` skips the guard (transitional warn-only
+    /// mode for clients that did not send `If-Match`).
     pub async fn update(
         &self,
         id: Uuid,
         input: UpdatePolicy,
+        expected_version: Option<i32>,
     ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
@@ -200,12 +208,60 @@ impl<'a> PolicyRepository<'a> {
         let description = input.description.or(current.description);
         let is_active = input.is_active.unwrap_or(current.is_active);
 
-        // If content is provided, create a new version
+        // If content is provided, create a new version. The guarded UPDATE of
+        // `policies.current_version` is the atomic arbiter, so it runs FIRST;
+        // the immutable version row is only inserted once this writer has won,
+        // and both statements commit together.
         if let Some(content) = input.content {
             let current_version = self.get_current_version(id).await?;
             let new_version = current_version + 1;
             let version_id = Uuid::new_v4();
             let content_hash = PolicyVersion::compute_hash(&content);
+
+            let mut tx = pool.begin().await?;
+
+            let result = if let Some(expected) = expected_version {
+                sqlx::query(
+                    r#"
+                    UPDATE policies
+                    SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
+                    WHERE id = $6 AND current_version = $7
+                    "#,
+                )
+                .bind(&name)
+                .bind(&description)
+                .bind(is_active as i64)
+                .bind(new_version)
+                .bind(&now)
+                .bind(id.to_string())
+                .bind(expected)
+                .execute(&mut *tx)
+                .await?
+            } else {
+                sqlx::query(
+                    r#"
+                    UPDATE policies
+                    SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
+                    WHERE id = $6
+                    "#,
+                )
+                .bind(&name)
+                .bind(&description)
+                .bind(is_active as i64)
+                .bind(new_version)
+                .bind(&now)
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await?
+            };
+
+            if result.rows_affected() == 0 {
+                tx.rollback().await?;
+                return Err(DatabaseError::VersionConflict(format!(
+                    "policy {id} was modified concurrently (expected version {})",
+                    expected_version.unwrap_or(current_version)
+                )));
+            }
 
             sqlx::query(
                 r#"
@@ -219,44 +275,88 @@ impl<'a> PolicyRepository<'a> {
             .bind(&content)
             .bind(&content_hash)
             .bind(&now)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
 
-            // Update policy with new current_version
-            sqlx::query(
-                r#"
-                UPDATE policies
-                SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
-                WHERE id = $6
-                "#,
-            )
-            .bind(&name)
-            .bind(&description)
-            .bind(is_active as i64)
-            .bind(new_version)
-            .bind(&now)
-            .bind(id.to_string())
-            .execute(pool)
-            .await?;
+            tx.commit().await?;
         } else {
-            // Just update metadata
-            sqlx::query(
-                r#"
-                UPDATE policies
-                SET name = $1, description = $2, is_active = $3, updated_at = $4
-                WHERE id = $5
-                "#,
-            )
-            .bind(&name)
-            .bind(&description)
-            .bind(is_active as i64)
-            .bind(&now)
-            .bind(id.to_string())
-            .execute(pool)
-            .await?;
+            // Metadata-only update. The same version guard still protects
+            // against racing a concurrent CONTENT update (which bumps the
+            // version); two racing metadata-only edits share a version, so
+            // last-write-wins there — see ADR-2's no-schema-change trade-off.
+            let result = if let Some(expected) = expected_version {
+                sqlx::query(
+                    r#"
+                    UPDATE policies
+                    SET name = $1, description = $2, is_active = $3, updated_at = $4
+                    WHERE id = $5 AND current_version = $6
+                    "#,
+                )
+                .bind(&name)
+                .bind(&description)
+                .bind(is_active as i64)
+                .bind(&now)
+                .bind(id.to_string())
+                .bind(expected)
+                .execute(pool)
+                .await?
+            } else {
+                sqlx::query(
+                    r#"
+                    UPDATE policies
+                    SET name = $1, description = $2, is_active = $3, updated_at = $4
+                    WHERE id = $5
+                    "#,
+                )
+                .bind(&name)
+                .bind(&description)
+                .bind(is_active as i64)
+                .bind(&now)
+                .bind(id.to_string())
+                .execute(pool)
+                .await?
+            };
+
+            if result.rows_affected() == 0 && expected_version.is_some() {
+                return Err(DatabaseError::VersionConflict(format!(
+                    "policy {id} was modified concurrently"
+                )));
+            }
         }
 
         self.get_by_id(id).await
+    }
+
+    /// The policy's current version number together with that version's
+    /// content hash, read as one consistent pair — the source of the policy
+    /// ETag (Plan 07 Phase C, ADR-2: derived from the existing `content_hash`,
+    /// no schema change).
+    pub async fn current_version_info(
+        &self,
+        id: Uuid,
+    ) -> Result<(i32, Option<String>), DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT p.current_version, v.content_hash
+            FROM policies p
+            LEFT JOIN policy_versions v
+                   ON v.policy_id = p.id AND v.version = p.current_version
+            WHERE p.id = $1
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| DatabaseError::NotFound(format!("Policy {id} not found")))?;
+
+        let version: i32 = row.get("current_version");
+        let content_hash: Option<String> = row.get("content_hash");
+        Ok((version, content_hash))
     }
 
     /// Delete a policy
@@ -533,7 +633,19 @@ mod tests {
             is_active: None,
             content: Some("version 2".to_string()),
         };
-        repo.update(policy.id, update).await.unwrap();
+        // Guarded with the version we hold (1) — the optimistic-concurrency
+        // fast path (Plan 07 Phase C).
+        repo.update(policy.id, update, Some(1)).await.unwrap();
+
+        // A writer holding the now-stale version 1 loses with VersionConflict.
+        let stale = UpdatePolicy {
+            name: None,
+            description: None,
+            is_active: None,
+            content: Some("version 3 (stale writer)".to_string()),
+        };
+        let err = repo.update(policy.id, stale, Some(1)).await.unwrap_err();
+        assert!(matches!(err, crate::db::DatabaseError::VersionConflict(_)));
 
         let versions = repo.get_versions(policy.id).await.unwrap();
         assert_eq!(versions.len(), 2);

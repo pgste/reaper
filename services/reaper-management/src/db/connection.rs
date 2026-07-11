@@ -72,6 +72,11 @@ pub enum DatabaseError {
     Config(String),
     #[error("Database not found: {0}")]
     NotFound(String),
+    /// Optimistic-concurrency guard failed: the row's version/timestamp no
+    /// longer matches what the caller read (a concurrent writer won). Maps to
+    /// HTTP 412 Precondition Failed at the API layer (Plan 07 Phase C).
+    #[error("Version conflict: {0}")]
+    VersionConflict(String),
 }
 
 /// Database wrapper supporting multiple backends

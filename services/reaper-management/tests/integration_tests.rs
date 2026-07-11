@@ -4029,3 +4029,313 @@ async fn deprecation_headers_marker_on_alias() {
         .contains("successor-version"));
     assert!(resp.headers().get("Warning").is_some());
 }
+
+// =============================================================================
+// Optimistic concurrency: ETag / If-Match on policy + bundle PUTs (Plan 07,
+// Phase C). The DoD two-writer test: both read the same ETag, exactly one
+// write succeeds, the loser gets 412 and its content never lands.
+// =============================================================================
+
+/// `authed_request` plus an `If-Match` precondition header.
+fn authed_request_if_match(
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+    api_key: &str,
+    if_match: &str,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .uri(v1_uri(uri))
+        .method(method)
+        .header("X-API-Key", api_key)
+        .header("If-Match", if_match);
+    if body.is_some() {
+        builder = builder.header("content-type", "application/json");
+    }
+    let body = body
+        .map(|v| Body::from(serde_json::to_vec(&v).unwrap()))
+        .unwrap_or(Body::empty());
+    builder.body(body).unwrap()
+}
+
+/// Bootstrap an org + api key + one policy; returns (key, policy path).
+async fn seed_policy(env: &TestEnv, slug: &str) -> (String, String) {
+    let create_org = json_request(
+        "POST",
+        "/orgs",
+        Some(json!({"name": format!("{slug} org"), "slug": slug})),
+    );
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let create_policy = authed_request(
+        "POST",
+        &format!("/orgs/{slug}/policies"),
+        Some(json!({
+            "name": "cc-policy",
+            "language": "reaper",
+            "content": "allow admin to access /admin"
+        })),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_policy).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (key, format!("/orgs/{slug}/policies/{policy_id}"))
+}
+
+fn etag_of(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get("ETag")
+        .expect("response carries an ETag")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn policy_get_returns_etag_and_put_rotates_it() {
+    let env = setup_test_env().await;
+    let (key, path) = seed_policy(&env, "etag-org").await;
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let tag = etag_of(&response);
+    assert!(
+        tag.starts_with('"') && tag.ends_with('"'),
+        "strong quoted ETag: {tag}"
+    );
+
+    // Guarded content update with the correct ETag succeeds and rotates it.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"content": "allow admin to access /admin/*"})),
+            &key,
+            &tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let new_tag = etag_of(&response);
+    assert_ne!(new_tag, tag, "content update must rotate the ETag");
+}
+
+#[tokio::test]
+async fn policy_lost_update_is_prevented() {
+    let env = setup_test_env().await;
+    let (key, path) = seed_policy(&env, "race-org").await;
+
+    // Both writers read the same state.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    let shared_tag = etag_of(&response);
+
+    // Writer A wins.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"content": "allow writer-a to access /a"})),
+            &key,
+            &shared_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Writer B, holding the now-stale tag, must get 412 — not a silent clobber.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"content": "allow writer-b to access /b"})),
+            &key,
+            &shared_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    // Writer A's version (2) is current; writer B's content never landed.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{path}/versions"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(response).await;
+    let versions = body["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 2, "exactly one successful content update");
+}
+
+#[tokio::test]
+async fn policy_put_without_if_match_modes() {
+    // Transitional default (warn-only): unguarded PUT still succeeds.
+    let env = setup_test_env().await;
+    let (key, path) = seed_policy(&env, "warn-org").await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            &path,
+            Some(json!({"description": "no precondition"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Enforcing mode: missing If-Match → 428 Precondition Required (ADR-3).
+    let env = setup_env_with(|c| c.server.require_if_match = true).await;
+    let (key, path) = seed_policy(&env, "enforce-org").await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            &path,
+            Some(json!({"description": "no precondition"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+
+    // But a correct If-Match still succeeds under enforcement.
+    let get = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    let tag = etag_of(&get);
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"description": "guarded"})),
+            &key,
+            &tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn bundle_lost_update_is_prevented() {
+    let env = setup_test_env().await;
+
+    // Org + key + bundle.
+    let create_org = json_request(
+        "POST",
+        "/orgs",
+        Some(json!({"name": "Bundle CC Org", "slug": "bundle-cc-org"})),
+    );
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let create_bundle = authed_request(
+        "POST",
+        "/orgs/bundle-cc-org/bundles",
+        Some(json!({"name": "cc-bundle", "description": "before"})),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_bundle).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bundle_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let path = format!("/orgs/bundle-cc-org/bundles/{bundle_id}");
+
+    // Both writers read the same ETag.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let shared_tag = etag_of(&response);
+
+    // Writer A wins (and the ETag rotates: updated_at bumped).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"name": "writer-a"})),
+            &key,
+            &shared_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_ne!(etag_of(&response), shared_tag);
+
+    // Writer B with the stale tag → 412; its rename never lands.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"name": "writer-b"})),
+            &key,
+            &shared_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    assert_eq!(parse_body(response).await["name"], "writer-a");
+}

@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     response::Json,
 };
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::authorize_org,
+    api::preconditions::{check_precondition, etag},
     auth::middleware::RequireAuth,
     auth::scopes::Scope,
     db::repositories::PolicyRepository,
@@ -23,6 +24,18 @@ use crate::{
     state::AppState,
     validation::{PolicyValidationResult, ValidationService},
 };
+
+/// The policy's strong ETag: the current version's `content_hash` (ADR-2), or
+/// a version marker when a version row is missing (never the case for
+/// API-created policies, which always start at version 1).
+async fn policy_etag(repo: &PolicyRepository<'_>, policy_id: Uuid) -> ApiResult<(i32, String)> {
+    let (version, hash) = repo.current_version_info(policy_id).await?;
+    let tag = match hash {
+        Some(h) => h,
+        None => format!("v{version}"),
+    };
+    Ok((version, tag))
+}
 
 /// Build policy routes (nested under orgs)
 pub fn routes() -> OpenApiRouter<Arc<AppState>> {
@@ -198,7 +211,8 @@ async fn create_policy(
         ("policy" = String, Path, description = "Policy ID or name")
     ),
     responses(
-        (status = 200, description = "Policy details")
+        (status = 200, description = "Policy details; the `ETag` response header \
+            carries the current content hash for use as `If-Match` on updates")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -206,13 +220,14 @@ async fn get_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
-) -> ApiResult<Json<Policy>> {
+) -> ApiResult<([(header::HeaderName, String); 1], Json<Policy>)> {
     let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
+    let (_, tag) = policy_etag(&policy_repo, policy.id).await?;
 
-    Ok(Json(policy))
+    Ok(([(header::ETAG, etag(&tag))], Json(policy)))
 }
 
 /// Update a policy
@@ -226,7 +241,12 @@ async fn get_policy(
     ),
     request_body = UpdatePolicyRequest,
     responses(
-        (status = 200, description = "Policy updated")
+        (status = 200, description = "Policy updated; the `ETag` response header \
+            carries the new content hash"),
+        (status = 412, description = "If-Match did not match the current policy \
+            (a concurrent writer won) — GET the policy again and retry"),
+        (status = 428, description = "If-Match missing while the server enforces \
+            preconditions (`server.require_if_match`)")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -234,12 +254,25 @@ async fn update_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
+    headers: HeaderMap,
     Json(request): Json<UpdatePolicyRequest>,
-) -> ApiResult<Json<Policy>> {
+) -> ApiResult<([(header::HeaderName, String); 1], Json<Policy>)> {
     let organization = authorize_org(&state, &user, &org, &[Scope::PolicyWrite]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let existing = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
+
+    // Optimistic concurrency (Plan 07 Phase C): fast-fail a stale If-Match
+    // here; the repository's `AND current_version = $expected` is the atomic
+    // arbiter for writers racing past this check.
+    let (current_version, current_tag) = policy_etag(&policy_repo, existing.id).await?;
+    let guarded = check_precondition(
+        &headers,
+        &current_tag,
+        state.config.server.require_if_match,
+        &format!("policy {}", existing.id),
+    )?;
+    let expected_version = guarded.then_some(current_version);
 
     let input = UpdatePolicy {
         name: request.name,
@@ -249,11 +282,12 @@ async fn update_policy(
     };
 
     let updated = policy_repo
-        .update(existing.id, input)
+        .update(existing.id, input, expected_version)
         .await?
         .ok_or_else(|| ApiError::NotFound("Policy not found after update".to_string()))?;
 
-    Ok(Json(updated))
+    let (_, new_tag) = policy_etag(&policy_repo, existing.id).await?;
+    Ok(([(header::ETAG, etag(&new_tag))], Json(updated)))
 }
 
 /// Delete a policy

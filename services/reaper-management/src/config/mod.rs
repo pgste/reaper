@@ -89,6 +89,13 @@ impl Config {
                 matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
 
+        // If-Match enforcement on policy/bundle PUTs (Plan 07 Phase C) —
+        // warn-only (false) for one release, then enforce.
+        if let Ok(v) = std::env::var("REAPER_REQUIRE_IF_MATCH") {
+            config.server.require_if_match =
+                matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+
         // Database overrides
         if let Ok(url) = std::env::var("REAPER_DATABASE_URL") {
             config.database.url = url;

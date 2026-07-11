@@ -303,13 +303,22 @@ impl<'a> BundleRepository<'a> {
             .ok_or_else(|| DatabaseError::NotFound("Bundle not found after update".to_string()))
     }
 
-    /// Update bundle metadata
+    /// Update bundle metadata.
+    ///
+    /// `expected_updated_at` is the optimistic-concurrency guard (Plan 07
+    /// Phase C): when `Some(rfc3339)`, the UPDATE carries
+    /// `AND updated_at = $expected` — every bundle write path bumps
+    /// `updated_at`, so a concurrent writer makes this write match zero rows
+    /// and the call returns [`DatabaseError::VersionConflict`] instead of
+    /// silently clobbering. `None` skips the guard (transitional warn-only
+    /// mode for clients that did not send `If-Match`).
     pub async fn update(
         &self,
         id: Uuid,
         name: Option<&str>,
         description: Option<&str>,
         version: Option<&str>,
+        expected_updated_at: Option<&str>,
     ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
@@ -326,20 +335,42 @@ impl<'a> BundleRepository<'a> {
         let new_description = description.or(bundle.description.as_deref());
         let new_version = version.unwrap_or("1.0.0");
 
-        let sql = r#"
-            UPDATE bundles
-            SET name = $1, description = $2, version = $3, updated_at = $4
-            WHERE id = $5
-        "#;
+        let result = if let Some(expected) = expected_updated_at {
+            let sql = r#"
+                UPDATE bundles
+                SET name = $1, description = $2, version = $3, updated_at = $4
+                WHERE id = $5 AND updated_at = $6
+            "#;
+            sqlx::query(sql)
+                .bind(new_name)
+                .bind(new_description)
+                .bind(new_version)
+                .bind(now.to_rfc3339())
+                .bind(id.to_string())
+                .bind(expected)
+                .execute(pool)
+                .await?
+        } else {
+            let sql = r#"
+                UPDATE bundles
+                SET name = $1, description = $2, version = $3, updated_at = $4
+                WHERE id = $5
+            "#;
+            sqlx::query(sql)
+                .bind(new_name)
+                .bind(new_description)
+                .bind(new_version)
+                .bind(now.to_rfc3339())
+                .bind(id.to_string())
+                .execute(pool)
+                .await?
+        };
 
-        sqlx::query(sql)
-            .bind(new_name)
-            .bind(new_description)
-            .bind(new_version)
-            .bind(now.to_rfc3339())
-            .bind(id.to_string())
-            .execute(pool)
-            .await?;
+        if result.rows_affected() == 0 && expected_updated_at.is_some() {
+            return Err(DatabaseError::VersionConflict(format!(
+                "bundle {id} was modified concurrently"
+            )));
+        }
 
         self.get_by_id(id)
             .await?

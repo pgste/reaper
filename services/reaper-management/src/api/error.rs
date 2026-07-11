@@ -25,6 +25,16 @@ pub enum ApiError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// A write arrived without its `If-Match` precondition (Plan 07 Phase C,
+    /// ADR-3: governed edits fail closed rather than blind-overwrite).
+    #[error("Precondition required: {0}")]
+    PreconditionRequired(String),
+
+    /// The `If-Match` precondition did not match the resource's current state
+    /// — the caller's copy is stale (a concurrent writer won). RFC 9110 §13.1.1.
+    #[error("Precondition failed: {0}")]
+    PreconditionFailed(String),
+
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
@@ -66,6 +76,16 @@ impl IntoResponse for ApiError {
                 msg.clone(),
             ),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone()),
+            ApiError::PreconditionRequired(msg) => (
+                StatusCode::PRECONDITION_REQUIRED,
+                "precondition_required",
+                msg.clone(),
+            ),
+            ApiError::PreconditionFailed(msg) => (
+                StatusCode::PRECONDITION_FAILED,
+                "precondition_failed",
+                msg.clone(),
+            ),
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone()),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone()),
             ApiError::ServiceUnavailable(msg) => (
@@ -87,6 +107,14 @@ impl IntoResponse for ApiError {
                     crate::db::DatabaseError::NotFound(msg) => {
                         (StatusCode::NOT_FOUND, "not_found", msg.clone())
                     }
+                    // Optimistic-concurrency guard lost the race after the
+                    // handler's precondition check — same client remedy as a
+                    // stale If-Match: re-GET and retry (RFC 9110 §13.1.1).
+                    crate::db::DatabaseError::VersionConflict(msg) => (
+                        StatusCode::PRECONDITION_FAILED,
+                        "precondition_failed",
+                        msg.clone(),
+                    ),
                     _ => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "database_error",

@@ -19,6 +19,7 @@ pub mod oauth;
 pub mod openapi;
 pub mod orgs;
 pub mod policies;
+pub mod preconditions;
 pub mod replay;
 pub mod revocations;
 pub mod scim;
