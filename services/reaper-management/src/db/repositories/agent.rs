@@ -145,6 +145,61 @@ impl<'a> AgentRepository<'a> {
         Ok(agents)
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E): rows strictly after the
+    /// `(registered_at, id)` position in `ORDER BY registered_at DESC, id DESC`
+    /// order. Unlike OFFSET, the walk never drifts under concurrent inserts
+    /// and stays O(page) on deep pages. `fetch` is `page limit + 1` — the
+    /// caller uses the sentinel row to detect whether another page exists.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Agent>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = if let Some((registered_at, id)) = after {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
+                FROM agents
+                WHERE org_id = $1 AND (registered_at, id) < ($2, $3)
+                ORDER BY registered_at DESC, id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(registered_at)
+            .bind(id)
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, name, hostname, ip_address, version, status, labels, last_heartbeat_at, registered_at, updated_at
+                FROM agents
+                WHERE org_id = $1
+                ORDER BY registered_at DESC, id DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut agents = Vec::with_capacity(rows.len());
+        for row in rows {
+            agents.push(self.row_to_agent(row)?);
+        }
+        Ok(agents)
+    }
+
     /// List agents by status
     pub async fn list_by_status(
         &self,

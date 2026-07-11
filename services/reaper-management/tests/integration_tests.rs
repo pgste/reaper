@@ -242,7 +242,7 @@ async fn test_organization_crud() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = parse_body(response).await;
-    assert!(!body["organizations"].as_array().unwrap().is_empty());
+    assert!(!body["items"].as_array().unwrap().is_empty());
 
     // Update organization
     let update_req = authed_request(
@@ -347,7 +347,7 @@ async fn test_policy_lifecycle() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = parse_body(response).await;
-    assert_eq!(body["policies"].as_array().unwrap().len(), 1);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -551,7 +551,7 @@ async fn test_agent_registration() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = parse_body(response).await;
-    assert_eq!(body["agents"].as_array().unwrap().len(), 1);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -615,7 +615,7 @@ async fn test_policy_source_crud() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = parse_body(response).await;
-    assert_eq!(body["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
 
     // Delete source (requires auth)
     let delete_source = authed_request(
@@ -4596,4 +4596,226 @@ async fn promote_idempotency_replay_single_side_effect() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// =============================================================================
+// Cursor pagination + RFC 9457 problem+json errors (Plan 07, Phase E).
+// =============================================================================
+
+#[tokio::test]
+async fn pagination_limit_cap_and_cursor_walk() {
+    let env = setup_test_env().await;
+    let (key, _) = seed_policy(&env, "page-org").await;
+
+    // Seed 4 more policies (5 total).
+    for i in 0..4 {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/page-org/policies",
+                Some(json!({
+                    "name": format!("page-policy-{i}"),
+                    "language": "reaper",
+                    "content": "allow user to read /api"
+                })),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    // An over-cap limit is a 400, not a silent clamp — as problem+json.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/page-org/policies?limit=10000",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/problem+json"
+    );
+
+    // Walk the 5 rows with page size 2: every row exactly once, even when a
+    // row is inserted mid-walk (the keyset cursor does not drift like OFFSET).
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    let mut inserted_mid_walk = false;
+    loop {
+        let uri = match &cursor {
+            Some(c) => format!("/orgs/page-org/policies?limit=2&cursor={c}"),
+            None => "/orgs/page-org/policies?limit=2".to_string(),
+        };
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request("GET", &uri, None, &key))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = parse_body(response).await;
+        let items = body["items"].as_array().unwrap();
+        assert!(items.len() <= 2);
+        for item in items {
+            let id = item["id"].as_str().unwrap().to_string();
+            assert!(seen.insert(id), "keyset walk must never repeat a row");
+        }
+        pages += 1;
+
+        // Concurrent insert after the first page: newest-first ordering means
+        // the new row sorts BEFORE our cursor, so the walk must neither skip
+        // nor duplicate any of the original rows (the OFFSET failure mode).
+        if !inserted_mid_walk {
+            inserted_mid_walk = true;
+            let response = env
+                .app
+                .clone()
+                .oneshot(authed_request(
+                    "POST",
+                    "/orgs/page-org/policies",
+                    Some(json!({
+                        "name": "inserted-mid-walk",
+                        "language": "reaper",
+                        "content": "allow user to read /api"
+                    })),
+                    &key,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        match body["next_cursor"].as_str() {
+            Some(c) => cursor = Some(c.to_string()),
+            None => break,
+        }
+        assert!(pages < 10, "cursor walk did not terminate");
+    }
+    assert_eq!(
+        seen.len(),
+        5,
+        "all originally-seeded rows seen exactly once"
+    );
+
+    // An undecodable cursor is a 400.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/page-org/policies?cursor=%21%21not-a-cursor%21%21",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn errors_are_rfc9457_problem_json() {
+    let env = setup_test_env().await;
+
+    // Seed an org, then force a duplicate-slug conflict.
+    let body = json!({"name": "Problem Org", "slug": "problem-org"});
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request("POST", "/orgs", Some(body.clone())))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request("POST", "/orgs", Some(body)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/problem+json"
+    );
+    let problem = parse_body(response).await;
+    assert_eq!(problem["status"], 409);
+    assert_eq!(problem["code"], "conflict");
+    assert!(problem["type"]
+        .as_str()
+        .unwrap()
+        .contains("/problems/conflict"));
+    assert!(problem["title"].as_str().is_some());
+    assert!(problem["detail"].as_str().is_some());
+
+    // 404s carry the envelope too (authenticated read of a nonexistent
+    // policy in the caller's own org).
+    let org_id: Uuid = {
+        use reaper_management::db::repositories::OrganizationRepository;
+        OrganizationRepository::new(&env.db)
+            .get_by_slug("problem-org")
+            .await
+            .unwrap()
+            .unwrap()
+            .id
+    };
+    let key = create_test_api_key(&env.db, org_id).await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/problem-org/policies/00000000-0000-0000-0000-000000000000",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/problem+json"
+    );
+    let problem = parse_body(response).await;
+    assert_eq!(problem["status"], 404);
+    assert_eq!(problem["code"], "not_found");
+}
+
+/// A REAL unique-constraint breach (bypassing the handlers' slug pre-checks by
+/// driving the repository directly) must classify as 409 problem+json, not a
+/// 500 (Plan 07 Phase E / finding API-7).
+#[tokio::test]
+async fn db_unique_violation_maps_to_409_problem_json() {
+    let env = setup_test_env().await;
+    use reaper_management::db::repositories::OrganizationRepository;
+    use reaper_management::domain::organization::CreateOrganization;
+
+    let make = || CreateOrganization {
+        name: "Constraint Org".into(),
+        slug: "constraint-org".into(),
+        display_name: None,
+        description: None,
+        settings: json!({}),
+    };
+    let repo = OrganizationRepository::new(&env.db);
+    repo.create(make()).await.unwrap();
+
+    // Second insert with the same slug trips the UNIQUE(slug) constraint.
+    let err = repo.create(make()).await.unwrap_err();
+    let api_err: reaper_management::api::error::ApiError = err.into();
+    let resp = axum::response::IntoResponse::into_response(api_err);
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/problem+json"
+    );
 }

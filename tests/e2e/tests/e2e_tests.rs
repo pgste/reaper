@@ -267,7 +267,7 @@ async fn test_e2e_organization_lifecycle() {
     assert!(response.status().is_success());
 
     let body: Value = response.json().await.unwrap();
-    let orgs = body["organizations"].as_array().unwrap();
+    let orgs = body["items"].as_array().unwrap();
     assert!(orgs.iter().any(|o| o["slug"] == session.org_slug.as_str()));
 
     // Delete organization (Owner holds org:admin)

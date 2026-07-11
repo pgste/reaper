@@ -10,8 +10,13 @@ use axum::{
 use serde::Serialize;
 use thiserror::Error;
 
-/// API error type
+/// API error type.
+///
+/// `#[non_exhaustive]`: downstream matchers must carry a wildcard arm, so a new
+/// error class (as Plan 07 keeps adding: preconditions, idempotency conflicts)
+/// is not a breaking change (finding API-10).
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ApiError {
     #[error("Not found: {0}")]
     NotFound(String),
@@ -51,18 +56,22 @@ pub enum ApiError {
     Database(#[from] crate::db::DatabaseError),
 }
 
-/// Error response body
+/// RFC 9457 `application/problem+json` error body (Plan 07, Phase E). `code`
+/// is a Reaper extension member kept for programmatic matching; `type` is a
+/// stable, documentation-anchored URI reference per problem class.
 #[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: ErrorDetail,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ErrorDetail {
+pub struct ProblemDetails {
+    /// Problem-class URI reference (stable; documented under docs/api/).
+    #[serde(rename = "type")]
+    pub problem_type: String,
+    /// Short, human-readable summary of the problem class.
+    pub title: String,
+    /// The HTTP status code, repeated in the body per RFC 9457.
+    pub status: u16,
+    /// Human-readable explanation specific to this occurrence.
+    pub detail: String,
+    /// Machine-readable Reaper error code (extension member).
     pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
 }
 
 impl IntoResponse for ApiError {
@@ -115,6 +124,19 @@ impl IntoResponse for ApiError {
                         "precondition_failed",
                         msg.clone(),
                     ),
+                    // Constraint violations are CLIENT errors, not 500s
+                    // (Plan 07 Phase E / finding API-7): a unique-constraint
+                    // breach is a 409, a check/validation breach a 422.
+                    crate::db::DatabaseError::Connection(sqlx_err) => {
+                        match classify_sqlx(sqlx_err) {
+                            Some(classified) => classified,
+                            None => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "database_error",
+                                "A database error occurred".to_string(),
+                            ),
+                        }
+                    }
                     _ => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "database_error",
@@ -124,16 +146,64 @@ impl IntoResponse for ApiError {
             }
         };
 
-        let body = ErrorResponse {
-            error: ErrorDetail {
-                code: code.to_string(),
-                message,
-                details: None,
-            },
-        };
-
-        (status, Json(body)).into_response()
+        problem_response(status, code, message)
     }
+}
+
+/// Classify a raw sqlx error into a client-attributable HTTP outcome, if it is
+/// one. PostgreSQL reports SQLSTATE `23505` (unique) / `23514` (check) /
+/// `23503` (foreign key); SQLite has no SQLSTATE through the Any driver, so
+/// its constraint failures are matched by message.
+fn classify_sqlx(e: &sqlx::Error) -> Option<(StatusCode, &'static str, String)> {
+    let sqlx::Error::Database(db_err) = e else {
+        return None;
+    };
+    let code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
+    let msg = db_err.message().to_lowercase();
+
+    if code == "23505" || msg.contains("unique constraint") {
+        return Some((
+            StatusCode::CONFLICT,
+            "conflict",
+            "A resource with these unique attributes already exists".to_string(),
+        ));
+    }
+    if code == "23514" || msg.contains("check constraint") {
+        return Some((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+            "The request violates a data constraint".to_string(),
+        ));
+    }
+    if code == "23503" || msg.contains("foreign key constraint") {
+        return Some((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+            "The request references a resource that does not exist".to_string(),
+        ));
+    }
+    None
+}
+
+/// Build the RFC 9457 response: `application/problem+json` with a stable,
+/// documentation-anchored problem type per error code.
+fn problem_response(status: StatusCode, code: &str, detail: String) -> Response {
+    let body = ProblemDetails {
+        problem_type: format!("https://docs.reaper.dev/problems/{code}"),
+        title: status
+            .canonical_reason()
+            .unwrap_or("Unknown Error")
+            .to_string(),
+        status: status.as_u16(),
+        detail,
+        code: code.to_string(),
+    };
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/problem+json"),
+    );
+    response
 }
 
 /// Result type alias for API handlers
@@ -169,6 +239,12 @@ impl From<crate::audit::AuditError> for ApiError {
 
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
+        // Constraint violations are the CLIENT's error (409/422), not a 500 —
+        // classified in IntoResponse via classify_sqlx. Everything else is
+        // internal.
+        if classify_sqlx(&e).is_some() {
+            return ApiError::Database(crate::db::DatabaseError::Connection(e));
+        }
         tracing::error!("SQLx error: {}", e);
         ApiError::Internal("Database error".to_string())
     }

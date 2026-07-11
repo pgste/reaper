@@ -106,7 +106,20 @@ can retry a timed-out request safely:
   shortly.
 - Failed operations are not memoized: the same key may be retried.
 
-## 7. Client guidance
+## 7. Pagination & errors (Phase E)
+
+- Collection `GET`s are bounded: `limit` (default 50, max 200 — over-max is a
+  **400**, not a clamp) and an opaque keyset `cursor`. Responses use
+  `{ "items": [...], "next_cursor": "..." }`; pass `next_cursor` back as
+  `?cursor=` and stop when it is absent. Cursors never drift under concurrent
+  inserts (no OFFSET). The decisions store allows `limit` up to 1000 and still
+  accepts `offset` (deprecated) when no cursor is given.
+- Errors are RFC 9457 **`application/problem+json`**: `type` (stable problem
+  URI), `title`, `status`, `detail`, plus the Reaper `code` extension. Database
+  constraint breaches surface as client errors — unique → **409**,
+  check/reference → **422** — never a 500.
+
+## 8. Client guidance
 
 - Always call under `/api/v1`; treat a `Deprecation` header as a signal to
   migrate before the `Sunset` date.

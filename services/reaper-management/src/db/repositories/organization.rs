@@ -135,6 +135,58 @@ impl<'a> OrganizationRepository<'a> {
         Ok(orgs)
     }
 
+    /// Keyset-paginated listing over all organizations (Plan 07 Phase E):
+    /// rows strictly after the `(created_at, id)` position in
+    /// `ORDER BY created_at DESC, id DESC` order. Unlike OFFSET, the walk
+    /// never drifts under concurrent inserts and stays O(page) on deep pages.
+    /// `fetch` is `page limit + 1` — the caller uses the sentinel row to
+    /// detect whether another page exists.
+    pub async fn list_page(
+        &self,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Organization>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = if let Some((created_at, id)) = after {
+            sqlx::query(
+                r#"
+                SELECT id, name, slug, display_name, description, settings, created_at, updated_at
+                FROM organizations
+                WHERE (created_at, id) < ($1, $2)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $3
+                "#,
+            )
+            .bind(created_at)
+            .bind(id)
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, name, slug, display_name, description, settings, created_at, updated_at
+                FROM organizations
+                ORDER BY created_at DESC, id DESC
+                LIMIT $1
+                "#,
+            )
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut orgs = Vec::with_capacity(rows.len());
+        for row in rows {
+            orgs.push(self.row_to_organization(row)?);
+        }
+        Ok(orgs)
+    }
+
     /// Count total organizations
     pub async fn count(&self) -> Result<i64, DatabaseError> {
         let pool = self

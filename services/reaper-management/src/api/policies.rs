@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::authorize_org,
+    api::pagination::{PageQuery, Paginated},
     api::preconditions::{check_precondition, etag},
     auth::middleware::RequireAuth,
     auth::scopes::Scope,
@@ -46,24 +47,6 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(validate_policy))
         .routes(routes!(list_versions))
         .routes(routes!(get_version))
-}
-
-/// Query parameters for listing policies
-#[derive(Debug, Deserialize, Default)]
-pub struct ListPoliciesQuery {
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-    pub team_id: Option<Uuid>,
-    pub active_only: Option<bool>,
-}
-
-/// Response for listing policies
-#[derive(Debug, Serialize)]
-pub struct ListPoliciesResponse {
-    pub policies: Vec<Policy>,
-    pub total: i64,
-    pub limit: i64,
-    pub offset: i64,
 }
 
 /// Request to create a policy
@@ -102,16 +85,19 @@ pub struct PolicyVersionSummary {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// List policies for an organization
+/// List policies for an organization (keyset-paginated: Plan 07 Phase E).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/policies",
     tag = "policies",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "List of policies")
+        (status = 200, description = "One page of policies with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -119,25 +105,19 @@ async fn list_policies(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-    Query(query): Query<ListPoliciesQuery>,
-) -> ApiResult<Json<ListPoliciesResponse>> {
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<Paginated<Policy>>> {
     let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
+    let page = query.validate()?;
 
     let policy_repo = PolicyRepository::new(&state.db);
-    let limit = query.limit.unwrap_or(100);
-    let offset = query.offset.unwrap_or(0);
-
-    let policies = policy_repo
-        .list_by_org(organization.id, Some(limit), Some(offset))
+    let rows = policy_repo
+        .list_page_by_org(organization.id, page.limit + 1, page.after.as_ref())
         .await?;
-    let total = policy_repo.count_by_org(organization.id).await?;
 
-    Ok(Json(ListPoliciesResponse {
-        policies,
-        total,
-        limit,
-        offset,
-    }))
+    Ok(Json(Paginated::from_rows(rows, &page, |p| {
+        (p.created_at.to_rfc3339(), p.id.to_string())
+    })))
 }
 
 /// Create a new policy

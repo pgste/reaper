@@ -352,6 +352,8 @@ async fn run_replay(
             to: request.to.clone(),
             limit: Some(page),
             offset: Some(offset),
+            cursor: None,
+            after: None,
         };
         let rows = store
             .list(&tenant, &query)

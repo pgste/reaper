@@ -175,6 +175,21 @@ impl BundleService {
         Ok(repo.list_by_org(org_id, status_filter).await?)
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E); see
+    /// [`BundleRepository::list_page_by_org`].
+    pub async fn list_page(
+        &self,
+        org_id: Uuid,
+        status_filter: Option<BundleStatus>,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Bundle>, BundleError> {
+        let repo = BundleRepository::new(&self.db);
+        Ok(repo
+            .list_page_by_org(org_id, status_filter, fetch, after)
+            .await?)
+    }
+
     /// Get the currently promoted bundle for an organization
     pub async fn get_promoted(&self, org_id: Uuid) -> Result<Option<Bundle>, BundleError> {
         let repo = BundleRepository::new(&self.db);

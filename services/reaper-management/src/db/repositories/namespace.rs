@@ -151,6 +151,61 @@ impl<'a> NamespaceRepository<'a> {
         Ok(namespaces)
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E): rows strictly after the
+    /// `(created_at, id)` position in `ORDER BY created_at DESC, id DESC`
+    /// order. Unlike OFFSET, the walk never drifts under concurrent inserts
+    /// and stays O(page) on deep pages. `fetch` is `page limit + 1` — the
+    /// caller uses the sentinel row to detect whether another page exists.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Namespace>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = if let Some((created_at, id)) = after {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
+                FROM namespaces
+                WHERE org_id = $1 AND (created_at, id) < ($2, $3)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(created_at)
+            .bind(id)
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, slug, display_name, parent_id, description, settings, is_active, created_at, updated_at
+                FROM namespaces
+                WHERE org_id = $1
+                ORDER BY created_at DESC, id DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut namespaces = Vec::with_capacity(rows.len());
+        for row in rows {
+            namespaces.push(self.row_to_namespace(row)?);
+        }
+        Ok(namespaces)
+    }
+
     /// List root namespaces (no parent) for an organization
     pub async fn list_roots(&self, org_id: Uuid) -> Result<Vec<Namespace>, DatabaseError> {
         let pool = self
