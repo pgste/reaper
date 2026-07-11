@@ -1,5 +1,20 @@
 # API Governance
 
+> **STATUS: ✅ SHIPPED** — all 9 steps landed via PRs #27–#31 (2026-07-11), one PR
+> per phase. A: generated OpenAPI 3.1 contracts served at `/openapi.json` on both
+> planes with a blocking contract-parity CI gate (control plane single-sourced
+> via utoipa-axum; agent dual-sourced so the enforcement hot path stayed
+> byte-for-byte untouched). B: single `/api/v1` surface (bare root retired
+> behind the default-off `serve_root_alias` deprecation lever) +
+> `docs/api/VERSIONING.md`. C: ETag/If-Match optimistic concurrency with the
+> SQL guard as atomic arbiter (`require_if_match` warn-only this release per
+> ADR-3's rollout). D: `Idempotency-Key` claim-then-complete on promote/
+> rollback/rollout/org-create (`idempotency_keys` table + sweeper). E: bounded
+> keyset cursor pagination on every list endpoint + RFC 9457 problem+json with
+> constraint-violation mapping (409/422). F: `docs/api/ROUTE_CONVENTIONS.md`.
+> Suites verified on SQLite AND real PostgreSQL (now enforced by the
+> `management-tests-postgres` CI job).
+
 **Readiness gate:** Blocks CONDITIONAL → READY (control-plane API is not publishable to enterprise buyers without a contract, concurrency control, and standard error/pagination semantics).
 **Priority:** P1 (elevate the lost-update and unversioned-root items — they cause silent data loss / permanent compatibility debt).
 **Findings closed:** Synth #9; Code API-4, API-5, API-6, API-7, API-8, API-13, API-14; Product F9. (Auth findings API-1/API-2 are owned by the auth plan and are a hard prerequisite — see §5.)
