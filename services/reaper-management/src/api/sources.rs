@@ -3,7 +3,7 @@
 //! Provides endpoints for managing policy sources (Git and API).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
+    api::pagination::{PageQuery, Paginated},
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::{OrganizationRepository, PolicySourceRepository},
     domain::source::{
@@ -72,13 +73,6 @@ impl From<PolicySource> for SourceSummary {
     }
 }
 
-/// Response for listing sources
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ListSourcesResponse {
-    pub sources: Vec<SourceSummary>,
-    pub total: usize,
-}
-
 /// Request to create a source
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateSourceRequest {
@@ -113,16 +107,19 @@ pub struct SyncResponse {
     pub commit: Option<String>,
 }
 
-/// List sources for an organization
+/// List sources for an organization (keyset-paginated: Plan 07 Phase E).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/sources",
     tag = "sources",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "List of policy sources", body = ListSourcesResponse)
+        (status = 200, description = "One page of policy sources with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -130,7 +127,8 @@ async fn list_sources(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> ApiResult<Json<ListSourcesResponse>> {
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<Paginated<SourceSummary>>> {
     if !user.has_permission(Scope::PolicyRead) && !user.has_permission(Scope::OrgAdmin) {
         return Err(ApiError::Forbidden("Missing policy:read scope".to_string()));
     }
@@ -144,16 +142,18 @@ async fn list_sources(
         ));
     }
 
-    let source_repo = PolicySourceRepository::new(&state.db);
-    let sources = source_repo.list_by_org(organization.id).await?;
+    let page = query.validate()?;
 
-    let total = sources.len();
+    let source_repo = PolicySourceRepository::new(&state.db);
+    let sources = source_repo
+        .list_page_by_org(organization.id, page.limit + 1, page.after.as_ref())
+        .await?;
+
     let summaries: Vec<SourceSummary> = sources.into_iter().map(|s| s.into()).collect();
 
-    Ok(Json(ListSourcesResponse {
-        sources: summaries,
-        total,
-    }))
+    Ok(Json(Paginated::from_rows(summaries, &page, |s| {
+        (s.created_at.to_rfc3339(), s.id.to_string())
+    })))
 }
 
 /// Get a specific source

@@ -94,15 +94,20 @@ fn store_or_unavailable(state: &AppState) -> ApiResult<&crate::decisions::Decisi
 }
 
 /// GET /api/v1/orgs/{org}/decisions — full-history, cross-agent, tenant-scoped.
+/// Keyset-paginated (Plan 07 Phase E): pass back `next_cursor` as `?cursor=` to
+/// resume; `offset` remains accepted (deprecated) when no cursor is given.
 #[utoipa::path(
     get,
     path = "/orgs/{org}/decisions",
     tag = "decisions",
     params(
-        ("org" = String, Path, description = "Organization ID")
+        ("org" = String, Path, description = "Organization ID"),
+        ("limit" = Option<u64>, Query, description = "Page size (default 100, max 1000)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "Decisions for the organization")
+        (status = 200, description = "One page of decisions with a next_cursor to resume"),
+        (status = 400, description = "cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -114,10 +119,31 @@ async fn list_decisions(
 ) -> ApiResult<Json<Value>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
-    let decisions = store.list(&tenant, &query).await.map_err(map_store_error)?;
+
+    // Decode the opaque cursor and fetch page+1 (has-more sentinel).
+    let mut query = query;
+    if let Some(cursor) = &query.cursor {
+        query.after = Some(crate::api::pagination::decode_cursor(cursor)?);
+    }
+    let limit = query.limit.unwrap_or(100).min(1000);
+    query.limit = Some(limit + 1);
+
+    let mut decisions = store.list(&tenant, &query).await.map_err(map_store_error)?;
+    let has_more = decisions.len() as u64 > limit;
+    if has_more {
+        decisions.truncate(limit as usize);
+    }
+    let next_cursor = if has_more {
+        decisions
+            .last()
+            .map(|d| crate::api::pagination::encode_cursor(&d.timestamp, &d.decision_id))
+    } else {
+        None
+    };
+
     Ok(Json(json!({
-        "count": decisions.len(),
-        "decisions": decisions,
+        "items": decisions,
+        "next_cursor": next_cursor,
     })))
 }
 

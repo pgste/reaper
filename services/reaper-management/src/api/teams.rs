@@ -7,7 +7,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::authorize_org,
+    api::pagination::{PageQuery, Paginated},
     auth::middleware::RequireAuth,
     auth::scopes::Scope,
     db::repositories::TeamRepository,
@@ -28,22 +29,6 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
     OpenApiRouter::new()
         .routes(routes!(list_teams, create_team))
         .routes(routes!(get_team, update_team, delete_team))
-}
-
-/// Query parameters for listing teams
-#[derive(Debug, Deserialize, Default)]
-pub struct ListTeamsQuery {
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-}
-
-/// Response for listing teams
-#[derive(Debug, Serialize)]
-pub struct ListTeamsResponse {
-    pub teams: Vec<Team>,
-    pub total: i64,
-    pub limit: i64,
-    pub offset: i64,
 }
 
 /// Request to create a team
@@ -61,16 +46,19 @@ pub struct UpdateTeamRequest {
     pub description: Option<String>,
 }
 
-/// List teams for an organization
+/// List teams for an organization (keyset-paginated: Plan 07 Phase E).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/teams",
     tag = "teams",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "List of teams")
+        (status = 200, description = "One page of teams with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -78,26 +66,20 @@ async fn list_teams(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-    Query(query): Query<ListTeamsQuery>,
-) -> ApiResult<Json<ListTeamsResponse>> {
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<Paginated<Team>>> {
     // Any authenticated member of the org may read teams.
     let organization = authorize_org(&state, &user, &org, &[]).await?;
+    let page = query.validate()?;
 
     let team_repo = TeamRepository::new(&state.db);
-    let limit = query.limit.unwrap_or(100);
-    let offset = query.offset.unwrap_or(0);
-
     let teams = team_repo
-        .list_by_org(organization.id, Some(limit), Some(offset))
+        .list_page_by_org(organization.id, page.limit + 1, page.after.as_ref())
         .await?;
-    let total = team_repo.count_by_org(organization.id).await?;
 
-    Ok(Json(ListTeamsResponse {
-        teams,
-        total,
-        limit,
-        offset,
-    }))
+    Ok(Json(Paginated::from_rows(teams, &page, |t| {
+        (t.created_at.to_rfc3339(), t.id.to_string())
+    })))
 }
 
 /// Create a new team

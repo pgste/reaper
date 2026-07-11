@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::idempotency;
 use crate::api::orgs::authorize_org;
+use crate::api::pagination::{PageQuery, Paginated};
 use crate::api::preconditions::{check_precondition, etag};
 use crate::audit::{ActorType, AuditEntry, ResourceType};
 use crate::auth::middleware::{AuthenticatedUser, RequireAuth};
@@ -61,11 +62,14 @@ async fn audit(
     }
 }
 
-/// Query parameters for listing bundles
+/// Query parameters for listing bundles: the status filter plus the shared
+/// pagination controls (Plan 07 Phase E).
 #[derive(Debug, Deserialize)]
 pub struct ListBundlesQuery {
     /// Filter by status
     pub status: Option<String>,
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 /// Request to add policies to a bundle
@@ -115,10 +119,14 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
     path = "/orgs/{org}/bundles",
     tag = "bundles",
     params(
-        ("org" = String, Path, description = "Organization ID")
+        ("org" = String, Path, description = "Organization ID"),
+        ("status" = Option<String>, Query, description = "Filter by bundle status"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "Bundles for the organization")
+        (status = 200, description = "One page of bundles with a next_cursor to resume"),
+        (status = 400, description = "invalid status, limit out of range, or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -127,7 +135,7 @@ async fn list_bundles(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<ListBundlesQuery>,
-) -> ApiResult<Json<Vec<crate::domain::Bundle>>> {
+) -> ApiResult<Json<Paginated<crate::domain::Bundle>>> {
     let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
         .await?
         .id;
@@ -137,9 +145,19 @@ async fn list_bundles(
         .map(|s| s.parse::<BundleStatus>())
         .transpose()
         .map_err(|e| ApiError::BadRequest(format!("Invalid status: {}", e)))?;
+    let page = PageQuery {
+        limit: query.limit,
+        cursor: query.cursor,
+    }
+    .validate()?;
 
-    let bundles = state.bundle_service.list(org_id, status_filter).await?;
-    Ok(Json(bundles))
+    let rows = state
+        .bundle_service
+        .list_page(org_id, status_filter, page.limit + 1, page.after.as_ref())
+        .await?;
+    Ok(Json(Paginated::from_rows(rows, &page, |b| {
+        (b.created_at.to_rfc3339(), b.id.to_string())
+    })))
 }
 
 /// Create a new bundle

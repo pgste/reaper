@@ -3,7 +3,7 @@
 //! Provides endpoints for managing namespaces and agent subscriptions.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
+    api::pagination::{PageQuery, Paginated},
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::{AgentRepository, NamespaceRepository, OrganizationRepository},
     domain::namespace::{
@@ -68,13 +69,6 @@ impl From<Namespace> for NamespaceSummary {
             updated_at: ns.updated_at,
         }
     }
-}
-
-/// Response for listing namespaces
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ListNamespacesResponse {
-    pub namespaces: Vec<NamespaceSummary>,
-    pub total: usize,
 }
 
 /// Request to create a namespace
@@ -154,16 +148,19 @@ fn default_include_children() -> bool {
 
 // ===== Namespace Handlers =====
 
-/// List namespaces for an organization
+/// List namespaces for an organization (keyset-paginated: Plan 07 Phase E).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces",
     tag = "namespaces",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "List of namespaces", body = ListNamespacesResponse)
+        (status = 200, description = "One page of namespaces with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -171,7 +168,8 @@ async fn list_namespaces(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> ApiResult<Json<ListNamespacesResponse>> {
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<Paginated<NamespaceSummary>>> {
     if !user.has_permission(Scope::PolicyRead) && !user.has_permission(Scope::OrgAdmin) {
         return Err(ApiError::Forbidden("Missing policy:read scope".to_string()));
     }
@@ -185,16 +183,18 @@ async fn list_namespaces(
         ));
     }
 
-    let ns_repo = NamespaceRepository::new(&state.db);
-    let namespaces = ns_repo.list_by_org(organization.id).await?;
+    let page = query.validate()?;
 
-    let total = namespaces.len();
+    let ns_repo = NamespaceRepository::new(&state.db);
+    let namespaces = ns_repo
+        .list_page_by_org(organization.id, page.limit + 1, page.after.as_ref())
+        .await?;
+
     let summaries: Vec<NamespaceSummary> = namespaces.into_iter().map(|n| n.into()).collect();
 
-    Ok(Json(ListNamespacesResponse {
-        namespaces: summaries,
-        total,
-    }))
+    Ok(Json(Paginated::from_rows(summaries, &page, |n| {
+        (n.created_at.to_rfc3339(), n.id.to_string())
+    })))
 }
 
 /// Get namespace tree for an organization

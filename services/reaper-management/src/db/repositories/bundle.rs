@@ -161,6 +161,55 @@ impl<'a> BundleRepository<'a> {
         rows.iter().map(|r| self.row_to_bundle(r)).collect()
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E): rows strictly after the
+    /// `(created_at, id)` position in `ORDER BY created_at DESC, id DESC`
+    /// order, with the optional status filter preserved. `fetch` is
+    /// `page limit + 1` — the caller's has-more sentinel.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        status_filter: Option<BundleStatus>,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Bundle>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        // Assemble the predicate set with sequential placeholders; bind order
+        // below must mirror this order exactly.
+        let mut sql = String::from(
+            "SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum, \
+                    policy_count, created_at, updated_at, compiled_at, promoted_at \
+             FROM bundles WHERE org_id = $1",
+        );
+        let mut n = 1;
+        if status_filter.is_some() {
+            n += 1;
+            sql.push_str(&format!(" AND status = ${n}"));
+        }
+        if after.is_some() {
+            sql.push_str(&format!(" AND (created_at, id) < (${}, ${})", n + 1, n + 2));
+            n += 2;
+        }
+        sql.push_str(&format!(
+            " ORDER BY created_at DESC, id DESC LIMIT ${}",
+            n + 1
+        ));
+
+        let mut q = sqlx::query(&sql).bind(org_id.to_string());
+        if let Some(status) = status_filter {
+            q = q.bind(status.to_string());
+        }
+        if let Some((created_at, id)) = after {
+            q = q.bind(created_at).bind(id);
+        }
+        let rows = q.bind(fetch).fetch_all(pool).await?;
+
+        rows.iter().map(|r| self.row_to_bundle(r)).collect()
+    }
+
     /// Get the currently promoted bundle for an organization
     pub async fn get_promoted(&self, org_id: Uuid) -> Result<Option<Bundle>, DatabaseError> {
         let pool = self

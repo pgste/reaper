@@ -163,6 +163,61 @@ impl<'a> PolicyRepository<'a> {
         Ok(policies)
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E): rows strictly after the
+    /// `(created_at, id)` position in `ORDER BY created_at DESC, id DESC`
+    /// order. Unlike OFFSET, the walk never drifts under concurrent inserts
+    /// and stays O(page) on deep pages. `fetch` is `page limit + 1` — the
+    /// caller uses the sentinel row to detect whether another page exists.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Policy>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = if let Some((created_at, id)) = after {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
+                FROM policies
+                WHERE org_id = $1 AND (created_at, id) < ($2, $3)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(created_at)
+            .bind(id)
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
+                FROM policies
+                WHERE org_id = $1
+                ORDER BY created_at DESC, id DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut policies = Vec::with_capacity(rows.len());
+        for row in rows {
+            policies.push(self.row_to_policy(row)?);
+        }
+        Ok(policies)
+    }
+
     /// Count policies for an organization
     pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
         let pool = self

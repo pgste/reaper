@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Json, Response},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::idempotency,
+    api::pagination::{PageQuery, Paginated},
     auth::middleware::{AuthenticatedUser, OptionalAuth, RequireAuth},
     auth::scopes::Scope,
     auth::users::{OrgRole, UserOrg, UserOrgRepository, UserRepository},
@@ -38,22 +39,6 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .merge(policies::routes())
 }
 
-/// Query parameters for listing organizations
-#[derive(Debug, Deserialize, Default)]
-pub struct ListOrgsQuery {
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-}
-
-/// Response for listing organizations
-#[derive(Debug, Serialize)]
-pub struct ListOrgsResponse {
-    pub organizations: Vec<Organization>,
-    pub total: i64,
-    pub limit: i64,
-    pub offset: i64,
-}
-
 /// Request to create an organization
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateOrgRequest {
@@ -73,45 +58,44 @@ pub struct UpdateOrgRequest {
     pub settings: Option<serde_json::Value>,
 }
 
-/// List organizations. Platform admins see every org; everyone else sees
-/// only the org they belong to (org enumeration is a tenant-isolation leak).
+/// List organizations (keyset-paginated: Plan 07 Phase E). Platform admins
+/// see every org; everyone else sees only the org they belong to (org
+/// enumeration is a tenant-isolation leak).
 #[utoipa::path(
     get,
     path = "/orgs",
     tag = "orgs",
+    params(
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
+    ),
     responses(
-        (status = 200, description = "List of organizations")
+        (status = 200, description = "One page of organizations with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
 async fn list_orgs(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
-    Query(query): Query<ListOrgsQuery>,
-) -> ApiResult<Json<ListOrgsResponse>> {
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<Paginated<Organization>>> {
     let repo = OrganizationRepository::new(&state.db);
+    let page = query.validate()?;
 
-    let limit = query.limit.unwrap_or(100);
-    let offset = query.offset.unwrap_or(0);
-
-    let (organizations, total) = if user.has_permission(Scope::Admin) {
-        (
-            repo.list(Some(limit), Some(offset)).await?,
-            repo.count().await?,
-        )
+    if user.has_permission(Scope::Admin) {
+        let rows = repo.list_page(page.limit + 1, page.after.as_ref()).await?;
+        Ok(Json(Paginated::from_rows(rows, &page, |o| {
+            (o.created_at.to_rfc3339(), o.id.to_string())
+        })))
     } else {
         let own = repo.get_by_id(user.org_id).await?;
         let organizations: Vec<Organization> = own.into_iter().collect();
-        let total = organizations.len() as i64;
-        (organizations, total)
-    };
-
-    Ok(Json(ListOrgsResponse {
-        organizations,
-        total,
-        limit,
-        offset,
-    }))
+        Ok(Json(Paginated {
+            items: organizations,
+            next_cursor: None,
+        }))
+    }
 }
 
 /// Create a new organization.

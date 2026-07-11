@@ -141,6 +141,61 @@ impl<'a> TeamRepository<'a> {
         Ok(teams)
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E): rows strictly after the
+    /// `(created_at, id)` position in `ORDER BY created_at DESC, id DESC`
+    /// order. Unlike OFFSET, the walk never drifts under concurrent inserts
+    /// and stays O(page) on deep pages. `fetch` is `page limit + 1` — the
+    /// caller uses the sentinel row to detect whether another page exists.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<Team>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = if let Some((created_at, id)) = after {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, name, slug, description, created_at, updated_at
+                FROM teams
+                WHERE org_id = $1 AND (created_at, id) < ($2, $3)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(created_at)
+            .bind(id)
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, name, slug, description, created_at, updated_at
+                FROM teams
+                WHERE org_id = $1
+                ORDER BY created_at DESC, id DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut teams = Vec::with_capacity(rows.len());
+        for row in rows {
+            teams.push(self.row_to_team(row)?);
+        }
+        Ok(teams)
+    }
+
     /// Count teams for an organization
     pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
         let pool = self

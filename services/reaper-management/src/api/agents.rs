@@ -3,7 +3,7 @@
 //! Provides endpoints for agent registration and management.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
+    api::pagination::{PageQuery, Paginated},
     auth::{jwt::JwtManager, middleware::RequireAuth, scopes::Scope},
     db::repositories::{AgentRepository, OrganizationRepository},
     domain::agent::{Agent, RegisterAgent},
@@ -100,13 +101,6 @@ impl From<Agent> for AgentSummary {
             registered_at: agent.registered_at,
         }
     }
-}
-
-/// Response for listing agents
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ListAgentsResponse {
-    pub agents: Vec<AgentSummary>,
-    pub total: usize,
 }
 
 /// Heartbeat request
@@ -234,16 +228,19 @@ async fn register_agent(
     ))
 }
 
-/// List agents for an organization
+/// List agents for an organization (keyset-paginated: Plan 07 Phase E).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/agents",
     tag = "agents",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "List of agents", body = ListAgentsResponse)
+        (status = 200, description = "One page of agents with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -251,7 +248,8 @@ async fn list_agents(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> ApiResult<Json<ListAgentsResponse>> {
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<Paginated<AgentSummary>>> {
     // Check permissions
     if !user.has_permission(Scope::AgentRead) && !user.has_permission(Scope::OrgAdmin) {
         return Err(ApiError::Forbidden("Missing agent:read scope".to_string()));
@@ -267,16 +265,18 @@ async fn list_agents(
         ));
     }
 
-    let agent_repo = AgentRepository::new(&state.db);
-    let agents = agent_repo.list_by_org(organization.id).await?;
+    let page = query.validate()?;
 
-    let total = agents.len();
+    let agent_repo = AgentRepository::new(&state.db);
+    let agents = agent_repo
+        .list_page_by_org(organization.id, page.limit + 1, page.after.as_ref())
+        .await?;
+
     let summaries: Vec<AgentSummary> = agents.into_iter().map(|a| a.into()).collect();
 
-    Ok(Json(ListAgentsResponse {
-        agents: summaries,
-        total,
-    }))
+    Ok(Json(Paginated::from_rows(summaries, &page, |a| {
+        (a.registered_at.to_rfc3339(), a.id.to_string())
+    })))
 }
 
 /// Get agent by ID

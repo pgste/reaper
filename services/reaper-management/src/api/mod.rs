@@ -19,6 +19,7 @@ pub mod namespaces;
 pub mod oauth;
 pub mod openapi;
 pub mod orgs;
+pub mod pagination;
 pub mod policies;
 pub mod preconditions;
 pub mod replay;

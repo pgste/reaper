@@ -72,7 +72,17 @@ pub struct DecisionQuery {
     /// Exclusive upper bound.
     pub to: Option<String>,
     pub limit: Option<u64>,
+    /// Deprecated in favor of `cursor` (offset drifts under concurrent inserts
+    /// and degrades on deep pages — Plan 07 Phase E); still honored when no
+    /// cursor is given.
     pub offset: Option<u64>,
+    /// Opaque keyset cursor; decoded by the API layer into [`Self::after`].
+    /// Takes precedence over `offset`.
+    pub cursor: Option<String>,
+    /// Decoded exclusive resume position `(timestamp, decision_id)` — set by
+    /// the API layer from `cursor`, never from the wire.
+    #[serde(skip)]
+    pub after: Option<(String, String)>,
 }
 
 /// A legal hold's row selector (Plan 04, step 6): the same dimensions as
@@ -630,17 +640,38 @@ fn build_list_sql(
     let mut params = Vec::new();
     let where_sql = where_clause(config, tenant_id, query, &mut params);
     // limit/offset are validated numerics, not strings; still bound as params.
-    let limit = query.limit.unwrap_or(100).min(1000);
-    let offset = query.offset.unwrap_or(0);
+    // Cap is 1001 (not 1000): the API layer fetches page+1 as its has-more
+    // sentinel, so a full 1000-row page must still fit its sentinel row.
+    let limit = query.limit.unwrap_or(100).min(1001);
     params.push(("limit".to_string(), limit.to_string()));
-    params.push(("offset".to_string(), offset.to_string()));
-    (
-        format!(
-            "SELECT {LIST_COLUMNS} FROM decisions FINAL {where_sql} \
-             ORDER BY timestamp DESC LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}"
-        ),
-        params,
-    )
+
+    // Keyset resume (Plan 07 Phase E): rows strictly after the cursor position
+    // in (timestamp DESC, decision_id DESC) order. Never drifts under the
+    // constant insert load a decision store sees, unlike OFFSET (kept for
+    // compatibility when no cursor is given; deprecated).
+    if let Some((ts, id)) = &query.after {
+        let joiner = if where_sql.is_empty() { "WHERE" } else { "AND" };
+        params.push(("cursor_ts".to_string(), ts.clone()));
+        params.push(("cursor_id".to_string(), id.clone()));
+        (
+            format!(
+                "SELECT {LIST_COLUMNS} FROM decisions FINAL {where_sql} {joiner} \
+                 (timestamp, decision_id) < (parseDateTime64BestEffort({{cursor_ts:String}}), {{cursor_id:String}}) \
+                 ORDER BY timestamp DESC, decision_id DESC LIMIT {{limit:UInt64}}"
+            ),
+            params,
+        )
+    } else {
+        let offset = query.offset.unwrap_or(0);
+        params.push(("offset".to_string(), offset.to_string()));
+        (
+            format!(
+                "SELECT {LIST_COLUMNS} FROM decisions FINAL {where_sql} \
+                 ORDER BY timestamp DESC, decision_id DESC LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}"
+            ),
+            params,
+        )
+    }
 }
 
 fn build_get_sql(
@@ -881,7 +912,24 @@ mod tests {
         };
         let (_, params) = build_list_sql(&config(true), "t", &query);
         let limit = params.iter().find(|(n, _)| n == "limit").unwrap();
-        assert_eq!(limit.1, "1000");
+        // Cap is 1001: the API layer's max page is 1000 plus its has-more
+        // sentinel row (Plan 07 Phase E).
+        assert_eq!(limit.1, "1001");
+    }
+
+    #[test]
+    fn list_sql_keyset_cursor_replaces_offset() {
+        let query = DecisionQuery {
+            after: Some(("2026-07-11 00:00:00.000".into(), "d-1".into())),
+            offset: Some(50), // ignored once a cursor position is present
+            ..Default::default()
+        };
+        let (sql, params) = build_list_sql(&config(true), "t", &query);
+        assert!(sql.contains("(timestamp, decision_id) <"));
+        assert!(sql.contains("ORDER BY timestamp DESC, decision_id DESC"));
+        assert!(!sql.contains("OFFSET"));
+        assert!(params.iter().any(|(n, _)| n == "cursor_ts"));
+        assert!(params.iter().any(|(n, _)| n == "cursor_id"));
     }
 
     #[test]

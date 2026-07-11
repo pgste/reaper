@@ -2458,7 +2458,11 @@ async fn handle_management_action(
 
             if response.status().is_success() {
                 let result: Value = response.json().await?;
-                if let Some(orgs) = result.get("organizations").and_then(|v| v.as_array()) {
+                if let Some(orgs) = result
+                    .get("items")
+                    .or_else(|| result.get("organizations"))
+                    .and_then(|v| v.as_array())
+                {
                     if orgs.is_empty() {
                         println!("No organizations found.");
                     } else {

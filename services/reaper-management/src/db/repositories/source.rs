@@ -161,6 +161,65 @@ impl<'a> PolicySourceRepository<'a> {
         Ok(sources)
     }
 
+    /// Keyset-paginated listing (Plan 07 Phase E): rows strictly after the
+    /// `(created_at, id)` position in `ORDER BY created_at DESC, id DESC`
+    /// order. Unlike OFFSET, the walk never drifts under concurrent inserts
+    /// and stays O(page) on deep pages. `fetch` is `page limit + 1` — the
+    /// caller uses the sentinel row to detect whether another page exists.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<PolicySource>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = if let Some((created_at, id)) = after {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                       sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                       created_at, updated_at
+                FROM policy_sources
+                WHERE org_id = $1 AND (created_at, id) < ($2, $3)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(created_at)
+            .bind(id)
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                       sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                       created_at, updated_at
+                FROM policy_sources
+                WHERE org_id = $1
+                ORDER BY created_at DESC, id DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(org_id.to_string())
+            .bind(fetch)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut sources = Vec::with_capacity(rows.len());
+        for row in rows {
+            sources.push(self.row_to_source(row)?);
+        }
+        Ok(sources)
+    }
+
     /// List sources that need syncing
     pub async fn list_due_for_sync(&self) -> Result<Vec<PolicySource>, DatabaseError> {
         let pool = self
