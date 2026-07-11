@@ -14,10 +14,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
+use utoipa::ToSchema;
 
 use crate::state::AgentState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CheckRequest {
     /// Name of a deployed policy to check against.
     pub policy_name: String,
@@ -39,6 +40,16 @@ fn default_action() -> String {
 }
 
 /// POST /api/v1/check
+#[utoipa::path(
+    post,
+    path = "/api/v1/check",
+    tag = "evaluation",
+    request_body = CheckRequest,
+    responses(
+        (status = 200, description = "Document check result with all violations")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn check_document(
     State(state): State<Arc<AgentState>>,

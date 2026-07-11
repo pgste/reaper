@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::observability::{ACTIVE_POLICIES, ERRORS_TOTAL};
@@ -26,7 +27,7 @@ use crate::state::AgentState;
 use crate::types::{DeployBundleRequest, DeployBundleResponse, DeployPolicyRequest};
 
 /// Deploy and compile a .reap policy file with the agent's DataStore.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct DeployCompiledPolicyRequest {
     /// Raw .reap policy content
     pub policy_content: String,
@@ -35,6 +36,15 @@ pub struct DeployCompiledPolicyRequest {
 }
 
 /// Deploy a policy from JSON rules.
+#[utoipa::path(
+    post,
+    path = "/api/v1/policies/deploy",
+    tag = "policies",
+    responses(
+        (status = 200, description = "Policy hot-swapped, or an error object on invalid input")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn deploy_policy(
     State(state): State<Arc<AgentState>>,
@@ -127,6 +137,15 @@ pub async fn deploy_policy(
 }
 
 /// List all deployed policies.
+#[utoipa::path(
+    get,
+    path = "/api/v1/policies",
+    tag = "policies",
+    responses(
+        (status = 200, description = "List of deployed policies")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn list_policies(
     State(state): State<Arc<AgentState>>,
@@ -154,6 +173,18 @@ pub async fn list_policies(
 }
 
 /// Get version history for a policy.
+#[utoipa::path(
+    get,
+    path = "/api/v1/policies/{id}/versions",
+    tag = "policies",
+    params(
+        ("id" = String, Path, description = "Policy ID")
+    ),
+    responses(
+        (status = 200, description = "Version history for the policy")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn get_policy_versions(
     State(state): State<Arc<AgentState>>,
@@ -184,6 +215,18 @@ pub async fn get_policy_versions(
 }
 
 /// Get current version of a policy.
+#[utoipa::path(
+    get,
+    path = "/api/v1/policies/{id}/version",
+    tag = "policies",
+    params(
+        ("id" = String, Path, description = "Policy ID")
+    ),
+    responses(
+        (status = 200, description = "Current version of the policy")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn get_policy_current_version(
     State(state): State<Arc<AgentState>>,
@@ -211,6 +254,16 @@ pub async fn get_policy_current_version(
 }
 
 /// Deploy and compile a .reap policy file with the agent's DataStore.
+#[utoipa::path(
+    post,
+    path = "/api/v1/policies/compile",
+    tag = "policies",
+    request_body = DeployCompiledPolicyRequest,
+    responses(
+        (status = 200, description = "Policy compiled and deployed")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn deploy_compiled_policy(
     State(state): State<Arc<AgentState>>,
@@ -304,6 +357,15 @@ pub async fn deploy_compiled_policy(
 ///
 /// This endpoint deploys bundles using the full ReaperDSL compiler,
 /// preserving all complex conditions, functions, and rule logic.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bundles/deploy",
+    tag = "policies",
+    responses(
+        (status = 200, description = "Bundle deployed with version tracking")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn deploy_bundle(
     State(state): State<Arc<AgentState>>,
@@ -413,6 +475,15 @@ pub async fn deploy_bundle(
 /// your desired state, POST them here, and the agent's policy set matches
 /// exactly, with no floating leftovers and no window where a reader sees a
 /// partial set.
+#[utoipa::path(
+    post,
+    path = "/api/v1/bundles/load",
+    tag = "policies",
+    responses(
+        (status = 200, description = "Bundle set atomically loaded as the full active policy set")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn load_bundles_atomic(
     State(state): State<Arc<AgentState>>,

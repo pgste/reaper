@@ -14,6 +14,7 @@
 //! - [`cache`]: Policy caching layer
 //! - [`bootstrap`]: Policy and data bootstrapping
 
+pub mod api;
 pub mod auth;
 pub mod bootstrap;
 pub mod cache;

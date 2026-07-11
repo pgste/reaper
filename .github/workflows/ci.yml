@@ -218,23 +218,30 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
-      - name: Contract-parity test (every served route is documented)
-        run: cargo test -p reaper-management --test api_contract
+      - name: Contract-parity tests (every served route is documented)
+        run: |
+          cargo test -p reaper-management --test api_contract
+          cargo test -p reaper-agent --test api_contract
 
-      - name: Generate OpenAPI 3.1 document
-        run: cargo run -p reaper-management --example dump_openapi > openapi-management.json
+      - name: Generate OpenAPI 3.1 documents
+        run: |
+          cargo run -p reaper-management --example dump_openapi > openapi-management.json
+          cargo run -p reaper-agent --example dump_openapi > openapi-agent.json
 
-      - name: Validate OpenAPI 3.1 document
+      - name: Validate OpenAPI 3.1 documents
         run: |
           python3 -m pip install --quiet openapi-spec-validator
           openapi-spec-validator openapi-management.json
+          openapi-spec-validator openapi-agent.json
 
-      - name: Upload OpenAPI document
+      - name: Upload OpenAPI documents
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: openapi-management
-          path: openapi-management.json
+          name: openapi-specs
+          path: |
+            openapi-management.json
+            openapi-agent.json
 
   # Stage 2: Unit Tests (BLOCKS pipeline if fails)
   unit-tests:

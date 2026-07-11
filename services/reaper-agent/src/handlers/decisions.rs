@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::instrument;
+use utoipa::ToSchema;
 
 use crate::observability::{
     DECISION_LOG_AUDIT_COMPROMISED, DECISION_LOG_BUFFER_SIZE, DECISION_LOG_DROPPED_ENTRIES,
@@ -40,7 +41,7 @@ pub struct DecisionQueryParams {
 }
 
 /// Export request body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ExportRequest {
     /// Export format: "ndjson" (default), "json"
     pub format: Option<String>,
@@ -54,6 +55,15 @@ pub struct ExportRequest {
 ///
 /// Supports filtering by principal, action, resource, decision, and policy_id.
 /// Use limit and offset for pagination.
+#[utoipa::path(
+    get,
+    path = "/api/v1/decisions",
+    tag = "decisions",
+    responses(
+        (status = 200, description = "Recent decisions")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn get_decisions(
     State(state): State<Arc<AgentState>>,
@@ -115,6 +125,19 @@ pub async fn get_decisions(
 /// Explain a single decision by `decision_id` — returns the full record
 /// including the `input_data` snapshot (the resolved principal/resource
 /// attributes the decision branched on) when the explain tier was enabled.
+#[utoipa::path(
+    get,
+    path = "/api/v1/decisions/{decision_id}",
+    tag = "decisions",
+    params(
+        ("decision_id" = String, Path, description = "Decision ID")
+    ),
+    responses(
+        (status = 200, description = "Decision record"),
+        (status = 404, description = "Decision not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn get_decision_by_id(
     State(state): State<Arc<AgentState>>,
@@ -134,6 +157,15 @@ pub async fn get_decision_by_id(
 }
 
 /// Get decision buffer statistics.
+#[utoipa::path(
+    get,
+    path = "/api/v1/decisions/stats",
+    tag = "decisions",
+    responses(
+        (status = 200, description = "Decision buffer statistics")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn get_decision_stats(
     State(state): State<Arc<AgentState>>,
@@ -178,6 +210,16 @@ pub async fn get_decision_stats(
 /// Supports two formats:
 /// - "ndjson" (default): Newline-delimited JSON
 /// - "json": Pretty-printed JSON array
+#[utoipa::path(
+    post,
+    path = "/api/v1/decisions/export",
+    tag = "decisions",
+    request_body = ExportRequest,
+    responses(
+        (status = 200, description = "Exported decisions")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn export_decisions(
     State(state): State<Arc<AgentState>>,
