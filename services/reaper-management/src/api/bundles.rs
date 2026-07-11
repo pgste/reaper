@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     Json,
 };
 use serde::Deserialize;
@@ -16,6 +16,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::api::error::{ApiError, ApiResult};
+use crate::api::idempotency;
 use crate::api::orgs::authorize_org;
 use crate::api::preconditions::{check_precondition, etag};
 use crate::audit::{ActorType, AuditEntry, ResourceType};
@@ -445,12 +446,18 @@ fn transition_allowed(kind: ChangeKind, status: BundleStatus) -> bool {
     tag = "bundles",
     params(
         ("org" = String, Path, description = "Organization ID"),
-        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+        ("bundle_id" = Uuid, Path, description = "Bundle ID"),
+        ("Idempotency-Key" = Option<String>, Header,
+         description = "Optional retry-safety key: a replay within the retention \
+                        window returns the original response without re-triggering \
+                        the promotion (Plan 07 Phase D)")
     ),
     request_body = OpenChangeRequest,
     responses(
         (status = 200, description = "Bundle promoted (single-control)"),
-        (status = 201, description = "Change request opened (dual-control)")
+        (status = 201, description = "Change request opened (dual-control)"),
+        (status = 409, description = "Original request for this Idempotency-Key still in flight"),
+        (status = 422, description = "Idempotency-Key was already used for a different request")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -458,9 +465,27 @@ async fn promote_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
     body: Option<Json<OpenChangeRequest>>,
 ) -> ApiResult<Response> {
-    open_change_request(state, user, org, bundle_id, body, ChangeKind::Promote).await
+    let notes = body.and_then(|Json(b)| b.notes);
+    let fingerprint = idempotency::fingerprint(&[
+        "bundles.promote",
+        &org,
+        &bundle_id.to_string(),
+        notes.as_deref().unwrap_or(""),
+    ]);
+    let scope_id = org.clone();
+    let db = state.db.clone();
+    idempotency::run(
+        &db,
+        &headers,
+        "bundles.promote",
+        &scope_id,
+        &fingerprint,
+        || open_change_request(state, user, org, bundle_id, notes, ChangeKind::Promote),
+    )
+    .await
 }
 
 /// Open a **rollback** change request (restore a previously-good bundle), or
@@ -472,12 +497,18 @@ async fn promote_bundle(
     tag = "bundles",
     params(
         ("org" = String, Path, description = "Organization ID"),
-        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+        ("bundle_id" = Uuid, Path, description = "Bundle ID"),
+        ("Idempotency-Key" = Option<String>, Header,
+         description = "Optional retry-safety key: a replay within the retention \
+                        window returns the original response without re-triggering \
+                        the rollback (Plan 07 Phase D)")
     ),
     request_body = OpenChangeRequest,
     responses(
         (status = 200, description = "Bundle rolled back (single-control)"),
-        (status = 201, description = "Change request opened (dual-control)")
+        (status = 201, description = "Change request opened (dual-control)"),
+        (status = 409, description = "Original request for this Idempotency-Key still in flight"),
+        (status = 422, description = "Idempotency-Key was already used for a different request")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -485,21 +516,41 @@ async fn rollback_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
     body: Option<Json<OpenChangeRequest>>,
 ) -> ApiResult<Response> {
-    open_change_request(state, user, org, bundle_id, body, ChangeKind::Rollback).await
+    let notes = body.and_then(|Json(b)| b.notes);
+    let fingerprint = idempotency::fingerprint(&[
+        "bundles.rollback",
+        &org,
+        &bundle_id.to_string(),
+        notes.as_deref().unwrap_or(""),
+    ]);
+    let scope_id = org.clone();
+    let db = state.db.clone();
+    idempotency::run(
+        &db,
+        &headers,
+        "bundles.rollback",
+        &scope_id,
+        &fingerprint,
+        || open_change_request(state, user, org, bundle_id, notes, ChangeKind::Rollback),
+    )
+    .await
 }
 
 /// Shared entry point for promote/rollback: record the change, then either
 /// return it pending (dual-control) or execute it immediately (single-control).
+/// Returns `(status, JSON body)` so the idempotency layer can store the
+/// response for replay (Plan 07 Phase D).
 async fn open_change_request(
     state: Arc<AppState>,
     user: AuthenticatedUser,
     org: String,
     bundle_id: Uuid,
-    body: Option<Json<OpenChangeRequest>>,
+    notes: Option<String>,
     kind: ChangeKind,
-) -> ApiResult<Response> {
+) -> ApiResult<(StatusCode, serde_json::Value)> {
     let org_id = authorize_org(&state, &user, &org, &[Scope::BundlePromote])
         .await?
         .id;
@@ -518,7 +569,6 @@ async fn open_change_request(
         )));
     }
 
-    let notes = body.and_then(|Json(b)| b.notes);
     let repo = PromotionChangeRepository::new(&state.db);
     let cr = repo
         .create(
@@ -534,7 +584,9 @@ async fn open_change_request(
 
     if state.config.bundles.promotion_approval.is_dual_control() {
         // Await a second, distinct principal.
-        return Ok((StatusCode::CREATED, Json(cr)).into_response());
+        let body = serde_json::to_value(&cr)
+            .map_err(|e| ApiError::Internal(format!("serialize change request: {e}")))?;
+        return Ok((StatusCode::CREATED, body));
     }
 
     // Single-control: the requester is also the executor. Execute now and still
@@ -542,7 +594,9 @@ async fn open_change_request(
     let promoted = execute_promotion(&state, org_id, &cr, &user.id).await?;
     let executed = repo.get_scoped(org_id, cr.id).await?.unwrap_or(cr);
     audit(&state, &user, org_id, "bundle.promote", &executed).await;
-    Ok((StatusCode::OK, Json(promoted)).into_response())
+    let body = serde_json::to_value(&promoted)
+        .map_err(|e| ApiError::Internal(format!("serialize bundle: {e}")))?;
+    Ok((StatusCode::OK, body))
 }
 
 /// Atomically claim a pending change request and apply it (promote or

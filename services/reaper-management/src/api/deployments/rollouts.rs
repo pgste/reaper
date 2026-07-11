@@ -2,14 +2,15 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
+    response::Response,
     Json,
 };
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
+    api::error::ApiError, api::idempotency, api::orgs::resolve_org, auth::middleware::RequireAuth,
     db::repositories::OrganizationRepository, deployment::DeploymentService,
     domain::deployment::StartRollout, state::AppState,
 };
@@ -26,11 +27,17 @@ use super::types::{
     tag = "deployments",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+        ("bundle_id" = Uuid, Path, description = "Bundle ID"),
+        ("Idempotency-Key" = Option<String>, Header,
+         description = "Optional retry-safety key: a replay within the retention \
+                        window returns the original response without starting a \
+                        second rollout (Plan 07 Phase D)")
     ),
     responses(
         (status = 201, description = "Rollout started"),
-        (status = 200, description = "Dry-run result")
+        (status = 200, description = "Dry-run result"),
+        (status = 409, description = "Original request for this Idempotency-Key still in flight"),
+        (status = 422, description = "Idempotency-Key was already used for a different request")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -38,8 +45,46 @@ pub async fn start_rollout(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
     Json(request): Json<RolloutRequest>,
-) -> Result<(StatusCode, Json<RolloutOrDryRun>), ApiError> {
+) -> Result<Response, ApiError> {
+    // Propagation-triggering POST: a retried request must not start a second
+    // rollout (Plan 07 Phase D).
+    let fingerprint = idempotency::fingerprint(&[
+        "deployments.rollout",
+        &org,
+        &bundle_id.to_string(),
+        &request
+            .strategy_id
+            .map(|u| u.to_string())
+            .unwrap_or_default(),
+        &request
+            .namespace_id
+            .map(|u| u.to_string())
+            .unwrap_or_default(),
+        if request.dry_run { "dry" } else { "live" },
+    ]);
+    let scope_id = org.clone();
+    let db = state.db.clone();
+    idempotency::run(
+        &db,
+        &headers,
+        "deployments.rollout",
+        &scope_id,
+        &fingerprint,
+        || start_rollout_inner(state, user, org, bundle_id, request),
+    )
+    .await
+}
+
+/// The actual rollout side effect; runs at most once per idempotency key.
+async fn start_rollout_inner(
+    state: Arc<AppState>,
+    user: crate::auth::middleware::AuthenticatedUser,
+    org: String,
+    bundle_id: Uuid,
+    request: RolloutRequest,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let org_repo = OrganizationRepository::new(&state.db);
     let organization = resolve_org(&org_repo, &org).await?;
 
@@ -73,7 +118,9 @@ pub async fn start_rollout(
                 e => ApiError::Internal(e.to_string()),
             })?;
 
-        return Ok((StatusCode::OK, Json(RolloutOrDryRun::DryRun(result.into()))));
+        let body = serde_json::to_value(RolloutOrDryRun::DryRun(result.into()))
+            .map_err(|e| ApiError::Internal(format!("serialize dry-run: {e}")))?;
+        return Ok((StatusCode::OK, body));
     }
 
     // Actual rollout
@@ -100,14 +147,13 @@ pub async fn start_rollout(
             e => ApiError::Internal(e.to_string()),
         })?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(RolloutOrDryRun::Rollout(RolloutStartResponse {
-            rollout: result.rollout.into(),
-            waves: result.waves.into_iter().map(Into::into).collect(),
-            target_agent_count: result.target_agents.len(),
-        })),
-    ))
+    let body = serde_json::to_value(RolloutOrDryRun::Rollout(RolloutStartResponse {
+        rollout: result.rollout.into(),
+        waves: result.waves.into_iter().map(Into::into).collect(),
+        target_agent_count: result.target_agents.len(),
+    }))
+    .map_err(|e| ApiError::Internal(format!("serialize rollout: {e}")))?;
+    Ok((StatusCode::CREATED, body))
 }
 
 /// List rollouts

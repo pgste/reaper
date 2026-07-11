@@ -13,6 +13,7 @@ pub mod deployments;
 pub mod error;
 pub mod events;
 pub mod health;
+pub mod idempotency;
 pub mod landscape;
 pub mod namespaces;
 pub mod oauth;

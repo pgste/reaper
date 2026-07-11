@@ -4,8 +4,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::Json,
+    http::{HeaderMap, StatusCode},
+    response::{Json, Response},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
+    api::idempotency,
     auth::middleware::{AuthenticatedUser, OptionalAuth, RequireAuth},
     auth::scopes::Scope,
     auth::users::{OrgRole, UserOrg, UserOrgRepository, UserRepository},
@@ -126,16 +127,47 @@ async fn list_orgs(
     path = "/orgs",
     tag = "orgs",
     request_body = CreateOrgRequest,
+    params(
+        ("Idempotency-Key" = Option<String>, Header,
+         description = "Optional retry-safety key: a replay within the retention \
+                        window returns the original response without creating a \
+                        second organization (Plan 07 Phase D)")
+    ),
     responses(
-        (status = 201, description = "Organization created")
+        (status = 201, description = "Organization created"),
+        (status = 409, description = "Original request for this Idempotency-Key still in flight"),
+        (status = 422, description = "Idempotency-Key was already used for a different request")
     ),
     security(("bearer_jwt" = []))
 )]
 async fn create_org(
     State(state): State<Arc<AppState>>,
     OptionalAuth(caller): OptionalAuth,
+    headers: HeaderMap,
     Json(request): Json<CreateOrgRequest>,
-) -> ApiResult<(StatusCode, Json<Organization>)> {
+) -> ApiResult<Response> {
+    // Propagation-triggering POST: retries must not double-create (Phase D).
+    let fingerprint = idempotency::fingerprint(&[
+        "orgs.create",
+        &request.name,
+        &request.slug,
+        request.display_name.as_deref().unwrap_or(""),
+        request.description.as_deref().unwrap_or(""),
+        &request.settings.to_string(),
+    ]);
+    let db = state.db.clone();
+    idempotency::run(&db, &headers, "orgs.create", "-", &fingerprint, || {
+        create_org_inner(state, caller, request)
+    })
+    .await
+}
+
+/// The actual org-create side effect; runs at most once per idempotency key.
+async fn create_org_inner(
+    state: Arc<AppState>,
+    caller: Option<AuthenticatedUser>,
+    request: CreateOrgRequest,
+) -> ApiResult<(StatusCode, serde_json::Value)> {
     // Validate slug format
     if !is_valid_slug(&request.slug) {
         return Err(ApiError::BadRequest(
@@ -196,7 +228,9 @@ async fn create_org(
         }
     }
 
-    Ok((StatusCode::CREATED, Json(org)))
+    let body = serde_json::to_value(&org)
+        .map_err(|e| ApiError::Internal(format!("serialize organization: {e}")))?;
+    Ok((StatusCode::CREATED, body))
 }
 
 /// Get an organization by ID or slug (any authenticated member of the org)

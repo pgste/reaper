@@ -90,7 +90,23 @@ still succeeds (unguarded, logged as deprecated). Once
 **428 Precondition Required**. SDK/CLI/automation should start sending
 `If-Match` now.
 
-## 6. Client guidance
+## 6. Idempotency keys (`Idempotency-Key`)
+
+Propagation-triggering POSTs — **bundle promote/rollback**, **rollout create**,
+and **org create** — accept an optional `Idempotency-Key` header so automation
+can retry a timed-out request safely:
+
+- The first execution stores its response; a **replay** of the same key within
+  the retention window (default 48 h, `REAPER_IDEMPOTENCY_RETENTION_SECS`)
+  returns the stored response verbatim, marked `Idempotency-Replayed: true`,
+  and triggers **nothing**.
+- The same key with a **different request** is rejected with **422** — one key
+  per distinct operation.
+- If the original request is still in flight, a duplicate gets **409**; retry
+  shortly.
+- Failed operations are not memoized: the same key may be retried.
+
+## 7. Client guidance
 
 - Always call under `/api/v1`; treat a `Deprecation` header as a signal to
   migrate before the `Sunset` date.
@@ -98,3 +114,6 @@ still succeeds (unguarded, logged as deprecated). Once
 - Pin to the published OpenAPI document (`/openapi.json`) for code generation;
   regenerate on each release to pick up additive changes.
 - On `PUT`, echo the last-read `ETag` as `If-Match`; on 412, re-read and retry.
+- Send an `Idempotency-Key` (a fresh UUID per logical operation) on promote,
+  rollback, rollout-create, and org-create; retry with the SAME key after a
+  timeout.
