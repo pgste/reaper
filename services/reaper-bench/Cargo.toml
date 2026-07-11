@@ -54,7 +54,7 @@ async-trait = { workspace = true }
 
 # System info
 num_cpus = "1.16"
-sysinfo = "0.31"
+sysinfo = "0.37"
 
 # Concurrent data structures
 dashmap = { workspace = true }

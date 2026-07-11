@@ -154,19 +154,14 @@ impl ApiSyncer {
     fn apply_jsonpath(&self, data: &JsonValue, path: &str) -> Result<Vec<JsonValue>, ApiSyncError> {
         use jsonpath_rust::JsonPath;
 
-        let jsonpath = JsonPath::try_from(path)
+        // jsonpath-rust 1.0: `JsonPath` is a trait on `serde_json::Value`;
+        // `query` parses the path and returns the matched nodes (borrowed),
+        // which we clone into owned values.
+        let matched = data
+            .query(path)
             .map_err(|e| ApiSyncError::JsonPath(format!("Invalid JSONPath '{}': {:?}", path, e)))?;
 
-        let result = jsonpath.find(data);
-
-        // find() returns a Value - if it's an array, return its elements; otherwise wrap in vec
-        let values: Vec<JsonValue> = match result {
-            JsonValue::Array(arr) => arr,
-            JsonValue::Null => vec![],
-            other => vec![other],
-        };
-
-        Ok(values)
+        Ok(matched.into_iter().cloned().collect())
     }
 
     /// Parse a single policy from JSON

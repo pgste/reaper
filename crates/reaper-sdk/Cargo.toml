@@ -22,7 +22,7 @@ serde_json = { workspace = true }
 
 # SIMD-accelerated JSON (3-5x faster than serde_json)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-sonic-rs = "0.3"
+sonic-rs = "0.5"
 
 # Error handling
 thiserror = { workspace = true }

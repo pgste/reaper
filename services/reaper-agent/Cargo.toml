@@ -24,7 +24,7 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
-sonic-rs = "0.3"  # SIMD-accelerated JSON parsing
+sonic-rs = "0.5"  # SIMD-accelerated JSON parsing
 mimalloc = { version = "0.1", default-features = false }  # fast allocator for the hot path
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
@@ -33,7 +33,7 @@ tower = { workspace = true }
 tower-http = { version = "0.7", features = ["catch-panic"] }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"
 scopeguard = "1.2"
@@ -54,7 +54,7 @@ parking_lot = { workspace = true }
 dashmap = { workspace = true }
 ed25519-dalek = { workspace = true }
 hdrhistogram = "7.5"
-sysinfo = "0.32"
+sysinfo = "0.37"
 core_affinity = "0.8"  # pin thread-per-core UDS shards to cores
 
 # TLS/mTLS support

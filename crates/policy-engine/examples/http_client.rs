@@ -212,13 +212,13 @@ async fn test_websocket(iterations: usize) -> anyhow::Result<()> {
 
         // Send request
         let json = serde_json::to_string(&req)?;
-        write.send(Message::Text(json)).await?;
+        write.send(Message::Text(json.into())).await?;
 
         // Receive response
         if let Some(msg) = read.next().await {
             let msg = msg?;
             if let Message::Text(text) = msg {
-                let _response: EvaluateResponse = serde_json::from_str(&text)?;
+                let _response: EvaluateResponse = serde_json::from_str(text.as_str())?;
 
                 let elapsed = start.elapsed();
                 total_time += elapsed;
