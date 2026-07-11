@@ -1,5 +1,16 @@
 # Software Supply Chain
 
+> **STATUS: ✅ SHIPPED** — landed via PR #25. Blocking `cargo-deny`
+> (advisories/licenses/bans/sources) + `cargo-audit` CI gates, a blocking Trivy
+> image scan (CRITICAL/HIGH, ignore-unfixed), a CycloneDX SBOM published on
+> release, and `cargo-fuzz` libFuzzer targets on the DSL parser — the
+> co-delivered acceptance test for Plan 05's nesting-depth bound. `deny.toml`
+> carries dated, justified advisory acknowledgements (the AWS-SDK rustls-webpki
+> chain; rsa RUSTSEC-2023-0071 is not in the compiled graph) kept in lockstep
+> with `docs/security/VULN_RESPONSE.md`; a weekly nightly re-scan plus an
+> informational dependency-freshness job keep the tree honest and surface
+> upgrade paths.
+
 **Readiness gate:** Third-party / supply-chain risk (SOC 2 CC7/CC8, DORA Art. 28 ICT third-party risk, SSDF / EO 14028 SBOM expectation). Blocks any regulated buyer's vendor security review.
 **Priority:** P2 by CVSS, but **elevated** by 3-way reviewer convergence (Security P2-2 = Code API-9 = Product F9). Cheap to fix, universally expected.
 **Findings closed:** Synthesis #9 (honourable mention); Security P2-2; Code API-9; Product F9.
