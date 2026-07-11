@@ -24,6 +24,14 @@ use crate::state::AgentState;
 /// - Number of policies loaded
 /// - Decision statistics
 /// - Cache hit/miss rates
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "Service health information")
+    )
+)]
 #[instrument(skip(state))]
 pub async fn health_check(State(state): State<Arc<AgentState>>) -> Result<Json<Value>, StatusCode> {
     let engine_stats = state.policy_engine.get_stats();
@@ -72,6 +80,15 @@ pub async fn health_check(State(state): State<Arc<AgentState>>) -> Result<Json<V
 ///
 /// `data_stale: true` with 200 (flag/monitor mode) is the "degraded but
 /// serving" state — map it to a degraded health status client-side.
+#[utoipa::path(
+    get,
+    path = "/ready",
+    tag = "health",
+    responses(
+        (status = 200, description = "Service is ready to accept traffic"),
+        (status = 503, description = "Service is not ready")
+    )
+)]
 #[instrument(skip(state))]
 pub async fn readiness_check(State(state): State<Arc<AgentState>>) -> (StatusCode, Json<Value>) {
     let engine_stats = state.policy_engine.get_stats();
@@ -131,6 +148,14 @@ pub async fn readiness_check(State(state): State<Arc<AgentState>>) -> (StatusCod
 /// Returns 200 OK.
 ///
 /// This endpoint is designed for Kubernetes liveness probes.
+#[utoipa::path(
+    get,
+    path = "/live",
+    tag = "health",
+    responses(
+        (status = 200, description = "Service is alive")
+    )
+)]
 #[instrument]
 pub async fn liveness_check() -> StatusCode {
     StatusCode::OK
@@ -139,6 +164,14 @@ pub async fn liveness_check() -> StatusCode {
 /// Prometheus metrics endpoint (`/metrics`).
 ///
 /// Returns all registered Prometheus metrics in text format.
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "health",
+    responses(
+        (status = 200, description = "Prometheus metrics in text format")
+    )
+)]
 #[instrument(skip(state))]
 pub async fn metrics(State(state): State<Arc<AgentState>>) -> Result<Response, StatusCode> {
     // Update active policies gauge

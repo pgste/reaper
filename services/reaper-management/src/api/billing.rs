@@ -7,11 +7,11 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::Json,
-    routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::error::{ApiError, ApiResult},
@@ -26,13 +26,13 @@ use crate::{
 };
 
 /// Build billing routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/orgs/{org}/billing", get(get_billing_summary))
-        .route("/orgs/{org}/billing/checkout", post(create_checkout))
-        .route("/orgs/{org}/billing/portal", post(create_portal))
-        .route("/orgs/{org}/billing/plans", get(list_plans))
-        .route("/webhooks/stripe", post(stripe_webhook))
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(get_billing_summary))
+        .routes(routes!(create_checkout))
+        .routes(routes!(create_portal))
+        .routes(routes!(list_plans))
+        .routes(routes!(stripe_webhook))
 }
 
 /// Response for billing summary
@@ -72,7 +72,7 @@ pub struct CreateCheckoutRequest {
 }
 
 /// Request to create portal session
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreatePortalRequest {
     pub return_url: String,
 }
@@ -89,6 +89,16 @@ pub struct PlanInfo {
 }
 
 /// Get billing summary for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/billing",
+    tag = "billing",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Billing summary for the organization")),
+    security(("bearer_jwt" = []))
+)]
 async fn get_billing_summary(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -108,6 +118,16 @@ async fn get_billing_summary(
 }
 
 /// Create a checkout session for upgrading
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/billing/checkout",
+    tag = "billing",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Stripe checkout session created")),
+    security(("bearer_jwt" = []))
+)]
 async fn create_checkout(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -161,6 +181,17 @@ async fn create_checkout(
 }
 
 /// Create a billing portal session
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/billing/portal",
+    tag = "billing",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreatePortalRequest,
+    responses((status = 200, description = "Stripe billing portal session created")),
+    security(("bearer_jwt" = []))
+)]
 async fn create_portal(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -188,6 +219,16 @@ async fn create_portal(
 }
 
 /// List available plans (static catalog; any authenticated caller)
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/billing/plans",
+    tag = "billing",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Static catalog of available plans")),
+    security(("bearer_jwt" = []))
+)]
 async fn list_plans(
     State(_state): State<Arc<AppState>>,
     RequireAuth(_user): RequireAuth,
@@ -232,6 +273,15 @@ async fn list_plans(
 }
 
 /// Handle Stripe webhook
+#[utoipa::path(
+    post,
+    path = "/webhooks/stripe",
+    tag = "billing",
+    responses(
+        (status = 200, description = "Webhook processed"),
+        (status = 400, description = "Missing or invalid signature")
+    )
+)]
 async fn stripe_webhook(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

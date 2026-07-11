@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, instrument};
+use utoipa::ToSchema;
 
 use crate::state::AgentState;
 
@@ -30,7 +31,7 @@ use crate::state::AgentState;
 // ============================================================================
 
 /// Request to create or update an entity.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertEntityRequest {
     pub entity_type: String,
     pub entity_id: String,
@@ -41,14 +42,14 @@ pub struct UpsertEntityRequest {
 }
 
 /// Relationship data for entity requests.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RelationshipRequest {
     pub rel_type: String,
     pub target: String,
 }
 
 /// Entity response for GET and upsert operations.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct EntityResponse {
     pub entity_id: String,
     pub entity_type: String,
@@ -62,7 +63,7 @@ pub struct EntityResponse {
 }
 
 /// Relationship data in responses.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct RelationshipResponse {
     pub rel_type: String,
     pub target: String,
@@ -80,20 +81,20 @@ fn default_limit() -> usize {
 }
 
 /// Response for listing entities.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct ListEntitiesResponse {
     pub entities: Vec<EntityResponse>,
     pub total: usize,
 }
 
 /// Batch upsert request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct BatchUpsertRequest {
     pub entities: Vec<UpsertEntityRequest>,
 }
 
 /// Batch upsert response.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct BatchUpsertResponse {
     pub succeeded: usize,
     pub failed: usize,
@@ -105,6 +106,16 @@ pub struct BatchUpsertResponse {
 // ============================================================================
 
 /// POST /api/v1/entities - Create or update entity.
+#[utoipa::path(
+    post,
+    path = "/api/v1/entities",
+    tag = "entities",
+    request_body = UpsertEntityRequest,
+    responses(
+        (status = 200, description = "Entity created or updated", body = EntityResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn upsert_entity_handler(
     State(state): State<Arc<AgentState>>,
@@ -141,6 +152,19 @@ pub async fn upsert_entity_handler(
 }
 
 /// GET /api/v1/entities/:type/:id - Get entity.
+#[utoipa::path(
+    get,
+    path = "/api/v1/entities/{type}/{id}",
+    tag = "entities",
+    params(
+        ("type" = String, Path, description = "Entity type"),
+        ("id" = String, Path, description = "Entity ID")
+    ),
+    responses(
+        (status = 200, description = "Entity found", body = EntityResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn get_entity_handler(
     State(state): State<Arc<AgentState>>,
@@ -170,6 +194,19 @@ pub async fn get_entity_handler(
 }
 
 /// DELETE /api/v1/entities/:type/:id - Delete entity.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/entities/{type}/{id}",
+    tag = "entities",
+    params(
+        ("type" = String, Path, description = "Entity type"),
+        ("id" = String, Path, description = "Entity ID")
+    ),
+    responses(
+        (status = 204, description = "Entity deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn delete_entity_handler(
     State(state): State<Arc<AgentState>>,
@@ -186,6 +223,18 @@ pub async fn delete_entity_handler(
 }
 
 /// GET /api/v1/entities/:type - List entities of type.
+#[utoipa::path(
+    get,
+    path = "/api/v1/entities/{type}",
+    tag = "entities",
+    params(
+        ("type" = String, Path, description = "Entity type")
+    ),
+    responses(
+        (status = 200, description = "List of entities", body = ListEntitiesResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn list_entities_handler(
     State(state): State<Arc<AgentState>>,
@@ -209,6 +258,16 @@ pub async fn list_entities_handler(
 }
 
 /// POST /api/v1/entities/batch - Batch upsert.
+#[utoipa::path(
+    post,
+    path = "/api/v1/entities/batch",
+    tag = "entities",
+    request_body = BatchUpsertRequest,
+    responses(
+        (status = 200, description = "Batch upsert result", body = BatchUpsertResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn batch_upsert_handler(
     State(state): State<Arc<AgentState>>,
@@ -232,6 +291,15 @@ pub async fn batch_upsert_handler(
 }
 
 /// Debug endpoint to check DataStore stats.
+#[utoipa::path(
+    get,
+    path = "/debug/datastore",
+    tag = "entities",
+    responses(
+        (status = 200, description = "DataStore statistics")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state))]
 pub async fn debug_datastore(
     State(state): State<Arc<AgentState>>,

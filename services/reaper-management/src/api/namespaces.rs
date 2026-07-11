@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{delete, get},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -26,34 +26,20 @@ use crate::{
 };
 
 /// Build namespace routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // Namespace CRUD
-        .route(
-            "/orgs/{org}/namespaces",
-            get(list_namespaces).post(create_namespace),
-        )
-        .route(
-            "/orgs/{org}/namespaces/{namespace}",
-            get(get_namespace)
-                .put(update_namespace)
-                .delete(delete_namespace),
-        )
+        .routes(routes!(list_namespaces, create_namespace))
+        .routes(routes!(get_namespace, update_namespace, delete_namespace))
         // Namespace tree view
-        .route("/orgs/{org}/namespaces/tree", get(get_namespace_tree))
+        .routes(routes!(get_namespace_tree))
         // Agent subscriptions
-        .route(
-            "/orgs/{org}/agents/{agent_id}/subscriptions",
-            get(list_agent_subscriptions).post(create_agent_subscription),
-        )
-        .route(
-            "/orgs/{org}/agents/{agent_id}/subscriptions/{namespace_id}",
-            delete(delete_agent_subscription),
-        )
+        .routes(routes!(list_agent_subscriptions, create_agent_subscription))
+        .routes(routes!(delete_agent_subscription))
 }
 
 /// Namespace summary for API responses
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct NamespaceSummary {
     pub id: Uuid,
     pub org_id: Uuid,
@@ -85,14 +71,14 @@ impl From<Namespace> for NamespaceSummary {
 }
 
 /// Response for listing namespaces
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListNamespacesResponse {
     pub namespaces: Vec<NamespaceSummary>,
     pub total: usize,
 }
 
 /// Request to create a namespace
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateNamespaceRequest {
     pub slug: String,
     pub display_name: Option<String>,
@@ -103,7 +89,7 @@ pub struct CreateNamespaceRequest {
 }
 
 /// Request to update a namespace
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateNamespaceRequest {
     pub display_name: Option<String>,
     pub description: Option<String>,
@@ -112,16 +98,19 @@ pub struct UpdateNamespaceRequest {
 }
 
 /// Response for namespace tree
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct NamespaceTreeResponse {
     pub roots: Vec<NamespaceTreeNode>,
     pub total: usize,
 }
 
 /// Tree node for response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct NamespaceTreeNode {
     pub namespace: NamespaceSummary,
+    // Self-referential: stop utoipa's schema generator from expanding the
+    // subtree inline (which recurses forever) — it emits a `$ref` instead.
+    #[schema(no_recursion)]
     pub children: Vec<NamespaceTreeNode>,
 }
 
@@ -135,7 +124,7 @@ impl From<NamespaceTree> for NamespaceTreeNode {
 }
 
 /// Subscription summary for API responses
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SubscriptionSummary {
     pub agent_id: Uuid,
     pub namespace_id: Uuid,
@@ -145,14 +134,14 @@ pub struct SubscriptionSummary {
 }
 
 /// Response for listing subscriptions
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListSubscriptionsResponse {
     pub subscriptions: Vec<SubscriptionSummary>,
     pub total: usize,
 }
 
 /// Request to create a subscription
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateSubscriptionRequest {
     pub namespace_id: Uuid,
     #[serde(default = "default_include_children")]
@@ -166,6 +155,18 @@ fn default_include_children() -> bool {
 // ===== Namespace Handlers =====
 
 /// List namespaces for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of namespaces", body = ListNamespacesResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_namespaces(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -197,6 +198,18 @@ async fn list_namespaces(
 }
 
 /// Get namespace tree for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/tree",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Namespace tree", body = NamespaceTreeResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_namespace_tree(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -226,6 +239,19 @@ async fn get_namespace_tree(
 }
 
 /// Get a specific namespace
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{namespace}",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Namespace details", body = NamespaceSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_namespace(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -263,6 +289,19 @@ async fn get_namespace(
 }
 
 /// Create a new namespace
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateNamespaceRequest,
+    responses(
+        (status = 201, description = "Namespace created", body = NamespaceSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_namespace(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -325,6 +364,20 @@ async fn create_namespace(
 }
 
 /// Update a namespace
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/namespaces/{namespace}",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace ID or slug")
+    ),
+    request_body = UpdateNamespaceRequest,
+    responses(
+        (status = 200, description = "Namespace updated", body = NamespaceSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_namespace(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -380,6 +433,19 @@ async fn update_namespace(
 }
 
 /// Delete a namespace
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/namespaces/{namespace}",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace ID or slug")
+    ),
+    responses(
+        (status = 204, description = "Namespace deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_namespace(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -423,6 +489,19 @@ async fn delete_namespace(
 // ===== Subscription Handlers =====
 
 /// List subscriptions for an agent
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents/{agent_id}/subscriptions",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "List of agent subscriptions", body = ListSubscriptionsResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_agent_subscriptions(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -478,6 +557,20 @@ async fn list_agent_subscriptions(
 }
 
 /// Create a subscription for an agent
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/agents/{agent_id}/subscriptions",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    request_body = CreateSubscriptionRequest,
+    responses(
+        (status = 201, description = "Subscription created", body = SubscriptionSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_agent_subscription(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -539,6 +632,20 @@ async fn create_agent_subscription(
 }
 
 /// Delete a subscription for an agent
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/agents/{agent_id}/subscriptions/{namespace_id}",
+    tag = "namespaces",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID"),
+        ("namespace_id" = Uuid, Path, description = "Namespace ID")
+    ),
+    responses(
+        (status = 204, description = "Subscription deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_agent_subscription(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

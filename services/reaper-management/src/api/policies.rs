@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -25,29 +25,14 @@ use crate::{
 };
 
 /// Build policy routes (nested under orgs)
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/orgs/{org}/policies",
-            get(list_policies).post(create_policy),
-        )
-        .route(
-            "/orgs/{org}/policies/validate",
-            axum::routing::post(validate_policy_content),
-        )
-        .route(
-            "/orgs/{org}/policies/{policy}",
-            get(get_policy).put(update_policy).delete(delete_policy),
-        )
-        .route(
-            "/orgs/{org}/policies/{policy}/validate",
-            axum::routing::post(validate_policy),
-        )
-        .route("/orgs/{org}/policies/{policy}/versions", get(list_versions))
-        .route(
-            "/orgs/{org}/policies/{policy}/versions/{version}",
-            get(get_version),
-        )
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(list_policies, create_policy))
+        .routes(routes!(validate_policy_content))
+        .routes(routes!(get_policy, update_policy, delete_policy))
+        .routes(routes!(validate_policy))
+        .routes(routes!(list_versions))
+        .routes(routes!(get_version))
 }
 
 /// Query parameters for listing policies
@@ -80,7 +65,7 @@ pub struct CreatePolicyRequest {
 }
 
 /// Request to update a policy
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdatePolicyRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -90,13 +75,13 @@ pub struct UpdatePolicyRequest {
 }
 
 /// Response for listing policy versions
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListVersionsResponse {
     pub versions: Vec<PolicyVersionSummary>,
 }
 
 /// Summary of a policy version (without full content)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PolicyVersionSummary {
     pub version: i32,
     pub content_hash: String,
@@ -105,6 +90,18 @@ pub struct PolicyVersionSummary {
 }
 
 /// List policies for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/policies",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of policies")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_policies(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -131,6 +128,18 @@ async fn list_policies(
 }
 
 /// Create a new policy
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/policies",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 201, description = "Policy created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -180,6 +189,19 @@ async fn create_policy(
 }
 
 /// Get a policy by ID or name
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/policies/{policy}",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("policy" = String, Path, description = "Policy ID or name")
+    ),
+    responses(
+        (status = 200, description = "Policy details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -194,6 +216,20 @@ async fn get_policy(
 }
 
 /// Update a policy
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/policies/{policy}",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("policy" = String, Path, description = "Policy ID or name")
+    ),
+    request_body = UpdatePolicyRequest,
+    responses(
+        (status = 200, description = "Policy updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -221,6 +257,19 @@ async fn update_policy(
 }
 
 /// Delete a policy
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/policies/{policy}",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("policy" = String, Path, description = "Policy ID or name")
+    ),
+    responses(
+        (status = 204, description = "Policy deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -241,6 +290,19 @@ async fn delete_policy(
 }
 
 /// List versions of a policy
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/policies/{policy}/versions",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("policy" = String, Path, description = "Policy ID or name")
+    ),
+    responses(
+        (status = 200, description = "List of policy versions", body = ListVersionsResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_versions(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -269,6 +331,20 @@ async fn list_versions(
 }
 
 /// Get a specific version of a policy
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/policies/{policy}/versions/{version}",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("policy" = String, Path, description = "Policy ID or name"),
+        ("version" = i32, Path, description = "Policy version number")
+    ),
+    responses(
+        (status = 200, description = "Policy version details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_version(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -296,6 +372,19 @@ pub struct ValidatePolicyContentRequest {
 }
 
 /// Validate an existing policy by ID
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/policies/{policy}/validate",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("policy" = String, Path, description = "Policy ID or name")
+    ),
+    responses(
+        (status = 200, description = "Policy validation result")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn validate_policy(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -316,6 +405,18 @@ async fn validate_policy(
 }
 
 /// Validate policy content before saving (preview)
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/policies/validate",
+    tag = "policies",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Policy validation result")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn validate_policy_content(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

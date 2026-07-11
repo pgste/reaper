@@ -23,6 +23,18 @@ use crate::{
 use super::types::{CheckRollbackResponse, RollbackConfigResponse};
 
 /// Get org-level auto-rollback configuration
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/auto-rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Org-level auto-rollback configuration")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_rollback_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -50,6 +62,19 @@ pub async fn get_rollback_config(
 }
 
 /// Update org-level auto-rollback configuration
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/auto-rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "Updated auto-rollback configuration"),
+        (status = 400, description = "Invalid configuration value")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_rollback_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -109,6 +134,20 @@ pub async fn update_rollback_config(
 }
 
 /// Get namespace-level auto-rollback configuration
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{namespace}/auto-rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace slug")
+    ),
+    responses(
+        (status = 200, description = "Namespace-level auto-rollback configuration"),
+        (status = 404, description = "Namespace not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_namespace_rollback_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -140,6 +179,21 @@ pub async fn get_namespace_rollback_config(
 }
 
 /// Update namespace-level auto-rollback configuration
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{namespace}/auto-rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace slug")
+    ),
+    responses(
+        (status = 200, description = "Updated namespace auto-rollback configuration"),
+        (status = 400, description = "Invalid configuration value"),
+        (status = 404, description = "Namespace not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_namespace_rollback_config(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -203,6 +257,20 @@ pub async fn update_namespace_rollback_config(
 }
 
 /// Check if auto-rollback should be triggered for a rollout
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/rollouts/{rollout_id}/check-rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Auto-rollback trigger evaluation"),
+        (status = 404, description = "Rollout not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn check_rollback_trigger(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

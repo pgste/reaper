@@ -1,6 +1,7 @@
 //! Request and response types for user authentication and management.
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
 };
 
 /// Request to sign up a new user
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SignupRequest {
     pub email: String,
     pub password: String,
@@ -27,7 +28,7 @@ pub struct SignupResponse {
 }
 
 /// Request to log in
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
@@ -93,33 +94,33 @@ pub struct OrgMembership {
 }
 
 /// Request to change password
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
 }
 
 /// Request to request a password reset
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RequestPasswordResetRequest {
     pub email: String,
 }
 
 /// Request to reset password with token
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ResetPasswordRequest {
     pub token: String,
     pub new_password: String,
 }
 
 /// Request to verify email
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct VerifyEmailRequest {
     pub token: String,
 }
 
 /// Response for verification status
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VerifyEmailResponse {
     pub verified: bool,
     pub message: String,

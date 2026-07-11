@@ -20,6 +20,20 @@ use super::types::{
 };
 
 /// Start a new rollout (or dry-run)
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/rollout",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 201, description = "Rollout started"),
+        (status = 200, description = "Dry-run result")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn start_rollout(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -97,6 +111,18 @@ pub async fn start_rollout(
 }
 
 /// List rollouts
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/rollouts",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of rollouts")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_rollouts(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -124,6 +150,20 @@ pub async fn list_rollouts(
 }
 
 /// Get rollout details
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/rollouts/{rollout_id}",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Rollout details"),
+        (status = 404, description = "Rollout not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_rollout(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -159,6 +199,20 @@ pub async fn get_rollout(
 }
 
 /// Approve next wave
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/rollouts/{rollout_id}/approve",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Wave approved"),
+        (status = 404, description = "Rollout not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn approve_wave(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -191,6 +245,20 @@ pub async fn approve_wave(
 }
 
 /// Cancel a rollout
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/rollouts/{rollout_id}/cancel",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Rollout cancelled"),
+        (status = 404, description = "Rollout not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn cancel_rollout(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -224,6 +292,20 @@ pub async fn cancel_rollout(
 }
 
 /// Rollback a namespace to previous bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{namespace}/rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace slug")
+    ),
+    responses(
+        (status = 201, description = "Rollback rollout started"),
+        (status = 404, description = "Namespace or bundle not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn rollback_namespace(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -275,6 +357,19 @@ pub async fn rollback_namespace(
 }
 
 /// Rollback entire org to previous bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/rollback",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 201, description = "Rollback rollout started"),
+        (status = 404, description = "Bundle not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn rollback_org(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

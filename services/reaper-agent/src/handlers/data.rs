@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
+use utoipa::ToSchema;
 
 use crate::state::AgentState;
 
@@ -20,14 +21,14 @@ use crate::state::AgentState;
 // ============================================================================
 
 /// Request to load entity data from JSON.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoadDataRequest {
     /// Raw JSON string with entities
     pub data: String,
 }
 
 /// Request to synchronize entity data from a management server.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SyncDataRequest {
     /// List of entities to sync
     pub entities: Vec<SyncEntityData>,
@@ -39,20 +40,21 @@ pub struct SyncDataRequest {
 }
 
 /// Entity data for sync endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SyncEntityData {
     /// Unique entity identifier
     pub id: String,
     /// Entity type (e.g., "User", "Resource", "Group")
     pub entity_type: String,
     /// Entity attributes as key-value pairs
+    #[schema(value_type = Object)]
     pub attributes: serde_json::Map<String, serde_json::Value>,
     /// Optional parent entity ID (for hierarchies)
     pub parent: Option<String>,
 }
 
 /// Source information for tracking where the sync came from.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[allow(dead_code)]
 pub struct SyncSource {
     /// Source type: "sync-client", "api", "file"
@@ -67,7 +69,7 @@ pub struct SyncSource {
 }
 
 /// Response from sync operation.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct SyncDataResponse {
     pub status: String,
     pub inserted: usize,
@@ -81,6 +83,16 @@ pub struct SyncDataResponse {
 // ============================================================================
 
 /// Load entity data (JSON) into the agent's DataStore.
+#[utoipa::path(
+    post,
+    path = "/api/v1/data",
+    tag = "data",
+    request_body = LoadDataRequest,
+    responses(
+        (status = 200, description = "Entities loaded into the DataStore")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn load_data_handler(
     State(state): State<Arc<AgentState>>,
@@ -115,6 +127,15 @@ pub async fn load_data_handler(
 /// Load entity data using streaming for memory efficiency.
 ///
 /// Accepts file content as raw bytes in request body.
+#[utoipa::path(
+    post,
+    path = "/api/v1/data/stream",
+    tag = "data",
+    responses(
+        (status = 200, description = "Entities streamed into the DataStore")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, body))]
 pub async fn load_data_stream_handler(
     State(state): State<Arc<AgentState>>,
@@ -190,6 +211,16 @@ pub async fn load_data_stream_handler(
 /// POST /api/v1/data/sync
 ///
 /// This endpoint supports bulk entity synchronization with optional replace-all semantics.
+#[utoipa::path(
+    post,
+    path = "/api/v1/data/sync",
+    tag = "data",
+    request_body = SyncDataRequest,
+    responses(
+        (status = 200, description = "Sync result", body = SyncDataResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn sync_data(
     State(state): State<Arc<AgentState>>,
@@ -370,7 +401,7 @@ mod tests {
 
 /// A published datastore version from the control plane
 /// (`GET /orgs/{o}/namespaces/{n}/datastore/versions/{v}`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct DeployDataVersionRequest {
     /// Monotonic version number from the control plane.
     pub version: i64,
@@ -400,6 +431,16 @@ fn default_replace() -> bool {
 /// preserves insertion order and would make the hash depend on transport
 /// ordering. A corrupt or tampered payload is rejected like a bad WAL
 /// segment; version regressions are rejected to keep sync monotonic.
+#[utoipa::path(
+    post,
+    path = "/api/v1/data/deploy-version",
+    tag = "data",
+    request_body = DeployDataVersionRequest,
+    responses(
+        (status = 200, description = "Verified data version deployed, already current, or a conflict")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn deploy_data_version(
     State(state): State<Arc<AgentState>>,
     Json(payload): Json<DeployDataVersionRequest>,
@@ -518,12 +559,22 @@ pub async fn deploy_data_version(
 /// still on the control plane's current version WITHOUT shipping the
 /// document. Match -> staleness clock refreshes. Version/checksum mismatch
 /// -> 409, telling the sync client to push a full deploy-version.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ConfirmDataVersionRequest {
     pub version: i64,
     pub checksum: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/data/confirm-version",
+    tag = "data",
+    request_body = ConfirmDataVersionRequest,
+    responses(
+        (status = 200, description = "Replica confirmed on the control plane's current version")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn confirm_data_version(
     State(state): State<Arc<AgentState>>,
     Json(payload): Json<ConfirmDataVersionRequest>,
@@ -562,7 +613,7 @@ pub async fn confirm_data_version(
 }
 
 /// One delta from the control plane's change stream.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct DataDelta {
     pub op: String, // "upsert" | "delete"
     pub entity_id: String,
@@ -571,7 +622,7 @@ pub struct DataDelta {
 }
 
 /// A contiguous slice of the change stream.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ApplyDeltasRequest {
     /// The seq the replica must currently be at (exclusive start).
     pub from_seq: i64,
@@ -588,6 +639,16 @@ pub struct ApplyDeltasRequest {
 /// last-state upserts/tombstones — idempotent under at-least-once
 /// delivery, proven equivalent to a fresh rebuild by
 /// delta_sync_differential_tests.
+#[utoipa::path(
+    post,
+    path = "/api/v1/data/apply-deltas",
+    tag = "data",
+    request_body = ApplyDeltasRequest,
+    responses(
+        (status = 200, description = "Contiguous delta batch applied")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn apply_data_deltas(
     State(state): State<Arc<AgentState>>,
     Json(payload): Json<ApplyDeltasRequest>,

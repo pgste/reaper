@@ -67,6 +67,17 @@ ignore = [
     # better option short of replacing tabled — not warranted for a build-time
     # dep. Revisit if tabled migrates (e.g. to manyhow) or we swap table crates.
     "RUSTSEC-2026-0173",
+
+    # RUSTSEC-2024-0436: paste is UNMAINTAINED (author archived the repo Dec 2024)
+    # — a maintenance signal, NOT a vulnerability (no CVE). It is a BUILD-TIME
+    # proc-macro helper pulled ONLY by utoipa-axum 0.2 (the OpenAPI contract
+    # generator added in Plan 07); it emits no runtime code and is not in any
+    # shipped binary. utoipa-axum uses paste in its `routes!` macro and every
+    # published version depends on it, so there is no drop-in fix short of
+    # replacing utoipa-axum. paste is feature-complete and stable (dtolnay
+    # archived it precisely because it was "done"). Revisit if utoipa-axum moves
+    # off paste. See docs/security/VULN_RESPONSE.md.
+    "RUSTSEC-2024-0436",
 ]
 
 [licenses]

@@ -30,6 +30,15 @@ use super::types::{
 };
 
 /// Sign up a new user and create their first organization
+#[utoipa::path(
+    post,
+    path = "/auth/signup",
+    tag = "users",
+    request_body = SignupRequest,
+    responses(
+        (status = 201, description = "User and organization created")
+    )
+)]
 pub async fn signup(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -158,6 +167,15 @@ pub async fn signup(
 }
 
 /// Log in with email and password
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    tag = "users",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login succeeded")
+    )
+)]
 pub async fn login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -249,6 +267,15 @@ pub async fn login(
 }
 
 /// Log out (invalidate session)
+#[utoipa::path(
+    post,
+    path = "/auth/logout",
+    tag = "users",
+    responses(
+        (status = 204, description = "Logged out")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -296,6 +323,15 @@ pub async fn logout(
 }
 
 /// Get current user info
+#[utoipa::path(
+    get,
+    path = "/auth/me",
+    tag = "users",
+    responses(
+        (status = 200, description = "Current user and organizations")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_current_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -336,6 +372,16 @@ pub async fn get_current_user(
 }
 
 /// Change password (requires current password)
+#[utoipa::path(
+    post,
+    path = "/auth/password/change",
+    tag = "users",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 204, description = "Password changed")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn change_password(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -390,6 +436,15 @@ pub async fn change_password(
 }
 
 /// Request a password reset (sends email - not implemented yet)
+#[utoipa::path(
+    post,
+    path = "/auth/password/reset-request",
+    tag = "users",
+    request_body = RequestPasswordResetRequest,
+    responses(
+        (status = 202, description = "Password reset requested if the email exists")
+    )
+)]
 pub async fn request_password_reset(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -448,6 +503,15 @@ pub async fn request_password_reset(
 }
 
 /// Reset password with token
+#[utoipa::path(
+    post,
+    path = "/auth/password/reset",
+    tag = "users",
+    request_body = ResetPasswordRequest,
+    responses(
+        (status = 204, description = "Password reset")
+    )
+)]
 pub async fn reset_password(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

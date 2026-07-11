@@ -21,6 +21,18 @@ use crate::{
 use super::types::{ConnectionSummary, ListConnectionsResponse};
 
 /// List OAuth connections for an org
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/oauth/connections",
+    tag = "oauth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of OAuth connections", body = ListConnectionsResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub(super) async fn list_connections(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -69,6 +81,19 @@ pub(super) async fn list_connections(
 }
 
 /// Get a specific OAuth connection
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/oauth/connections/{provider}",
+    tag = "oauth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("provider" = String, Path, description = "OAuth provider name")
+    ),
+    responses(
+        (status = 200, description = "OAuth connection details", body = ConnectionSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub(super) async fn get_connection(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -115,6 +140,18 @@ pub(super) async fn get_connection(
 }
 
 /// Create OAuth connection manually (for testing/admin)
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/oauth/connections",
+    tag = "oauth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "OAuth connection created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub(super) async fn create_connection(
     State(_state): State<Arc<AppState>>,
     RequireAuth(_auth_user): RequireAuth,
@@ -127,6 +164,19 @@ pub(super) async fn create_connection(
 }
 
 /// Delete OAuth connection
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/oauth/connections/{provider}",
+    tag = "oauth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("provider" = String, Path, description = "OAuth provider name")
+    ),
+    responses(
+        (status = 204, description = "OAuth connection deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub(super) async fn delete_connection(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,

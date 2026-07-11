@@ -5,11 +5,12 @@
 
 use axum::{
     extract::{Path, Query, State},
-    routing::get,
-    Json, Router,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -19,24 +20,18 @@ use crate::{
 };
 
 /// Build landscape routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // Organization landscape
-        .route("/orgs/{org}/landscape", get(get_landscape))
+        .routes(routes!(get_landscape))
         // Namespace landscape
-        .route(
-            "/orgs/{org}/namespaces/{namespace}/landscape",
-            get(get_namespace_landscape),
-        )
+        .routes(routes!(get_namespace_landscape))
         // Organization metrics
-        .route("/orgs/{org}/metrics", get(get_org_metrics))
+        .routes(routes!(get_org_metrics))
         // Agent metrics
-        .route(
-            "/orgs/{org}/agents/{agent_id}/metrics",
-            get(get_agent_metrics),
-        )
+        .routes(routes!(get_agent_metrics))
         // Dashboard (combined view)
-        .route("/orgs/{org}/dashboard", get(get_dashboard))
+        .routes(routes!(get_dashboard))
 }
 
 // ==================== Request/Response Types ====================
@@ -48,7 +43,7 @@ pub struct LandscapeQuery {
     pub include_inactive: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LandscapeResponse {
     pub org_id: Uuid,
     pub namespace_id: Option<Uuid>,
@@ -58,7 +53,7 @@ pub struct LandscapeResponse {
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SummaryResponse {
     pub total_agents: usize,
     pub healthy: usize,
@@ -67,7 +62,7 @@ pub struct SummaryResponse {
     pub pinned: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AgentEntryResponse {
     pub id: Uuid,
     pub name: String,
@@ -81,7 +76,7 @@ pub struct AgentEntryResponse {
     pub metrics: Option<AgentMetricsResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AgentMetricsResponse {
     pub requests_total: u64,
     pub requests_per_second: f64,
@@ -91,7 +86,7 @@ pub struct AgentMetricsResponse {
     pub uptime_seconds: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BundleDistributionResponse {
     pub bundle_id: Uuid,
     pub bundle_name: String,
@@ -101,7 +96,7 @@ pub struct BundleDistributionResponse {
     pub is_promoted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OrgMetricsResponse {
     pub org_id: Uuid,
     pub total_agents: usize,
@@ -117,13 +112,13 @@ pub struct OrgMetricsResponse {
     pub period_end: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SingleAgentMetricsResponse {
     pub agent_id: Uuid,
     pub metrics: Option<DetailedAgentMetrics>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DetailedAgentMetrics {
     pub requests_total: u64,
     pub requests_per_second: f64,
@@ -143,7 +138,7 @@ pub struct DetailedAgentMetrics {
     pub data_stale: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DashboardResponse {
     pub summary: SummaryResponse,
     pub metrics: OrgMetricsResponse,
@@ -152,7 +147,7 @@ pub struct DashboardResponse {
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RecentRolloutResponse {
     pub id: Uuid,
     pub bundle_name: String,
@@ -161,7 +156,7 @@ pub struct RecentRolloutResponse {
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AlertResponse {
     pub severity: String,
     pub message: String,
@@ -172,6 +167,16 @@ pub struct AlertResponse {
 // ==================== Handlers ====================
 
 /// Get landscape view for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/landscape",
+    tag = "landscape",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Organization landscape view", body = LandscapeResponse)),
+    security(("bearer_jwt" = []))
+)]
 async fn get_landscape(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -199,6 +204,17 @@ async fn get_landscape(
 }
 
 /// Get landscape view for a namespace
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{namespace}/landscape",
+    tag = "landscape",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Namespace landscape view", body = LandscapeResponse)),
+    security(("bearer_jwt" = []))
+)]
 async fn get_namespace_landscape(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -234,6 +250,16 @@ async fn get_namespace_landscape(
 }
 
 /// Get aggregated metrics for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/metrics",
+    tag = "landscape",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Aggregated organization metrics", body = OrgMetricsResponse)),
+    security(("bearer_jwt" = []))
+)]
 async fn get_org_metrics(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -273,6 +299,17 @@ async fn get_org_metrics(
 }
 
 /// Get metrics for a specific agent
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents/{agent_id}/metrics",
+    tag = "landscape",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses((status = 200, description = "Metrics for a specific agent", body = SingleAgentMetricsResponse)),
+    security(("bearer_jwt" = []))
+)]
 async fn get_agent_metrics(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -329,6 +366,16 @@ async fn get_agent_metrics(
 }
 
 /// Get dashboard view (combined summary, metrics, and alerts)
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/dashboard",
+    tag = "landscape",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses((status = 200, description = "Combined dashboard view", body = DashboardResponse)),
+    security(("bearer_jwt" = []))
+)]
 async fn get_dashboard(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

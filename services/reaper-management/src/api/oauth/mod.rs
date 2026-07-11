@@ -8,11 +8,9 @@ mod github;
 pub(crate) mod helpers;
 mod types;
 
-use axum::{
-    routing::{get, post},
-    Router,
-};
 use std::sync::Arc;
+
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::state::AppState;
 
@@ -23,24 +21,21 @@ pub use types::{
 };
 
 /// Build OAuth routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // GitHub OAuth
-        .route("/auth/github/authorize", get(github::github_authorize))
-        .route("/auth/github/callback", get(github::github_callback))
+        .routes(routes!(github::github_authorize))
+        .routes(routes!(github::github_callback))
         // OAuth connections management
-        .route(
-            "/orgs/{org}/oauth/connections",
-            get(connections::list_connections).post(connections::create_connection),
-        )
-        .route(
-            "/orgs/{org}/oauth/connections/{provider}",
-            get(connections::get_connection).delete(connections::delete_connection),
-        )
+        .routes(routes!(
+            connections::list_connections,
+            connections::create_connection
+        ))
+        .routes(routes!(
+            connections::get_connection,
+            connections::delete_connection
+        ))
         // GitHub repo listing
-        .route("/orgs/{org}/github/repos", get(github::list_github_repos))
-        .route(
-            "/orgs/{org}/sources/github",
-            post(github::create_source_from_github),
-        )
+        .routes(routes!(github::list_github_repos))
+        .routes(routes!(github::create_source_from_github))
 }

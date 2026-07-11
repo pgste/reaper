@@ -25,6 +25,14 @@ use super::types::{
 };
 
 /// Initiate GitHub OAuth flow
+#[utoipa::path(
+    get,
+    path = "/auth/github/authorize",
+    tag = "oauth",
+    responses(
+        (status = 307, description = "Redirect to GitHub authorization page")
+    )
+)]
 pub(super) async fn github_authorize(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -77,6 +85,14 @@ pub(super) async fn github_authorize(
 }
 
 /// Handle GitHub OAuth callback
+#[utoipa::path(
+    get,
+    path = "/auth/github/callback",
+    tag = "oauth",
+    responses(
+        (status = 307, description = "Redirect back to the application after connecting")
+    )
+)]
 pub(super) async fn github_callback(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -224,6 +240,18 @@ pub(super) async fn github_callback(
 }
 
 /// List GitHub repositories for the connected account
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/github/repos",
+    tag = "oauth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of GitHub repositories", body = Vec<GitHubRepo>)
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub(super) async fn list_github_repos(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,
@@ -265,6 +293,19 @@ pub(super) async fn list_github_repos(
 }
 
 /// Create a policy source from a GitHub repository
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/sources/github",
+    tag = "oauth",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateSourceFromGitHubRequest,
+    responses(
+        (status = 201, description = "Policy source created from GitHub repository")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub(super) async fn create_source_from_github(
     State(state): State<Arc<AppState>>,
     RequireAuth(auth_user): RequireAuth,

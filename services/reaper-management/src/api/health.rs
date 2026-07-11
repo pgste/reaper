@@ -15,17 +15,18 @@ use axum::{
     http::StatusCode,
     response::{Json, Response},
     routing::get,
-    Router,
 };
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::metrics;
 use crate::state::AppState;
 
 /// Health response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -34,7 +35,7 @@ pub struct HealthResponse {
 }
 
 /// Component health status
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ComponentHealth {
     pub status: HealthStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,7 +47,7 @@ pub struct ComponentHealth {
 }
 
 /// Health status enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
     Healthy,
@@ -55,26 +56,26 @@ pub enum HealthStatus {
 }
 
 /// Liveness response (minimal)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LivenessResponse {
     pub status: String,
 }
 
 /// Readiness response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadinessResponse {
     pub status: String,
     pub checks: ReadinessChecks,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadinessChecks {
     pub database: bool,
     pub storage: bool,
 }
 
 /// Deep health response with all components
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DeepHealthResponse {
     pub status: HealthStatus,
     pub version: String,
@@ -83,7 +84,7 @@ pub struct DeepHealthResponse {
     pub checks_duration_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ComponentsHealth {
     pub database: ComponentHealth,
     pub storage: ComponentHealth,
@@ -91,27 +92,42 @@ pub struct ComponentsHealth {
 }
 
 /// Metrics response (JSON format)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MetricsResponse {
     pub uptime_seconds: i64,
     pub database_type: String,
     pub event_subscribers: usize,
 }
 
-/// Build health routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/health", get(health_handler))
-        .route("/health/live", get(liveness_handler))
-        .route("/health/ready", get(readiness_handler))
-        .route("/health/deep", get(deep_health_handler))
+/// Build health routes.
+///
+/// `/live` and `/ready` are short-form aliases of `/health/live` and
+/// `/health/ready` for orchestrator probes; they are registered as plain
+/// routes (not in the OpenAPI contract) and are listed in the parity gate's
+/// documented alias allowlist.
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(health_handler))
+        .routes(routes!(liveness_handler))
+        .routes(routes!(readiness_handler))
+        .routes(routes!(deep_health_handler))
+        .routes(routes!(metrics_handler))
+        .routes(routes!(prometheus_metrics_handler))
+        // Short-form probe aliases (intentionally undocumented; see allowlist).
         .route("/live", get(liveness_handler))
         .route("/ready", get(readiness_handler))
-        .route("/metrics", get(metrics_handler))
-        .route("/metrics/prometheus", get(prometheus_metrics_handler))
 }
 
 /// Health check handler (standard health check)
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "Service is healthy", body = HealthResponse),
+        (status = 503, description = "Service is unhealthy")
+    )
+)]
 async fn health_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<HealthResponse>, StatusCode> {
@@ -131,6 +147,12 @@ async fn health_handler(
 
 /// Liveness probe handler
 /// Returns 200 if the process is running, regardless of dependency status
+#[utoipa::path(
+    get,
+    path = "/health/live",
+    tag = "health",
+    responses((status = 200, description = "Process is alive", body = LivenessResponse))
+)]
 async fn liveness_handler() -> Json<LivenessResponse> {
     Json(LivenessResponse {
         status: "alive".to_string(),
@@ -139,6 +161,15 @@ async fn liveness_handler() -> Json<LivenessResponse> {
 
 /// Readiness probe handler
 /// Returns 200 only if the service can accept traffic
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    tag = "health",
+    responses(
+        (status = 200, description = "Service can accept traffic", body = ReadinessResponse),
+        (status = 503, description = "Service is not ready")
+    )
+)]
 async fn readiness_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ReadinessResponse>, StatusCode> {
@@ -167,6 +198,15 @@ async fn readiness_handler(
 }
 
 /// Deep health check with all components
+#[utoipa::path(
+    get,
+    path = "/health/deep",
+    tag = "health",
+    responses(
+        (status = 200, description = "Deep health with per-component status", body = DeepHealthResponse),
+        (status = 503, description = "One or more components unhealthy")
+    )
+)]
 async fn deep_health_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DeepHealthResponse>, StatusCode> {
@@ -355,6 +395,12 @@ fn update_health_metrics(
 }
 
 /// Metrics handler (JSON format)
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "health",
+    responses((status = 200, description = "Server metrics (JSON)", body = MetricsResponse))
+)]
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> Json<MetricsResponse> {
     // Update SSE subscribers metric
     metrics::SSE_SUBSCRIBERS.set(state.event_tx.receiver_count() as f64);
@@ -367,6 +413,12 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> Json<MetricsResp
 }
 
 /// Prometheus metrics handler (text format)
+#[utoipa::path(
+    get,
+    path = "/metrics/prometheus",
+    tag = "health",
+    responses((status = 200, description = "Prometheus text-format metrics", content_type = "text/plain"))
+)]
 async fn prometheus_metrics_handler(State(state): State<Arc<AppState>>) -> Response<String> {
     // Update gauge metrics before encoding
     metrics::SSE_SUBSCRIBERS.set(state.event_tx.receiver_count() as f64);

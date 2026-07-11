@@ -7,11 +7,12 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
-    Json, Router,
+    Json,
 };
 use serde::Deserialize;
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::api::error::{ApiError, ApiResult};
@@ -66,77 +67,59 @@ pub struct ListBundlesQuery {
 }
 
 /// Request to add policies to a bundle
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AddPoliciesRequest {
     pub policy_ids: Vec<Uuid>,
 }
 
 /// Request to remove policies from a bundle
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RemovePoliciesRequest {
     pub policy_ids: Vec<Uuid>,
 }
 
 /// Build bundle routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // Bundle CRUD
-        .route("/orgs/{org}/bundles", get(list_bundles).post(create_bundle))
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}",
-            get(get_bundle).put(update_bundle).delete(delete_bundle),
-        )
+        .routes(routes!(list_bundles, create_bundle))
+        .routes(routes!(get_bundle, update_bundle, delete_bundle))
         // Bundle policies
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/policies",
-            post(add_policies).delete(remove_policies),
-        )
+        .routes(routes!(add_policies, remove_policies))
         // Bundle workflow
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/compile",
-            post(compile_bundle),
-        )
-        .route("/orgs/{org}/bundles/{bundle_id}/stage", post(stage_bundle))
+        .routes(routes!(compile_bundle))
+        .routes(routes!(stage_bundle))
         // Governed promotion (two-person control): promote/rollback OPEN a
         // pending change request; a second distinct principal approves to
         // execute. See Plan 02 step 5.
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/promote",
-            post(promote_bundle),
-        )
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/rollback",
-            post(rollback_bundle),
-        )
-        .route("/orgs/{org}/change-requests", get(list_change_requests))
-        .route(
-            "/orgs/{org}/change-requests/{cr_id}",
-            get(get_change_request),
-        )
-        .route(
-            "/orgs/{org}/change-requests/{cr_id}/approve",
-            post(approve_change_request),
-        )
-        .route(
-            "/orgs/{org}/change-requests/{cr_id}/reject",
-            post(reject_change_request),
-        )
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/deprecate",
-            post(deprecate_bundle),
-        )
+        .routes(routes!(promote_bundle))
+        .routes(routes!(rollback_bundle))
+        .routes(routes!(list_change_requests))
+        .routes(routes!(get_change_request))
+        .routes(routes!(approve_change_request))
+        .routes(routes!(reject_change_request))
+        .routes(routes!(deprecate_bundle))
         // Bundle download
-        .route(
-            "/orgs/{org}/bundles/{bundle_id}/download",
-            get(download_bundle),
-        )
+        .routes(routes!(download_bundle))
         // Get promoted bundle
-        .route("/orgs/{org}/bundles/promoted", get(get_promoted_bundle))
+        .routes(routes!(get_promoted_bundle))
         // Bundle diff/preview
-        .route("/orgs/{org}/bundles/{bundle_id}/diff", get(get_bundle_diff))
+        .routes(routes!(get_bundle_diff))
 }
 
 /// List bundles for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/bundles",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Bundles for the organization")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_bundles(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -158,6 +141,18 @@ async fn list_bundles(
 }
 
 /// Create a new bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 201, description = "Bundle created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -172,6 +167,19 @@ async fn create_bundle(
 }
 
 /// Get a specific bundle
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/bundles/{bundle_id}",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Bundle details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -185,6 +193,19 @@ async fn get_bundle(
 }
 
 /// Update a bundle
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/bundles/{bundle_id}",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Bundle updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -212,6 +233,19 @@ async fn update_bundle(
 }
 
 /// Delete a bundle
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/bundles/{bundle_id}",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 204, description = "Bundle deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -226,6 +260,20 @@ async fn delete_bundle(
 }
 
 /// Add policies to a bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/policies",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    request_body = AddPoliciesRequest,
+    responses(
+        (status = 200, description = "Policies added")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn add_policies(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -244,6 +292,20 @@ async fn add_policies(
 }
 
 /// Remove policies from a bundle
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/bundles/{bundle_id}/policies",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    request_body = RemovePoliciesRequest,
+    responses(
+        (status = 200, description = "Policies removed")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn remove_policies(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -262,6 +324,19 @@ async fn remove_policies(
 }
 
 /// Compile a bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/compile",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Bundle compiled")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn compile_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -276,6 +351,19 @@ async fn compile_bundle(
 }
 
 /// Stage a bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/stage",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Bundle staged")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn stage_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -291,7 +379,7 @@ async fn stage_bundle(
 
 /// Body for opening a promote/rollback change request. Notes are optional and
 /// carried through to the eventual promotion for the audit trail.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 pub struct OpenChangeRequest {
     #[serde(default)]
     pub notes: Option<String>,
@@ -320,6 +408,21 @@ fn transition_allowed(kind: ChangeKind, status: BundleStatus) -> bool {
 ///
 /// Either way the org is resolved tenant-safe and the bundle must belong to it
 /// (404 otherwise), and it must be in a promotable state (400 otherwise).
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/promote",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    request_body = OpenChangeRequest,
+    responses(
+        (status = 200, description = "Bundle promoted (single-control)"),
+        (status = 201, description = "Change request opened (dual-control)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn promote_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -332,6 +435,21 @@ async fn promote_bundle(
 /// Open a **rollback** change request (restore a previously-good bundle), or
 /// roll back now under single-control. Same authorization and governance as
 /// promote; only the recorded kind and the execution path differ.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/rollback",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    request_body = OpenChangeRequest,
+    responses(
+        (status = 200, description = "Bundle rolled back (single-control)"),
+        (status = 201, description = "Change request opened (dual-control)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn rollback_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -445,6 +563,18 @@ async fn execute_promotion(
 }
 
 /// List an org's promotion change requests (newest first).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/change-requests",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Promotion change requests")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_change_requests(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -460,6 +590,19 @@ async fn list_change_requests(
 }
 
 /// Get a single change request (tenant-safe: another org's id is a 404).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/change-requests/{cr_id}",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("cr_id" = Uuid, Path, description = "Change request ID")
+    ),
+    responses(
+        (status = 200, description = "Change request details")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_change_request(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -490,6 +633,19 @@ async fn get_change_request(
 ///   concurrent approvals can't both promote — the loser sees a 409;
 /// - only after the request is claimed is the bundle actually promoted (or
 ///   rolled back), and the whole decision is written to the audit log.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/change-requests/{cr_id}/approve",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("cr_id" = Uuid, Path, description = "Change request ID")
+    ),
+    responses(
+        (status = 200, description = "Change request approved and executed")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn approve_change_request(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -541,6 +697,19 @@ async fn approve_change_request(
 /// (`bundle:approve`) declining it, or the requester (`bundle:promote`)
 /// withdrawing their own — rejection is non-destructive, so either authority
 /// suffices.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/change-requests/{cr_id}/reject",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("cr_id" = Uuid, Path, description = "Change request ID")
+    ),
+    responses(
+        (status = 200, description = "Change request rejected")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn reject_change_request(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -590,6 +759,19 @@ async fn reject_change_request(
 }
 
 /// Deprecate a bundle
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/bundles/{bundle_id}/deprecate",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Bundle deprecated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn deprecate_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -604,6 +786,19 @@ async fn deprecate_bundle(
 }
 
 /// Download a compiled bundle
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/bundles/{bundle_id}/download",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Compiled bundle artifact", content_type = "application/octet-stream")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn download_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -671,6 +866,18 @@ fn bundle_content_disposition(name: &str, bundle_id: &Uuid) -> String {
 }
 
 /// Get the currently promoted bundle
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/bundles/promoted",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Currently promoted bundle (if any)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_promoted_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -714,7 +921,7 @@ pub struct BundleDiffQuery {
 }
 
 /// Policy info for diff response
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct PolicyDiffInfo {
     pub id: Uuid,
     pub name: String,
@@ -723,7 +930,7 @@ pub struct PolicyDiffInfo {
 }
 
 /// Policy change info for modified policies
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct PolicyChange {
     pub id: Uuid,
     pub name: String,
@@ -735,7 +942,7 @@ pub struct PolicyChange {
 }
 
 /// Bundle diff response
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct BundleDiffResponse {
     /// Base bundle info
     pub base_bundle: BundleSummary,
@@ -753,7 +960,7 @@ pub struct BundleDiffResponse {
     pub summary: DiffSummary,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct BundleSummary {
     pub id: Uuid,
     pub name: String,
@@ -761,7 +968,7 @@ pub struct BundleSummary {
     pub policy_count: i32,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, ToSchema)]
 pub struct DiffSummary {
     pub total_added: u32,
     pub total_removed: u32,
@@ -770,6 +977,19 @@ pub struct DiffSummary {
 }
 
 /// Get diff between two bundles
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/bundles/{bundle_id}/diff",
+    tag = "bundles",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("bundle_id" = Uuid, Path, description = "Bundle ID")
+    ),
+    responses(
+        (status = 200, description = "Diff between two bundles", body = BundleDiffResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_bundle_diff(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

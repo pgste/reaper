@@ -33,6 +33,10 @@ tower = { workspace = true }
 tower-http = { version = "0.7", features = ["catch-panic"] }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+# OpenAPI 3.1 contract (Plan 07). Spec assembly only — the served enforcement
+# router is unchanged; #[utoipa::path] attributes are compile-time metadata.
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"

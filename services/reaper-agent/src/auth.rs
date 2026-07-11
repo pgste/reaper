@@ -42,7 +42,10 @@ const JWT_CACHE_MAX: usize = 4096;
 
 /// Routes that must stay reachable without credentials (orchestrator probes).
 fn is_exempt(path: &str) -> bool {
-    matches!(path, "/health" | "/ready" | "/live" | "/metrics") || path.starts_with("/metrics/")
+    matches!(
+        path,
+        "/health" | "/ready" | "/live" | "/metrics" | "/openapi.json"
+    ) || path.starts_with("/metrics/")
 }
 
 /// The read-only data-plane hot path: policy evaluation. Optionally left open

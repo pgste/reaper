@@ -116,6 +116,15 @@ fn audit_gate(state: &AgentState) -> Result<(), StatusCode> {
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/messages",
+    tag = "evaluation",
+    responses(
+        (status = 200, description = "Policy decision")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn evaluate_policy(
     State(state): State<Arc<AgentState>>,
     Json(mut payload): Json<EvaluateRequest>,
@@ -503,6 +512,15 @@ pub async fn evaluate_policy(
 ///
 /// No `#[instrument]`: this is the latency-critical path, so we do not pay for
 /// per-request span construction (see `evaluate_policy`).
+#[utoipa::path(
+    post,
+    path = "/api/v1/fast-messages",
+    tag = "evaluation",
+    responses(
+        (status = 200, description = "Policy decision (SIMD-accelerated path)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn fast_evaluate_policy(
     State(state): State<Arc<AgentState>>,
     body: Bytes,
@@ -767,6 +785,16 @@ pub async fn fast_evaluate_policy(
 ///   the async reactor or block unrelated request latency (Plan 05, Step 3).
 /// - Optional decision-cache integration; results preserve input order via an
 ///   explicit `index` field.
+#[utoipa::path(
+    post,
+    path = "/api/v1/batch-messages",
+    tag = "evaluation",
+    responses(
+        (status = 200, description = "Batch policy decisions"),
+        (status = 413, description = "Batch request count exceeds configured maximum")
+    ),
+    security(("bearer_jwt" = []))
+)]
 #[instrument(skip(state, payload))]
 pub async fn batch_evaluate_policy(
     State(state): State<Arc<AgentState>>,

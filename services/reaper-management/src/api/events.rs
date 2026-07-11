@@ -5,8 +5,6 @@
 use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, Sse},
-    routing::get,
-    Router,
 };
 use futures::stream::Stream;
 use serde::Deserialize;
@@ -24,6 +22,7 @@ use crate::{
     db::repositories::{NamespaceRepository, OrganizationRepository},
     state::{AppState, ServerEvent},
 };
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Query parameters for event stream
 #[derive(Debug, Deserialize, Default)]
@@ -36,18 +35,27 @@ pub struct EventStreamQuery {
 }
 
 /// Build SSE routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // SSE event stream (org-wide)
-        .route("/orgs/{org}/events", get(events_stream))
+        .routes(routes!(events_stream))
         // SSE event stream for agent (filtered by subscriptions)
-        .route(
-            "/orgs/{org}/agents/{agent_id}/events",
-            get(agent_events_stream),
-        )
+        .routes(routes!(agent_events_stream))
 }
 
 /// SSE event stream for an organization (with optional namespace filtering)
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/events",
+    tag = "events",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "SSE stream of organization events", content_type = "text/event-stream")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn events_stream(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -112,6 +120,19 @@ async fn events_stream(
 }
 
 /// SSE event stream for an agent (filtered by subscriptions)
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents/{agent_id}/events",
+    tag = "events",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "SSE stream of agent-filtered events", content_type = "text/event-stream")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn agent_events_stream(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

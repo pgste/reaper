@@ -26,6 +26,15 @@ const ROLES: [OrgRole; 4] = [
     OrgRole::Viewer,
 ];
 
+#[utoipa::path(
+    get,
+    path = "/scim/v2/Groups",
+    tag = "scim",
+    responses(
+        (status = 200, description = "SCIM ListResponse of groups (org roles)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_groups(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -38,6 +47,18 @@ pub async fn list_groups(
     Ok(Json(list_response(resources)).into_response())
 }
 
+#[utoipa::path(
+    get,
+    path = "/scim/v2/Groups/{id}",
+    tag = "scim",
+    params(
+        ("id" = String, Path, description = "Group ID (org role name)")
+    ),
+    responses(
+        (status = 200, description = "SCIM Group resource")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_group(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

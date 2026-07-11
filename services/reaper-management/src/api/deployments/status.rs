@@ -19,6 +19,19 @@ use crate::{
 use super::types::{AgentDeploymentResponse, DeploymentSummaryResponse};
 
 /// Get per-agent deployment status for a rollout
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/rollouts/{rollout_id}/deployments",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Per-agent deployment status")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_rollout_deployments(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -45,6 +58,19 @@ pub async fn get_rollout_deployments(
 }
 
 /// Get deployment summary for a rollout
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/rollouts/{rollout_id}/summary",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Deployment summary")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_deployment_summary(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -71,6 +97,19 @@ pub async fn get_deployment_summary(
 }
 
 /// Get latest deployment for an agent
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents/{agent_id}/deployment",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "Latest agent deployment (or null if none)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_agent_deployment(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -97,6 +136,20 @@ pub async fn get_agent_deployment(
 }
 
 /// Acknowledge a deployment (agent confirms receipt)
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/agents/{agent_id}/deployment/acknowledge",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 204, description = "Deployment acknowledged"),
+        (status = 404, description = "No deployment found for agent")
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn acknowledge_deployment(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

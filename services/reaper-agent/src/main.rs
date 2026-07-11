@@ -1,3 +1,4 @@
+mod api;
 mod auth;
 mod bootstrap;
 mod cache;
@@ -583,6 +584,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/ready", get(readiness_check))
         .route("/live", get(liveness_check))
         .route(endpoints::METRICS, get(metrics))
+        // OpenAPI 3.1 contract (Plan 07). A plain, public GET off the hot path;
+        // the served enforcement routes below are unchanged.
+        .route("/openapi.json", get(api::serve_openapi))
         // Evaluation endpoints (tighter per-route body limit, merged below)
         .merge(eval_routes)
         // Data management - load entities

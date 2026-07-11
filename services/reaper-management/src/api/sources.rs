@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -25,18 +25,15 @@ use crate::{
 };
 
 /// Build source routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/orgs/{org}/sources", get(list_sources).post(create_source))
-        .route(
-            "/orgs/{org}/sources/{source_id}",
-            get(get_source).put(update_source).delete(delete_source),
-        )
-        .route("/orgs/{org}/sources/{source_id}/sync", post(trigger_sync))
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(list_sources, create_source))
+        .routes(routes!(get_source, update_source, delete_source))
+        .routes(routes!(trigger_sync))
 }
 
 /// Policy source summary for API responses
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SourceSummary {
     pub id: Uuid,
     pub org_id: Uuid,
@@ -76,14 +73,14 @@ impl From<PolicySource> for SourceSummary {
 }
 
 /// Response for listing sources
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListSourcesResponse {
     pub sources: Vec<SourceSummary>,
     pub total: usize,
 }
 
 /// Request to create a source
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateSourceRequest {
     pub name: String,
     pub description: Option<String>,
@@ -98,7 +95,7 @@ fn default_sync_interval() -> u32 {
 }
 
 /// Request to update a source
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateSourceRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -108,7 +105,7 @@ pub struct UpdateSourceRequest {
 }
 
 /// Response for sync trigger
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SyncResponse {
     pub success: bool,
     pub message: String,
@@ -117,6 +114,18 @@ pub struct SyncResponse {
 }
 
 /// List sources for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/sources",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of policy sources", body = ListSourcesResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_sources(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -148,6 +157,19 @@ async fn list_sources(
 }
 
 /// Get a specific source
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/sources/{source_id}",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("source_id" = Uuid, Path, description = "Policy source ID")
+    ),
+    responses(
+        (status = 200, description = "Policy source details", body = SourceSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_source(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -180,6 +202,19 @@ async fn get_source(
 }
 
 /// Create a new source
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/sources",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = CreateSourceRequest,
+    responses(
+        (status = 201, description = "Policy source created", body = SourceSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_source(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -236,6 +271,20 @@ async fn create_source(
 }
 
 /// Update a source
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/sources/{source_id}",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("source_id" = Uuid, Path, description = "Policy source ID")
+    ),
+    request_body = UpdateSourceRequest,
+    responses(
+        (status = 200, description = "Policy source updated", body = SourceSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn update_source(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -294,6 +343,19 @@ async fn update_source(
 }
 
 /// Delete a source
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/sources/{source_id}",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("source_id" = Uuid, Path, description = "Policy source ID")
+    ),
+    responses(
+        (status = 204, description = "Policy source deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_source(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -332,6 +394,19 @@ async fn delete_source(
 }
 
 /// Trigger sync for a source
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/sources/{source_id}/sync",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("source_id" = Uuid, Path, description = "Policy source ID")
+    ),
+    responses(
+        (status = 200, description = "Sync triggered", body = SyncResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn trigger_sync(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

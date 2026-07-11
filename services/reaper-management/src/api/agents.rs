@@ -6,11 +6,11 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -23,27 +23,21 @@ use crate::{
 };
 
 /// Build agent routes
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
         // Agent self-registration (uses API key auth)
-        .route("/orgs/{org}/agents/register", post(register_agent))
+        .routes(routes!(register_agent))
         // Agent listing and details (requires auth)
-        .route("/orgs/{org}/agents", get(list_agents))
-        .route(
-            "/orgs/{org}/agents/{agent_id}",
-            get(get_agent).delete(delete_agent),
-        )
+        .routes(routes!(list_agents))
+        .routes(routes!(get_agent, delete_agent))
         // Heartbeat endpoint
-        .route("/orgs/{org}/agents/{agent_id}/heartbeat", post(heartbeat))
+        .routes(routes!(heartbeat))
         // Deploy-status report: agent confirms the bundle version it applied
-        .route(
-            "/orgs/{org}/agents/{agent_id}/deployments/report",
-            post(report_deployment),
-        )
+        .routes(routes!(report_deployment))
 }
 
 /// Agent's report of the bundle version it just applied (or failed to apply).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct DeploymentReportRequest {
     pub bundle_id: Uuid,
     #[serde(default)]
@@ -54,13 +48,13 @@ pub struct DeploymentReportRequest {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DeploymentReportResponse {
     pub acknowledged: bool,
 }
 
 /// Request to register an agent
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterAgentRequest {
     pub name: String,
     pub hostname: Option<String>,
@@ -70,7 +64,7 @@ pub struct RegisterAgentRequest {
 }
 
 /// Response after successful registration
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RegisterAgentResponse {
     pub agent: AgentSummary,
     /// JWT token for subsequent requests
@@ -79,7 +73,7 @@ pub struct RegisterAgentResponse {
 }
 
 /// Agent summary for API responses
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AgentSummary {
     pub id: Uuid,
     pub org_id: Uuid,
@@ -109,7 +103,7 @@ impl From<Agent> for AgentSummary {
 }
 
 /// Response for listing agents
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListAgentsResponse {
     pub agents: Vec<AgentSummary>,
     pub total: usize,
@@ -125,13 +119,26 @@ pub struct HeartbeatRequest {
 }
 
 /// Heartbeat response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HeartbeatResponse {
     pub acknowledged: bool,
     pub server_time: chrono::DateTime<chrono::Utc>,
 }
 
 /// Register a new agent
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/agents/register",
+    tag = "agents",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    request_body = RegisterAgentRequest,
+    responses(
+        (status = 201, description = "Agent registered", body = RegisterAgentResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn register_agent(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -228,6 +235,18 @@ async fn register_agent(
 }
 
 /// List agents for an organization
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents",
+    tag = "agents",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug")
+    ),
+    responses(
+        (status = 200, description = "List of agents", body = ListAgentsResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_agents(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -261,6 +280,19 @@ async fn list_agents(
 }
 
 /// Get agent by ID
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/agents/{agent_id}",
+    tag = "agents",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "Agent details", body = AgentSummary)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_agent(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -296,6 +328,19 @@ async fn get_agent(
 }
 
 /// Delete an agent
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/agents/{agent_id}",
+    tag = "agents",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 204, description = "Agent deleted")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn delete_agent(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -334,6 +379,19 @@ async fn delete_agent(
 }
 
 /// Agent heartbeat
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/agents/{agent_id}/heartbeat",
+    tag = "agents",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    responses(
+        (status = 200, description = "Heartbeat acknowledged", body = HeartbeatResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn heartbeat(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -463,6 +521,20 @@ fn data_stale_transition(previous: Option<bool>, current: Option<bool>) -> Optio
 /// Agent reports the bundle version it applied. Records the actual per-agent
 /// deployment state and, when confirmation gating is on, advances the owning
 /// rollout based on real confirmations instead of optimistic completion.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/agents/{agent_id}/deployments/report",
+    tag = "agents",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("agent_id" = Uuid, Path, description = "Agent ID")
+    ),
+    request_body = DeploymentReportRequest,
+    responses(
+        (status = 200, description = "Deployment report acknowledged", body = DeploymentReportResponse)
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn report_deployment(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,

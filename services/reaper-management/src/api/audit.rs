@@ -12,12 +12,12 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
-    Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -37,21 +37,12 @@ use crate::{
 const MAX_RETENTION_DAYS: i64 = 3650;
 
 /// Build audit-governance routes.
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/orgs/{org}/audit/retention",
-            get(get_retention).put(set_retention),
-        )
-        .route(
-            "/orgs/{org}/audit/legal-holds",
-            get(list_holds).post(create_hold),
-        )
-        .route(
-            "/orgs/{org}/audit/legal-holds/{hold_id}",
-            get(get_hold).delete(release_hold),
-        )
-        .route("/orgs/{org}/audit/purge", post(trigger_purge))
+pub fn routes() -> OpenApiRouter<Arc<AppState>> {
+    OpenApiRouter::new()
+        .routes(routes!(get_retention, set_retention))
+        .routes(routes!(list_holds, create_hold))
+        .routes(routes!(get_hold, release_hold))
+        .routes(routes!(trigger_purge))
 }
 
 /// Authorize audit-governance access on `org` and return the org id.
@@ -106,6 +97,18 @@ async fn write_audit(
 // ---- Retention ----
 
 /// GET /orgs/{org}/audit/retention — effective window (explicit or default).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/audit/retention",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Effective retention window")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_retention(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -127,12 +130,25 @@ async fn get_retention(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct SetRetentionRequest {
     days: i64,
 }
 
 /// PUT /orgs/{org}/audit/retention {days} — set the tenant window. Audited.
+#[utoipa::path(
+    put,
+    path = "/orgs/{org}/audit/retention",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    request_body = SetRetentionRequest,
+    responses(
+        (status = 200, description = "Retention window updated")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn set_retention(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -181,6 +197,18 @@ struct CreateHoldRequest {
 }
 
 /// POST /orgs/{org}/audit/legal-holds — place a hold. Audited.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/audit/legal-holds",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 201, description = "Legal hold created")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn create_hold(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -220,6 +248,18 @@ async fn create_hold(
 
 /// GET /orgs/{org}/audit/legal-holds — active and released (the compliance
 /// record includes released holds).
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/audit/legal-holds",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Legal holds (active and released)")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn list_holds(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -238,6 +278,20 @@ async fn list_holds(
 }
 
 /// GET /orgs/{org}/audit/legal-holds/{hold_id}
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/audit/legal-holds/{hold_id}",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("hold_id" = Uuid, Path, description = "Legal hold ID")
+    ),
+    responses(
+        (status = 200, description = "Legal hold detail"),
+        (status = 404, description = "Legal hold not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn get_hold(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -261,6 +315,20 @@ async fn get_hold(
 
 /// DELETE /orgs/{org}/audit/legal-holds/{hold_id} — release (never deletes
 /// the record; the hold's lifecycle stays auditable). Audited.
+#[utoipa::path(
+    delete,
+    path = "/orgs/{org}/audit/legal-holds/{hold_id}",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("hold_id" = Uuid, Path, description = "Legal hold ID")
+    ),
+    responses(
+        (status = 204, description = "Legal hold released"),
+        (status = 404, description = "Legal hold not found or already released")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn release_hold(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
@@ -293,6 +361,18 @@ async fn release_hold(
 
 /// POST /orgs/{org}/audit/purge — run the org's retention purge now (the
 /// background sweeper runs the same path on an interval). Audited.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/audit/purge",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    responses(
+        (status = 200, description = "Retention purge executed")
+    ),
+    security(("bearer_jwt" = []))
+)]
 async fn trigger_purge(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
