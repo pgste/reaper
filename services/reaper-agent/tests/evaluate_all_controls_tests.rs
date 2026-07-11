@@ -14,7 +14,9 @@ use axum::{
     extract::{Json, State},
     response::IntoResponse,
 };
-use policy_engine::{cache_config::CacheConfig, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRule};
+use policy_engine::{
+    cache_config::CacheConfig, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRule,
+};
 use reaper_agent::handlers::evaluate_policy;
 use reaper_agent::management::verify::BundleVerifier;
 use reaper_agent::state::{AgentState, AgentStats, DataSyncState};

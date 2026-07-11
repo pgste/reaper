@@ -102,7 +102,10 @@ fn wildcard_policies_are_always_candidates() {
         .deploy_policy(simple_policy("specific", vec![(PolicyAction::Allow, "/a")]))
         .unwrap();
     engine
-        .deploy_policy(simple_policy("global-deny", vec![(PolicyAction::Deny, "*")]))
+        .deploy_policy(simple_policy(
+            "global-deny",
+            vec![(PolicyAction::Deny, "*")],
+        ))
         .unwrap();
 
     let stats = engine.get_index_stats();
@@ -165,7 +168,16 @@ fn differential_pruned_vs_linear_over_corpus() {
 
     // Corpus of resources: matched, overlapping, wildcard-only, unrelated.
     let corpus = [
-        "/a", "/b", "/c", "/d", "/e", "/noise/3", "/noise/499", "/unrelated", "/a/sub", "",
+        "/a",
+        "/b",
+        "/c",
+        "/d",
+        "/e",
+        "/noise/3",
+        "/noise/499",
+        "/unrelated",
+        "/a/sub",
+        "",
     ];
 
     for res in corpus {
