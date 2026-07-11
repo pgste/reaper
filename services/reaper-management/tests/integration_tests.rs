@@ -8,7 +8,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reaper_management::{
-    api::build_api_router,
+    api::build_served_router,
     auth::api_key::{ApiKeyRepository, CreateApiKey},
     auth::jwks::JwksConfigRepository,
     config::{AuthConfig, Config, PromotionApproval},
@@ -65,14 +65,34 @@ async fn setup_env_with(customize: impl FnOnce(&mut Config)) -> TestEnv {
     customize(&mut config);
 
     let state = AppState::new(db.clone(), config, storage);
-    let app = build_api_router().with_state(Arc::new(state));
+    let app = build_served_router().with_state(Arc::new(state));
 
     TestEnv { temp_dir, app, db }
 }
 
+/// Map a bare resource path to the single `/api/v1` surface (Plan 07 Phase B).
+/// Probes (`/health*`, `/live`, `/ready`, `/metrics*`, `/openapi.json`) stay
+/// unversioned; anything already `/api/v1`-prefixed is left as-is. Lets the
+/// existing bare-path test call sites exercise the versioned router unchanged.
+fn v1_uri(uri: &str) -> String {
+    let path = uri.split('?').next().unwrap_or(uri);
+    let is_probe = path == "/health"
+        || path.starts_with("/health/")
+        || path == "/live"
+        || path == "/ready"
+        || path == "/metrics"
+        || path.starts_with("/metrics/")
+        || path == "/openapi.json";
+    if is_probe || uri.starts_with("/api/v1") {
+        uri.to_string()
+    } else {
+        format!("/api/v1{uri}")
+    }
+}
+
 /// Helper to make JSON requests without auth
 fn json_request(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
-    let mut builder = Request::builder().uri(uri).method(method);
+    let mut builder = Request::builder().uri(v1_uri(uri)).method(method);
 
     if body.is_some() {
         builder = builder.header("content-type", "application/json");
@@ -88,7 +108,7 @@ fn json_request(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
 /// Helper to make authenticated JSON requests
 fn authed_request(method: &str, uri: &str, body: Option<Value>, api_key: &str) -> Request<Body> {
     let mut builder = Request::builder()
-        .uri(uri)
+        .uri(v1_uri(uri))
         .method(method)
         .header("X-API-Key", api_key);
 
@@ -1037,7 +1057,7 @@ async fn test_jwks_config_lifecycle() {
 /// Helper to make requests with session token
 fn session_request(method: &str, uri: &str, body: Option<Value>, token: &str) -> Request<Body> {
     let mut builder = Request::builder()
-        .uri(uri)
+        .uri(v1_uri(uri))
         .method(method)
         .header("Authorization", format!("Bearer {}", token));
 
@@ -2238,7 +2258,7 @@ async fn setup_gateway_env() -> (axum::Router, Arc<Database>) {
     };
 
     let state = Arc::new(AppState::new(db.clone(), config, storage));
-    let app = build_api_router()
+    let app = build_served_router()
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             reaper_management::auth::gateway::require_authentication,
@@ -2713,7 +2733,7 @@ async fn test_revocation_list_served_signed_and_updates() {
         ..Config::default()
     };
     let state = AppState::new(db.clone(), config, storage);
-    let app = build_api_router().with_state(Arc::new(state));
+    let app = build_served_router().with_state(Arc::new(state));
 
     // Org + admin key.
     let response = app
@@ -3228,7 +3248,7 @@ async fn test_sso_broker_session_is_accepted_and_stable() {
 /// Build a Bearer-authenticated request (session token, not an API key).
 fn authed_request_bearer(method: &str, uri: &str, token: &str) -> Request<Body> {
     Request::builder()
-        .uri(uri)
+        .uri(v1_uri(uri))
         .method(method)
         .header("Authorization", format!("Bearer {token}"))
         .body(Body::empty())
@@ -3243,7 +3263,7 @@ fn authed_request_bearer(method: &str, uri: &str, token: &str) -> Request<Body> 
 /// session token).
 fn bearer_request(method: &str, uri: &str, body: Option<Value>, token: &str) -> Request<Body> {
     let mut b = Request::builder()
-        .uri(uri)
+        .uri(v1_uri(uri))
         .method(method)
         .header("Authorization", format!("Bearer {token}"));
     if body.is_some() {
@@ -3926,4 +3946,86 @@ async fn test_replay_engine_loads_real_bundle_and_api_guards() {
     );
     let response = env.app.clone().oneshot(get).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// =============================================================================
+// Single /api/v1 surface + deprecation alias (Plan 07 Phase B)
+// =============================================================================
+
+/// A raw GET that bypasses the `v1_uri` helper — used to probe the exact path.
+fn raw_get(uri: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method("GET")
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn resource_api_is_only_under_api_v1() {
+    let env = setup_test_env().await;
+
+    // Bare-root resource path is not served → 404 (the pre-Plan-07 dual mount
+    // is gone).
+    let resp = env.app.clone().oneshot(raw_get("/orgs")).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "bare /orgs must 404 on the single /api/v1 surface"
+    );
+
+    // The versioned path exists — unauthenticated, so 401/403, but NOT 404.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(raw_get("/api/v1/orgs"))
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "/api/v1/orgs must be routed"
+    );
+
+    // Probes stay unversioned at the root.
+    let resp = env.app.clone().oneshot(raw_get("/health")).await.unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "/health stays at root"
+    );
+    let resp = env
+        .app
+        .clone()
+        .oneshot(raw_get("/openapi.json"))
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "/openapi.json stays at root, got {}",
+        resp.status()
+    );
+}
+
+#[tokio::test]
+async fn deprecation_headers_marker_on_alias() {
+    use axum::{routing::get, Router};
+    // The alias applies this layer to the bare-root routes; assert it tags the
+    // response per RFC 8594 regardless of the handler outcome.
+    let app =
+        Router::new()
+            .route("/orgs", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(
+                reaper_management::middleware::deprecation_headers,
+            ));
+    let resp = app.oneshot(raw_get("/orgs")).await.unwrap();
+    assert_eq!(resp.headers().get("Deprecation").unwrap(), "true");
+    assert!(resp
+        .headers()
+        .get("Link")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("successor-version"));
+    assert!(resp.headers().get("Warning").is_some());
 }

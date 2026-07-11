@@ -29,6 +29,9 @@ use utoipa::{Modify, OpenApi};
                        unless documented as a public probe.",
         license(name = "Apache-2.0")
     ),
+    servers(
+        (url = "/api/v1", description = "Versioned control-plane surface")
+    ),
     modifiers(&SecurityAddon),
     tags(
         (name = "health", description = "Health, readiness and metrics probes (public)"),
