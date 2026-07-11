@@ -41,6 +41,30 @@ pub trait PolicyEvaluator: Send + Sync + Debug {
     /// * `Err(ReaperError)` - If evaluation fails
     fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyAction, ReaperError>;
 
+    /// Evaluate and additionally report whether a rule actually **matched**
+    /// (`true`) or the policy's per-policy default was returned because nothing
+    /// matched (`false`).
+    ///
+    /// Set-level combination ([`PolicyEngine::evaluate_set`]) treats unmatched
+    /// outcomes as **non-decisive** (Plan 08 Phase A): a policy that says
+    /// nothing about a request must not decide it — the set-level default deny
+    /// applies only when *no* policy matched. Single-policy evaluation
+    /// ([`PolicyEngine::evaluate`]) is unaffected and keeps returning the
+    /// per-policy default.
+    ///
+    /// The default implementation is conservative: it assumes the outcome
+    /// matched (decisive), preserving pre-existing behavior for evaluators that
+    /// cannot distinguish the two.
+    ///
+    /// [`PolicyEngine::evaluate_set`]: crate::PolicyEngine::evaluate_set
+    /// [`PolicyEngine::evaluate`]: crate::PolicyEngine::evaluate
+    fn evaluate_matched(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<(PolicyAction, bool), ReaperError> {
+        Ok((self.evaluate(request)?, true))
+    }
+
     /// Validate the policy before deployment
     ///
     /// This is called during policy deployment to catch errors early.

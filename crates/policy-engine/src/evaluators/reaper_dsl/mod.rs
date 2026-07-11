@@ -1524,8 +1524,17 @@ impl ReaperDSLEvaluator {
     }
 }
 
-impl PolicyEvaluator for ReaperDSLEvaluator {
-    fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyAction, reaper_core::ReaperError> {
+impl ReaperDSLEvaluator {
+    /// Evaluate `request`, returning `(action, matched)` where `matched` is
+    /// `true` when a deny/allow rule actually fired and `false` when no rule
+    /// matched and the per-policy `default_decision` was returned. The set-level
+    /// combiner ([`crate::PolicyEngine::evaluate_set`]) uses the flag to treat
+    /// an unmatched policy as non-decisive (Plan 08 Phase A). The public
+    /// [`PolicyEvaluator::evaluate`] delegates here and discards the flag.
+    pub(crate) fn evaluate_with_match(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<(PolicyAction, bool), reaper_core::ReaperError> {
         let interner = self.store.interner();
 
         // Reclaim transient result strings interned during this evaluation
@@ -1639,7 +1648,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
                 &mut variables,
             ) {
                 // Explicit deny - return immediately, no allow can override this
-                return Ok(PolicyAction::Deny);
+                return Ok((PolicyAction::Deny, true));
             }
             // Clear variables between rules (each rule has independent scope)
             variables.clear();
@@ -1661,7 +1670,7 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
                     action = %request.action,
                     "Rule matched - returning Allow"
                 );
-                return Ok(PolicyAction::Allow);
+                return Ok((PolicyAction::Allow, true));
             }
             // Clear variables between rules (each rule has independent scope)
             variables.clear();
@@ -1672,7 +1681,20 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             default_decision = ?self.default_decision,
             "No rules matched - returning default"
         );
-        Ok(self.default_decision.clone())
+        Ok((self.default_decision.clone(), false))
+    }
+}
+
+impl PolicyEvaluator for ReaperDSLEvaluator {
+    fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyAction, reaper_core::ReaperError> {
+        self.evaluate_with_match(request).map(|(action, _)| action)
+    }
+
+    fn evaluate_matched(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<(PolicyAction, bool), reaper_core::ReaperError> {
+        self.evaluate_with_match(request)
     }
 
     fn validate(&self) -> Result<(), reaper_core::ReaperError> {

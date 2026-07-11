@@ -205,6 +205,24 @@ impl PolicyEvaluator for CedarPolicyEvaluator {
         Ok(Self::convert_decision(response.decision()))
     }
 
+    fn evaluate_matched(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<(PolicyAction, bool), ReaperError> {
+        let policy_set = self.parse_policy_set()?;
+        let cedar_request = self.convert_request(request)?;
+        let entities = Entities::empty();
+        let authorizer = Authorizer::new();
+        let response = authorizer.is_authorized(&cedar_request, &policy_set, &entities);
+
+        // Cedar reaches an *implicit* default deny when no policy determined the
+        // outcome — `diagnostics().reason()` is then empty. Any determining
+        // policy (allow or forbid) makes the decision decisive for set-level
+        // combination (Plan 08 Phase A).
+        let matched = response.diagnostics().reason().next().is_some();
+        Ok((Self::convert_decision(response.decision()), matched))
+    }
+
     fn validate(&self) -> Result<(), ReaperError> {
         // Attempt to parse the policy
         let policy_set = self.parse_policy_set()?;

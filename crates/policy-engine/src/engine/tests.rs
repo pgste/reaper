@@ -851,12 +851,13 @@ fn test_evaluate_set_production_semantics() {
     assert_eq!(out.decision, PolicyAction::Allow);
     assert_eq!(out.policy_name, "allow-a");
 
-    // No rule matched: the Simple evaluator itself default-denies (with the
-    // evaluated policy's attribution and no matched rule) — identical to what
-    // the agent serves.
+    // No rule matched: the only policy is non-decisive (Plan 08 Phase A), so
+    // the set falls through to its default deny with nil attribution and no
+    // matched rule — the same Deny the agent serves.
     let out = engine.evaluate_set(&[allow_id], &request("/other"));
     assert_eq!(out.decision, PolicyAction::Deny);
     assert_eq!(out.matched_rule, None);
+    assert_eq!(out.policy_id, uuid::Uuid::nil());
 
     // Deny overrides a prior allow, and attribution moves to the denier.
     let out = engine.evaluate_set(&[allow_id, deny_id], &request("/a"));

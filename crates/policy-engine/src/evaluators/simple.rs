@@ -171,6 +171,17 @@ impl PolicyEvaluator for SimplePolicyEvaluator {
         Ok(PolicyAction::Deny)
     }
 
+    fn evaluate_matched(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<(PolicyAction, bool), ReaperError> {
+        // `evaluate_with_details` returns the matched rule index (`Some`) when a
+        // rule fired, or `None` when it fell through to the default deny. The
+        // latter is non-decisive for set-level combination.
+        let (action, matched) = self.evaluate_with_details(request)?;
+        Ok((action, matched.is_some()))
+    }
+
     fn validate(&self) -> Result<(), ReaperError> {
         // Validate that we have at least one rule
         if self.rules.is_empty() {

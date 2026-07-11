@@ -165,6 +165,22 @@ impl ReaperAgentConfig {
                 }
             }
         }
+        // Plan 08 Phase A: evaluate-all fan-out controls.
+        if let Ok(val) = std::env::var("REAPER_ALLOW_EVALUATE_ALL") {
+            self.performance.allow_evaluate_all =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_MAX_CANDIDATE_POLICIES") {
+            if let Ok(max) = val.parse::<usize>() {
+                if max > 0 {
+                    self.performance.max_candidate_policies = max;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_USE_PRUNING_INDEX") {
+            self.performance.use_pruning_index =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // Observability settings
         if let Ok(val) = std::env::var("REAPER_LOG_LEVEL") {

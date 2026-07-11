@@ -326,6 +326,21 @@ pub struct PolicyEngineStats {
     pub has_default_policy: bool,
 }
 
+/// Resource pruning-index statistics (Plan 08 Phase A) — exposed for
+/// monitoring and to let tests assert the served evaluate-all path narrows to a
+/// small candidate set rather than scanning every policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PruningIndexStats {
+    /// Number of distinct resource buckets (concrete resource strings indexed).
+    pub resource_buckets: usize,
+    /// Total (resource, policy) entries across all buckets.
+    pub indexed_entries: usize,
+    /// Policies always evaluated regardless of resource (wildcards / DSL / Cedar).
+    pub unprunable_policies: usize,
+    /// Total active policies (indexed + unprunable, counting each once).
+    pub total_policies: usize,
+}
+
 // Legacy simple types for backward compatibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SimpleAction {

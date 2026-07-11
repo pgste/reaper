@@ -298,6 +298,29 @@ pub struct PerformanceSettings {
     /// Over-cap batches are rejected with 413 before any evaluation.
     #[serde(default = "default_max_batch_requests")]
     pub max_batch_requests: usize,
+
+    /// Allow policy-less "evaluate-all" requests (Plan 08 Phase A, ADR-2).
+    /// A request that names no policy id/name would otherwise fan out to every
+    /// candidate policy — a DoS amplifier and semantically ambiguous. Default
+    /// **false**: such requests are denied with `evaluate_all_disabled`. Enable
+    /// only for deployments that intentionally rely on whole-set evaluation.
+    #[serde(default)]
+    pub allow_evaluate_all: bool,
+
+    /// Hard cap on candidate policies for an evaluate-all request after pruning
+    /// (Plan 08 Phase A). If the pruning index yields more than this many
+    /// candidates the request is rejected with `candidate_cap_exceeded` rather
+    /// than fanning out to an N-eval. Only consulted when `allow_evaluate_all`.
+    #[serde(default = "default_max_candidate_policies")]
+    pub max_candidate_policies: usize,
+
+    /// Use the engine's resource pruning index for evaluate-all (Plan 08 Phase
+    /// A). Default **true**: evaluate only candidate policies for the request's
+    /// resource. Set false to fall back to the linear full-set scan
+    /// (`list_policies`) — the always-available correctness fallback behind
+    /// which the index ships (ADR-1 / Risk mitigation).
+    #[serde(default = "default_true")]
+    pub use_pruning_index: bool,
 }
 
 impl Default for PerformanceSettings {
@@ -307,6 +330,9 @@ impl Default for PerformanceSettings {
             worker_threads: 0,
             enable_simd: true,
             max_batch_requests: default_max_batch_requests(),
+            allow_evaluate_all: false,
+            max_candidate_policies: default_max_candidate_policies(),
+            use_pruning_index: true,
         }
     }
 }
@@ -317,6 +343,10 @@ fn default_target_latency() -> f64 {
 
 fn default_max_batch_requests() -> usize {
     1000
+}
+
+fn default_max_candidate_policies() -> usize {
+    256
 }
 
 // ============================================================================
