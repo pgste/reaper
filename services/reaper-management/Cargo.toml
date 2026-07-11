@@ -56,7 +56,7 @@ git2 = "0.21"
 glob = "0.3"
 
 # Auth
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 rand = { workspace = true }
 chacha20poly1305 = { workspace = true }  # AEAD for OAuth token storage
 hkdf = { workspace = true }              # key derivation for token encryption
@@ -68,14 +68,14 @@ base64 = "0.22"
 argon2 = "0.5"
 
 # Rate limiting
-governor = "0.8"
-tower_governor = "0.6"
+governor = "0.10"
+tower_governor = "0.8"
 
 # URL encoding
 urlencoding = "2.1"
 
 # HTTP/SSE
-axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower = { workspace = true }
@@ -84,7 +84,7 @@ async-stream = "0.3"
 async-trait = "0.1"
 
 # External API parsing
-jsonpath-rust = "0.7"
+jsonpath-rust = "1"
 
 # Metrics
 prometheus = { version = "0.14", features = ["process"] }

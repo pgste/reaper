@@ -41,7 +41,7 @@ rayon = "1.10"  # Parallel batch evaluation
 
 # JSON parsing: sonic-rs (SIMD) for native, serde_json for WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-sonic-rs = "0.3"
+sonic-rs = "0.5"
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -54,7 +54,7 @@ axum = { workspace = true, features = ["ws"] }
 tower = { workspace = true }
 tower-http = { version = "0.7", features = ["cors"] }
 reqwest = { workspace = true, features = ["json"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.27"
 futures-util = "0.3"
 anyhow = { workspace = true }
 tempfile = "3.8"
