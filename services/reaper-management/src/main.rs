@@ -177,6 +177,29 @@ async fn main() -> anyhow::Result<()> {
     // No-op unless the decision store (REAPER_CLICKHOUSE_URL) is configured.
     reaper_management::decisions::purge::spawn_retention_sweeper(state.clone());
 
+    // Idempotency-key retention sweeper (Plan 07 Phase D): completed keys
+    // replay within their window (REAPER_IDEMPOTENCY_RETENTION_SECS, default
+    // 48 h) and are aged out here so the table stays bounded. Expired rows are
+    // also treated as absent at claim time, so a delayed sweep never wrongly
+    // replays.
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let cutoff = chrono::Utc::now().to_rfc3339();
+                let repo = reaper_management::db::repositories::IdempotencyRepository::new(&db);
+                match repo.prune_expired(&cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(pruned = n, "idempotency retention: aged out expired keys"),
+                    Err(e) => warn!("idempotency retention sweep failed: {e}"),
+                }
+            }
+        });
+    }
+
     // Create rate limiter
     let rate_limiter = rate_limit::create_rate_limiter(&config.rate_limit);
 

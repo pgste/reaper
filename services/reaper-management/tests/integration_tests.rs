@@ -4339,3 +4339,261 @@ async fn bundle_lost_update_is_prevented() {
         .unwrap();
     assert_eq!(parse_body(response).await["name"], "writer-a");
 }
+
+// =============================================================================
+// Idempotency keys on propagation POSTs (Plan 07, Phase D). DoD: replaying the
+// same key returns the original result (same status + body) and does NOT
+// re-trigger the side effect; the same key with a different body is a 422.
+// =============================================================================
+
+/// Request builder with an `Idempotency-Key` (and optional API key).
+fn idem_request(
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+    api_key: Option<&str>,
+    idem_key: &str,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .uri(v1_uri(uri))
+        .method(method)
+        .header("Idempotency-Key", idem_key);
+    if let Some(key) = api_key {
+        builder = builder.header("X-API-Key", key);
+    }
+    if body.is_some() {
+        builder = builder.header("content-type", "application/json");
+    }
+    let body = body
+        .map(|v| Body::from(serde_json::to_vec(&v).unwrap()))
+        .unwrap_or(Body::empty());
+    builder.body(body).unwrap()
+}
+
+fn replayed_header(response: &axum::response::Response) -> Option<String> {
+    response
+        .headers()
+        .get("Idempotency-Replayed")
+        .map(|v| v.to_str().unwrap().to_string())
+}
+
+#[tokio::test]
+async fn org_create_idempotency_replay() {
+    let env = setup_test_env().await;
+    let body = json!({"name": "Idem Org", "slug": "idem-org"});
+
+    // First execution: created, not a replay.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            "/orgs",
+            Some(body.clone()),
+            None,
+            "key-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(replayed_header(&response).as_deref(), Some("false"));
+    let first = parse_body(response).await;
+    let org_id = first["id"].as_str().unwrap().to_string();
+
+    // Replay: identical status + body, marked as a replay, and no second org.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            "/orgs",
+            Some(body.clone()),
+            None,
+            "key-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(replayed_header(&response).as_deref(), Some("true"));
+    let second = parse_body(response).await;
+    assert_eq!(
+        first, second,
+        "replay must return the stored response verbatim"
+    );
+
+    // Without idempotency the same slug would 409; the replay bypassed the
+    // handler entirely. Exactly one org with this slug exists.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request("GET", &format!("/orgs/{org_id}"), None))
+        .await
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+
+    // Same key, DIFFERENT body → 422 (ADR-6), never a silent replay.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Other Org", "slug": "other-org"})),
+            None,
+            "key-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A request WITHOUT a key still behaves exactly as before (duplicate slug
+    // reaches the handler and conflicts).
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Idem Org", "slug": "idem-org"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn promote_idempotency_replay_single_side_effect() {
+    let env = setup_test_env().await;
+
+    // Org + key + policy + compiled/staged bundle.
+    let create_org = json_request(
+        "POST",
+        "/orgs",
+        Some(json!({"name": "Idem Promote Org", "slug": "idem-promote-org"})),
+    );
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let create_policy = authed_request(
+        "POST",
+        "/orgs/idem-promote-org/policies",
+        Some(json!({
+            "name": "idem-policy",
+            "language": "reaper",
+            "content": "allow user to read /api"
+        })),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_policy).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let policy_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let create_bundle = authed_request(
+        "POST",
+        "/orgs/idem-promote-org/bundles",
+        Some(json!({"name": "idem-bundle", "policy_ids": [policy_id]})),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_bundle).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bundle_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for step in ["compile", "stage"] {
+        let req = authed_request(
+            "POST",
+            &format!("/orgs/idem-promote-org/bundles/{bundle_id}/{step}"),
+            None,
+            &key,
+        );
+        let response = env.app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{step} must succeed");
+    }
+
+    // Promote with an idempotency key (single-control default → 200).
+    let promote_uri = format!("/orgs/idem-promote-org/bundles/{bundle_id}/promote");
+    let promote_body = json!({"notes": "release"});
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            &promote_uri,
+            Some(promote_body.clone()),
+            Some(&key),
+            "promote-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(replayed_header(&response).as_deref(), Some("false"));
+    let first = parse_body(response).await;
+    assert_eq!(first["status"], "promoted");
+
+    // Replay: same response, no second promotion attempt. (Without the key
+    // this request would now 400 — the bundle is no longer in a promotable
+    // state — so a 200 here proves the handler did not run again.)
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            &promote_uri,
+            Some(promote_body.clone()),
+            Some(&key),
+            "promote-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(replayed_header(&response).as_deref(), Some("true"));
+    assert_eq!(parse_body(response).await, first);
+
+    // Exactly ONE change record exists — the side effect happened once.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/idem-promote-org/change-requests",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let body = parse_body(response).await;
+    let crs = body.as_array().cloned().unwrap_or_else(|| {
+        body["change_requests"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    });
+    assert_eq!(crs.len(), 1, "replay must not open a second change request");
+
+    // A FRESH key reaches the handler, which now correctly rejects (the bundle
+    // is already promoted) — and the failed attempt is NOT memoized.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            &promote_uri,
+            Some(promote_body),
+            Some(&key),
+            "promote-2",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
