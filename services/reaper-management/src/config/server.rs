@@ -19,6 +19,15 @@ pub struct ServerConfig {
     /// `REAPER_SERVE_ROOT_ALIAS=true`.
     #[serde(default)]
     pub serve_root_alias: bool,
+    /// Optimistic-concurrency enforcement (Plan 07 Phase C, ADR-3): when true,
+    /// a `PUT` on a policy or bundle without an `If-Match` header is rejected
+    /// with **428 Precondition Required**. Default **false** for one release
+    /// (warn-only: the write proceeds unguarded and a deprecation warning is
+    /// logged), then flips to true. A stale `If-Match`, when sent, always
+    /// fails with 412 regardless of this flag. Env override:
+    /// `REAPER_REQUIRE_IF_MATCH=true`.
+    #[serde(default)]
+    pub require_if_match: bool,
 }
 
 impl Default for ServerConfig {
@@ -27,6 +36,7 @@ impl Default for ServerConfig {
             bind_address: default_bind_address(),
             port: default_port(),
             serve_root_alias: false,
+            require_if_match: false,
         }
     }
 }

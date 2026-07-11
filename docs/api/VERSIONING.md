@@ -69,10 +69,32 @@ for one release as a migration aid with `REAPER_SERVE_ROOT_ALIAS=true` (or
 bare root, tagged with the deprecation headers above. This is a temporary
 rollback lever, not a supported surface — migrate clients to `/api/v1`.
 
-## 5. Client guidance
+## 5. Optimistic concurrency (`ETag` / `If-Match`)
+
+Governed mutable resources — today **policies** and **bundles** — carry an
+`ETag` on every `GET`/`PUT` response:
+
+- **Policies**: the current version's content hash.
+- **Bundles**: the current modification stamp.
+
+A `PUT` must echo the ETag it read via `If-Match`. If a concurrent writer got
+there first, the request fails with **412 Precondition Failed** — re-`GET` for
+the fresh ETag, re-apply your change, and retry. `If-Match: *` means "the
+resource exists in some state" and always writes guarded against the state read
+at request time.
+
+Enforcement is transitional: in the current release a `PUT` without `If-Match`
+still succeeds (unguarded, logged as deprecated). Once
+`server.require_if_match` flips on (next release, or today via
+`REAPER_REQUIRE_IF_MATCH=true`), a missing `If-Match` is rejected with
+**428 Precondition Required**. SDK/CLI/automation should start sending
+`If-Match` now.
+
+## 6. Client guidance
 
 - Always call under `/api/v1`; treat a `Deprecation` header as a signal to
   migrate before the `Sunset` date.
 - Ignore unknown response fields; tolerate unknown enum values on open fields.
 - Pin to the published OpenAPI document (`/openapi.json`) for code generation;
   regenerate on each release to pick up additive changes.
+- On `PUT`, echo the last-read `ETag` as `If-Match`; on 412, re-read and retry.

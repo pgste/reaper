@@ -5,7 +5,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::orgs::authorize_org;
+use crate::api::preconditions::{check_precondition, etag};
 use crate::audit::{ActorType, AuditEntry, ResourceType};
 use crate::auth::middleware::{AuthenticatedUser, RequireAuth};
 use crate::auth::scopes::Scope;
@@ -176,7 +177,8 @@ async fn create_bundle(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Bundle details")
+        (status = 200, description = "Bundle details; the `ETag` response header \
+            carries the current modification stamp for use as `If-Match` on updates")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -184,12 +186,18 @@ async fn get_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
-) -> ApiResult<Json<crate::domain::Bundle>> {
+) -> ApiResult<(
+    [(header::HeaderName, String); 1],
+    Json<crate::domain::Bundle>,
+)> {
     let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
         .await?
         .id;
     let bundle = state.bundle_service.get_scoped(org_id, bundle_id).await?;
-    Ok(Json(bundle))
+    // Bundle ETag: `updated_at`, which every bundle write path bumps (ADR-2 —
+    // an existing column, no schema change; stored/round-tripped as RFC 3339).
+    let tag = etag(&bundle.updated_at.to_rfc3339());
+    Ok(([(header::ETAG, tag)], Json(bundle)))
 }
 
 /// Update a bundle
@@ -202,7 +210,12 @@ async fn get_bundle(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Bundle updated")
+        (status = 200, description = "Bundle updated; the `ETag` response header \
+            carries the new modification stamp"),
+        (status = 412, description = "If-Match did not match the current bundle \
+            (a concurrent writer won) — GET the bundle again and retry"),
+        (status = 428, description = "If-Match missing while the server enforces \
+            preconditions (`server.require_if_match`)")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -210,13 +223,29 @@ async fn update_bundle(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, bundle_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<UpdateBundle>,
-) -> ApiResult<Json<crate::domain::Bundle>> {
+) -> ApiResult<(
+    [(header::HeaderName, String); 1],
+    Json<crate::domain::Bundle>,
+)> {
     let org_id = authorize_org(&state, &user, &org, &[Scope::BundleWrite])
         .await?
         .id;
     // Tenant guard: 404 unless the bundle belongs to this org.
-    state.bundle_service.get_scoped(org_id, bundle_id).await?;
+    let current = state.bundle_service.get_scoped(org_id, bundle_id).await?;
+
+    // Optimistic concurrency (Plan 07 Phase C): fast-fail a stale If-Match
+    // here; the repository's `AND updated_at = $expected` is the atomic
+    // arbiter for writers racing past this check.
+    let current_stamp = current.updated_at.to_rfc3339();
+    let guarded = check_precondition(
+        &headers,
+        &current_stamp,
+        state.config.server.require_if_match,
+        &format!("bundle {bundle_id}"),
+    )?;
+    let expected = guarded.then_some(current_stamp.as_str());
 
     // Update bundle metadata through repository
     let bundle = crate::db::repositories::BundleRepository::new(&state.db)
@@ -225,11 +254,13 @@ async fn update_bundle(
             input.name.as_deref(),
             input.description.as_deref(),
             None,
+            expected,
         )
         .await
         .map_err(ApiError::from)?;
 
-    Ok(Json(bundle))
+    let new_tag = etag(&bundle.updated_at.to_rfc3339());
+    Ok(([(header::ETAG, new_tag)], Json(bundle)))
 }
 
 /// Delete a bundle
