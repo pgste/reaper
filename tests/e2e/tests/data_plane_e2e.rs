@@ -180,7 +180,9 @@ async fn data_plane_replication_end_to_end() {
 
     let post = |path: String, body: Value| {
         let client = client.clone();
-        let url = format!("{mgmt_url}{path}");
+        // Resource API is served under /api/v1 (Plan 07 Phase B). Health probes
+        // (wait_healthy) still hit the unversioned root.
+        let url = format!("{mgmt_url}/api/v1{path}");
         let key = api_key.clone();
         async move {
             let resp = client
@@ -288,7 +290,7 @@ async fn data_plane_replication_end_to_end() {
 
     // --- Mutations after the snapshot: attribute change + CASCADE delete. ---
     let resp = client
-        .put(format!("{mgmt_url}{base}/entities/alice/attributes"))
+        .put(format!("{mgmt_url}/api/v1{base}/entities/alice/attributes"))
         .header("X-API-Key", api_key.clone())
         .json(&json!({"mfa": false, "clearance": 2}))
         .send()
@@ -296,7 +298,7 @@ async fn data_plane_replication_end_to_end() {
         .unwrap();
     assert!(resp.status().is_success(), "attr update");
     let resp = client
-        .delete(format!("{mgmt_url}{base}/entities/bob"))
+        .delete(format!("{mgmt_url}/api/v1{base}/entities/bob"))
         .header("X-API-Key", api_key.clone())
         .send()
         .await

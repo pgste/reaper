@@ -20,6 +20,25 @@ fn management_url() -> String {
     std::env::var("REAPER_MANAGEMENT_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
 }
 
+/// Map a bare management path to the single `/api/v1` surface (Plan 07 Phase B).
+/// Health/metrics/openapi probes stay unversioned at the root; anything already
+/// `/api/v1`-prefixed is left as-is.
+fn mgmt_uri(path: &str) -> String {
+    let p = path.split('?').next().unwrap_or(path);
+    let is_probe = p == "/health"
+        || p.starts_with("/health/")
+        || p == "/live"
+        || p == "/ready"
+        || p == "/metrics"
+        || p.starts_with("/metrics/")
+        || p == "/openapi.json";
+    if is_probe || path.starts_with("/api/v1") {
+        path.to_string()
+    } else {
+        format!("/api/v1{path}")
+    }
+}
+
 fn agent_url() -> String {
     std::env::var("REAPER_AGENT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
@@ -104,14 +123,16 @@ impl TestClient {
     // Management API helpers
 
     async fn management_get(&self, path: &str) -> reqwest::Result<reqwest::Response> {
-        let req = self.client.get(format!("{}{}", self.management_url, path));
+        let req = self
+            .client
+            .get(format!("{}{}", self.management_url, mgmt_uri(path)));
         self.auth_headers(req).send().await
     }
 
     async fn management_post(&self, path: &str, body: Value) -> reqwest::Result<reqwest::Response> {
         let req = self
             .client
-            .post(format!("{}{}", self.management_url, path))
+            .post(format!("{}{}", self.management_url, mgmt_uri(path)))
             .json(&body);
         self.auth_headers(req).send().await
     }
@@ -119,7 +140,7 @@ impl TestClient {
     async fn management_delete(&self, path: &str) -> reqwest::Result<reqwest::Response> {
         let req = self
             .client
-            .delete(format!("{}{}", self.management_url, path));
+            .delete(format!("{}{}", self.management_url, mgmt_uri(path)));
         self.auth_headers(req).send().await
     }
 

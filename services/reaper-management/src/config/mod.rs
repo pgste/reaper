@@ -83,6 +83,12 @@ impl Config {
         config.server.bind_address = bind;
         config.server.port = port;
 
+        // Transitional bare-root alias (Plan 07 Phase B) — default off.
+        if let Ok(v) = std::env::var("REAPER_SERVE_ROOT_ALIAS") {
+            config.server.serve_root_alias =
+                matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+
         // Database overrides
         if let Ok(url) = std::env::var("REAPER_DATABASE_URL") {
             config.database.url = url;

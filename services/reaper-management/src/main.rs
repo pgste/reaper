@@ -213,11 +213,27 @@ fn build_router(
     state: Arc<AppState>,
     rate_limiter: Option<Arc<rate_limit::ApiRateLimiter>>,
 ) -> Router {
-    // Serve the API at BOTH the root (existing consumers/tests) and the
-    // documented /api/v1 prefix (reaper-sync and external clients build
-    // URLs against /api/v1 — caught by the process-level data-plane E2E).
-    let api_router =
-        api::build_api_router().merge(Router::new().nest("/api/v1", api::build_api_router()));
+    // Single versioned surface (Plan 07 Phase B): the resource API is served
+    // only under /api/v1; health/metrics/openapi probes stay unversioned at the
+    // root. A bare `/orgs/...` returns 404 unless the transitional alias is on.
+    let api_router = api::build_served_router();
+
+    // Transitional bare-root alias (default OFF). When enabled, the pre-Plan-07
+    // un-versioned layout is also served, tagged with RFC 8594
+    // Deprecation/Warning headers, for one release so un-migrated clients keep
+    // working while they move to /api/v1. The alias body still authenticates
+    // (the auth gateway runs below); only the deprecation headers are extra.
+    let api_router = if state.config.server.serve_root_alias {
+        warn!(
+            "serve_root_alias=true: serving the DEPRECATED un-versioned API at the \
+             bare root with Deprecation headers — migrate clients to /api/v1"
+        );
+        api_router.merge(
+            api::build_api_router().layer(middleware::from_fn(app_middleware::deprecation_headers)),
+        )
+    } else {
+        api_router
+    };
 
     // Default-deny authentication gateway: authenticate every non-public request
     // at the router layer so a handler that forgets `RequireAuth` still fails

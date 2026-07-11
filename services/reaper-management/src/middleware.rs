@@ -280,6 +280,29 @@ pub async fn access_log(request: Request, next: Next) -> Response<Body> {
     response
 }
 
+/// RFC 8594 deprecation signaling for responses served from the transitional
+/// bare-root API alias (Plan 07 Phase B). The un-versioned surface is retired
+/// after its one-release grace window; clients must migrate to `/api/v1`.
+/// Applied only to the alias routes (never to `/api/v1` or the probes).
+pub async fn deprecation_headers(request: Request, next: Next) -> Response<Body> {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    // Deprecation: true (RFC 8594 — the resource is deprecated).
+    headers.insert("Deprecation", HeaderValue::from_static("true"));
+    // Point clients at the successor surface.
+    headers.insert(
+        "Link",
+        HeaderValue::from_static("</api/v1>; rel=\"successor-version\""),
+    );
+    headers.insert(
+        "Warning",
+        HeaderValue::from_static(
+            "299 - \"Un-versioned API is deprecated; migrate to /api/v1. See docs/api/VERSIONING.md\"",
+        ),
+    );
+    response
+}
+
 /// Deny-equivalent body for a caught panic. No internal detail leaks to the
 /// client; the panic message goes to the error log.
 const PANIC_BODY: &str =

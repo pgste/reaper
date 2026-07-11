@@ -76,10 +76,32 @@ pub fn build_openapi_router() -> OpenApiRouter<Arc<AppState>> {
         .merge(scim::routes())
 }
 
-/// Build the API router with all routes (state deferred — applied by the
-/// caller). Backwards-compatible entry point for existing callers/tests.
+/// Build the resource-API router with all routes at their bare paths (state
+/// deferred). This is the router that gets nested under `/api/v1`; it is also
+/// the body of the transitional bare-root alias.
 pub fn build_api_router() -> Router<Arc<AppState>> {
     build_openapi_router().split_for_parts().0
+}
+
+/// The single versioned surface (Plan 07 Phase B): the resource API is served
+/// **only** under `/api/v1`, while the health/metrics/`openapi.json` probes stay
+/// unversioned at the root for orchestrators and contract discovery. The binary
+/// layers on auth, middleware, and — when `serve_root_alias` is set — the
+/// deprecated bare-root alias.
+pub fn build_served_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .nest("/api/v1", build_api_router())
+        .merge(probe_routes())
+}
+
+/// Unversioned probes + contract discovery served at the root. `/health`,
+/// `/health/*`, `/live`, `/ready`, `/metrics`, `/metrics/prometheus` (from the
+/// health module) plus `/openapi.json`. These are also reachable under
+/// `/api/v1` via the nested router; the root copies exist so orchestrator
+/// probes and spec discovery do not have to know the API version.
+pub fn probe_routes() -> Router<Arc<AppState>> {
+    let (health_router, _) = health::routes().split_for_parts();
+    health_router.route("/openapi.json", axum::routing::get(openapi::serve_openapi))
 }
 
 /// Generate the assembled OpenAPI 3.1 document for the control plane.
