@@ -1,0 +1,134 @@
+# =============================================================================
+# PostgreSQL HA — CloudNativePG cluster (self-hosted / portable path)
+# =============================================================================
+# Production-grade replacement for the single-replica postgres.yaml:
+#   * 3 instances (1 primary + 2 streaming standbys), automatic failover
+#   * pod anti-affinity spreads instances across nodes/zones
+#   * continuous WAL archiving + nightly base backups to S3-compatible
+#     object storage (retention 14 days) => PITR anywhere in the window
+#
+# Prerequisite: the CloudNativePG operator must be installed first — see
+# docs/deployment/CONTROL_PLANE_HA_DR.md §4. The recommended production
+# default is a MANAGED HA Postgres (RDS/Cloud SQL/Azure) instead; this
+# manifest is the portable/self-hosted alternative (same connection
+# contract: point DATABASE_URL at the reaper-pg-rw Service).
+#
+# Deploy with:  kubectl apply -f postgres-cnpg.yaml
+# NOT included in kustomization.yaml by default (requires operator CRDs).
+# =============================================================================
+
+---
+# Object-storage credentials for WAL archiving + backups.
+# REPLACE the placeholders (or manage via external-secrets / sealed-secrets).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: reaper-pg-backup-creds
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-pg
+    app.kubernetes.io/component: database-backup
+type: Opaque
+stringData:
+  ACCESS_KEY_ID: "REPLACE-ME"
+  SECRET_ACCESS_KEY: "REPLACE-ME"
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: reaper-pg
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-pg
+    app.kubernetes.io/component: database
+spec:
+  instances: 3
+
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  primaryUpdateStrategy: unsupervised
+
+  bootstrap:
+    initdb:
+      database: reaper_management
+      owner: reaper
+      # The operator generates the app password into the `reaper-pg-app`
+      # secret; reference it from REAPER_DATABASE_URL, or pre-create the
+      # secret to pin credentials.
+
+  postgresql:
+    parameters:
+      # Bound the RPO: force a WAL segment switch (and archive) at least
+      # every 5 minutes even under low write volume.
+      archive_timeout: "300s"
+      max_connections: "200"
+      shared_buffers: "256MB"
+      wal_compression: "on"
+    # Standbys stream asynchronously by default (durability comes from WAL
+    # archiving). For zero-data-loss failover at the cost of write latency,
+    # uncomment to require one synchronous standby:
+    # syncReplicaElectionConstraint:
+    #   enabled: true
+
+  # Spread instances across nodes (and zones where labels exist).
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+
+  storage:
+    size: 20Gi
+    # storageClass: <set to your zone-replicated / SSD class>
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  monitoring:
+    enablePodMonitor: false   # flip on if the Prometheus operator is present
+
+  # Continuous archiving + base backups (PITR source of truth).
+  backup:
+    retentionPolicy: "14d"
+    barmanObjectStore:
+      destinationPath: s3://reaper-pg-backups/
+      endpointURL: https://REPLACE-WITH-S3-ENDPOINT
+      s3Credentials:
+        accessKeyId:
+          name: reaper-pg-backup-creds
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: reaper-pg-backup-creds
+          key: SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+        # Encrypt if the endpoint supports SSE; otherwise use an
+        # encrypted-at-rest bucket.
+        # encryption: AES256
+      data:
+        compression: gzip
+        # encryption: AES256
+
+---
+# Nightly base backup (WAL is archived continuously regardless; the base
+# backup bounds restore/replay time).
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: reaper-pg-nightly
+  namespace: reaper
+  labels:
+    app.kubernetes.io/name: reaper-pg
+    app.kubernetes.io/component: database-backup
+spec:
+  # At 02:15 every night (CNPG uses a 6-field cron: sec min hour dom mon dow).
+  schedule: "0 15 2 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: reaper-pg
+  immediate: true   # take the first backup as soon as the cluster is ready

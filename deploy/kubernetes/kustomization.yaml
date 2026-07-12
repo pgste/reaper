@@ -18,6 +18,10 @@ commonLabels:
   app.kubernetes.io/managed-by: kustomize
 
 # Resources to include
+# NOTE: postgres.yaml is DEV/DEMO ONLY (single replica, no HA/backup). For
+# production replace it with a managed HA Postgres endpoint, or swap in the
+# CloudNativePG manifests (postgres-cnpg.yaml + postgres-restore-check.yaml,
+# operator required) — see docs/deployment/CONTROL_PLANE_HA_DR.md.
 resources:
   - namespace.yaml
   - postgres.yaml

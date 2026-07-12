@@ -1,6 +1,18 @@
 # =============================================================================
 # PostgreSQL - Kubernetes StatefulSet for Reaper Management
 # =============================================================================
+# *** DEV / DEMO ONLY — NOT AN HA POSTURE ***
+# Single replica, no failover, no WAL archiving, no backups: losing this pod's
+# PV loses the policy/audit source-of-truth. For anything production-grade use
+# either:
+#   * a MANAGED HA Postgres (RDS / Cloud SQL / Azure Flexible Server) — the
+#     recommended default; point DATABASE_URL at its stable endpoint, or
+#   * the self-hosted CloudNativePG cluster: postgres-cnpg.yaml (3 instances,
+#     automatic failover, continuous WAL archiving + PITR) plus the nightly
+#     postgres-restore-check.yaml verification job.
+# See docs/deployment/CONTROL_PLANE_HA_DR.md for both paths and the
+# RPO/RTO targets.
+#
 # Deploy with: kubectl apply -f postgres.yaml
 # =============================================================================
 
