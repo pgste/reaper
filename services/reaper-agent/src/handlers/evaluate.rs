@@ -364,6 +364,16 @@ pub async fn evaluate_policy(
                 cache_hit: true,
             })
             .unwrap_or_default();
+
+            // Cache hits are served requests too — feed the request-total SLA
+            // series so a cache-heavy workload's p99 isn't invisible. Constant
+            // "cached" label: the hit is scoped to a policy set, not one policy.
+            state
+                .decision_metrics
+                .for_policy("cached")
+                .duration
+                .observe(start_time.elapsed().as_secs_f64());
+
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
         state.stats.record_decision_cache_miss();
@@ -408,10 +418,13 @@ pub async fn evaluate_policy(
 
     // Record Prometheus metrics via cached per-policy handles — no UUID in
     // labels (high-cardinality anti-pattern), and no per-request label hashing.
-    let latency_seconds = total_eval_time_ns as f64 / 1_000_000_000.0;
+    // The engine slice goes to reaper_engine_eval_seconds; the request-total
+    // observation happens after response serialization below (Phase D).
     let metrics = state.decision_metrics.for_policy(&matched_policy_name);
     metrics.counter(&final_decision).inc();
-    metrics.duration.observe(latency_seconds);
+    metrics
+        .engine_duration
+        .observe(total_eval_time_ns as f64 / 1_000_000_000.0);
 
     // Attach OpenTelemetry attributes only when the trace is sampled. The
     // context/span-context lookup and all the KeyValue allocations are skipped
@@ -553,6 +566,10 @@ pub async fn evaluate_policy(
         cache_hit: false,
     })
     .unwrap_or_default();
+
+    // Request-total latency (handler entry → serialized response), so the SLA
+    // series reports what a client experiences, not just the engine slice.
+    metrics.duration.observe(start_time.elapsed().as_secs_f64());
 
     Ok(([(header::CONTENT_TYPE, "application/json")], body))
 }
@@ -781,10 +798,14 @@ pub async fn fast_evaluate_policy(
     };
 
     // Record metrics via cached per-policy handles — avoids re-hashing the
-    // label values and re-locking the metric vecs on every request.
+    // label values and re-locking the metric vecs on every request. Engine
+    // slice here; the request-total observation happens after response
+    // serialization below (Phase D), same as the standard endpoint.
     let metrics = state.decision_metrics.for_policy(&policy_name_resolved);
     metrics.counter(&final_decision).inc();
-    metrics.duration.observe(total_time.as_secs_f64());
+    metrics
+        .engine_duration
+        .observe(total_eval_time_ns as f64 / 1_000_000_000.0);
 
     // Audit: capture the decision (deny-priority sampled). The fast path was
     // previously not logged at all, so fast-endpoint decisions went unaudited —
@@ -868,6 +889,10 @@ pub async fn fast_evaluate_policy(
         cache_hit: false,
     })
     .unwrap_or_default();
+
+    // Request-total latency (handler entry → serialized response) into the
+    // same SLA series as the standard endpoint, so the two are comparable.
+    metrics.duration.observe(start_time.elapsed().as_secs_f64());
 
     Ok(([(header::CONTENT_TYPE, "application/json")], resp_body))
 }

@@ -38,15 +38,40 @@ lazy_static! {
     )
     .expect("Failed to register DECISIONS_TOTAL metric");
 
-    /// Decision latency histogram (sub-microsecond tracking).
-    /// Buckets: 100ns, 500ns, 1µs, 5µs, 10µs, 50µs, 100µs, 500µs, 1ms
+    /// Request-total decision latency histogram (Plan 08 Phase D).
+    ///
+    /// Both `/api/v1/messages` and `/api/v1/fast-messages` observe the time
+    /// from handler entry to serialized response into this series, so the two
+    /// endpoints are comparable and dashboards report the latency a client
+    /// actually experiences. The engine-only slice is the separate
+    /// `reaper_engine_eval_seconds` series below — previously the standard
+    /// endpoint fed the engine slice into this same series, silently
+    /// understating p99.
+    /// Buckets: 100ns .. 10ms (request-total includes parse + serialize).
     pub static ref DECISION_DURATION: HistogramVec = register_histogram_vec!(
         "reaper_decision_duration_seconds",
-        "Policy decision latency in seconds",
+        "Request-total policy decision latency in seconds (handler entry to serialized response)",
+        &["policy_name"],
+        vec![
+            0.0000001, 0.0000005, 0.000001, 0.000005, 0.00001, 0.00005, 0.0001, 0.0005, 0.001,
+            0.005, 0.01
+        ]
+    )
+    .expect("Failed to register DECISION_DURATION metric");
+
+    /// Engine-slice evaluation latency histogram (sub-microsecond tracking).
+    /// Measures only the policy-engine evaluation, excluding JSON parse,
+    /// cache probe, logging, and response serialization. This is the series
+    /// that backs the sub-microsecond engine claim; the SLA series is the
+    /// request-total `reaper_decision_duration_seconds` above.
+    /// Buckets: 100ns, 500ns, 1µs, 5µs, 10µs, 50µs, 100µs, 500µs, 1ms
+    pub static ref ENGINE_EVAL_DURATION: HistogramVec = register_histogram_vec!(
+        "reaper_engine_eval_seconds",
+        "Policy-engine evaluation latency in seconds (engine slice only)",
         &["policy_name"],
         vec![0.0000001, 0.0000005, 0.000001, 0.000005, 0.00001, 0.00005, 0.0001, 0.0005, 0.001]
     )
-    .expect("Failed to register DECISION_DURATION metric");
+    .expect("Failed to register ENGINE_EVAL_DURATION metric");
 
     /// Total denials (security events).
     ///

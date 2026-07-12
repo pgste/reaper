@@ -165,6 +165,13 @@ impl ReaperAgentConfig {
                 }
             }
         }
+        // Plan 08 Phase D: tokio runtime sizing (0 = auto-detect). Lets a
+        // cgroup-limited sidecar run fewer workers than the host CPU count.
+        if let Ok(val) = std::env::var("REAPER_WORKER_THREADS") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.performance.worker_threads = n;
+            }
+        }
         // Plan 08 Phase A: evaluate-all fan-out controls.
         if let Ok(val) = std::env::var("REAPER_ALLOW_EVALUATE_ALL") {
             self.performance.allow_evaluate_all =
@@ -537,6 +544,18 @@ mod tests {
                 .find(|(k, _)| *k == name)
                 .map(|(_, v)| v.to_string())
         }
+    }
+
+    #[test]
+    fn test_worker_threads_env_override() {
+        std::env::set_var("REAPER_WORKER_THREADS", "3");
+        let config = ReaperAgentConfig::from_env();
+        std::env::remove_var("REAPER_WORKER_THREADS");
+        assert_eq!(config.performance.worker_threads, 3);
+
+        // Absent → config default: 0 = auto-detect.
+        let config = ReaperAgentConfig::from_env();
+        assert_eq!(config.performance.worker_threads, 0);
     }
 
     #[test]
