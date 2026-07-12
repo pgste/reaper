@@ -139,6 +139,27 @@ pub struct GitConfig {
     /// when `require_signed_commits` is set.
     #[serde(default)]
     pub trusted_signing_keys: Vec<String>,
+    /// How UI/API edits to a policy backed by this source are reconciled with
+    /// git (Plan 09 Step 9, ADR-3). Default `commit_back`.
+    #[serde(default)]
+    pub conflict_mode: ConflictMode,
+}
+
+/// Git↔UI conflict model for a git-backed source (Plan 09 Step 9 / ADR-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictMode {
+    /// Recommended default: a UI/API edit opens a branch + commit on the source
+    /// repo; deployed state is only ever changed by the sync path materializing
+    /// a commit, so there is exactly one lineage and drift is impossible.
+    #[default]
+    CommitBack,
+    /// Git is authoritative: UI/API edits to a git-backed policy are rejected.
+    ReadOnly,
+    /// Escape hatch (discouraged): the UI/API edit is applied directly to the
+    /// deployed state and git is left behind — guarantees eventual divergence,
+    /// so a drift event is emitted. Offered, not recommended.
+    LastWriterWins,
 }
 
 fn default_branch() -> String {
@@ -164,6 +185,7 @@ impl Default for GitConfig {
             repo_full_name: None,
             require_signed_commits: false,
             trusted_signing_keys: Vec::new(),
+            conflict_mode: ConflictMode::default(),
         }
     }
 }

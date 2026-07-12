@@ -396,6 +396,27 @@ fn event_to_sse(event: ServerEvent) -> Event {
             }))
             .unwrap_or_else(|_| Event::default().data("error")),
 
+        ServerEvent::DriftDetected {
+            source_id,
+            source_name,
+            org_id,
+            namespace_id,
+            added,
+            removed,
+            changed,
+        } => Event::default()
+            .event("drift_detected")
+            .json_data(serde_json::json!({
+                "source_id": source_id,
+                "source_name": source_name,
+                "org_id": org_id,
+                "namespace_id": namespace_id,
+                "added": added,
+                "removed": removed,
+                "changed": changed
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
+
         ServerEvent::AgentRegistered {
             agent_id,
             agent_name,

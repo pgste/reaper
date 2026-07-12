@@ -188,6 +188,85 @@ impl GitSyncer {
         self.base_path.join(source_id.to_string())
     }
 
+    /// Commit `content` to `rel_path` in the source's local clone and push it
+    /// to the tracked branch (Plan 09 Step 9, commit-back). Returns the new
+    /// commit SHA. The commit message carries a `Reaper-Commit-Back: true`
+    /// trailer so the webhook handler can recognize (and skip re-syncing) its
+    /// own commits, avoiding a commit → webhook → materialize loop.
+    ///
+    /// Requires the source to have been cloned already (i.e. synced at least
+    /// once); the push authenticates with the same resolved credential as sync
+    /// (a minted App installation token, or configured userpass).
+    pub async fn commit_and_push(
+        &self,
+        source: &PolicySource,
+        rel_path: &str,
+        content: &str,
+        author_name: &str,
+        author_email: &str,
+        message: &str,
+    ) -> Result<String, GitSyncError> {
+        let config = source
+            .git_config()
+            .ok_or_else(|| GitSyncError::Config("Invalid Git configuration".to_string()))?;
+        let (push_url, cred) = self.resolve_auth(&config).await?;
+        guard_remote_url(&push_url).await?;
+
+        let repo_path = self.repo_path(source.id);
+        let repo = git2::Repository::open(&repo_path).map_err(|_| {
+            GitSyncError::Config(
+                "source has no local clone; sync it before committing back".to_string(),
+            )
+        })?;
+
+        // Write the file (creating parent dirs), then stage it.
+        let abs = repo_path.join(rel_path);
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&abs, content)?;
+
+        let mut index = repo.index()?;
+        index.add_path(Path::new(rel_path))?;
+        index.write()?;
+        let tree = repo.find_tree(index.write_tree()?)?;
+
+        // Commit on top of the current branch tip.
+        let sig = git2::Signature::now(author_name, author_email)?;
+        let full_message = format!("{message}\n\nReaper-Commit-Back: true\n");
+        let parent_commit = repo.head()?.peel_to_commit()?;
+        let new_oid = repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &full_message,
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        // Push the branch to origin with the resolved credential. Point origin
+        // at the (token-free) push URL so App installs push over https with the
+        // minted token as the credential, exactly like fetch.
+        repo.remote_set_url("origin", &push_url)?;
+        let mut remote = repo.find_remote("origin")?;
+        let mut push_opts = git2::PushOptions::new();
+        push_opts.remote_callbacks(Self::callbacks_for(&cred));
+        // Push HEAD (the just-created commit) to the tracked branch. The synced
+        // clone checks out a remote-tracking ref rather than a local branch, so
+        // pushing `HEAD` — not `refs/heads/{branch}` — is what resolves to the
+        // new commit.
+        let refspec = format!("HEAD:refs/heads/{}", config.branch);
+        remote.push(&[&refspec], Some(&mut push_opts))?;
+
+        info!(
+            source_id = %source.id,
+            commit = %new_oid,
+            branch = %config.branch,
+            "Committed policy edit back to git (commit-back)"
+        );
+        Ok(new_oid.to_string())
+    }
+
     /// Build remote callbacks that authenticate with `cred` when present.
     fn callbacks_for(cred: &GitCred) -> git2::RemoteCallbacks<'static> {
         let mut callbacks = git2::RemoteCallbacks::new();

@@ -78,6 +78,17 @@ pub enum ServerEvent {
         namespace_id: Option<uuid::Uuid>,
         error: String,
     },
+    /// Drift detected between a git source's HEAD and its deployed policies
+    /// (Plan 09 Step 8).
+    DriftDetected {
+        source_id: uuid::Uuid,
+        source_name: String,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        added: usize,
+        removed: usize,
+        changed: usize,
+    },
     /// Agent registered
     AgentRegistered {
         agent_id: uuid::Uuid,
@@ -164,6 +175,7 @@ impl ServerEvent {
             ServerEvent::SyncStarted { org_id, .. } => Some(*org_id),
             ServerEvent::SyncCompleted { org_id, .. } => Some(*org_id),
             ServerEvent::SyncFailed { org_id, .. } => Some(*org_id),
+            ServerEvent::DriftDetected { org_id, .. } => Some(*org_id),
             ServerEvent::AgentRegistered { org_id, .. } => Some(*org_id),
             ServerEvent::AgentUnhealthy { org_id, .. } => Some(*org_id),
             ServerEvent::AgentHealthy { org_id, .. } => Some(*org_id),
@@ -188,6 +200,7 @@ impl ServerEvent {
             ServerEvent::SyncStarted { namespace_id, .. } => *namespace_id,
             ServerEvent::SyncCompleted { namespace_id, .. } => *namespace_id,
             ServerEvent::SyncFailed { namespace_id, .. } => *namespace_id,
+            ServerEvent::DriftDetected { namespace_id, .. } => *namespace_id,
             ServerEvent::AgentRegistered { namespace_id, .. } => *namespace_id,
             ServerEvent::AgentUnhealthy { namespace_id, .. } => *namespace_id,
             ServerEvent::AgentHealthy { namespace_id, .. } => *namespace_id,

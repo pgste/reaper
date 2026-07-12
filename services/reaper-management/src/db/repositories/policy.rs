@@ -126,6 +126,34 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// List policies for an organization
+    /// List all policies materialized from a given source (Plan 09 Step 8).
+    /// Used by drift detection to compare the deployed policy set against the
+    /// source's git HEAD.
+    pub async fn list_by_source(&self, source_id: Uuid) -> Result<Vec<Policy>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, org_id, team_id, source_id, name, description, language, source_path, is_active, created_at, updated_at
+            FROM policies
+            WHERE source_id = $1
+            ORDER BY name ASC
+            "#,
+        )
+        .bind(source_id.to_string())
+        .fetch_all(pool)
+        .await?;
+
+        let mut policies = Vec::with_capacity(rows.len());
+        for row in rows {
+            policies.push(self.row_to_policy(row)?);
+        }
+        Ok(policies)
+    }
+
     pub async fn list_by_org(
         &self,
         org_id: Uuid,
