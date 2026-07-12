@@ -112,6 +112,19 @@ pub struct CallbackParams {
     pub state: String,
 }
 
+/// Query params for the GitHub App setup callback (Plan 09 Step 6). GitHub
+/// appends `installation_id` and `setup_action` after an admin installs the
+/// App; `state` is our HMAC-signed org/user token.
+#[derive(Debug, Deserialize)]
+pub(super) struct AppSetupParams {
+    pub state: String,
+    #[serde(default)]
+    pub installation_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub setup_action: Option<String>,
+}
+
 /// GitHub access token response
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]

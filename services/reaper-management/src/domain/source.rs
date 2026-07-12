@@ -115,6 +115,30 @@ pub struct GitConfig {
     /// File patterns to include (glob)
     #[serde(default = "default_patterns")]
     pub patterns: Vec<String>,
+
+    // --- Provenance / hardening (Plan 09 Phase B) ------------------------
+    /// Provider driving this source ("github" | "gitlab"). Set when the source
+    /// was created via an App/OAuth flow; used to resolve webhook handlers and
+    /// to mint installation tokens.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// GitHub App installation id. When set, cloning mints a short-lived
+    /// installation token at sync time instead of using `password` — no
+    /// long-lived credential is stored in `url` or `password` (Plan 09 Step 6).
+    #[serde(default)]
+    pub installation_id: Option<String>,
+    /// "owner/repo" — how a webhook payload identifies this source, and what
+    /// the installation-token clone URL is built from.
+    #[serde(default)]
+    pub repo_full_name: Option<String>,
+    /// Require the tracked HEAD commit to carry a trusted signature (Plan 09
+    /// Step 5). When true, an unsigned/untrusted HEAD fails the sync closed.
+    #[serde(default)]
+    pub require_signed_commits: bool,
+    /// Trusted SSH signer public keys (`ssh-ed25519 AAAA… comment`) checked
+    /// when `require_signed_commits` is set.
+    #[serde(default)]
+    pub trusted_signing_keys: Vec<String>,
 }
 
 fn default_branch() -> String {
@@ -135,6 +159,11 @@ impl Default for GitConfig {
             username: None,
             password: None,
             patterns: default_patterns(),
+            provider: None,
+            installation_id: None,
+            repo_full_name: None,
+            require_signed_commits: false,
+            trusted_signing_keys: Vec::new(),
         }
     }
 }

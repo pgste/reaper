@@ -21,6 +21,7 @@ use crate::state::ServerEvent;
 use super::api::{ApiSyncError, ApiSyncer};
 use super::bundle_url::{BundleUrlSyncError, BundleUrlSyncer};
 use super::git::{GitSyncError, GitSyncer};
+use super::github_app::GitHubAppClient;
 use super::s3::{S3SyncError, S3Syncer};
 
 /// Unified sync error
@@ -140,6 +141,13 @@ impl SyncService {
     /// policy rows + a bundle keyed by the commit SHA (Plan 09 Step 2).
     pub fn with_materializer(mut self, bundle_service: Arc<BundleService>) -> Self {
         self.bundle_service = Some(bundle_service);
+        self
+    }
+
+    /// Attach a GitHub App client so App-installed sources clone with a
+    /// short-lived installation token minted at sync time (Plan 09 Step 6).
+    pub fn with_github_app(mut self, app_client: Option<Arc<GitHubAppClient>>) -> Self {
+        self.git_syncer = GitSyncer::new(&self.config.git_base_path).with_app_client(app_client);
         self
     }
 
