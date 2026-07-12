@@ -1,0 +1,81 @@
+# Blocking perf regression gate — paired A/B on shared runners (Plan 08 Phase F).
+#
+# The trend dashboard (perf-tracking.yml) compares against numbers measured on
+# a DIFFERENT shared runner days ago, so it can only warn (±25-33% machine
+# variance). This gate removes that variance by construction: it benchmarks
+# the PR's merge-base AND head in the SAME job on the SAME runner, minutes
+# apart, and compares criterion's saved baselines statistically.
+#
+# Gate rule (scripts/perf_ab_gate.py): a benchmark fails when its head mean
+# exceeds base mean by the threshold (10% for the stable eval-latency set,
+# 50% for variance-prone micro-ops) AND the 95% confidence intervals do not
+# overlap — a regression outside measurement noise. The script's --self-test
+# runs first on every job and proves a clean synthetic +15% regression fails,
+# so the gate's sensitivity is continuously verified (Plan 08 §3 DoD).
+#
+# If a dedicated runner ever materializes, only `runs-on` changes — the
+# paired design still helps there too.
+
+name: Perf Gate
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "services/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/perf-gate.yml"
+      - "scripts/perf_ab_gate.py"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ab-gate:
+    name: Paired A/B criterion gate (merge-base vs head)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout PR head (full history for merge-base)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-bench"
+          cache-on-failure: true
+
+      - name: Gate self-test (synthetic +15% regression must fail)
+        run: python3 scripts/perf_ab_gate.py --self-test
+
+      - name: Benchmark merge-base (baseline "base")
+        run: |
+          set -euo pipefail
+          BASE_REF="${{ github.event.pull_request.base.ref || 'main' }}"
+          BASE_SHA="$(git merge-base HEAD "origin/${BASE_REF}")"
+          echo "merge-base with origin/${BASE_REF}: ${BASE_SHA}"
+          git checkout --quiet "${BASE_SHA}"
+          cargo bench -p policy-engine --bench policy_evaluation_bench -- --save-baseline base
+          cargo bench -p policy-engine --bench rebac_bench -- --save-baseline base
+
+      - name: Benchmark PR head (baseline "head")
+        run: |
+          set -euo pipefail
+          git checkout --quiet "${{ github.event.pull_request.head.sha || github.sha }}"
+          cargo bench -p policy-engine --bench policy_evaluation_bench -- --save-baseline head
+          cargo bench -p policy-engine --bench rebac_bench -- --save-baseline head
+
+      - name: Compare baselines (blocking)
+        run: python3 scripts/perf_ab_gate.py --criterion-dir target/criterion --base base --head head

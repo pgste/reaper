@@ -12,11 +12,13 @@ use axum::{
     routing::post,
     Router,
 };
-use policy_engine::{cache_config::CacheConfig, PolicyEngine};
-use reaper_agent::handlers::batch_evaluate_policy;
+use policy_engine::{
+    cache_config::CacheConfig, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRule,
+};
+use reaper_agent::handlers::{batch_evaluate_policy, evaluate_policy};
 use reaper_agent::management::verify::BundleVerifier;
 use reaper_agent::state::{AgentState, AgentStats, DataSyncState};
-use reaper_agent::types::{BatchEvaluateRequest, BatchRequestItem};
+use reaper_agent::types::{BatchEvaluateRequest, BatchRequestItem, EvaluateRequest};
 use reaper_core::config::{ManagementSettings, ReaperAgentConfig};
 use tower::ServiceExt; // for `oneshot`
 
@@ -78,6 +80,101 @@ async fn batch_at_cap_is_not_rejected_by_the_cap() {
         result.is_ok(),
         "a batch at the cap must pass the count guard"
     );
+}
+
+fn simple_allow(name: &str, resource: &str) -> EnhancedPolicy {
+    EnhancedPolicy::new(
+        name.to_string(),
+        String::new(),
+        vec![PolicyRule {
+            action: PolicyAction::Allow,
+            resource: resource.to_string(),
+            conditions: vec![],
+        }],
+    )
+}
+
+/// Plan 08 Phase B: the batch loop fans out across the rayon pool. Parallel
+/// execution must not reorder results or mix up per-request decisions.
+#[tokio::test]
+async fn parallel_batch_preserves_order_and_decisions() {
+    let state = state_with_max_batch(1000);
+    state
+        .policy_engine
+        .deploy_policy(simple_allow("batch-par", "/doc"))
+        .unwrap();
+
+    // Mixed batch: even indices hit /doc (allow), odd hit /other (default deny).
+    let requests = (0..300)
+        .map(|i| BatchRequestItem {
+            id: format!("r{i}"),
+            principal: "alice".to_string(),
+            resource: if i % 2 == 0 { "/doc" } else { "/other" }.to_string(),
+            action: "read".to_string(),
+            context: None,
+        })
+        .collect();
+    let req = BatchEvaluateRequest {
+        policy_id: None,
+        policy_name: Some("batch-par".to_string()),
+        requests,
+    };
+
+    let Json(body) = batch_evaluate_policy(State(state), Json(req))
+        .await
+        .expect("batch evaluation failed");
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 300);
+    for (i, r) in results.iter().enumerate() {
+        assert_eq!(r["index"].as_u64().unwrap() as usize, i, "order preserved");
+        let expected = if i % 2 == 0 { "allow" } else { "deny" };
+        assert_eq!(r["decision"], expected, "decision for request {i}");
+    }
+    assert_eq!(body["summary"]["allowed"], 150);
+    assert_eq!(body["summary"]["denied"], 150);
+}
+
+/// Functional head-of-line check (Plan 08 Phase B): while a full-cap batch
+/// runs on the blocking/rayon pools, concurrent single evaluations on the
+/// async runtime still complete.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_evals_complete_while_large_batch_runs() {
+    let state = state_with_max_batch(1000);
+    state
+        .policy_engine
+        .deploy_policy(simple_allow("hol", "/doc"))
+        .unwrap();
+
+    let mut batch = batch_of(1000);
+    batch.policy_name = Some("hol".to_string());
+    let batch_state = state.clone();
+    let batch_task =
+        tokio::spawn(async move { batch_evaluate_policy(State(batch_state), Json(batch)).await });
+
+    let singles: Vec<_> = (0..8)
+        .map(|_| {
+            let s = state.clone();
+            tokio::spawn(async move {
+                evaluate_policy(
+                    State(s),
+                    Json(EvaluateRequest {
+                        policy_id: None,
+                        policy_name: Some("hol".to_string()),
+                        principal: "alice".to_string(),
+                        resource: "/doc".to_string(),
+                        action: "read".to_string(),
+                        context: None,
+                    }),
+                )
+                .await
+            })
+        })
+        .collect();
+
+    for t in singles {
+        assert!(t.await.expect("single eval task panicked").is_ok());
+    }
+    assert!(batch_task.await.expect("batch task panicked").is_ok());
 }
 
 /// The production router applies a global 256 MB body limit and a tighter

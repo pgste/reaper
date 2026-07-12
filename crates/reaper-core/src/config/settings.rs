@@ -284,7 +284,11 @@ pub struct PerformanceSettings {
     #[serde(default = "default_target_latency")]
     pub target_latency_microseconds: f64,
 
-    /// Number of worker threads (0 = auto-detect)
+    /// Tokio runtime worker threads (0 = auto-detect from available
+    /// parallelism). Sizes the agent's runtime at startup (Plan 08 Phase D);
+    /// override with `REAPER_WORKER_THREADS`. Set explicitly for
+    /// cgroup-limited sidecars so the runtime doesn't over-subscribe a small
+    /// CPU quota.
     #[serde(default)]
     pub worker_threads: usize,
 

@@ -1535,6 +1535,10 @@ impl ReaperDSLEvaluator {
         &self,
         request: &PolicyRequest,
     ) -> Result<(PolicyAction, bool), reaper_core::ReaperError> {
+        // One evaluation = one ReBAC traversal budget, shared across every
+        // condition this policy checks (Plan 08 Phase E).
+        crate::data::relationships::reset_traversal_budget();
+
         let interner = self.store.interner();
 
         // Reclaim transient result strings interned during this evaluation

@@ -20,15 +20,19 @@ use policy_engine::PolicyAction;
 use prometheus::{Counter, Histogram};
 use std::sync::Arc;
 
-use crate::observability::{DECISIONS_TOTAL, DECISION_DURATION};
+use crate::observability::{DECISIONS_TOTAL, DECISION_DURATION, ENGINE_EVAL_DURATION};
 
 /// Pre-resolved metric child handles for a single policy.
 pub struct PolicyMetricHandles {
     allow: Counter,
     deny: Counter,
     log: Counter,
-    /// Decision-latency histogram for this policy.
+    /// Request-total latency histogram for this policy
+    /// (`reaper_decision_duration_seconds`).
     pub duration: Histogram,
+    /// Engine-slice evaluation histogram for this policy
+    /// (`reaper_engine_eval_seconds`).
+    pub engine_duration: Histogram,
 }
 
 impl PolicyMetricHandles {
@@ -41,6 +45,7 @@ impl PolicyMetricHandles {
             deny: DECISIONS_TOTAL.with_label_values(&["deny", policy_name]),
             log: DECISIONS_TOTAL.with_label_values(&["log", policy_name]),
             duration: DECISION_DURATION.with_label_values(&[policy_name]),
+            engine_duration: ENGINE_EVAL_DURATION.with_label_values(&[policy_name]),
         }
     }
 

@@ -18,8 +18,12 @@
 # in raw CPU speed run-to-run, so a hard fail-threshold on nanosecond benches
 # false-fires on identical code. The trend dashboard + the +5%/+25% comments
 # are the real signal; a genuine regression shows as a sustained step in the
-# chart, not one noisy point. (Re-introduce fail-on-alert only on a dedicated,
-# consistent-hardware runner.)
+# chart, not one noisy point.
+#
+# The BLOCKING gate lives in perf-gate.yml (Plan 08 Phase F): it benchmarks a
+# PR's merge-base and head in the same job on the same runner, so machine
+# variance cancels and a ≤10% statistical threshold is enforceable. This
+# workflow stays as the cross-run trend history; that one is the enforcement.
 #
 # The end-to-end HTTP throughput benchmark (vs OPA) lives in benchmark.yml;
 # this workflow guards the engine's nanosecond-scale core specifically.

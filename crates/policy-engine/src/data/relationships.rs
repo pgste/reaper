@@ -33,6 +33,7 @@ use crate::data::EntityId;
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 /// Adjacency list — inline up to 4 edges, sorted for binary-search membership.
@@ -42,6 +43,36 @@ pub type EdgeList = SmallVec<[EntityId; 4]>;
 /// bound. Keeps a pathological graph from turning one policy check into a
 /// full-graph walk.
 const TRAVERSAL_NODE_BUDGET: usize = 4_096;
+
+/// Traversal budget for one policy evaluation, shared across every ReBAC
+/// condition that evaluation runs on this thread (Plan 08 Phase E). Without
+/// it the worst case is `#conditions × TRAVERSAL_NODE_BUDGET` — unbounded in
+/// the number of conditions a crafted policy stacks. The engine resets this
+/// via [`reset_traversal_budget`] at each policy-evaluation entry; combined
+/// with the Phase A candidate cap, one request is bounded by
+/// `max_candidate_policies × EVAL_TRAVERSAL_BUDGET` nodes.
+pub const EVAL_TRAVERSAL_BUDGET: usize = 4 * TRAVERSAL_NODE_BUDGET;
+
+/// Reusable BFS traversal scratch: (visited set, queue of `(node, depth)`).
+type BfsScratch = (FxHashSet<EntityId>, VecDeque<(EntityId, usize)>);
+
+thread_local! {
+    /// Reusable BFS scratch (visited set + queue), cleared per traversal —
+    /// no fresh `FxHashSet`/`VecDeque` allocation per condition after warm-up
+    /// (Plan 08 Phase E).
+    static BFS_SCRATCH: RefCell<BfsScratch> =
+        RefCell::new((FxHashSet::default(), VecDeque::new()));
+
+    /// Remaining per-evaluation traversal budget on this thread.
+    static EVAL_BUDGET: Cell<usize> = const { Cell::new(EVAL_TRAVERSAL_BUDGET) };
+}
+
+/// Reset the per-evaluation traversal budget. Called by the policy engine at
+/// the start of each policy evaluation so the budget spans all ReBAC
+/// conditions within that evaluation, rather than resetting per condition.
+pub fn reset_traversal_budget() {
+    EVAL_BUDGET.with(|b| b.set(EVAL_TRAVERSAL_BUDGET));
+}
 
 /// Concurrent, doubly-indexed relationship graph.
 #[derive(Debug)]
@@ -243,6 +274,11 @@ impl RelationshipGraph {
     /// Bounded, cycle-safe BFS from `start` along `edge` (forward direction),
     /// returning true as soon as `hit` matches a visited node (start excluded
     /// from the first check only via the caller's predicate when needed).
+    ///
+    /// Scratch state is thread-local and reused across traversals (cleared,
+    /// not reallocated); the nodes visited are charged against the
+    /// per-evaluation budget, and an exhausted budget fails closed (no
+    /// relation established).
     fn bfs_reaches<F: Fn(EntityId) -> bool>(
         &self,
         start: EntityId,
@@ -250,13 +286,55 @@ impl RelationshipGraph {
         max_depth: usize,
         hit: F,
     ) -> bool {
-        let mut visited: FxHashSet<EntityId> = FxHashSet::default();
-        let mut queue: VecDeque<(EntityId, usize)> = VecDeque::new();
+        // Each traversal keeps its own hard cap; the per-evaluation budget
+        // additionally bounds the SUM across conditions.
+        let cap = EVAL_BUDGET.with(|b| b.get()).min(TRAVERSAL_NODE_BUDGET);
+        if cap == 0 {
+            return false;
+        }
+
+        let (reached, used) = BFS_SCRATCH.with(|scratch| {
+            match scratch.try_borrow_mut() {
+                Ok(mut s) => {
+                    let (visited, queue) = &mut *s;
+                    visited.clear();
+                    queue.clear();
+                    let reached = self.bfs_run(visited, queue, start, edge, max_depth, cap, &hit);
+                    (reached, visited.len())
+                }
+                // A `hit` predicate started a nested traversal on this thread.
+                // No current caller does, but fall back to fresh scratch rather
+                // than assume it never happens.
+                Err(_) => {
+                    let mut visited = FxHashSet::default();
+                    let mut queue = VecDeque::new();
+                    let reached =
+                        self.bfs_run(&mut visited, &mut queue, start, edge, max_depth, cap, &hit);
+                    (reached, visited.len())
+                }
+            }
+        });
+        EVAL_BUDGET.with(|b| b.set(b.get().saturating_sub(used)));
+        reached
+    }
+
+    /// The BFS loop proper, over caller-provided scratch.
+    #[allow(clippy::too_many_arguments)]
+    fn bfs_run<F: Fn(EntityId) -> bool>(
+        &self,
+        visited: &mut FxHashSet<EntityId>,
+        queue: &mut VecDeque<(EntityId, usize)>,
+        start: EntityId,
+        edge: InternedString,
+        max_depth: usize,
+        cap: usize,
+        hit: &F,
+    ) -> bool {
         visited.insert(start);
         queue.push_back((start, 0));
 
         while let Some((node, depth)) = queue.pop_front() {
-            if depth >= max_depth || visited.len() > TRAVERSAL_NODE_BUDGET {
+            if depth >= max_depth || visited.len() > cap {
                 continue;
             }
             // Same single-statement copy: guard drops before we recurse into
@@ -411,6 +489,9 @@ mod tests {
     fn traversal_node_budget_is_exact() {
         let (g, i) = graph();
         let parent = i.intern("parent");
+        // Both traversals below must run with a full per-traversal cap, not
+        // whatever this thread's per-evaluation budget has left.
+        reset_traversal_budget();
 
         // Chain c0 -> c1 -> ... -> c(B+1). BFS pops c(k-1) with
         // visited.len() == k, so hit(c_k) is checked iff k <= BUDGET.
@@ -431,6 +512,40 @@ mod tests {
         assert!(
             !g.bfs_reaches(nodes[0], parent, deep_enough, |x| x == first_outside),
             "node past the budget must be cut off (DoS guard)"
+        );
+    }
+
+    /// Plan 08 Phase E: the traversal budget spans conditions — repeated
+    /// traversals without a reset drain it (fail closed), and a reset (one per
+    /// policy evaluation, at the evaluator entry) restores it. Also exercises
+    /// the thread-local scratch across many traversals on one thread: earlier
+    /// traversals' visited state must not leak into later ones.
+    #[test]
+    fn eval_budget_spans_conditions_and_resets() {
+        let (g, i) = graph();
+        let parent = i.intern("parent");
+        let n = TRAVERSAL_NODE_BUDGET + 2;
+        let nodes: Vec<_> = (0..n).map(|k| i.intern(&format!("b{k}"))).collect();
+        for w in nodes.windows(2) {
+            g.add_edge(w[0], parent, w[1]);
+        }
+        let missing = i.intern("nowhere");
+
+        reset_traversal_budget();
+        // Each full traversal consumes ~TRAVERSAL_NODE_BUDGET nodes; the
+        // per-evaluation budget (4× that) is gone after four of them.
+        for _ in 0..4 {
+            assert!(!g.bfs_reaches(nodes[0], parent, usize::MAX, |x| x == missing));
+        }
+        assert!(
+            !g.bfs_reaches(nodes[0], parent, 4, |x| x == nodes[1]),
+            "exhausted per-evaluation budget must fail closed, even for a trivially reachable node"
+        );
+
+        reset_traversal_budget();
+        assert!(
+            g.bfs_reaches(nodes[0], parent, 4, |x| x == nodes[1]),
+            "reset must restore the budget (scratch state must not leak between traversals)"
         );
     }
 

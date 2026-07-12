@@ -27,11 +27,24 @@
 //!   verified on read, so an unrelated request that hashes to the same slot is
 //!   a miss rather than a wrong decision.
 //!
+//! # Concurrency model (sharded)
+//! The cache is split into power-of-two shards, each with its own lock, so
+//! inserts on different shards never contend. This matters on **low-hit-rate**
+//! workloads, where every request takes a write lock: a single global lock
+//! serializes all cores (Plan 08 Phase C); with shards, writers proceed in
+//! parallel. Shard count scales with capacity (up to [`MAX_SHARDS`]) so small
+//! caches keep exact capacity semantics with one shard.
+//!
+//! Capacity is enforced per shard (`capacity / shards`, rounded up), so the
+//! effective total can exceed the configured capacity by at most `shards - 1`
+//! entries.
+//!
 //! # Performance characteristics
-//! - Cache hit: one read-lock + two `u64` compares. No allocation, no write
-//!   lock, no O(n) scan.
-//! - Cache miss: hashing only.
-//! - Insert: one write-lock; FIFO eviction when at capacity.
+//! - Cache hit: one shard read-lock + two `u64` compares. No allocation, no
+//!   write lock, no O(n) scan.
+//! - Cache miss: hashing only. The fingerprint folds context entries with a
+//!   commutative combiner — no sorted key `Vec` allocation per probe.
+//! - Insert: one shard write-lock; FIFO eviction within the shard at capacity.
 
 use crate::{PolicyAction, PolicyRequest};
 use parking_lot::{Mutex, RwLock};
@@ -44,6 +57,39 @@ use std::time::{Duration, Instant};
 /// Salt mixed into the second fingerprint hash so it is independent of the
 /// map-key hash. Any non-zero constant works.
 const VERIFY_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
+
+/// Upper bound on shard count. 64 shards is enough that 32+ writer threads
+/// rarely collide, while keeping the per-shard maps large enough to stay
+/// cache-friendly.
+const MAX_SHARDS: usize = 64;
+
+/// Minimum entries per shard before the cache splits into more shards. Keeps
+/// small caches single-sharded (exact capacity/FIFO semantics) and prevents
+/// degenerate 1-entry shards.
+const MIN_SHARD_CAPACITY: usize = 64;
+
+/// Order-independent fold of the request context under `salt`.
+///
+/// Each `(key, value)` pair is hashed to one `u64` and the pair hashes are
+/// combined with commutative operations (wrapping add + rotated xor), so the
+/// result does not depend on `HashMap` iteration order and needs no sorted
+/// key `Vec` per probe. Distinct salts produce independent folds, preserving
+/// the 128-bit two-independent-hashes collision model.
+#[inline]
+fn context_fold(request: &PolicyRequest, salt: u64) -> u64 {
+    let mut sum: u64 = 0;
+    let mut xor: u64 = 0;
+    for (key, value) in &request.context {
+        let mut eh = rustc_hash::FxBuildHasher.build_hasher();
+        salt.hash(&mut eh);
+        key.hash(&mut eh);
+        value.hash(&mut eh);
+        let pair = eh.finish();
+        sum = sum.wrapping_add(pair);
+        xor ^= pair.rotate_left(32);
+    }
+    sum ^ xor
+}
 
 /// Compute the 128-bit fingerprint `(key, verify)` for a request under a scope.
 ///
@@ -59,15 +105,7 @@ fn fingerprint(request: &PolicyRequest, scope: u64) -> (u64, u64) {
         scope.hash(&mut h);
         request.action.hash(&mut h);
         request.resource.hash(&mut h);
-
-        // Context must be hashed order-independently. Sort keys so the same
-        // logical request always produces the same fingerprint.
-        let mut keys: Vec<&String> = request.context.keys().collect();
-        keys.sort_unstable();
-        for key in keys {
-            key.hash(&mut h);
-            request.context.get(key).hash(&mut h);
-        }
+        context_fold(request, salt).hash(&mut h);
         h.finish()
     }
 
@@ -86,11 +124,21 @@ struct CacheEntry {
     inserted_at: Instant,
 }
 
-/// Decision cache with epoch invalidation, policy scoping, and TTL.
-pub struct DecisionCache {
-    cache: RwLock<FxHashMap<u64, CacheEntry>>,
+/// One independently locked slice of the cache.
+struct Shard {
+    map: RwLock<FxHashMap<u64, CacheEntry>>,
     /// FIFO insertion order for eviction. Only touched on insert, never on read.
     order: Mutex<VecDeque<u64>>,
+}
+
+/// Decision cache with epoch invalidation, policy scoping, TTL, and N-way
+/// sharding (see the module docs for the concurrency model).
+pub struct DecisionCache {
+    shards: Box<[Shard]>,
+    /// `shards.len() - 1`; shard count is a power of two so selection is a mask.
+    shard_mask: usize,
+    /// Per-shard entry cap (`capacity / shards`, rounded up).
+    shard_capacity: usize,
     capacity: usize,
     ttl: Option<Duration>,
     /// Global generation counter. Bumped on every invalidation.
@@ -121,29 +169,50 @@ pub struct DecisionCacheStats {
     pub hit_rate: f64,
 }
 
+/// Shard count for `capacity`: one shard per `MIN_SHARD_CAPACITY` entries,
+/// rounded up to a power of two, clamped to `[1, MAX_SHARDS]`.
+fn shard_count(capacity: usize) -> usize {
+    (capacity / MIN_SHARD_CAPACITY)
+        .next_power_of_two()
+        .clamp(1, MAX_SHARDS)
+}
+
 impl DecisionCache {
     /// Create a new decision cache with the specified capacity.
     pub fn new(capacity: usize) -> Self {
+        Self::build(capacity, None)
+    }
+
+    /// Create a cache with TTL-based expiration.
+    pub fn with_ttl(capacity: usize, ttl: Duration) -> Self {
+        Self::build(capacity, Some(ttl))
+    }
+
+    fn build(capacity: usize, ttl: Option<Duration>) -> Self {
+        let shards = shard_count(capacity);
+        let shard_capacity = capacity.div_ceil(shards);
+        let shards: Box<[Shard]> = (0..shards)
+            .map(|_| Shard {
+                map: RwLock::new(FxHashMap::default()),
+                order: Mutex::new(VecDeque::with_capacity(shard_capacity)),
+            })
+            .collect();
         Self {
-            cache: RwLock::new(FxHashMap::default()),
-            order: Mutex::new(VecDeque::with_capacity(capacity)),
+            shard_mask: shards.len() - 1,
+            shards,
+            shard_capacity,
             capacity,
-            ttl: None,
+            ttl,
             generation: AtomicU64::new(0),
             stats: CacheStats::default(),
         }
     }
 
-    /// Create a cache with TTL-based expiration.
-    pub fn with_ttl(capacity: usize, ttl: Duration) -> Self {
-        Self {
-            cache: RwLock::new(FxHashMap::default()),
-            order: Mutex::new(VecDeque::with_capacity(capacity)),
-            capacity,
-            ttl: Some(ttl),
-            generation: AtomicU64::new(0),
-            stats: CacheStats::default(),
-        }
+    /// The shard owning fingerprint `key`. Folds the high bits in so shard
+    /// selection isn't just the map hash's low bits.
+    #[inline]
+    fn shard(&self, key: u64) -> &Shard {
+        &self.shards[((key >> 32) ^ key) as usize & self.shard_mask]
     }
 
     /// Current generation. Capture this *before* evaluating a request and pass
@@ -158,26 +227,28 @@ impl DecisionCache {
     ///
     /// Call on any policy deploy/update/delete or entity-data change. O(1) with
     /// respect to correctness (the generation bump makes all prior entries
-    /// misses); also clears the map to reclaim memory since invalidations are
-    /// rare relative to lookups.
+    /// misses); also clears the shards to reclaim memory since invalidations
+    /// are rare relative to lookups.
     pub fn invalidate(&self) {
         self.generation.fetch_add(1, Ordering::Release);
-        self.cache.write().clear();
-        self.order.lock().clear();
+        for shard in &self.shards {
+            shard.map.write().clear();
+            shard.order.lock().clear();
+        }
         self.stats.invalidations.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Look up a cached decision for `request` under `scope`.
     ///
-    /// Read-only fast path: a shared lock plus two `u64` comparisons. Returns
-    /// `None` (miss) if absent, stale (superseded generation), expired, or a
-    /// fingerprint mismatch.
+    /// Read-only fast path: one shard's shared lock plus two `u64` comparisons.
+    /// Returns `None` (miss) if absent, stale (superseded generation), expired,
+    /// or a fingerprint mismatch.
     #[inline]
     pub fn get(&self, request: &PolicyRequest, scope: u64) -> Option<PolicyAction> {
         let (key, verify) = fingerprint(request, scope);
         let current_gen = self.generation.load(Ordering::Acquire);
 
-        let map = self.cache.read();
+        let map = self.shard(key).map.read();
         if let Some(entry) = map.get(&key) {
             if entry.verify == verify && entry.generation == current_gen {
                 if let Some(ttl) = self.ttl {
@@ -219,11 +290,12 @@ impl DecisionCache {
             inserted_at: Instant::now(),
         };
 
-        let mut cache = self.cache.write();
-        let mut order = self.order.lock();
+        let shard = self.shard(key);
+        let mut cache = shard.map.write();
+        let mut order = shard.order.lock();
 
         if !cache.contains_key(&key) {
-            while cache.len() >= self.capacity {
+            while cache.len() >= self.shard_capacity {
                 match order.pop_front() {
                     Some(old) => {
                         if cache.remove(&old).is_some() {
@@ -240,13 +312,15 @@ impl DecisionCache {
 
     /// Clear all cached decisions without bumping the generation.
     pub fn clear(&self) {
-        self.cache.write().clear();
-        self.order.lock().clear();
+        for shard in &self.shards {
+            shard.map.write().clear();
+            shard.order.lock().clear();
+        }
     }
 
     /// Get cache statistics.
     pub fn stats(&self) -> DecisionCacheStats {
-        let size = self.cache.read().len();
+        let size = self.len();
         let hits = self.stats.hits.load(Ordering::Relaxed);
         let misses = self.stats.misses.load(Ordering::Relaxed);
         let total = hits + misses;
@@ -268,14 +342,14 @@ impl DecisionCache {
         }
     }
 
-    /// Current number of cached entries.
+    /// Current number of cached entries (summed across shards).
     pub fn len(&self) -> usize {
-        self.cache.read().len()
+        self.shards.iter().map(|s| s.map.read().len()).sum()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.cache.read().is_empty()
+        self.shards.iter().all(|s| s.map.read().is_empty())
     }
 }
 
@@ -427,5 +501,96 @@ mod tests {
         assert!(matches!(cache.get(&r1, 0), Some(PolicyAction::Allow)));
         assert!(matches!(cache.get(&r2, 0), Some(PolicyAction::Deny)));
         assert!(matches!(cache.get(&r3, 0), Some(PolicyAction::Allow)));
+    }
+
+    #[test]
+    fn test_fingerprint_is_context_order_independent() {
+        // Two maps with the same entries inserted in different orders (and
+        // therefore different iteration orders) must produce the same
+        // fingerprint — the fold is commutative, no sorting involved.
+        let mut ctx_a = HashMap::new();
+        ctx_a.insert("principal".to_string(), "alice".to_string());
+        ctx_a.insert("dept".to_string(), "eng".to_string());
+        ctx_a.insert("region".to_string(), "eu".to_string());
+
+        let mut ctx_b = HashMap::new();
+        ctx_b.insert("region".to_string(), "eu".to_string());
+        ctx_b.insert("dept".to_string(), "eng".to_string());
+        ctx_b.insert("principal".to_string(), "alice".to_string());
+
+        let r_a = PolicyRequest {
+            action: "read".to_string(),
+            resource: "doc1".to_string(),
+            context: ctx_a,
+        };
+        let r_b = PolicyRequest {
+            action: "read".to_string(),
+            resource: "doc1".to_string(),
+            context: ctx_b,
+        };
+
+        assert_eq!(fingerprint(&r_a, 7), fingerprint(&r_b, 7));
+
+        // And a differing value must change the fingerprint.
+        let mut ctx_c = r_b.context.clone();
+        ctx_c.insert("dept".to_string(), "sales".to_string());
+        let r_c = PolicyRequest {
+            action: "read".to_string(),
+            resource: "doc1".to_string(),
+            context: ctx_c,
+        };
+        assert_ne!(fingerprint(&r_a, 7), fingerprint(&r_c, 7));
+    }
+
+    #[test]
+    fn test_sharded_capacity_bound() {
+        // Large enough to shard (1024 /64 = 16 shards): total size stays at
+        // the configured capacity (per-shard cap divides evenly here) and
+        // eviction kicks in across shards.
+        let capacity = 1024;
+        let cache = DecisionCache::new(capacity);
+        assert!(cache.shards.len() > 1);
+        let gen = cache.generation();
+        for i in 0..5000 {
+            cache.insert(
+                &make_request(&format!("user-{i}"), "read", &format!("doc-{i}")),
+                0,
+                PolicyAction::Allow,
+                gen,
+            );
+        }
+        assert!(cache.len() <= capacity);
+        assert!(cache.stats().evictions > 0);
+
+        cache.invalidate();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_concurrent_insert_and_get_across_shards() {
+        use std::sync::Arc;
+
+        // Keep the key count well under capacity: eviction is per-shard, so a
+        // near-full cache can evict from hot shards before the global total
+        // reaches capacity. 2000 keys across 64 shards (cap 64 each) leaves
+        // every shard far from its limit, so all inserts must survive.
+        let cache = Arc::new(DecisionCache::new(4096));
+        let gen = cache.generation();
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let cache = Arc::clone(&cache);
+                std::thread::spawn(move || {
+                    for i in 0..250 {
+                        let req = make_request(&format!("u{t}-{i}"), "read", "doc");
+                        cache.insert(&req, 0, PolicyAction::Allow, gen);
+                        assert!(matches!(cache.get(&req, 0), Some(PolicyAction::Allow)));
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(cache.len(), 8 * 250);
     }
 }

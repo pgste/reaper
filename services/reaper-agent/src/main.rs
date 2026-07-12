@@ -127,11 +127,57 @@ struct DeployPolicyRule {
 // AgentStats methods are now in state.rs
 // init_observability is now in observability.rs
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
+    // Load configuration BEFORE building the runtime so worker-thread count
+    // can size it (Plan 08 Phase D): `performance.worker_threads` /
+    // `REAPER_WORKER_THREADS`, 0 = tokio's auto-detect. A cgroup-limited
+    // sidecar sets this to its CPU quota instead of over-subscribing on the
+    // host's core count. Logging is not initialized yet (the OTEL exporter
+    // needs the runtime), so how the config was resolved is reported once
+    // tracing is up inside `run`.
+    let (config, config_load_note) = load_config(&args);
+
+    let configured_workers = config.performance.worker_threads;
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if configured_workers > 0 {
+        builder.worker_threads(configured_workers);
+    }
+    let runtime = builder.build()?;
+    runtime.block_on(run(args, config, config_load_note))
+}
+
+/// How configuration was resolved in `main`, reported once logging exists.
+enum ConfigLoadNote {
+    FromFile(PathBuf),
+    FileFailed(String),
+    Defaults,
+}
+
+fn load_config(args: &Args) -> (ReaperAgentConfig, ConfigLoadNote) {
+    if let Some(ref config_path) = args.config {
+        match ReaperAgentConfig::from_file_with_env(config_path) {
+            Ok(cfg) => (cfg, ConfigLoadNote::FromFile(config_path.clone())),
+            Err(e) => (
+                ReaperAgentConfig::from_env(),
+                ConfigLoadNote::FileFailed(format!(
+                    "Failed to load config file {config_path:?}: {e}. Using defaults."
+                )),
+            ),
+        }
+    } else {
+        (ReaperAgentConfig::from_env(), ConfigLoadNote::Defaults)
+    }
+}
+
+async fn run(
+    args: Args,
+    mut config: ReaperAgentConfig,
+    config_load_note: ConfigLoadNote,
+) -> anyhow::Result<()> {
     // Initialize observability (logs, traces, metrics)
     init_observability()?;
 
@@ -142,20 +188,25 @@ async fn main() -> anyhow::Result<()> {
         "Starting Reaper Agent - High-Performance Policy Enforcement"
     );
 
-    // Load configuration
-    let mut config = if let Some(ref config_path) = args.config {
-        info!("Loading configuration from {:?}", config_path);
-        match ReaperAgentConfig::from_file_with_env(config_path) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                warn!("Failed to load config file: {}. Using defaults.", e);
-                ReaperAgentConfig::from_env()
-            }
+    match &config_load_note {
+        ConfigLoadNote::FromFile(path) => info!("Loaded configuration from {:?}", path),
+        ConfigLoadNote::FileFailed(msg) => warn!("{msg}"),
+        ConfigLoadNote::Defaults => {
+            info!("No config file specified, using defaults with env overrides")
         }
-    } else {
-        info!("No config file specified, using defaults with env overrides");
-        ReaperAgentConfig::from_env()
+    }
+
+    let effective_workers = match config.performance.worker_threads {
+        0 => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+        n => n,
     };
+    info!(
+        configured = config.performance.worker_threads,
+        effective = effective_workers,
+        "Tokio runtime worker threads (0 = auto; set performance.worker_threads or REAPER_WORKER_THREADS)"
+    );
 
     // Apply CLI argument overrides
     if let Some(port) = args.port {
