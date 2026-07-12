@@ -1,5 +1,29 @@
 # Control-Plane HA/DR & Fleet Upgrades
 
+> **STATUS: ✅ SHIPPED** — landed via PRs #42–#44 (2026-07-12) across phases A–C.
+> A (data durability): `docs/deployment/CONTROL_PLANE_HA_DR.md` with numeric
+> targets (failover ≤60s, RPO ≤5min, RTO ≤30min, retention ≥7d) and the
+> managed-vs-self-hosted ADR; CloudNativePG 3-instance cluster manifest with
+> continuous WAL archiving (archive_timeout bounds RPO) + nightly
+> ScheduledBackup; automated nightly restore-check CronJob that restores the
+> latest backup into a throwaway cluster and smoke-queries it (fails loudly);
+> old single-replica postgres.yaml demoted to DEV/DEMO ONLY; helm
+> externalDatabase.url wired (was referenced but missing). B (redundancy):
+> failover-aware pool (test_before_acquire, 30m lifetime/10m idle, 5s
+> acquire, bounded connect backoff, optional REAPER_DATABASE_REPLICA_URL
+> read pool), advisory-locked migrations under N concurrent replicas,
+> change-log sweeper per-tick leader election via pg_try_advisory_xact_lock,
+> zero-gap Helm rollouts (maxUnavailable:0/maxSurge:1, default soft pod
+> anti-affinity, NOTES warning on multi-replica+RWO persistence). C:
+> `FLEET_UPGRADE_RUNBOOK.md` (pre-flight durability checkpoint, migrate →
+> roll plane → roll agents wave-wise behind the REQUIRE_SYNC readiness gate →
+> confirmed-convergence completion, rollback paths) and the quarterly DR
+> game-day script (§8: primary loss, total DB loss, total plane loss,
+> replica-kill under load, with a planned-vs-actual record table). The
+> runtime drills (failover timing, PITR restore, game-day numbers) are
+> written as procedures to execute in a k8s environment — the exit
+> checklist's measured RPO/RTO boxes tick on the first game-day run.
+
 **Readiness gate:** Enterprise deployability / operational resilience (SS2/21, DORA) — currently a hard rejection at a bank architecture review board.
 **Priority:** P1 (Product Architecture F5). Non-blocking for a design-partner PoC, blocking for a regulated production deployment.
 **Findings closed:** Product F5 (no control-plane HA/DR/backup posture; single Postgres; no RPO/RTO; no fleet-upgrade-without-downtime runbook). Synthesis "Honourable mentions" — control-plane DR/HA/backup. Partially hardens the availability theme (§ availability) on the *plane* side only (the agent/eval-path `panic="abort"` items are out of scope here).

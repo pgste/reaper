@@ -5,9 +5,9 @@ PostgreSQL source-of-truth — so it survives the loss of a node, an
 availability zone, or the database itself, with numeric recovery targets.
 
 This document covers **data durability** (database HA, backup, point-in-time
-restore, restore verification). Control-plane replica redundancy is Plan 11
-Phase B; the fleet-upgrade runbook and DR game-day script are Phase C and
-will extend this document.
+restore, restore verification — §§2–6), **control-plane redundancy** (§7),
+and the **DR game-day** (§8). The zero-downtime upgrade procedure lives in
+the companion `FLEET_UPGRADE_RUNBOOK.md`.
 
 > Scope note: the **agents** are deliberately out of scope. They are stateless
 > and fail safe — when the control plane is down they keep serving decisions
@@ -267,9 +267,52 @@ The management service is safe to run at **N ≥ 2 replicas**:
   Postgres remains the source of truth; the volume only holds compiled
   bundle blobs.
 
-## 8. What Phase C adds (placeholder)
+## 8. DR game-day (quarterly)
 
-- **Fleet-upgrade runbook & DR game-day:** the ordered zero-eval-downtime
-  upgrade procedure (control plane then agents, leaning on atomic bundle
-  hot-swap + confirmed-convergence rollouts) and the quarterly game-day
-  script with recorded RPO/RTO vs the targets in §1.
+A rehearsed, measured recovery — run at least quarterly and after any major
+topology change. The fleet-upgrade happy path lives in
+`FLEET_UPGRADE_RUNBOOK.md`; this section is the failure half. Each scenario
+records **planned vs actual** numbers against §1 and files remediations for
+any miss.
+
+> Run scenarios 2–4 in a staging environment that mirrors production
+> topology. Scenario 1 is safe to run in production if you have ≥ 2
+> standbys and want a real answer.
+
+**Scenario 1 — primary loss (target: failover ≤ 60 s).**
+Kill the current Postgres primary (`kubectl delete pod reaper-pg-1`, or the
+managed platform's failover test). Measure: time until a standby is
+promoted and the management API accepts writes again. Expected: agents are
+unaffected throughout (they serve from memory); management writes see only
+transient errors that the hardened pool rides out.
+
+**Scenario 2 — total database loss (target: RPO ≤ 5 min, RTO ≤ 30 min).**
+Write a known marker row and note the time. Destroy the cluster including
+its PVCs (managed path: treat the instance as lost). Restore from the
+object-store backup into a clean cluster (§4 PITR procedure), point a fresh
+`DATABASE_URL` at it, restart management. Measure: wall-clock to a serving
+control plane (RTO) and the write-loss window around the marker (RPO).
+
+**Scenario 3 — total control-plane loss (target: RTO ≤ 30 min; zero
+authorization downtime).** Delete the management Deployment AND the
+database. Re-deploy from Helm/manifests, restore the DB per scenario 2,
+verify agents re-register and re-sync. A load generator on an agent must
+show **zero outage-denied decisions** for the entire scenario — this is
+the proof that control-plane loss degrades management, never
+authorization.
+
+**Scenario 4 — replica kill under load (target: zero failed API
+requests).** 2-minute load test against the management API while deleting
+one replica and draining its node. The PDB must hold the last replica; the
+Service must shed to survivors without a failed request.
+
+**Record for every run:**
+
+| Scenario | Target | Actual | Pass | Remediation |
+|---|---|---|---|---|
+| 1 failover | ≤ 60 s | | | |
+| 2 RPO / RTO | ≤ 5 min / ≤ 30 min | | | |
+| 3 RTO / eval downtime | ≤ 30 min / 0 | | | |
+| 4 failed requests | 0 | | | |
+
+File every miss as a tracked issue before closing the game-day.
