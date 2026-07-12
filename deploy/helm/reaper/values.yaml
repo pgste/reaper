@@ -63,6 +63,15 @@ management:
     enabled: true
     minAvailable: 1
 
+  # Deployment rollout strategy. maxUnavailable: 0 + maxSurge: 1 gives
+  # zero-gap upgrades: a new pod must be Ready before an old one is taken
+  # out (Plan 11 Phase B fleet-upgrade posture).
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
   config:
     logLevel: info
     storageType: filesystem
@@ -80,6 +89,13 @@ management:
     jwtSecret: ""  # Must be set in production
     existingSecret: ""  # Use existing secret instead
 
+  # Local bundle-blob storage. NOTE (Plan 11 Phase B / ADR-3): a
+  # ReadWriteOnce PVC pins every management replica onto one node and blocks
+  # clean multi-node scale-out. For a truly redundant control plane either
+  # set enabled=false and use shared bundle storage (S3 — see
+  # management.config.storageType), or use a ReadWriteMany storage class.
+  # The DB (Postgres) is the source of truth; this volume only caches
+  # compiled bundle blobs. See docs/deployment/CONTROL_PLANE_HA_DR.md §7.
   persistence:
     enabled: true
     size: 10Gi

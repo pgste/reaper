@@ -223,13 +223,53 @@ The SQLite dev path is untouched.
 
 ---
 
-## 7. What Phase B / C add (placeholders)
+## 7. Control-plane redundancy (Phase B)
 
-- **Phase B — control-plane redundancy:** failover-aware pool, advisory-locked
-  migrations under N concurrent replicas, leader-elected/idempotent
-  background sweepers, PVC-free management in Postgres mode, ≥ 2 replicas
-  with anti-affinity and `maxUnavailable: 0` rollouts.
-- **Phase C — fleet-upgrade runbook & DR game-day:** the ordered
-  zero-eval-downtime upgrade procedure (control plane then agents, leaning on
-  atomic bundle hot-swap + confirmed-convergence rollouts) and the quarterly
-  game-day script with recorded RPO/RTO vs the targets in §1.
+The management service is safe to run at **N ≥ 2 replicas**:
+
+- **Failover-aware pool** (`db/connection.rs`): Postgres connections are
+  health-checked before hand-out (`test_before_acquire`), recycled on a
+  30-minute lifetime / 10-minute idle timeout so nothing stays pinned to a
+  demoted primary, acquire fails fast (5 s), and the initial connect retries
+  with bounded backoff (1→16 s, ≈31 s total) so a replica booting mid-failover
+  doesn't crash-loop. Optionally set `database.replica_url`
+  (`REAPER_DATABASE_REPLICA_URL`) to the managed reader endpoint or the CNPG
+  `-ro` Service — it opens a read pool (`Database::any_read_pool`) for future
+  read-scaling; writes always go to the primary URL.
+- **Migrations under concurrent boot**: `run_pg_migrations` takes a
+  transaction-scoped Postgres advisory lock (`advisory_keys::MIGRATIONS`), so
+  N replicas starting simultaneously against one database queue and exactly
+  one applies each pending migration — the checksum drift guard is unchanged.
+  The lock releases automatically on commit, drop, or process death.
+  *Drill:* start 3 replicas against an empty database; one migrates, none
+  error.
+- **Background singletons**: the change-log retention sweeper elects a
+  per-tick leader with `pg_try_advisory_xact_lock`
+  (`advisory_keys::CHANGE_LOG_SWEEP`); non-leaders skip the tick. The prune
+  itself is idempotent delete-by-range, so this removes redundant work, not a
+  correctness hazard. On SQLite (single-process dev) the lock is reported
+  `Unsupported` and the sweep just runs.
+- **Sessions are DB-backed** (the `sessions` table), so login on replica A
+  and an authenticated call on replica B work. *Drill:* run 2+ replicas
+  behind the Service and exercise exactly that.
+- **Zero-gap rollouts**: the Helm Deployment ships
+  `maxUnavailable: 0 / maxSurge: 1` (`management.updateStrategy`) and a
+  default **soft pod anti-affinity** spreading replicas across nodes
+  (override with `management.affinity`). Combined with the existing HPA
+  (min 2) and PDB (`minAvailable: 1`), a node drain cannot evict the last
+  replica. *Drill:* 2-minute API load test while deleting one replica —
+  zero failed requests.
+- **The RWO PVC caveat**: `management.persistence` uses a `ReadWriteOnce`
+  PVC that forces all replicas onto one node — the chart prints a NOTES
+  warning when it detects multi-replica + RWO. For real node-loss redundancy
+  set `persistence.enabled: false` and use shared bundle storage
+  (`management.config.storageType: s3`), or a `ReadWriteMany` storage class.
+  Postgres remains the source of truth; the volume only holds compiled
+  bundle blobs.
+
+## 8. What Phase C adds (placeholder)
+
+- **Fleet-upgrade runbook & DR game-day:** the ordered zero-eval-downtime
+  upgrade procedure (control plane then agents, leaning on atomic bundle
+  hot-swap + confirmed-convergence rollouts) and the quarterly game-day
+  script with recorded RPO/RTO vs the targets in §1.

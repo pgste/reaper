@@ -104,6 +104,11 @@ impl Config {
         if let Ok(url) = std::env::var("REAPER_DATABASE_URL") {
             config.database.url = url;
         }
+        if let Ok(replica) = std::env::var("REAPER_DATABASE_REPLICA_URL") {
+            if !replica.trim().is_empty() {
+                config.database.replica_url = Some(replica);
+            }
+        }
         if let Ok(db_type) = std::env::var("REAPER_DATABASE_TYPE") {
             config.database.db_type = db_type;
         }

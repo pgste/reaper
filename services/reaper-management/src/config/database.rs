@@ -11,6 +11,12 @@ pub struct DatabaseConfig {
     pub db_type: String,
     #[serde(default = "default_db_url")]
     pub url: String,
+    /// Optional read-replica URL (Postgres only): the managed reader endpoint
+    /// or the CloudNativePG `-ro` Service. When set, a second pool is opened
+    /// for future read-scaling; writes always go to `url`. See
+    /// docs/deployment/CONTROL_PLANE_HA_DR.md §6.
+    #[serde(default)]
+    pub replica_url: Option<String>,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -20,6 +26,7 @@ impl Default for DatabaseConfig {
         Self {
             db_type: default_db_type(),
             url: default_db_url(),
+            replica_url: None,
             max_connections: default_max_connections(),
         }
     }

@@ -11,6 +11,10 @@ spec:
   {{- if not .Values.management.autoscaling.enabled }}
   replicas: {{ .Values.management.replicaCount }}
   {{- end }}
+  # Zero-gap rollouts (Plan 11 Phase B): surge a new pod before taking one
+  # out, so the management API never drops below the replica floor.
+  strategy:
+    {{- toYaml .Values.management.updateStrategy | nindent 4 }}
   selector:
     matchLabels:
       {{- include "reaper.selectorLabels" . | nindent 6 }}
@@ -92,9 +96,23 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.management.affinity }}
+      {{- if .Values.management.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.management.affinity | nindent 8 }}
+      {{- else }}
+      # Default (Plan 11 Phase B): prefer spreading replicas across nodes so
+      # one node loss cannot take out every management pod. Soft so single-node
+      # dev clusters still schedule. Override via management.affinity.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "reaper.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: management
       {{- end }}
       {{- with .Values.management.tolerations }}
       tolerations:

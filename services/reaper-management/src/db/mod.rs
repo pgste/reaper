@@ -6,7 +6,7 @@
 pub mod connection;
 pub mod repositories;
 
-pub use connection::{Database, DatabaseError};
+pub use connection::{advisory_keys, AdvisoryLock, Database, DatabaseError};
 
 use crate::config::DatabaseConfig;
 use std::sync::Arc;
@@ -41,12 +41,14 @@ pub async fn ephemeral_test_config(dir: &std::path::Path) -> DatabaseConfig {
         DatabaseConfig {
             db_type: "postgres".to_string(),
             url: format!("{prefix}/{name}"),
+            replica_url: None,
             max_connections: 5,
         }
     } else {
         DatabaseConfig {
             db_type: "sqlite".to_string(),
             url: format!("sqlite:{}", dir.join("test.db").display()),
+            replica_url: None,
             max_connections: 5,
         }
     }
