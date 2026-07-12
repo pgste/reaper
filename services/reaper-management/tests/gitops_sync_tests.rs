@@ -18,9 +18,10 @@ use reaper_management::{
     db::Database,
     domain::bundle::BundleStatus,
     domain::organization::CreateOrganization,
+    domain::policy::UpdatePolicy,
     domain::source::{CreatePolicySource, SourceType},
     storage::{BundleStorage, FilesystemStorage},
-    sync::{SyncConfig, SyncError, SyncService},
+    sync::{compute_drift, DriftStatus, SyncConfig, SyncError, SyncService},
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -306,6 +307,182 @@ async fn ssrf_guarded_remote_fails_the_sync_without_fetching() {
         err.to_string().contains("not allowed"),
         "expected the SSRF guard to reject, got: {err}"
     );
+}
+
+#[tokio::test]
+async fn drift_is_in_sync_after_sync_and_shows_change_after_out_of_band_edit() {
+    use reaper_management::sync::drift::source_policy_name;
+    use std::collections::BTreeMap;
+
+    let env = setup(true).await;
+    let fixture = env._temp.path().join("drift-repo");
+    std::fs::create_dir_all(&fixture).unwrap();
+    init_fixture_repo(&fixture);
+
+    let source_id =
+        create_git_source(&env, "drift-src", &format!("file://{}", fixture.display())).await;
+    env.sync.trigger_sync(source_id).await.unwrap();
+
+    let source = PolicySourceRepository::new(&env.db)
+        .get_by_id(source_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let policy_repo = PolicyRepository::new(&env.db);
+
+    // Build the two sides of the diff exactly as the handler does.
+    let git_head = |src: &_| -> BTreeMap<String, String> {
+        env.sync
+            .git_syncer()
+            .get_policy_files(src)
+            .unwrap()
+            .into_iter()
+            .map(|f| (source_policy_name(&source.name, &f.path), f.content))
+            .collect()
+    };
+    // Right after a sync: in sync.
+    let report = compute_drift(
+        &git_head(&source),
+        &deployed_map(&policy_repo, source_id).await,
+    );
+    assert_eq!(
+        report.status,
+        DriftStatus::InSync,
+        "fresh sync must be in_sync"
+    );
+
+    // Edit a materialized policy out-of-band (API path, not git).
+    let target = policy_repo
+        .get_by_name(env.org_id, "drift-src/policies-allow-docs")
+        .await
+        .unwrap()
+        .unwrap();
+    policy_repo
+        .update(
+            target.id,
+            UpdatePolicy {
+                content: Some("policy allow_docs {\n  allow read on \"/docs/**\"\n}\n".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let report = compute_drift(
+        &git_head(&source),
+        &deployed_map(&policy_repo, source_id).await,
+    );
+    assert_eq!(report.status, DriftStatus::Drift);
+    assert_eq!(report.changed, vec!["drift-src/policies-allow-docs"]);
+    assert!(report.added.is_empty() && report.removed.is_empty());
+}
+
+/// The deployed `name -> current content` map for a source (mirrors the drift
+/// handler's DB side).
+async fn deployed_map(
+    repo: &PolicyRepository<'_>,
+    source_id: Uuid,
+) -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    for p in repo.list_by_source(source_id).await.unwrap() {
+        let content = repo
+            .get_latest_version(p.id)
+            .await
+            .unwrap()
+            .map(|v| v.content)
+            .unwrap_or_default();
+        m.insert(p.name, content);
+    }
+    m
+}
+
+#[tokio::test]
+async fn commit_back_writes_a_signed_off_commit_to_the_remote() {
+    let env = setup(false).await;
+
+    // A bare remote + a seeded clone pushed into it, so commit_and_push has a
+    // real upstream to push to.
+    let bare = env._temp.path().join("remote.git");
+    git2::Repository::init_bare(&bare).unwrap();
+    let seed = env._temp.path().join("seed");
+    let mut init = git2::RepositoryInitOptions::new();
+    init.initial_head("main");
+    let seed_repo = git2::Repository::init_opts(&seed, &init).unwrap();
+    std::fs::create_dir_all(seed.join("policies")).unwrap();
+    std::fs::write(
+        seed.join("policies/allow-docs.reap"),
+        "policy allow_docs {\n  allow read on \"/docs/*\"\n}\n",
+    )
+    .unwrap();
+    commit_all(&seed_repo, "seed");
+    seed_repo
+        .remote("origin", &format!("file://{}", bare.display()))
+        .unwrap();
+    // Push HEAD (resolves to the commit regardless of the local branch name)
+    // into the remote's main.
+    seed_repo
+        .find_remote("origin")
+        .unwrap()
+        .push(&["HEAD:refs/heads/main"], None)
+        .unwrap();
+
+    let url = format!("file://{}", bare.display());
+    let source_id = create_git_source(&env, "cb-src", &url).await;
+    env.sync.trigger_sync(source_id).await.unwrap();
+
+    let source = PolicySourceRepository::new(&env.db)
+        .get_by_id(source_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let new_content = "policy allow_docs {\n  allow read on \"/docs/**\"\n}\n";
+    let sha = env
+        .sync
+        .git_syncer()
+        .commit_and_push(
+            &source,
+            "policies/allow-docs.reap",
+            new_content,
+            "alice",
+            "alice@test",
+            "Update allow_docs via Reaper",
+        )
+        .await
+        .unwrap();
+
+    // The bare remote's main now points at our commit, carrying the trailer
+    // and the new content.
+    let bare_repo = git2::Repository::open(&bare).unwrap();
+    let head = bare_repo
+        .find_reference("refs/heads/main")
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    assert_eq!(head.id().to_string(), sha);
+    assert!(head.message().unwrap().contains("Reaper-Commit-Back: true"));
+
+    let tree = head.tree().unwrap();
+    let entry = tree
+        .get_path(Path::new("policies/allow-docs.reap"))
+        .unwrap();
+    let blob = bare_repo.find_blob(entry.id()).unwrap();
+    assert_eq!(std::str::from_utf8(blob.content()).unwrap(), new_content);
+}
+
+fn commit_all(repo: &git2::Repository, msg: &str) {
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = git2::Signature::now("seed", "seed@test").unwrap();
+    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &parents)
+        .unwrap();
 }
 
 #[tokio::test]

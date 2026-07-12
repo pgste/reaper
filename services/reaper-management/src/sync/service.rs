@@ -87,17 +87,7 @@ struct MaterializeOutcome {
     bundle_id: Option<uuid::Uuid>,
 }
 
-/// Derive the org-unique policy name for a synced file. Namespaced by the
-/// source name so two sources shipping the same path never collide, with the
-/// extension stripped and separators flattened: source "prod-policies" +
-/// "auth/rbac.reap" → "prod-policies/auth-rbac".
-fn source_policy_name(source_name: &str, file_path: &str) -> String {
-    let no_ext = std::path::Path::new(file_path)
-        .with_extension("")
-        .to_string_lossy()
-        .replace(['/', '\\'], "-");
-    format!("{source_name}/{no_ext}")
-}
+use super::drift::source_policy_name;
 
 /// Sync service for managing policy source synchronization
 pub struct SyncService {

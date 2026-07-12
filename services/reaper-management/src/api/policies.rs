@@ -5,7 +5,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::Json,
+    response::{IntoResponse, Json, Response},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -20,11 +20,38 @@ use crate::{
     api::preconditions::{check_precondition, etag},
     auth::middleware::RequireAuth,
     auth::scopes::Scope,
-    db::repositories::PolicyRepository,
+    db::repositories::{PolicyRepository, PolicySourceRepository},
     domain::policy::{CreatePolicy, Policy, PolicyLanguage, PolicyVersion, UpdatePolicy},
-    state::AppState,
+    domain::source::{ConflictMode, PolicySource, SourceType},
+    state::{AppState, ServerEvent},
     validation::{PolicyValidationResult, ValidationService},
 };
+
+/// Resolve whether a policy is backed by a git source and, if so, that
+/// source's conflict mode (Plan 09 Step 9). Non-git or source-less policies
+/// return `None` and follow the normal direct-write path.
+async fn git_backing(
+    state: &AppState,
+    policy: &Policy,
+) -> ApiResult<Option<(PolicySource, ConflictMode)>> {
+    let Some(source_id) = policy.source_id else {
+        return Ok(None);
+    };
+    let Some(source) = PolicySourceRepository::new(&state.db)
+        .get_by_id(source_id)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if source.source_type != SourceType::Git {
+        return Ok(None);
+    }
+    let mode = source
+        .git_config()
+        .map(|c| c.conflict_mode)
+        .unwrap_or_default();
+    Ok(Some((source, mode)))
+}
 
 /// The policy's strong ETag: the current version's `content_hash` (ADR-2), or
 /// a version marker when a version row is missing (never the case for
@@ -236,11 +263,71 @@ async fn update_policy(
     Path((org, policy_ref)): Path<(String, String)>,
     headers: HeaderMap,
     Json(request): Json<UpdatePolicyRequest>,
-) -> ApiResult<([(header::HeaderName, String); 1], Json<Policy>)> {
+) -> ApiResult<Response> {
     let organization = authorize_org(&state, &user, &org, &[Scope::PolicyWrite]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let existing = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
+
+    // Conflict model for git-backed policies (Plan 09 Step 9, ADR-3).
+    if let Some((source, mode)) = git_backing(&state, &existing).await? {
+        match mode {
+            ConflictMode::ReadOnly => {
+                return Err(ApiError::Conflict(format!(
+                    "policy is managed by git source '{}' (read_only); edit it in git",
+                    source.name
+                )));
+            }
+            ConflictMode::CommitBack => {
+                // The edit becomes a commit on the source repo; deployed state
+                // is reconciled by the normal sync path (one lineage), so we do
+                // NOT write the DB here.
+                let content = request.content.ok_or_else(|| {
+                    ApiError::BadRequest(
+                        "commit_back requires policy `content` to commit".to_string(),
+                    )
+                })?;
+                let rel_path = existing.source_path.clone().ok_or_else(|| {
+                    ApiError::Internal("git-backed policy is missing its source_path".to_string())
+                })?;
+                let author_email = format!("{}@reaper", user.id);
+                let sha = state
+                    .sync_service
+                    .git_syncer()
+                    .commit_and_push(
+                        &source,
+                        &rel_path,
+                        &content,
+                        &user.id,
+                        &author_email,
+                        &format!("Update {} via Reaper", existing.name),
+                    )
+                    .await
+                    .map_err(|e| ApiError::Internal(format!("commit-back failed: {e}")))?;
+                return Ok((
+                    StatusCode::ACCEPTED,
+                    Json(serde_json::json!({
+                        "status": "committed",
+                        "commit": sha,
+                        "message": "Change committed to git; it will deploy on the next sync.",
+                    })),
+                )
+                    .into_response());
+            }
+            ConflictMode::LastWriterWins => {
+                // Discouraged escape hatch: apply directly and flag drift.
+                let _ = state.event_tx.send(ServerEvent::DriftDetected {
+                    source_id: source.id,
+                    source_name: source.name.clone(),
+                    org_id: organization.id,
+                    namespace_id: None,
+                    added: 0,
+                    removed: 0,
+                    changed: 1,
+                });
+            }
+        }
+    }
 
     // Optimistic concurrency (Plan 07 Phase C): fast-fail a stale If-Match
     // here; the repository's `AND current_version = $expected` is the atomic
@@ -267,7 +354,7 @@ async fn update_policy(
         .ok_or_else(|| ApiError::NotFound("Policy not found after update".to_string()))?;
 
     let (_, new_tag) = policy_etag(&policy_repo, existing.id).await?;
-    Ok(([(header::ETAG, etag(&new_tag))], Json(updated)))
+    Ok(([(header::ETAG, etag(&new_tag))], Json(updated)).into_response())
 }
 
 /// Delete a policy
@@ -293,6 +380,15 @@ async fn delete_policy(
 
     let policy_repo = PolicyRepository::new(&state.db);
     let existing = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
+
+    // A read-only git-backed policy can't be deleted through the API — the file
+    // must be removed in git (Plan 09 Step 9).
+    if let Some((source, ConflictMode::ReadOnly)) = git_backing(&state, &existing).await? {
+        return Err(ApiError::Conflict(format!(
+            "policy is managed by git source '{}' (read_only); delete it in git",
+            source.name
+        )));
+    }
 
     let deleted = policy_repo.delete(existing.id).await?;
 

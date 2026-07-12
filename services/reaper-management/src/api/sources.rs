@@ -21,6 +21,7 @@ use crate::{
     db::repositories::{OrganizationRepository, PolicySourceRepository},
     domain::source::{CreatePolicySource, PolicySource, SourceType, UpdatePolicySource},
     state::AppState,
+    sync::DriftReport,
 };
 
 /// Build source routes
@@ -29,6 +30,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(list_sources, create_source))
         .routes(routes!(get_source, update_source, delete_source))
         .routes(routes!(trigger_sync))
+        .routes(routes!(get_source_drift))
 }
 
 /// Policy source summary for API responses
@@ -463,6 +465,108 @@ async fn trigger_sync(
         policies_found: Some(result.policies_found),
         commit: result.commit,
     }))
+}
+
+/// Get drift between a git source's HEAD and its deployed policies.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/sources/{source_id}/drift",
+    tag = "sources",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("source_id" = Uuid, Path, description = "Policy source ID")
+    ),
+    responses(
+        (status = 200, description = "Drift report", body = DriftReport)
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn get_source_drift(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, source_id)): Path<(String, Uuid)>,
+) -> ApiResult<Json<DriftReport>> {
+    if !user.has_permission(Scope::PolicyRead) && !user.has_permission(Scope::OrgAdmin) {
+        return Err(ApiError::Forbidden("Missing policy:read scope".to_string()));
+    }
+
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, &org).await?;
+    if user.org_id != organization.id && !user.has_permission(Scope::Admin) {
+        return Err(ApiError::Forbidden(
+            "Cannot access sources for other organizations".to_string(),
+        ));
+    }
+
+    let source_repo = PolicySourceRepository::new(&state.db);
+    let source = source_repo
+        .get_by_id(source_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Source not found".to_string()))?;
+    if source.org_id != organization.id {
+        return Err(ApiError::NotFound("Source not found".to_string()));
+    }
+    if source.source_type != SourceType::Git {
+        return Err(ApiError::BadRequest(
+            "Drift detection applies only to git sources".to_string(),
+        ));
+    }
+    // A source that has never synced has no local clone to diff against.
+    if source.last_sync_commit.is_none() {
+        return Err(ApiError::Conflict(
+            "Source has not synced yet; trigger a sync before checking drift".to_string(),
+        ));
+    }
+
+    // git HEAD side: policy files from the last-synced working tree, keyed by
+    // the same source-namespaced name materialization writes.
+    let git_files = state
+        .sync_service
+        .git_syncer()
+        .get_policy_files(&source)
+        .map_err(|e| ApiError::Internal(format!("Failed to read source policy files: {e}")))?;
+    let git_head: std::collections::BTreeMap<String, String> = git_files
+        .into_iter()
+        .map(|f| {
+            (
+                crate::sync::drift::source_policy_name(&source.name, &f.path),
+                f.content,
+            )
+        })
+        .collect();
+
+    // Deployed side: policies materialized from this source with their current
+    // version content.
+    let policy_repo = crate::db::repositories::PolicyRepository::new(&state.db);
+    let deployed_policies = policy_repo.list_by_source(source_id).await?;
+    let mut deployed = std::collections::BTreeMap::new();
+    for policy in deployed_policies {
+        let content = policy_repo
+            .get_latest_version(policy.id)
+            .await?
+            .map(|v| v.content)
+            .unwrap_or_default();
+        deployed.insert(policy.name, content);
+    }
+
+    let report = crate::sync::compute_drift(&git_head, &deployed);
+
+    // Surface drift on the SSE stream so the landscape view reflects it.
+    if report.status == crate::sync::DriftStatus::Drift {
+        let _ = state
+            .event_tx
+            .send(crate::state::ServerEvent::DriftDetected {
+                source_id,
+                source_name: source.name.clone(),
+                org_id: organization.id,
+                namespace_id: None,
+                added: report.added.len(),
+                removed: report.removed.len(),
+                changed: report.changed.len(),
+            });
+    }
+
+    Ok(Json(report))
 }
 
 /// Validate source configuration based on type
