@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::graceful::ShutdownSignal;
 use crate::storage::BundleStorage;
+use crate::sync::{SyncConfig as SyncServiceConfig, SyncService};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -226,6 +227,9 @@ pub struct AppState {
     pub storage: Arc<dyn BundleStorage>,
     /// Bundle service for compilation and promotion
     pub bundle_service: Arc<BundleService>,
+    /// Policy-source sync engine (Plan 09): spawned as a background loop at
+    /// boot and invoked directly by the manual-trigger API.
+    pub sync_service: Arc<SyncService>,
     /// Event broadcaster for SSE
     pub event_tx: broadcast::Sender<ServerEvent>,
     /// Server start time
@@ -281,11 +285,31 @@ impl AppState {
             tracing::info!("Decision-log query API disabled (set REAPER_CLICKHOUSE_URL to enable)");
         }
 
+        // Sync engine (Plan 09): shares the SSE broadcaster so syncs surface
+        // as events, and the bundle service so git syncs materialize into
+        // policy rows + a bundle instead of only counting files (F2).
+        let sync_service = Arc::new(
+            SyncService::with_event_tx(
+                db.clone(),
+                SyncServiceConfig {
+                    git_base_path: config.sync.git_base_path.clone(),
+                    s3_cache_path: config.sync.s3_cache_path.clone(),
+                    bundle_storage_path: config.sync.bundle_storage_path.clone(),
+                    check_interval_secs: config.sync.check_interval_secs,
+                    max_concurrent: config.sync.max_concurrent,
+                    auto_compile: config.bundles.auto_compile_on_source_sync,
+                },
+                event_tx.clone(),
+            )
+            .with_materializer(bundle_service.clone()),
+        );
+
         Self {
             db,
             config: Arc::new(config),
             storage,
             bundle_service,
+            sync_service,
             event_tx,
             started_at: chrono::Utc::now(),
             jwks_validator: Some(jwks_validator),

@@ -444,6 +444,64 @@ impl<'a> BundleRepository<'a> {
         Ok(())
     }
 
+    /// Find the bundle already materialized for `(source, commit)`, if any —
+    /// the idempotency check for git-sync materialization (Plan 09 Step 2):
+    /// a webhook and a poll landing on the same SHA must not double-apply.
+    pub async fn find_by_source_commit(
+        &self,
+        source_id: Uuid,
+        commit: &str,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let row = sqlx::query(
+            "SELECT id FROM bundles WHERE source_id = $1 AND source_commit = $2 LIMIT 1",
+        )
+        .bind(source_id.to_string())
+        .bind(commit)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(|r| {
+            r.get::<String, _>("id")
+                .parse()
+                .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))
+        })
+        .transpose()
+    }
+
+    /// Record which source + commit produced this bundle (Plan 09 Step 2).
+    pub async fn link_source(
+        &self,
+        bundle_id: Uuid,
+        source_id: Uuid,
+        commit: &str,
+    ) -> Result<(), DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let result =
+            sqlx::query("UPDATE bundles SET source_id = $1, source_commit = $2 WHERE id = $3")
+                .bind(source_id.to_string())
+                .bind(commit)
+                .bind(bundle_id.to_string())
+                .execute(pool)
+                .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DatabaseError::NotFound(format!(
+                "Bundle {} not found",
+                bundle_id
+            )));
+        }
+        Ok(())
+    }
+
     /// Add a policy to a bundle
     pub async fn add_policy(
         &self,

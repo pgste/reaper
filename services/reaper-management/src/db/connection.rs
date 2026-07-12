@@ -58,6 +58,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "idempotency_keys",
         include_str!("migrations_pg/0008_idempotency_keys.sql"),
     ),
+    (
+        9,
+        "source_materialization",
+        include_str!("migrations_pg/0009_source_materialization.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -214,6 +219,7 @@ impl Database {
             include_str!("migrations/013_scim.sql"),
             include_str!("migrations/014_audit_governance.sql"),
             include_str!("migrations/015_idempotency_keys.sql"),
+            include_str!("migrations/016_source_materialization.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

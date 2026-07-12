@@ -7,83 +7,24 @@ use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Reject IPs that must never be reachable via a user-configured JWKS URL —
-/// loopback, private, link-local (incl. the 169.254.169.254 cloud metadata
-/// endpoint), CGNAT, and IPv6 equivalents. This is the core SSRF guard.
-fn is_disallowed_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || o[0] == 0
-                // 100.64.0.0/10 carrier-grade NAT
-                || (o[0] == 100 && (o[1] & 0xC0) == 0x40)
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                // unique local fc00::/7
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                // link-local fe80::/10
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-        }
-    }
-}
-
-/// Validate a JWKS URL before fetching: require HTTPS and ensure every resolved
-/// address is a public IP. Blocks SSRF to internal services and cloud metadata.
-///
-/// Note: this resolves the host and checks the addresses; a determined attacker
-/// could still attempt DNS rebinding between this check and the actual fetch.
-/// That residual risk is much smaller than the unrestricted fetch it replaces.
-/// SSRF guard for an outbound URL that must be a public https endpoint — the
-/// same check the JWKS fetch uses, exposed for the OIDC discovery/token
-/// endpoints so they can't be pointed at internal services or cloud metadata.
+/// SSRF guard for an outbound URL that must be a public https endpoint —
+/// delegates to the shared [`crate::url_guard`] (Plan 09 Step 4 promoted the
+/// original JWKS-local guard so the git sync path uses the identical check).
+/// Exposed for the OIDC discovery/token endpoints so they can't be pointed at
+/// internal services or cloud metadata.
 pub(crate) async fn guard_public_https_url(url: &str) -> Result<(), JwksError> {
     validate_jwks_url(url).await
 }
 
 async fn validate_jwks_url(url: &str) -> Result<(), JwksError> {
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|_| JwksError::UrlNotAllowed("malformed URL".to_string()))?;
-
-    if parsed.scheme() != "https" {
-        return Err(JwksError::UrlNotAllowed("must use https".to_string()));
-    }
-
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| JwksError::UrlNotAllowed("missing host".to_string()))?;
-    let port = parsed.port_or_known_default().unwrap_or(443);
-
-    let addrs = tokio::net::lookup_host((host, port))
+    crate::url_guard::validate_public_https_url(url)
         .await
-        .map_err(|_| JwksError::UrlNotAllowed("host does not resolve".to_string()))?;
-
-    let mut resolved_any = false;
-    for addr in addrs {
-        resolved_any = true;
-        if is_disallowed_ip(&addr.ip()) {
-            return Err(JwksError::UrlNotAllowed(
-                "resolves to a disallowed internal address".to_string(),
-            ));
-        }
-    }
-    if !resolved_any {
-        return Err(JwksError::UrlNotAllowed(
-            "host does not resolve".to_string(),
-        ));
-    }
-
-    Ok(())
+        .map_err(|crate::url_guard::UrlGuardError::NotAllowed(reason)| {
+            JwksError::UrlNotAllowed(reason)
+        })
 }
 
 /// JWKS configuration for an organization

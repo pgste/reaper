@@ -19,6 +19,47 @@ pub enum GitSyncError {
     Config(String),
     #[error("Pattern error: {0}")]
     Pattern(String),
+    #[error("Remote URL not allowed: {0}")]
+    UrlNotAllowed(String),
+}
+
+/// Env flag that permits `file://` / local-path remotes. Test fixtures and
+/// air-gapped mirror setups only — a local remote bypasses the SSRF guard by
+/// definition, so this must never be set on an internet-facing control plane.
+const ALLOW_LOCAL_GIT_ENV: &str = "REAPER_SYNC_ALLOW_LOCAL_GIT";
+
+/// SSRF guard on the git remote (Plan 09 Step 4, Security P1-3): a source URL
+/// is org-admin-controlled input, so before ANY clone/fetch it must pass the
+/// same shared guard the JWKS/OIDC paths use — https only, host resolves, and
+/// no address in a disallowed range (loopback/private/link-local/metadata/
+/// CGNAT). `http://`, `git://`, and `ssh://` are rejected outright (the syncer
+/// only implements userpass auth, which must not travel in cleartext), and
+/// local paths are rejected unless explicitly opted in for test fixtures.
+async fn guard_remote_url(url: &str) -> Result<(), GitSyncError> {
+    let is_local = url.starts_with("file://") || std::path::Path::new(url).is_absolute();
+    if is_local {
+        let allowed = std::env::var(ALLOW_LOCAL_GIT_ENV)
+            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        if allowed {
+            warn!(
+                url = %url,
+                "Allowing LOCAL git remote because {ALLOW_LOCAL_GIT_ENV} is set — \
+                 test/air-gapped use only"
+            );
+            return Ok(());
+        }
+        return Err(GitSyncError::UrlNotAllowed(
+            "local git remotes are disabled (set {REAPER_SYNC_ALLOW_LOCAL_GIT} for test fixtures)"
+                .replace("{REAPER_SYNC_ALLOW_LOCAL_GIT}", ALLOW_LOCAL_GIT_ENV),
+        ));
+    }
+
+    crate::url_guard::validate_public_https_url(url)
+        .await
+        .map_err(|crate::url_guard::UrlGuardError::NotAllowed(reason)| {
+            GitSyncError::UrlNotAllowed(reason)
+        })
 }
 
 /// Git repository syncer
@@ -42,6 +83,11 @@ impl GitSyncer {
         let config = source
             .git_config()
             .ok_or_else(|| GitSyncError::Config("Invalid Git configuration".to_string()))?;
+
+        // SSRF guard BEFORE any network activity — clone and fetch both talk
+        // to this URL. Checked on every sync (not just the first clone), so a
+        // source whose config was edited to an internal address is re-blocked.
+        guard_remote_url(&config.url).await?;
 
         // Determine repo path
         let repo_path = self.repo_path(source.id);
@@ -267,6 +313,45 @@ mod tests {
         assert_eq!(detect_language(Path::new("rules.yaml")), "reaper");
         assert_eq!(detect_language(Path::new("auth.cedar")), "cedar");
         assert_eq!(detect_language(Path::new("unknown.txt")), "simple");
+    }
+
+    #[tokio::test]
+    async fn guard_rejects_http_internal_and_metadata_urls() {
+        for url in [
+            "http://github.com/org/repo.git",            // cleartext
+            "https://127.0.0.1/repo.git",                // loopback
+            "https://10.1.2.3/repo.git",                 // private
+            "https://169.254.169.254/latest/meta-data/", // cloud metadata
+            "git://github.com/org/repo.git",             // non-https scheme
+            "ssh://git@github.com/org/repo.git",         // ssh (userpass-only syncer)
+        ] {
+            assert!(
+                matches!(
+                    guard_remote_url(url).await,
+                    Err(GitSyncError::UrlNotAllowed(_))
+                ),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn guard_gates_local_remotes_behind_env_flag() {
+        // Single test covers both states of the flag — separate tests would
+        // race each other on the shared process environment.
+        std::env::remove_var(ALLOW_LOCAL_GIT_ENV);
+        assert!(matches!(
+            guard_remote_url("file:///tmp/fixture-repo").await,
+            Err(GitSyncError::UrlNotAllowed(_))
+        ));
+        assert!(matches!(
+            guard_remote_url("/tmp/fixture-repo").await,
+            Err(GitSyncError::UrlNotAllowed(_))
+        ));
+
+        std::env::set_var(ALLOW_LOCAL_GIT_ENV, "1");
+        assert!(guard_remote_url("file:///tmp/fixture-repo").await.is_ok());
+        std::env::remove_var(ALLOW_LOCAL_GIT_ENV);
     }
 
     #[test]
