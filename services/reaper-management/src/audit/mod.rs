@@ -174,6 +174,7 @@ pub mod actions {
     pub const ROLLOUT_CANCEL: &str = "rollout.cancel";
     pub const ROLLOUT_COMPLETE: &str = "rollout.complete";
     pub const ROLLOUT_ROLLBACK: &str = "rollout.rollback";
+    pub const ROLLOUT_BREAK_GLASS: &str = "rollout.break_glass";
 
     // API Key actions
     pub const APIKEY_CREATE: &str = "apikey.create";

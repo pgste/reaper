@@ -61,6 +61,13 @@ pub struct ApprovalPolicy {
     #[serde(default)]
     #[schema(value_type = Vec<String>)]
     pub required_scopes: Vec<Scope>,
+    /// If true, every deployment into this environment's namespace must go
+    /// through the governed promotion path (change record + approvals) — a
+    /// direct rollout is rejected with 409. Platform `admin` keys bypass as
+    /// an audited break-glass. Default false, so small deployments keep the
+    /// frictionless direct path unless an org opts in.
+    #[serde(default)]
+    pub require_change_record: bool,
 }
 
 impl Default for ApprovalPolicy {
@@ -69,6 +76,7 @@ impl Default for ApprovalPolicy {
             min_approvers: 0,
             distinct_from_requester: true,
             required_scopes: Vec::new(),
+            require_change_record: false,
         }
     }
 }
@@ -216,7 +224,7 @@ mod tests {
         let policy = ApprovalPolicy {
             min_approvers: 2,
             distinct_from_requester: true,
-            required_scopes: vec![],
+            ..Default::default()
         };
         let requester = Uuid::new_v4();
         let a = Uuid::new_v4();
@@ -259,13 +267,29 @@ mod tests {
         let policy = ApprovalPolicy {
             min_approvers: 1,
             distinct_from_requester: false,
-            required_scopes: vec![],
+            ..Default::default()
         };
         let requester = Uuid::new_v4();
         assert_eq!(
             policy.evaluate(requester, &[requester]),
             ApprovalOutcome::Satisfied
         );
+    }
+
+    #[test]
+    fn require_change_record_defaults_off_for_stored_policies() {
+        // Environments created before the flag existed have approval_policy
+        // JSON without it — they must keep the frictionless direct-rollout
+        // default rather than suddenly enforcing the promotion path.
+        let policy: ApprovalPolicy =
+            serde_json::from_str(r#"{"min_approvers": 2, "distinct_from_requester": true}"#)
+                .unwrap();
+        assert!(!policy.require_change_record);
+        assert!(!ApprovalPolicy::default().require_change_record);
+
+        let opted_in: ApprovalPolicy =
+            serde_json::from_str(r#"{"require_change_record": true}"#).unwrap();
+        assert!(opted_in.require_change_record);
     }
 
     #[test]

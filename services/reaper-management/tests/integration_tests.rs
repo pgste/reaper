@@ -5426,7 +5426,9 @@ async fn promotion_applies_pinned_data_version_to_target_env() {
         .await
         .unwrap();
 
-    // Promote staging→prod: auto-applies (0 approvers) and moves the data.
+    // Promote staging→prod: even at 0 approvers this is a two-step act — the
+    // request lands pending and the requester's own approve applies it (and
+    // moves the data).
     let r = env
         .app
         .clone()
@@ -5440,8 +5442,22 @@ async fn promotion_applies_pinned_data_version_to_target_env() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::CREATED);
     let cr = parse_body(r).await;
-    assert_eq!(cr["status"], "applied");
+    assert_eq!(cr["status"], "pending", "never applies inline");
     assert_eq!(cr["data_version"], 1, "source data version must be pinned");
+    let cr_id = cr["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/dpromo-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(parse_body(r).await["status"], "applied");
 
     // The target env's datastore received the snapshot as ITS version 1, with
     // the promoted entity inside.
@@ -5580,8 +5596,9 @@ async fn promotion_with_unresolvable_data_version_fails_closed() {
         .await
         .unwrap();
 
-    // Promote: the pinned data version cannot land (no prod datastore) → 409,
-    // and the request must NOT be applied.
+    // The request opens pending; the APPROVE is where the pinned data version
+    // fails to land (no prod datastore) → 409, and the request must NOT be
+    // applied.
     let r = env
         .app
         .clone()
@@ -5589,6 +5606,19 @@ async fn promotion_with_unresolvable_data_version_fails_closed() {
             "POST",
             "/orgs/fc-org/environments/prod/promote",
             Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let cr_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/fc-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
             &key,
         ))
         .await
@@ -5741,4 +5771,444 @@ async fn promotions_list_is_keyset_paginated() {
     let page2 = parse_body(r).await;
     assert_eq!(page2["items"].as_array().unwrap().len(), 1);
     assert!(page2["next_cursor"].is_null());
+}
+
+/// An environment that opts into `require_change_record` only accepts
+/// deployments through the promotion path: direct rollouts into its namespace
+/// (and org-wide rollouts, which would sweep it) are rejected with 409, while
+/// unguarded namespaces, dry-runs, the promotion path, and the audited
+/// `admin` break-glass all still work. The flag defaults OFF, so this is
+/// opt-in per environment.
+#[tokio::test]
+async fn direct_rollout_requires_promotion_path_when_env_opts_in() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Gate Org", "slug": "gate-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let admin_key = create_test_api_key(&env.db, org_id).await; // platform `admin` scope
+    let member_key = create_scoped_api_key(&env.db, org_id, &["policy:read", "policy:write"]).await;
+
+    // Agent so rollouts have a target.
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/gate-org/agents/register",
+            Some(json!({"name": "a1", "hostname": "h", "version": "1.0.0", "labels": {}})),
+            &admin_key,
+        ))
+        .await
+        .unwrap();
+
+    // staging: default policy (no gate). prod: opts into require_change_record
+    // (auto-approve so the sanctioned path applies inline in this test).
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/gate-org/namespaces",
+                Some(json!({"slug": slug})),
+                &admin_key,
+            ))
+            .await
+            .unwrap();
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    for (name, tier, nsid, policy) in [
+        ("staging", 10, &ns[0], json!({})),
+        (
+            "prod",
+            20,
+            &ns[1],
+            json!({"min_approvers": 0, "require_change_record": true}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/gate-org/environments",
+                Some(
+                    json!({"name": name, "tier_order": tier, "namespace_id": nsid,
+                            "approval_policy": policy}),
+                ),
+                &admin_key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+    }
+
+    // One compiled bundle per successful rollout so ActiveRolloutExists can't
+    // couple the assertions.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/gate-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &admin_key,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let mut bundles = Vec::new();
+    for name in ["b-blocked", "b-promo", "b-glass", "b-direct"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/gate-org/bundles",
+                Some(json!({"name": name, "policy_ids": [policy_id]})),
+                &admin_key,
+            ))
+            .await
+            .unwrap();
+        let id = parse_body(r).await["id"].as_str().unwrap().to_string();
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("/orgs/gate-org/bundles/{id}/compile"),
+                None,
+                &admin_key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        bundles.push(id);
+    }
+    let (b_blocked, b_promo, b_glass, b_direct) =
+        (&bundles[0], &bundles[1], &bundles[2], &bundles[3]);
+
+    // Direct rollout into prod's namespace by a regular member → 409.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/gate-org/bundles/{b_blocked}/rollout"),
+            Some(json!({"namespace_id": ns[1]})),
+            &member_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let msg = parse_body(r).await;
+    assert!(
+        msg["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("promotion path")
+            || msg.to_string().contains("promotion path"),
+        "409 must point at the promotion path: {msg}"
+    );
+
+    // An org-wide rollout (no namespace) would sweep prod → also 409.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/gate-org/bundles/{b_blocked}/rollout"),
+            Some(json!({})),
+            &member_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+
+    // A dry-run is side-effect free and stays available for planning.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/gate-org/bundles/{b_blocked}/rollout"),
+            Some(json!({"namespace_id": ns[1], "dry_run": true})),
+            &member_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // The sanctioned path — promotion with its change record — works for the
+    // same member: two explicit steps (promote, then self-approve under the
+    // zero-approver policy) and it lands in prod.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/gate-org/environments/prod/promote",
+            Some(json!({"bundle_id": b_promo, "from_env": "staging"})),
+            &member_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let pending = parse_body(r).await;
+    assert_eq!(pending["status"], "pending", "never applies inline");
+    let cr_id = pending["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/gate-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
+            &member_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let applied = parse_body(r).await;
+    assert_eq!(applied["status"], "applied");
+    assert!(applied["rollout_id"].as_str().is_some());
+
+    // `admin` break-glass: the direct rollout proceeds (audited).
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/gate-org/bundles/{b_glass}/rollout"),
+            Some(json!({"namespace_id": ns[1]})),
+            &admin_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+
+    // A namespace whose environment did NOT opt in keeps the direct path.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/gate-org/bundles/{b_direct}/rollout"),
+            Some(json!({"namespace_id": ns[0]})),
+            &member_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+}
+
+/// The freeze window is re-checked when a promotion APPLIES, not only when it
+/// is requested: a change request opened before a freeze cannot slip through
+/// by being approved mid-freeze. The approval is recorded, the request stays
+/// pending, and a re-approve after the freeze lifts applies it.
+#[tokio::test]
+async fn promotion_apply_recheck_blocks_mid_freeze_approval() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Refreeze Org", "slug": "refreeze-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let requester = create_named_api_key(&env.db, org_id, "requester").await;
+    let approver = create_named_api_key(&env.db, org_id, "approver").await;
+
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/refreeze-org/agents/register",
+            Some(json!({"name": "a1", "hostname": "h", "version": "1.0.0", "labels": {}})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/refreeze-org/namespaces",
+                Some(json!({"slug": slug})),
+                &requester,
+            ))
+            .await
+            .unwrap();
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    for (name, tier, nsid, policy) in [
+        ("staging", 10, &ns[0], json!({})),
+        (
+            "prod",
+            20,
+            &ns[1],
+            json!({"min_approvers": 1, "distinct_from_requester": true}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/refreeze-org/environments",
+                Some(
+                    json!({"name": name, "tier_order": tier, "namespace_id": nsid,
+                            "approval_policy": policy}),
+                ),
+                &requester,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+    }
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/refreeze-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/refreeze-org/bundles",
+            Some(json!({"name": "b", "policy_ids": [policy_id]})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    let bundle_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/refreeze-org/bundles/{bundle_id}/compile"),
+            None,
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // Open the request while prod is NOT frozen — it sits pending on approval.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/refreeze-org/environments/prod/promote",
+            Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let cr = parse_body(r).await;
+    assert_eq!(cr["status"], "pending");
+    let cr_id = cr["id"].as_str().unwrap().to_string();
+
+    // The freeze begins after the request was opened.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            "/orgs/refreeze-org/environments/prod",
+            Some(json!({"change_windows": {"freeze_periods": [{
+                "start": "2020-01-01T00:00:00Z", "end": "2100-01-01T00:00:00Z",
+                "reason": "incident freeze"
+            }]}})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // Approving mid-freeze is rejected at apply time; the request stays
+    // pending with no rollout.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/refreeze-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
+            &approver,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("/orgs/refreeze-org/promotions/{cr_id}"),
+            None,
+            &requester,
+        ))
+        .await
+        .unwrap();
+    let detail = parse_body(r).await;
+    assert_eq!(detail["status"], "pending");
+    assert!(detail["rollout_id"].is_null());
+
+    // Freeze lifts → the same approver re-approves and it applies.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            "/orgs/refreeze-org/environments/prod",
+            Some(json!({"change_windows": {"freeze_periods": []}})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/refreeze-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
+            &approver,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let applied = parse_body(r).await;
+    assert_eq!(applied["status"], "applied");
+    assert!(applied["rollout_id"].as_str().is_some());
 }

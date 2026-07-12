@@ -1,11 +1,14 @@
 //! Change-request (env→env promotion) API endpoints (Plan 10 Phase B).
 //!
 //! - `POST /orgs/{org}/environments/{env}/promote` creates a **pending**
-//!   change request (bundle + source data version pinned); it does NOT start a
-//!   rollout until the target environment's approval policy is satisfied.
+//!   change request (bundle + source data version pinned) — it NEVER applies
+//!   inline, whatever the approval policy, so promotion is always an explicit
+//!   two-step act and a single call cannot accidentally deploy to prod.
 //! - `POST /orgs/{org}/promotions/{id}/approve|reject` records an approver
-//!   decision; on reaching the target env's distinct-approver threshold the
-//!   request is approved and the **existing** rollout machinery is invoked.
+//!   decision; once the target env's approval policy is satisfied the request
+//!   applies via the **existing** rollout machinery. Under the default
+//!   zero-approver policy the requester's own approve suffices (self-service
+//!   confirmation); stricter envs demand N distinct approvers.
 //! - `GET /orgs/{org}/promotions[/{id}]` is the auditable change-record trail.
 //!
 //! (The `/promotions` path is distinct from Plan 02's `/change-requests`, which
@@ -177,8 +180,11 @@ async fn promote(
     )
     .await;
 
-    // A zero-approver policy (e.g. dev) is satisfied immediately — apply now.
-    let cr = maybe_apply(&state, &organization.id, cr, &to_env).await?;
+    // Deliberately NO inline apply, whatever the approval policy: a promotion
+    // is always a two-step act (create the change record, then explicitly
+    // approve it), so a single mistyped call can never land in prod. Under
+    // the default zero-approver policy the requester's own approve applies it
+    // — self-service, but never accidental.
 
     let approvals = cr_repo.list_approvals(cr.id).await?;
     Ok((
@@ -430,6 +436,19 @@ async fn maybe_apply(
     ) {
         // Not yet enough distinct approvers — leave the request pending.
         return Ok(cr);
+    }
+
+    // Re-check the freeze window at APPLY time, not just at request time — a
+    // request opened before a freeze must not slip through by being approved
+    // mid-freeze. The approval itself is recorded; the request stays pending
+    // and a re-approve after the freeze applies it.
+    if let WindowDecision::InFreeze { reason } = to_env.change_windows.is_change_allowed(now()) {
+        return Err(ApiError::Conflict(format!(
+            "environment '{}' is in a freeze window{}; the change request remains pending — \
+             approve again once the freeze lifts",
+            to_env.name,
+            reason.map(|r| format!(": {r}")).unwrap_or_default()
+        )));
     }
 
     // Satisfied. FIRST move the pinned data version into the target env's
