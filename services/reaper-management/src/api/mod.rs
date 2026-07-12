@@ -7,6 +7,7 @@ pub mod audit;
 pub mod auth;
 pub mod billing;
 pub mod bundles;
+pub mod change_requests;
 pub mod datastore;
 pub mod decisions;
 pub mod deployments;
@@ -72,6 +73,7 @@ pub fn build_openapi_router() -> OpenApiRouter<Arc<AppState>> {
         .merge(webhook_subscriptions::routes())
         .merge(namespaces::routes())
         .merge(environments::routes())
+        .merge(change_requests::routes())
         .merge(deployments::routes())
         .merge(decisions::routes())
         .merge(audit::routes())

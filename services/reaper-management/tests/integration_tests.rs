@@ -4993,3 +4993,288 @@ async fn environments_crud_and_binding_constraints() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
+
+/// Plan 10 Phase B: governed env→env promotion — a two-person change request
+/// gating the existing rollout, plus upward-only and freeze-window rules.
+#[tokio::test]
+async fn promotion_change_request_two_person_gate_and_rules() {
+    let env = setup_test_env().await;
+
+    // Org + requester key + a distinct approver key + an active agent.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Promo Org", "slug": "promo-org"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let requester = create_named_api_key(&env.db, org_id, "requester").await;
+    let approver = create_named_api_key(&env.db, org_id, "approver").await;
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/promo-org/agents/register",
+            Some(json!({"name": "a1", "hostname": "h", "version": "1.0.0", "labels": {}})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Two namespaces + two environments (staging tier 10, prod tier 20 with a
+    // 1-distinct-approver policy).
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/promo-org/namespaces",
+                Some(json!({"slug": slug})),
+                &requester,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    for (name, tier, nsid, policy) in [
+        ("staging", 10, &ns[0], json!({"min_approvers": 0})),
+        (
+            "prod",
+            20,
+            &ns[1],
+            json!({"min_approvers": 1, "distinct_from_requester": true}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/promo-org/environments",
+                Some(json!({"name": name, "tier_order": tier, "namespace_id": nsid, "approval_policy": policy})),
+                &requester,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+    }
+
+    // Compiled bundle to promote.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/promo-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/promo-org/bundles",
+            Some(json!({"name": "b", "policy_ids": [policy_id]})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    let bundle_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/promo-org/bundles/{bundle_id}/compile"),
+            None,
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // Downward promotion (prod→staging) is rejected.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/promo-org/environments/staging/promote",
+            Some(json!({"bundle_id": bundle_id, "from_env": "prod"})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    // Promote staging→prod: a pending change request, NO rollout yet.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/promo-org/environments/prod/promote",
+            Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let cr = parse_body(r).await;
+    assert_eq!(cr["status"], "pending");
+    assert!(cr["rollout_id"].is_null());
+    let cr_id = cr["id"].as_str().unwrap().to_string();
+
+    // The requester approving themselves does NOT satisfy the distinct policy.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/promo-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(parse_body(r).await["status"], "pending");
+
+    // A distinct approver satisfies it → applied, with a real rollout id.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/promo-org/promotions/{cr_id}/approve"),
+            Some(json!({})),
+            &approver,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let applied = parse_body(r).await;
+    assert_eq!(applied["status"], "applied");
+    assert!(applied["rollout_id"].as_str().is_some());
+
+    // The change-record trail lists it.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/promo-org/promotions?status=applied",
+            None,
+            &requester,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(parse_body(r).await.as_array().unwrap().len(), 1);
+}
+
+/// A freeze window on the target environment blocks a promotion with 409.
+#[tokio::test]
+async fn promotion_blocked_by_freeze_window() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Freeze Org", "slug": "freeze-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/freeze-org/namespaces",
+                Some(json!({"slug": slug})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    // prod is frozen for all of 2020..2100.
+    let windows = json!({"freeze_periods": [{
+        "start": "2020-01-01T00:00:00Z", "end": "2100-01-01T00:00:00Z", "reason": "always frozen"
+    }]});
+    for (name, tier, nsid, w) in [
+        ("staging", 10, &ns[0], json!({})),
+        ("prod", 20, &ns[1], windows),
+    ] {
+        env.app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/freeze-org/environments",
+                Some(json!({"name": name, "tier_order": tier, "namespace_id": nsid, "change_windows": w})),
+                &key,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/freeze-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/freeze-org/bundles",
+            Some(json!({"name": "b", "policy_ids": [policy_id]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let bundle_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/freeze-org/environments/prod/promote",
+            Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+}
