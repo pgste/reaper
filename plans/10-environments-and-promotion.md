@@ -1,5 +1,25 @@
 # Environments & Promotion
 
+> **STATUS: ✅ SHIPPED** — landed via PRs #38–#40 (2026-07-12) across phases A–C.
+> A: first-class `Environment` bound 1:1 to a namespace with tier ordering
+> (dev < staging < prod), a JSON approval policy (N-of-M distinct approvers,
+> requester excluded, required scopes) and absolute freeze windows, plus
+> env CRUD. B: governed env→env promotion — `promote` opens a change request
+> pinning bundle + source data version (upward-only, freeze-checked),
+> approvals recorded per approver, and on threshold the EXISTING rollout
+> machinery deploys into the target namespace (`/orgs/{org}/promotions`,
+> distinct from Plan 02's bundle-status `/change-requests`). C: the pinned
+> data version is materialized into the target env's datastore before the
+> rollout (fail-closed, `promotion:{id}` provenance, replicas sync like a
+> normal publish) and the change-record trail is keyset-paginated. Follow-ups
+> in #40: promotion is always two-step (create → explicit approve, even at
+> zero approvers); per-env `require_change_record` blocks direct rollouts
+> into the env's namespace (audited `admin` break-glass; dry-runs/rollbacks
+> exempt); freeze windows re-checked at apply time; opt-in external
+> change records (`external_change_record: off|reference|validated`) with
+> live ServiceNow validation at request AND apply time, stored on the
+> change record. Defaults stay frictionless — every gate is per-env opt-in.
+
 **Readiness gate:** NOT READY → CONDITIONAL (adds the regulated change-management spine on top of the already-strong rollout machinery)
 **Priority:** P1 (cheap relative to value — rollout/approval primitives already exist; this is a governance layer, not a rewrite)
 **Findings closed:** Product **F4** (no first-class environment object; dev→staging→prod is namespace slugs by convention; promotion is bundle-status + rollout, not env→env; no approval gates / change records / windows)
