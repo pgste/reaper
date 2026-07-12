@@ -109,10 +109,36 @@ pub enum DatabaseError {
     VersionConflict(String),
 }
 
+/// Advisory-lock keys for cross-replica coordination (Plan 11 Phase B).
+/// 64-bit, namespaced by the high bytes 0x52454150 ("REAP") so they cannot
+/// collide with other tools' advisory locks on a shared database.
+pub mod advisory_keys {
+    /// Serializes `run_pg_migrations` across concurrently booting replicas.
+    pub const MIGRATIONS: i64 = 0x5245_4150_0000_0001;
+    /// Elects the single replica that runs a change-log retention sweep.
+    pub const CHANGE_LOG_SWEEP: i64 = 0x5245_4150_0000_0002;
+}
+
+/// Outcome of attempting a Postgres transaction-scoped advisory lock.
+/// The lock lives exactly as long as the carried transaction: dropping or
+/// committing it releases the lock, and a dying process releases it
+/// automatically — no manual unlock, no pool poisoning.
+pub enum AdvisoryLock<'a> {
+    /// Lock held; keep this alive for the duration of the critical section.
+    Acquired(sqlx::Transaction<'a, sqlx::Any>),
+    /// Another replica holds the lock — skip the work this round.
+    Busy,
+    /// Not PostgreSQL (SQLite dev runs single-process; no coordination
+    /// needed) — callers should just do the work.
+    Unsupported,
+}
+
 /// Database wrapper supporting multiple backends
 #[derive(Clone)]
 pub struct Database {
     pool: Option<AnyPool>,
+    /// Optional read-replica pool (Postgres only). Never used for writes.
+    read_pool: Option<AnyPool>,
     db_type: String,
 }
 
@@ -123,7 +149,12 @@ impl Database {
         match config.db_type.as_str() {
             "sqlite" => Self::new_sqlite(&config.url, config.max_connections).await,
             "postgres" | "postgresql" => {
-                Self::new_postgres(&config.url, config.max_connections).await
+                Self::new_postgres(
+                    &config.url,
+                    config.replica_url.as_deref(),
+                    config.max_connections,
+                )
+                .await
             }
             other => Err(DatabaseError::Config(format!(
                 "Unsupported database type: {}",
@@ -184,24 +215,131 @@ impl Database {
 
         Ok(Self {
             pool: Some(pool),
+            read_pool: None,
             db_type: "sqlite".to_string(),
         })
     }
 
-    /// Create a new PostgreSQL database connection
-    async fn new_postgres(url: &str, max_connections: u32) -> Result<Self, DatabaseError> {
+    /// Create a new PostgreSQL database connection.
+    ///
+    /// Failover-aware (Plan 11 Phase B): connections are health-checked
+    /// before hand-out and recycled on a lifetime, so a primary failover
+    /// behind a stable endpoint surfaces as a brief acquire retry rather
+    /// than a stream of errors on connections still pointed at the demoted
+    /// primary. Initial connect retries with backoff so a replica booting
+    /// mid-failover doesn't crash-loop.
+    async fn new_postgres(
+        url: &str,
+        replica_url: Option<&str>,
+        max_connections: u32,
+    ) -> Result<Self, DatabaseError> {
         info!("Connecting to PostgreSQL database");
 
-        let pool = AnyPoolOptions::new()
-            .max_connections(max_connections)
-            .acquire_timeout(std::time::Duration::from_secs(10))
-            .connect(url)
-            .await?;
+        let pool = Self::connect_pg_with_retry(url, max_connections, "primary").await?;
+        let read_pool = match replica_url {
+            Some(replica) if !replica.trim().is_empty() => {
+                Some(Self::connect_pg_with_retry(replica, max_connections, "replica").await?)
+            }
+            _ => None,
+        };
 
         Ok(Self {
             pool: Some(pool),
+            read_pool,
             db_type: "postgres".to_string(),
         })
+    }
+
+    /// Build a hardened PG pool, retrying the initial connect with bounded
+    /// exponential backoff (1/2/4/8/16s — ≈31s total, sized to ride out a
+    /// typical ≤60s failover window across a restart).
+    async fn connect_pg_with_retry(
+        url: &str,
+        max_connections: u32,
+        role: &str,
+    ) -> Result<AnyPool, DatabaseError> {
+        let options = || {
+            AnyPoolOptions::new()
+                .max_connections(max_connections)
+                // Fail fast per attempt; the layers above retry/surface it.
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                // Ping before hand-out: a connection into a demoted/dead
+                // primary is discarded instead of handed to a request.
+                .test_before_acquire(true)
+                // Recycle connections so long-lived ones can't pin a stale
+                // DNS resolution / demoted endpoint indefinitely.
+                .max_lifetime(std::time::Duration::from_secs(30 * 60))
+                .idle_timeout(std::time::Duration::from_secs(10 * 60))
+        };
+
+        let mut delay = std::time::Duration::from_secs(1);
+        let mut attempt = 1;
+        loop {
+            match options().connect(url).await {
+                Ok(pool) => return Ok(pool),
+                Err(e) if attempt < 6 => {
+                    warn!(
+                        role,
+                        attempt,
+                        error = %e,
+                        "PostgreSQL connect failed; retrying in {}s",
+                        delay.as_secs()
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                    attempt += 1;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Try to take a Postgres transaction-scoped advisory lock without
+    /// blocking. See [`AdvisoryLock`] for the contract.
+    pub async fn try_advisory_xact_lock(
+        &self,
+        key: i64,
+    ) -> Result<AdvisoryLock<'_>, DatabaseError> {
+        if self.db_type != "postgres" {
+            return Ok(AdvisoryLock::Unsupported);
+        }
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| DatabaseError::Config("No database pool available".to_string()))?;
+        let mut tx = pool.begin().await?;
+        let row = sqlx::query("SELECT pg_try_advisory_xact_lock($1) AS locked")
+            .bind(key)
+            .fetch_one(&mut *tx)
+            .await?;
+        let locked: bool = row.get("locked");
+        if locked {
+            Ok(AdvisoryLock::Acquired(tx))
+        } else {
+            // Dropping the tx rolls it back; we never held the lock.
+            Ok(AdvisoryLock::Busy)
+        }
+    }
+
+    /// Take a Postgres transaction-scoped advisory lock, BLOCKING until it
+    /// is granted. Returns `None` on non-Postgres backends.
+    async fn advisory_xact_lock(
+        &self,
+        key: i64,
+    ) -> Result<Option<sqlx::Transaction<'_, sqlx::Any>>, DatabaseError> {
+        if self.db_type != "postgres" {
+            return Ok(None);
+        }
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| DatabaseError::Config("No database pool available".to_string()))?;
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(key)
+            .fetch_optional(&mut *tx)
+            .await?;
+        Ok(Some(tx))
     }
 
     /// Run database migrations
@@ -266,8 +404,20 @@ impl Database {
     }
 
     /// Versioned, checksummed migrator for PostgreSQL.
+    ///
+    /// Serialized across replicas by a transaction-scoped advisory lock
+    /// (Plan 11 Phase B): N replicas booting concurrently against the same
+    /// database queue here, exactly one applies each pending migration, and
+    /// the rest see it as already-applied when their turn comes. The lock
+    /// rides its own transaction and releases automatically on commit, drop,
+    /// or process death.
     async fn run_pg_migrations(&self, pool: &AnyPool) -> Result<(), DatabaseError> {
         info!("Running database migrations (postgres)...");
+
+        let _migration_lock = self
+            .advisory_xact_lock(advisory_keys::MIGRATIONS)
+            .await
+            .map_err(|e| DatabaseError::Migration(format!("acquire migration lock: {e}")))?;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS _reaper_migrations (
@@ -345,6 +495,12 @@ impl Database {
         self.pool.as_ref()
     }
 
+    /// Pool for read-only queries: the replica pool when configured, else
+    /// the primary. Callers must never write through this.
+    pub fn any_read_pool(&self) -> Option<&AnyPool> {
+        self.read_pool.as_ref().or(self.pool.as_ref())
+    }
+
     /// Get the database type
     pub fn db_type(&self) -> &str {
         &self.db_type
@@ -368,6 +524,7 @@ impl Database {
     pub fn new_mock() -> Self {
         Self {
             pool: None,
+            read_pool: None,
             db_type: "mock".to_string(),
         }
     }
@@ -449,12 +606,24 @@ mod tests {
         let config = DatabaseConfig {
             db_type: "sqlite".to_string(),
             url,
+            replica_url: None,
             max_connections: 5,
         };
 
         let db = Database::new(&config).await.unwrap();
         assert_eq!(db.db_type(), "sqlite");
         assert!(db.any_pool().is_some());
+        // With no replica configured, reads fall back to the primary pool.
+        assert!(db.any_read_pool().is_some());
+
+        // Advisory locks are a Postgres coordination tool; SQLite (single
+        // process) reports Unsupported so callers just do the work.
+        assert!(matches!(
+            db.try_advisory_xact_lock(advisory_keys::CHANGE_LOG_SWEEP)
+                .await
+                .unwrap(),
+            AdvisoryLock::Unsupported
+        ));
     }
 
     #[tokio::test]
@@ -466,6 +635,7 @@ mod tests {
         let config = DatabaseConfig {
             db_type: "sqlite".to_string(),
             url,
+            replica_url: None,
             max_connections: 5,
         };
 

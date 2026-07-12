@@ -165,11 +165,32 @@ async fn main() -> anyhow::Result<()> {
         if retention_secs > 0 {
             let db = state.db.clone();
             tokio::spawn(async move {
+                use reaper_management::db::{advisory_keys, AdvisoryLock};
+
                 let mut tick =
                     tokio::time::interval(std::time::Duration::from_secs(sweep_secs.max(60)));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tick.tick().await;
+
+                    // Under N replicas only one instance sweeps per tick
+                    // (Plan 11 Phase B): a per-tick advisory try-lock elects
+                    // it. The prune is idempotent delete-by-range, so this is
+                    // about avoiding redundant full-table work, not
+                    // correctness. Lock releases with the guard transaction.
+                    let _sweep_lock = match db
+                        .try_advisory_xact_lock(advisory_keys::CHANGE_LOG_SWEEP)
+                        .await
+                    {
+                        Ok(AdvisoryLock::Acquired(tx)) => Some(tx),
+                        Ok(AdvisoryLock::Unsupported) => None, // sqlite: single process
+                        Ok(AdvisoryLock::Busy) => continue,    // sibling replica is sweeping
+                        Err(e) => {
+                            warn!("change-log sweep leader election failed: {e}");
+                            continue;
+                        }
+                    };
+
                     let cutoff = (chrono::Utc::now()
                         - chrono::Duration::seconds(retention_secs as i64))
                     .to_rfc3339();

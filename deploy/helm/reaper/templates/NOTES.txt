@@ -106,4 +106,28 @@ PostgreSQL is deployed as part of this release.
   Database: {{ .Values.postgresql.auth.database }}
   Username: {{ .Values.postgresql.auth.username }}
 
+NOTE: the bundled PostgreSQL subchart is DEV-GRADE (single primary, no
+failover, no WAL archiving/backups). For production point
+externalDatabase.url at a managed HA instance or a CloudNativePG cluster —
+see docs/deployment/CONTROL_PLANE_HA_DR.md.
+
+{{- end }}
+
+{{- $replicas := int .Values.management.replicaCount }}
+{{- if .Values.management.autoscaling.enabled }}{{ $replicas = int .Values.management.autoscaling.minReplicas }}{{ end }}
+{{- if and .Values.management.enabled .Values.management.persistence.enabled (gt $replicas 1) (not (has "ReadWriteMany" .Values.management.persistence.accessModes)) }}
+
+=============================================================================
+WARNING: MULTI-REPLICA MANAGEMENT WITH A ReadWriteOnce VOLUME
+=============================================================================
+
+management runs {{ $replicas }}+ replicas but management.persistence uses a
+ReadWriteOnce PVC: every replica must co-schedule onto the SAME node, which
+defeats node-loss redundancy and can leave surge pods Pending during
+upgrades. For a genuinely redundant control plane either:
+  * set management.persistence.enabled=false and use shared bundle storage
+    (management.config.storageType=s3), or
+  * use a ReadWriteMany-capable storageClass.
+See docs/deployment/CONTROL_PLANE_HA_DR.md §7.
+
 {{- end }}
