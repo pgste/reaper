@@ -396,6 +396,15 @@ curl http://localhost:3000/orgs/myorg/bundles > bundles-backup.json
 
 ### Database Backup (Management)
 
+For production, use the HA/DR posture — managed HA Postgres or the
+CloudNativePG cluster with continuous WAL archiving, PITR, and the nightly
+automated restore-check — documented in
+[Control-Plane HA/DR](CONTROL_PLANE_HA_DR.md) (RPO ≤ 5 min, RTO ≤ 30 min).
+Fleet upgrades without authorization downtime are covered in the
+[Fleet Upgrade Runbook](FLEET_UPGRADE_RUNBOOK.md).
+
+Ad-hoc dev backup:
+
 ```bash
 # PostgreSQL backup
 pg_dump -h localhost -U reaper reaper_management > backup.sql
@@ -455,6 +464,8 @@ psql -h localhost -U reaper reaper_management < backup.sql
 
 ## Related Documentation
 
+- [Control-Plane HA/DR](CONTROL_PLANE_HA_DR.md)
+- [Fleet Upgrade Runbook](FLEET_UPGRADE_RUNBOOK.md)
 - [Event-Driven Loading](../concepts/EVENT_DRIVEN_LOADING.md)
 - [Bundle Format](../concepts/BUNDLE_FORMAT.md)
 - [Architecture](../architecture/ARCHITECTURE.md)
