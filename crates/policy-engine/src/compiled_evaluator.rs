@@ -218,8 +218,13 @@ impl CompiledPolicyEvaluator {
         }
     }
 
-    /// Fast evaluation path - minimal overhead
-    fn evaluate_fast(&self, request: &PolicyRequest) -> PolicyAction {
+    /// Fast evaluation path - minimal overhead.
+    ///
+    /// Returns `(action, matched)` where `matched` is `true` when a rule
+    /// actually fired and `false` when the default action was returned because
+    /// no rule matched. Set-level combination treats the unmatched case as
+    /// non-decisive (Plan 08 Phase A).
+    fn evaluate_fast_matched(&self, request: &PolicyRequest) -> (PolicyAction, bool) {
         // Check each compiled rule in order
         for rule in &self.compiled_rules {
             // Fast resource check (no string allocations)
@@ -235,17 +240,29 @@ impl CompiledPolicyEvaluator {
             }
 
             // Rule matches - return action
-            return rule.action.clone();
+            return (rule.action.clone(), true);
         }
 
-        // No rules matched - return default
-        self.default_action.clone()
+        // No rules matched - return default (non-decisive for set combination)
+        (self.default_action.clone(), false)
+    }
+
+    /// Fast evaluation path returning only the action.
+    fn evaluate_fast(&self, request: &PolicyRequest) -> PolicyAction {
+        self.evaluate_fast_matched(request).0
     }
 }
 
 impl PolicyEvaluator for CompiledPolicyEvaluator {
     fn evaluate(&self, request: &PolicyRequest) -> std::result::Result<PolicyAction, ReaperError> {
         Ok(self.evaluate_fast(request))
+    }
+
+    fn evaluate_matched(
+        &self,
+        request: &PolicyRequest,
+    ) -> std::result::Result<(PolicyAction, bool), ReaperError> {
+        Ok(self.evaluate_fast_matched(request))
     }
 
     fn validate(&self) -> std::result::Result<(), ReaperError> {

@@ -229,9 +229,44 @@ pub async fn evaluate_policy(
             }
         }
     } else {
-        // No policy specified - evaluate ALL policies (if any deny, return deny)
-        let all_policies = state.policy_engine.list_policies();
-        if all_policies.is_empty() {
+        // No policy specified - evaluate-all path (Plan 08 Phase A).
+        let perf = &state.agent_config.performance;
+
+        // ADR-2: evaluate-all is opt-in. A policy-less request fanning out to
+        // every policy is a DoS amplifier, so it fails closed unless armed.
+        if !perf.allow_evaluate_all {
+            ERRORS_TOTAL
+                .with_label_values(&["evaluate_all_disabled"])
+                .inc();
+            let body = sonic_rs::to_vec(&EvalResponse {
+                decision_id,
+                decision: "deny",
+                policy_id: "",
+                policy_version: 0,
+                evaluation_time_microseconds: 0.0,
+                total_time_microseconds: 0.0,
+                matched_rule: "evaluate_all_disabled",
+                agent_id: &state.agent_id,
+                cache_hit: false,
+            })
+            .unwrap_or_default();
+            return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+        }
+
+        // Prune to candidate policies for this resource instead of cloning the
+        // whole set (ADR-1). The linear scan remains available as the fallback.
+        let candidate_ids: Vec<Uuid> = if perf.use_pruning_index {
+            state.policy_engine.candidate_policy_ids(&payload.resource)
+        } else {
+            state
+                .policy_engine
+                .list_policies()
+                .into_iter()
+                .map(|p| p.id)
+                .collect()
+        };
+
+        if candidate_ids.is_empty() {
             ERRORS_TOTAL.with_label_values(&["no_policies"]).inc();
             let body = sonic_rs::to_vec(&EvalResponse {
                 decision_id,
@@ -247,7 +282,28 @@ pub async fn evaluate_policy(
             .unwrap_or_default();
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
-        all_policies.into_iter().map(|p| p.id).collect()
+
+        // Hard cap post-pruning: reject rather than fan out to an N-eval.
+        if candidate_ids.len() > perf.max_candidate_policies {
+            ERRORS_TOTAL
+                .with_label_values(&["candidate_cap_exceeded"])
+                .inc();
+            let body = sonic_rs::to_vec(&EvalResponse {
+                decision_id,
+                decision: "deny",
+                policy_id: "",
+                policy_version: 0,
+                evaluation_time_microseconds: 0.0,
+                total_time_microseconds: 0.0,
+                matched_rule: "candidate_cap_exceeded",
+                agent_id: &state.agent_id,
+                cache_hit: false,
+            })
+            .unwrap_or_default();
+            return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+        }
+
+        candidate_ids
     };
 
     // Create policy request — take ownership from payload, avoid cloning.
@@ -630,13 +686,56 @@ pub async fn fast_evaluate_policy(
             }
         }
     } else {
-        // Evaluate all policies
-        state
-            .policy_engine
-            .list_policies()
-            .iter()
-            .map(|p| p.id)
-            .collect()
+        // Evaluate-all path (Plan 08 Phase A) — same fan-out controls as the
+        // standard endpoint so the two paths can't diverge on policy.
+        let perf = &state.agent_config.performance;
+
+        if !perf.allow_evaluate_all {
+            ERRORS_TOTAL
+                .with_label_values(&["evaluate_all_disabled"])
+                .inc();
+            let body = sonic_rs::to_vec(&json!({
+                "decision": "deny",
+                "error": "evaluate_all_disabled"
+            }))
+            .unwrap_or_default();
+            return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+        }
+
+        let candidate_ids: Vec<Uuid> = if perf.use_pruning_index {
+            state.policy_engine.candidate_policy_ids(resource)
+        } else {
+            state
+                .policy_engine
+                .list_policies()
+                .iter()
+                .map(|p| p.id)
+                .collect()
+        };
+
+        if candidate_ids.is_empty() {
+            ERRORS_TOTAL.with_label_values(&["no_policies"]).inc();
+            let body = sonic_rs::to_vec(&json!({
+                "decision": "deny",
+                "error": "no_policies_loaded"
+            }))
+            .unwrap_or_default();
+            return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+        }
+
+        if candidate_ids.len() > perf.max_candidate_policies {
+            ERRORS_TOTAL
+                .with_label_values(&["candidate_cap_exceeded"])
+                .inc();
+            let body = sonic_rs::to_vec(&json!({
+                "decision": "deny",
+                "error": "candidate_cap_exceeded"
+            }))
+            .unwrap_or_default();
+            return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+        }
+
+        candidate_ids
     };
 
     // Build request
