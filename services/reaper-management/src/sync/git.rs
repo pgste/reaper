@@ -3,9 +3,12 @@
 //! Clones/pulls Git repositories and extracts policy files.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+use super::commit_verify::{verify_commit_signature, CommitVerifyError};
+use super::github_app::{GitHubAppClient, GitHubAppError};
 use crate::domain::source::{GitConfig, PolicySource, SyncResult};
 
 /// Git sync errors
@@ -21,6 +24,10 @@ pub enum GitSyncError {
     Pattern(String),
     #[error("Remote URL not allowed: {0}")]
     UrlNotAllowed(String),
+    #[error("GitHub App error: {0}")]
+    GitHubApp(#[from] GitHubAppError),
+    #[error("Commit signature verification failed: {0}")]
+    Signature(#[from] CommitVerifyError),
 }
 
 /// Env flag that permits `file://` / local-path remotes. Test fixtures and
@@ -62,10 +69,19 @@ async fn guard_remote_url(url: &str) -> Result<(), GitSyncError> {
         })
 }
 
+/// Resolved clone credential for one sync (never stored). `x-access-token` +
+/// a short-lived GitHub App installation token, or the source's configured
+/// userpass, or none.
+type GitCred = Option<(String, String)>;
+
 /// Git repository syncer
 pub struct GitSyncer {
     /// Base directory for cloned repositories
     base_path: PathBuf,
+    /// GitHub App client for minting installation tokens (Plan 09 Step 6).
+    /// `None` when no App is configured — the syncer then falls back to the
+    /// source's configured userpass credentials.
+    app_client: Option<Arc<GitHubAppClient>>,
 }
 
 impl GitSyncer {
@@ -73,7 +89,41 @@ impl GitSyncer {
     pub fn new(base_path: impl AsRef<Path>) -> Self {
         Self {
             base_path: base_path.as_ref().to_path_buf(),
+            app_client: None,
         }
+    }
+
+    /// Attach a GitHub App client so sources carrying an `installation_id`
+    /// clone with a freshly minted, short-lived installation token instead of
+    /// a stored credential (Plan 09 Step 6).
+    pub fn with_app_client(mut self, app_client: Option<Arc<GitHubAppClient>>) -> Self {
+        self.app_client = app_client;
+        self
+    }
+
+    /// Resolve the clone URL and credential for this sync. For a GitHub App
+    /// installation, mint a short-lived token now and build the standard https
+    /// URL from `repo_full_name` — no long-lived credential is ever persisted.
+    async fn resolve_auth(&self, config: &GitConfig) -> Result<(String, GitCred), GitSyncError> {
+        if let (Some(installation_id), Some(repo_full_name)) =
+            (&config.installation_id, &config.repo_full_name)
+        {
+            let app = self.app_client.as_ref().ok_or_else(|| {
+                GitSyncError::Config(
+                    "source uses a GitHub App installation but no App is configured".to_string(),
+                )
+            })?;
+            let minted = app.installation_token(installation_id).await?;
+            let url = format!("https://github.com/{repo_full_name}.git");
+            return Ok((url, Some(("x-access-token".to_string(), minted.token))));
+        }
+
+        // Legacy / non-App path: use the stored userpass if present.
+        let cred = config
+            .username
+            .as_ref()
+            .map(|u| (u.clone(), config.password.clone().unwrap_or_default()));
+        Ok((config.url.clone(), cred))
     }
 
     /// Sync a policy source
@@ -84,19 +134,29 @@ impl GitSyncer {
             .git_config()
             .ok_or_else(|| GitSyncError::Config("Invalid Git configuration".to_string()))?;
 
+        // Resolve the effective clone URL + credential (mints an App
+        // installation token when configured; never persists it).
+        let (clone_url, cred) = self.resolve_auth(&config).await?;
+
         // SSRF guard BEFORE any network activity — clone and fetch both talk
         // to this URL. Checked on every sync (not just the first clone), so a
         // source whose config was edited to an internal address is re-blocked.
-        guard_remote_url(&config.url).await?;
+        guard_remote_url(&clone_url).await?;
 
         // Determine repo path
         let repo_path = self.repo_path(source.id);
 
         // Clone or update repository
-        let (repo, is_new) = self.clone_or_open(&repo_path, &config)?;
+        let (repo, is_new) = self.clone_or_open(&repo_path, &clone_url, &cred)?;
 
         // Fetch and checkout the branch
-        let commit = self.update_repo(&repo, &config)?;
+        let commit = self.update_repo(&repo, &config.branch, &cred)?;
+
+        // Verify the HEAD commit signature when the source requires it — fail
+        // the sync CLOSED before any policy file is read (Plan 09 Step 5).
+        if config.require_signed_commits {
+            self.verify_head_signature(&repo, &commit, &config.trusted_signing_keys)?;
+        }
 
         // Find policy files matching patterns
         let policy_files = self.find_policy_files(&repo_path, &config)?;
@@ -128,38 +188,39 @@ impl GitSyncer {
         self.base_path.join(source_id.to_string())
     }
 
+    /// Build remote callbacks that authenticate with `cred` when present.
+    fn callbacks_for(cred: &GitCred) -> git2::RemoteCallbacks<'static> {
+        let mut callbacks = git2::RemoteCallbacks::new();
+        if let Some((username, password)) = cred.clone() {
+            callbacks.credentials(move |_url, _username_from_url, _allowed_types| {
+                git2::Cred::userpass_plaintext(&username, &password)
+            });
+        }
+        callbacks
+    }
+
     /// Clone a new repository or open an existing one
     fn clone_or_open(
         &self,
         path: &Path,
-        config: &GitConfig,
+        url: &str,
+        cred: &GitCred,
     ) -> Result<(git2::Repository, bool), GitSyncError> {
         if path.exists() {
             debug!("Opening existing repository at {:?}", path);
             let repo = git2::Repository::open(path)?;
             Ok((repo, false))
         } else {
-            info!("Cloning repository {} to {:?}", config.url, path);
+            info!("Cloning repository to {:?}", path);
             std::fs::create_dir_all(path)?;
 
             let mut builder = git2::build::RepoBuilder::new();
-
-            // Set up authentication if provided
-            let mut callbacks = git2::RemoteCallbacks::new();
-
-            if let Some(username) = &config.username {
-                let password = config.password.clone().unwrap_or_default();
-                callbacks.credentials(move |_url, _username_from_url, _allowed_types| {
-                    git2::Cred::userpass_plaintext(username, &password)
-                });
-            }
-
             let mut fetch_opts = git2::FetchOptions::new();
-            fetch_opts.remote_callbacks(callbacks);
+            fetch_opts.remote_callbacks(Self::callbacks_for(cred));
             builder.fetch_options(fetch_opts);
 
             // Clone the repository
-            let repo = builder.clone(&config.url, path)?;
+            let repo = builder.clone(url, path)?;
             Ok((repo, true))
         }
     }
@@ -168,27 +229,19 @@ impl GitSyncer {
     fn update_repo(
         &self,
         repo: &git2::Repository,
-        config: &GitConfig,
+        branch: &str,
+        cred: &GitCred,
     ) -> Result<String, GitSyncError> {
         let mut remote = repo.find_remote("origin")?;
 
-        // Set up authentication for fetch
-        let mut callbacks = git2::RemoteCallbacks::new();
-        if let Some(username) = &config.username {
-            let password = config.password.clone().unwrap_or_default();
-            callbacks.credentials(move |_url, _username_from_url, _allowed_types| {
-                git2::Cred::userpass_plaintext(username, &password)
-            });
-        }
-
         let mut fetch_opts = git2::FetchOptions::new();
-        fetch_opts.remote_callbacks(callbacks);
+        fetch_opts.remote_callbacks(Self::callbacks_for(cred));
 
         // Fetch
-        remote.fetch(&[&config.branch], Some(&mut fetch_opts), None)?;
+        remote.fetch(&[branch], Some(&mut fetch_opts), None)?;
 
         // Get the remote branch
-        let branch_ref = format!("refs/remotes/origin/{}", config.branch);
+        let branch_ref = format!("refs/remotes/origin/{}", branch);
         let reference = repo.find_reference(&branch_ref)?;
         let commit = reference.peel_to_commit()?;
         let commit_id = commit.id().to_string();
@@ -203,6 +256,39 @@ impl GitSyncer {
         debug!("Checked out commit {}", commit_id);
 
         Ok(commit_id)
+    }
+
+    /// Verify the signature on `commit_id` against the source's trusted keys
+    /// (Plan 09 Step 5). `extract_signature` returns the armored signature and
+    /// the exact signed content (the commit object minus its `gpgsig` header),
+    /// which is what the SSHSIG verifier checks. Any failure (unsigned,
+    /// unsupported, untrusted) propagates as an error so the sync fails closed.
+    fn verify_head_signature(
+        &self,
+        repo: &git2::Repository,
+        commit_id: &str,
+        trusted_keys: &[String],
+    ) -> Result<(), GitSyncError> {
+        let oid = git2::Oid::from_str(commit_id)?;
+        // `None` signature field → the default `gpgsig`. A commit with no
+        // signature returns GIT_ENOTFOUND, which we map to a fail-closed
+        // "unsigned" rather than a generic git error.
+        let (signature, signed_content) = match repo.extract_signature(&oid, None) {
+            Ok(pair) => pair,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                return Err(GitSyncError::Signature(CommitVerifyError::Unsigned));
+            }
+            Err(e) => return Err(GitSyncError::Git(e)),
+        };
+
+        let fingerprint =
+            verify_commit_signature(signature.as_ref(), signed_content.as_ref(), trusted_keys)?;
+        info!(
+            commit = %commit_id,
+            key = %fingerprint,
+            "Verified signed commit against a trusted key"
+        );
+        Ok(())
     }
 
     /// Find policy files matching the patterns

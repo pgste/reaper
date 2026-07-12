@@ -54,6 +54,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "any", "sqlite", "postgre
 # Git integration
 git2 = "0.21"
 glob = "0.3"
+ssh-key = { version = "0.6", features = ["ed25519"] }  # SSHSIG commit-signature verification (Plan 09 Step 5)
 
 # Auth
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
@@ -62,6 +63,7 @@ chacha20poly1305 = { workspace = true }  # AEAD for OAuth token storage
 hkdf = { workspace = true }              # key derivation for token encryption
 hex = "0.4"
 hmac = "0.12"
+subtle = "2.6"  # constant-time equality for webhook token compare
 md-5 = "0.10"
 dashmap = "6.1"
 base64 = "0.22"

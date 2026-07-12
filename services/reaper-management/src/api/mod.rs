@@ -30,6 +30,7 @@ pub mod teams;
 pub mod users;
 pub mod webhook_subscriptions;
 pub mod webhooks;
+pub mod webhooks_git;
 
 use crate::state::AppState;
 use axum::Router;
@@ -66,6 +67,7 @@ pub fn build_openapi_router() -> OpenApiRouter<Arc<AppState>> {
         .merge(sources::routes())
         .merge(bundles::routes())
         .merge(webhooks::routes())
+        .merge(webhooks_git::routes())
         .merge(webhook_subscriptions::routes())
         .merge(namespaces::routes())
         .merge(deployments::routes())

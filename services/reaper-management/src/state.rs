@@ -285,6 +285,28 @@ impl AppState {
             tracing::info!("Decision-log query API disabled (set REAPER_CLICKHOUSE_URL to enable)");
         }
 
+        // GitHub App client (Plan 09 Step 6): minted-per-sync installation
+        // tokens replace PAT-in-URL cloning. None unless the App is fully
+        // configured (app_id + private key); an invalid key is logged and
+        // App auth stays off, falling back to configured userpass.
+        let github_app = config.oauth.github.as_ref().and_then(|gh| {
+            match crate::sync::GitHubAppClient::from_config(
+                gh.app_id.as_deref(),
+                gh.app_private_key.as_deref(),
+            ) {
+                Ok(client) => {
+                    tracing::info!("GitHub App auth enabled (installation tokens)");
+                    Some(Arc::new(client))
+                }
+                Err(crate::sync::GitHubAppError::NotConfigured) => None,
+                Err(e) => {
+                    tracing::error!(error = %e, "Invalid GitHub App config; \
+                            App auth disabled (falling back to userpass)");
+                    None
+                }
+            }
+        });
+
         // Sync engine (Plan 09): shares the SSE broadcaster so syncs surface
         // as events, and the bundle service so git syncs materialize into
         // policy rows + a bundle instead of only counting files (F2).
@@ -301,7 +323,8 @@ impl AppState {
                 },
                 event_tx.clone(),
             )
-            .with_materializer(bundle_service.clone()),
+            .with_materializer(bundle_service.clone())
+            .with_github_app(github_app),
         );
 
         Self {

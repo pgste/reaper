@@ -18,9 +18,11 @@ use crate::{
     state::AppState,
 };
 
-use super::helpers::{encrypt_token, get_github_token, get_user_id_from_session};
+use super::helpers::{
+    encrypt_token, get_github_installation_id, get_github_token, get_user_id_from_session,
+};
 use super::types::{
-    AuthorizeParams, CallbackParams, CreateSourceFromGitHubRequest, GitHubRepo,
+    AppSetupParams, AuthorizeParams, CallbackParams, CreateSourceFromGitHubRequest, GitHubRepo,
     GitHubTokenResponse, GitHubUser, OAuthState,
 };
 
@@ -239,6 +241,137 @@ pub(super) async fn github_callback(
     )))
 }
 
+/// Begin GitHub App installation (Plan 09 Step 6).
+///
+/// Redirects the org admin to the App's install page. GitHub then sends them
+/// back to the App's configured setup URL with an `installation_id`, which
+/// `github_app_setup_callback` records. This replaces the personal-OAuth-PAT
+/// flow for cloning: sync auth becomes a short-lived installation token minted
+/// from the App key, scoped to the repos approved at install time.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/git/github/install",
+    tag = "oauth",
+    params(("org" = String, Path, description = "Organization ID or slug")),
+    responses((status = 307, description = "Redirect to the GitHub App install page"))
+)]
+pub(super) async fn github_app_install(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<String>,
+) -> ApiResult<Redirect> {
+    let github_config = state
+        .config
+        .oauth
+        .github
+        .as_ref()
+        .ok_or_else(|| ApiError::Internal("GitHub OAuth not configured".to_string()))?;
+    let app_slug = github_config.app_slug.as_ref().ok_or_else(|| {
+        ApiError::Internal("GitHub App not configured (missing app_slug)".to_string())
+    })?;
+
+    // AuthN + permission: only a policy manager may connect a source.
+    let user_id = get_user_id_from_session(&state, &headers).await?;
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, &org).await?;
+    let role = UserOrgRepository::new(&state.db)
+        .get_role(user_id, organization.id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Forbidden("You are not a member of this organization".to_string())
+        })?;
+    if !role.can_manage_policies() {
+        return Err(ApiError::Forbidden(
+            "You don't have permission to install the GitHub App".to_string(),
+        ));
+    }
+
+    // HMAC-signed state carries the org/user through the install round-trip so
+    // the setup callback can attribute the installation (CSRF-protected).
+    let state_secret = state.config.auth.jwt_secret.clone().unwrap_or_default();
+    let state_token = OAuthState::new(&org, &user_id.to_string()).encode(state_secret.as_bytes());
+
+    let url = format!(
+        "https://github.com/apps/{}/installations/new?state={}",
+        app_slug,
+        urlencoding::encode(&state_token)
+    );
+    Ok(Redirect::temporary(&url))
+}
+
+/// GitHub App setup callback (Plan 09 Step 6): records the `installation_id`
+/// GitHub sends after an admin installs the App. Stores the installation (not
+/// a user PAT), so revoking the connecting user's token never breaks sync.
+#[utoipa::path(
+    get,
+    path = "/auth/github/app/callback",
+    tag = "oauth",
+    responses((status = 307, description = "Redirect back after installing the App"))
+)]
+pub(super) async fn github_app_setup_callback(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<AppSetupParams>,
+) -> ApiResult<Redirect> {
+    let client_info = ClientInfo::from_headers(&headers);
+
+    let state_secret = state.config.auth.jwt_secret.clone().unwrap_or_default();
+    let oauth_state = OAuthState::decode(&params.state, state_secret.as_bytes())
+        .ok_or_else(|| ApiError::BadRequest("Invalid state token".to_string()))?;
+    if !oauth_state.is_valid() {
+        return Err(ApiError::BadRequest("State token expired".to_string()));
+    }
+
+    let installation_id = params
+        .installation_id
+        .ok_or_else(|| ApiError::BadRequest("Missing installation_id".to_string()))?;
+
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, &oauth_state.org_slug).await?;
+    let user_id = Uuid::parse_str(&oauth_state.user_id)
+        .map_err(|_| ApiError::Internal("Invalid user ID in state".to_string()))?;
+
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        INSERT INTO github_app_installations
+            (id, org_id, installation_id, installed_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT(org_id) DO UPDATE SET
+            installation_id = excluded.installation_id,
+            installed_by = excluded.installed_by,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(organization.id.to_string())
+    .bind(&installation_id)
+    .bind(user_id.to_string())
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    AuditEntry::builder(actions::OAUTH_CONNECT, ActorType::User, user_id.to_string())
+        .org_id(organization.id)
+        .resource(ResourceType::Org, organization.id.to_string())
+        .ip_address(client_info.ip_address.unwrap_or_default())
+        .user_agent(client_info.user_agent.unwrap_or_default())
+        .details(serde_json::json!({
+            "provider": "github_app",
+            "installation_id": installation_id
+        }))
+        .log(&state.db)
+        .await
+        .ok();
+
+    Ok(Redirect::temporary(&format!(
+        "/orgs/{}/settings/integrations?github_app=installed",
+        oauth_state.org_slug
+    )))
+}
+
 /// List GitHub repositories for the connected account
 #[utoipa::path(
     get,
@@ -336,50 +469,57 @@ pub(super) async fn create_source_from_github(
         ));
     }
 
-    // Get GitHub token for the clone URL
-    let token = get_github_token(&state, organization.id).await?;
+    // Require a GitHub App installation (Plan 09 Step 6 / ADR-1). The source
+    // stores the installation id + repo name — NOT a token in the clone URL.
+    // At sync time a short-lived installation token is minted for that one
+    // clone, so revoking the connecting user's PAT never orphans the source.
+    let installation_id = get_github_installation_id(&state, organization.id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "GitHub App is not installed for this organization. Install it via \
+                 /orgs/{org}/git/github/install before creating a source."
+                    .to_string(),
+            )
+        })?;
 
-    // Build the Git clone URL with token embedded
-    let clone_url = format!(
-        "https://x-access-token:{}@github.com/{}.git",
-        token, request.repo_full_name
-    );
-
-    // Create the Git source
-    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
-    let source_id = Uuid::new_v4();
-    let now = Utc::now().to_rfc3339();
     let branch = request.branch.unwrap_or_else(|| "main".to_string());
     let name = request
         .name
         .unwrap_or_else(|| request.repo_full_name.replace('/', "-"));
 
+    // Token-free config: the clone URL carries no credential; provider +
+    // installation_id + repo_full_name drive minted-per-sync auth.
     let config = serde_json::json!({
-        "url": clone_url,
+        "url": format!("https://github.com/{}.git", request.repo_full_name),
         "branch": branch,
         "path": request.path.unwrap_or_else(|| ".".to_string()),
-        "poll_interval_seconds": 300
+        "provider": "github",
+        "installation_id": installation_id,
+        "repo_full_name": request.repo_full_name,
     });
 
-    sqlx::query(
-        r#"
-        INSERT INTO sources (id, org_id, namespace_id, name, source_type, config, is_active, created_at, updated_at)
-        VALUES ($1, $2, NULL, $3, 'git', $4, 1, $5, $6)
-        "#,
-    )
-    .bind(source_id.to_string())
-    .bind(organization.id.to_string())
-    .bind(&name)
-    .bind(config.to_string())
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await?;
+    // Persist via the sources repository so the source runs through the normal
+    // sync pipeline (policy_sources table, not the legacy `sources` table).
+    let source_repo = crate::db::repositories::PolicySourceRepository::new(&state.db);
+    let source = source_repo
+        .create(
+            organization.id,
+            crate::domain::source::CreatePolicySource {
+                name: name.clone(),
+                description: Some(format!("GitHub: {}", request.repo_full_name)),
+                source_type: crate::domain::source::SourceType::Git,
+                config,
+                sync_interval_secs: 300,
+            },
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to create source: {e}")))?;
 
     // Audit log
     AuditEntry::builder(actions::SOURCE_CREATE, ActorType::User, user_id.to_string())
         .org_id(organization.id)
-        .resource(ResourceType::Source, source_id.to_string())
+        .resource(ResourceType::Source, source.id.to_string())
         .ip_address(client_info.ip_address.unwrap_or_default())
         .user_agent(client_info.user_agent.unwrap_or_default())
         .details(serde_json::json!({

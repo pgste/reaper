@@ -89,6 +89,22 @@ pub(super) async fn get_github_token(state: &AppState, org_id: Uuid) -> ApiResul
     Ok(token)
 }
 
+/// Get the GitHub App installation id for an org (Plan 09 Step 6), if the org
+/// has installed the App. Returned to build a token-free git source that
+/// clones with a minted installation token at sync time.
+pub(super) async fn get_github_installation_id(
+    state: &AppState,
+    org_id: Uuid,
+) -> ApiResult<Option<String>> {
+    let pool = state.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT installation_id FROM github_app_installations WHERE org_id = $1")
+            .bind(org_id.to_string())
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// Derive a 32-byte AEAD key from the master secret with domain separation.
 ///
 /// Returns an error if the master secret is empty — we must never fall back to

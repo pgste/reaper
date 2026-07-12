@@ -255,6 +255,53 @@ impl<'a> PolicySourceRepository<'a> {
         Ok(sources)
     }
 
+    /// Find enabled git sources tracking `repo_full_name` (e.g. "owner/repo"),
+    /// optionally filtered by `provider` (Plan 09 Step 7). Used by the webhook
+    /// handler to resolve which source(s) a push event targets. Matches on the
+    /// git config's `repo_full_name`, so a source created without it (legacy
+    /// PAT-in-URL) is not webhook-resolvable — that's intended, those predate
+    /// the App/webhook model.
+    pub async fn find_git_sources_by_repo(
+        &self,
+        provider: Option<&str>,
+        repo_full_name: &str,
+    ) -> Result<Vec<PolicySource>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, org_id, name, description, source_type, config, sync_interval_secs,
+                   sync_status, last_sync_at, last_sync_error, last_sync_commit, is_enabled,
+                   created_at, updated_at
+            FROM policy_sources
+            WHERE is_enabled = 1 AND source_type = 'git'
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut matches = Vec::new();
+        for row in rows {
+            let source = self.row_to_source(row)?;
+            let Some(cfg) = source.git_config() else {
+                continue;
+            };
+            let repo_matches = cfg.repo_full_name.as_deref() == Some(repo_full_name);
+            let provider_matches = match (provider, cfg.provider.as_deref()) {
+                (Some(want), Some(have)) => want.eq_ignore_ascii_case(have),
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            if repo_matches && provider_matches {
+                matches.push(source);
+            }
+        }
+        Ok(matches)
+    }
+
     /// Update policy source
     pub async fn update(&self, id: Uuid, input: UpdatePolicySource) -> Result<bool, DatabaseError> {
         let pool = self

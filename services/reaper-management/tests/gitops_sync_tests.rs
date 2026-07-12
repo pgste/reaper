@@ -58,6 +58,55 @@ fn init_fixture_repo(dir: &Path) -> String {
     commit.to_string()
 }
 
+/// Create a git repo whose HEAD commit is SSH-signed (as `git config
+/// gpg.format ssh` produces). Returns (commit SHA, trusted authorized_keys
+/// public line).
+fn init_signed_fixture_repo(dir: &Path) -> (String, String) {
+    use ssh_key::{HashAlg, LineEnding, PrivateKey};
+
+    let mut opts = git2::RepositoryInitOptions::new();
+    opts.initial_head("main");
+    let repo = git2::Repository::init_opts(dir, &opts).unwrap();
+
+    std::fs::create_dir_all(dir.join("policies")).unwrap();
+    std::fs::write(
+        dir.join("policies/allow-docs.reap"),
+        "policy allow_docs {\n  allow read on \"/docs/*\"\n}\n",
+    )
+    .unwrap();
+
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = git2::Signature::now("signer", "signer@test").unwrap();
+
+    // Build the commit content, sign it under the git SSHSIG namespace, and
+    // attach the armored signature — exactly what git does for SSH signing.
+    let buf = repo
+        .commit_create_buffer(&sig, &sig, "signed policies", &tree, &[])
+        .unwrap();
+    let content = std::str::from_utf8(&buf).unwrap();
+    let key = PrivateKey::from(ssh_key::private::Ed25519Keypair::from_seed(&[11u8; 32]));
+    let armored = key
+        .sign("git", HashAlg::Sha512, content.as_bytes())
+        .unwrap()
+        .to_pem(LineEnding::LF)
+        .unwrap();
+    let oid = repo
+        .commit_signed(content, &armored, Some("gpgsig"))
+        .unwrap();
+    // Point HEAD/main at the signed commit.
+    repo.reference("refs/heads/main", oid, true, "signed")
+        .unwrap();
+    repo.set_head("refs/heads/main").unwrap();
+
+    let pubkey = key.public_key().to_openssh().unwrap();
+    (oid.to_string(), pubkey)
+}
+
 struct Env {
     _temp: TempDir,
     db: Arc<Database>,
@@ -115,6 +164,15 @@ async fn setup(auto_compile: bool) -> Env {
 }
 
 async fn create_git_source(env: &Env, name: &str, url: &str) -> Uuid {
+    create_git_source_cfg(
+        env,
+        name,
+        json!({ "url": url, "branch": "main", "patterns": ["**/*.reap"] }),
+    )
+    .await
+}
+
+async fn create_git_source_cfg(env: &Env, name: &str, config: serde_json::Value) -> Uuid {
     PolicySourceRepository::new(&env.db)
         .create(
             env.org_id,
@@ -122,11 +180,7 @@ async fn create_git_source(env: &Env, name: &str, url: &str) -> Uuid {
                 name: name.to_string(),
                 description: None,
                 source_type: SourceType::Git,
-                config: json!({
-                    "url": url,
-                    "branch": "main",
-                    "patterns": ["**/*.reap"],
-                }),
+                config,
                 sync_interval_secs: 300,
             },
         )
@@ -251,5 +305,81 @@ async fn ssrf_guarded_remote_fails_the_sync_without_fetching() {
     assert!(
         err.to_string().contains("not allowed"),
         "expected the SSRF guard to reject, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn signed_commit_by_trusted_key_syncs_and_untrusted_fails_closed() {
+    let env = setup(false).await;
+
+    let fixture = env._temp.path().join("signed-repo");
+    std::fs::create_dir_all(&fixture).unwrap();
+    let (head_sha, trusted_pubkey) = init_signed_fixture_repo(&fixture);
+    let url = format!("file://{}", fixture.display());
+
+    // require_signed_commits + the actual signer key trusted → sync succeeds.
+    let ok_source = create_git_source_cfg(
+        &env,
+        "signed-ok",
+        json!({
+            "url": url,
+            "branch": "main",
+            "patterns": ["**/*.reap"],
+            "require_signed_commits": true,
+            "trusted_signing_keys": [trusted_pubkey],
+        }),
+    )
+    .await;
+    let result = env.sync.trigger_sync(ok_source).await.unwrap();
+    assert_eq!(result.commit.as_deref(), Some(head_sha.as_str()));
+
+    // Same signed HEAD, but a DIFFERENT key is the only trusted one → the sync
+    // must fail closed (an attacker's signature must not pass).
+    let untrusted =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleUntrustedKeyDoesNotMatch00000000000 other";
+    let bad_source = create_git_source_cfg(
+        &env,
+        "signed-untrusted",
+        json!({
+            "url": url,
+            "branch": "main",
+            "patterns": ["**/*.reap"],
+            "require_signed_commits": true,
+            "trusted_signing_keys": [untrusted],
+        }),
+    )
+    .await;
+    let err = env.sync.trigger_sync(bad_source).await.unwrap_err();
+    assert!(
+        err.to_string().contains("signature"),
+        "untrusted signer must fail closed, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn unsigned_commit_fails_closed_when_signing_required() {
+    let env = setup(false).await;
+
+    let fixture = env._temp.path().join("unsigned-repo");
+    std::fs::create_dir_all(&fixture).unwrap();
+    init_fixture_repo(&fixture); // ordinary unsigned commit
+
+    let source = create_git_source_cfg(
+        &env,
+        "requires-signing",
+        json!({
+            "url": format!("file://{}", fixture.display()),
+            "branch": "main",
+            "patterns": ["**/*.reap"],
+            "require_signed_commits": true,
+            "trusted_signing_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample00000000000000000000000000000000000 k"],
+        }),
+    )
+    .await;
+
+    let err = env.sync.trigger_sync(source).await.unwrap_err();
+    assert!(
+        err.to_string().contains("signature") || err.to_string().contains("not signed"),
+        "unsigned HEAD with signing required must fail closed, got: {err}"
     );
 }

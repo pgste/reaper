@@ -26,6 +26,9 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         // GitHub OAuth
         .routes(routes!(github::github_authorize))
         .routes(routes!(github::github_callback))
+        // GitHub App install (Plan 09 Step 6)
+        .routes(routes!(github::github_app_install))
+        .routes(routes!(github::github_app_setup_callback))
         // OAuth connections management
         .routes(routes!(
             connections::list_connections,
