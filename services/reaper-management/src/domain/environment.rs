@@ -61,6 +61,36 @@ pub struct ApprovalPolicy {
     #[serde(default)]
     #[schema(value_type = Vec<String>)]
     pub required_scopes: Vec<Scope>,
+    /// If true, every deployment into this environment's namespace must go
+    /// through the governed promotion path (change record + approvals) — a
+    /// direct rollout is rejected with 409. Platform `admin` keys bypass as
+    /// an audited break-glass. Default false, so small deployments keep the
+    /// frictionless direct path unless an org opts in.
+    #[serde(default)]
+    pub require_change_record: bool,
+    /// Whether a promotion into this environment must carry an external ITSM
+    /// change-record reference (e.g. a ServiceNow CHG number), and whether
+    /// that reference is validated live against the configured instance.
+    /// Default `off`: a supplied reference is stored opaquely but never
+    /// required.
+    #[serde(default)]
+    pub external_change_record: ExternalChangeRecordMode,
+}
+
+/// How an environment treats external ITSM change records on promotion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalChangeRecordMode {
+    /// Not required; a supplied reference is stored opaquely.
+    #[default]
+    Off,
+    /// A reference must be supplied; it is stored but not verified.
+    Reference,
+    /// A reference must be supplied AND validate as an approved change record
+    /// against the configured ServiceNow instance — at request time and again
+    /// when the promotion applies. Fails closed if the instance is not
+    /// configured or unreachable.
+    Validated,
 }
 
 impl Default for ApprovalPolicy {
@@ -69,6 +99,8 @@ impl Default for ApprovalPolicy {
             min_approvers: 0,
             distinct_from_requester: true,
             required_scopes: Vec::new(),
+            require_change_record: false,
+            external_change_record: ExternalChangeRecordMode::Off,
         }
     }
 }
@@ -216,7 +248,7 @@ mod tests {
         let policy = ApprovalPolicy {
             min_approvers: 2,
             distinct_from_requester: true,
-            required_scopes: vec![],
+            ..Default::default()
         };
         let requester = Uuid::new_v4();
         let a = Uuid::new_v4();
@@ -259,12 +291,47 @@ mod tests {
         let policy = ApprovalPolicy {
             min_approvers: 1,
             distinct_from_requester: false,
-            required_scopes: vec![],
+            ..Default::default()
         };
         let requester = Uuid::new_v4();
         assert_eq!(
             policy.evaluate(requester, &[requester]),
             ApprovalOutcome::Satisfied
+        );
+    }
+
+    #[test]
+    fn require_change_record_defaults_off_for_stored_policies() {
+        // Environments created before the flag existed have approval_policy
+        // JSON without it — they must keep the frictionless direct-rollout
+        // default rather than suddenly enforcing the promotion path.
+        let policy: ApprovalPolicy =
+            serde_json::from_str(r#"{"min_approvers": 2, "distinct_from_requester": true}"#)
+                .unwrap();
+        assert!(!policy.require_change_record);
+        assert!(!ApprovalPolicy::default().require_change_record);
+
+        let opted_in: ApprovalPolicy =
+            serde_json::from_str(r#"{"require_change_record": true}"#).unwrap();
+        assert!(opted_in.require_change_record);
+    }
+
+    #[test]
+    fn external_change_record_mode_defaults_off_and_parses() {
+        let stored: ApprovalPolicy = serde_json::from_str(r#"{"min_approvers": 1}"#).unwrap();
+        assert_eq!(stored.external_change_record, ExternalChangeRecordMode::Off);
+
+        let reference: ApprovalPolicy =
+            serde_json::from_str(r#"{"external_change_record": "reference"}"#).unwrap();
+        assert_eq!(
+            reference.external_change_record,
+            ExternalChangeRecordMode::Reference
+        );
+        let validated: ApprovalPolicy =
+            serde_json::from_str(r#"{"external_change_record": "validated"}"#).unwrap();
+        assert_eq!(
+            validated.external_change_record,
+            ExternalChangeRecordMode::Validated
         );
     }
 

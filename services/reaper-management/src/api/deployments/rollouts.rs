@@ -10,9 +10,15 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError, api::idempotency, api::orgs::resolve_org, auth::middleware::RequireAuth,
-    db::repositories::OrganizationRepository, deployment::DeploymentService,
-    domain::deployment::StartRollout, state::AppState,
+    api::error::ApiError,
+    api::idempotency,
+    api::orgs::resolve_org,
+    audit::{actions, ActorType, AuditEntry, ResourceType},
+    auth::middleware::RequireAuth,
+    db::repositories::{EnvironmentRepository, OrganizationRepository},
+    deployment::DeploymentService,
+    domain::deployment::StartRollout,
+    state::AppState,
 };
 
 use super::types::{
@@ -123,6 +129,13 @@ async fn start_rollout_inner(
         return Ok((StatusCode::OK, body));
     }
 
+    // Environments that opted into `require_change_record` only accept
+    // deployments through the governed promotion path (Plan 10) — a direct
+    // rollout into their namespace is rejected here. Dry-runs above are
+    // exempt (no side effects), as are the rollback endpoints (incident
+    // recovery must not be gated behind approvals).
+    enforce_promotion_path(&state, organization.id, request.namespace_id, &user).await?;
+
     // Actual rollout
     let input = StartRollout {
         bundle_id,
@@ -154,6 +167,56 @@ async fn start_rollout_inner(
     }))
     .map_err(|e| ApiError::Internal(format!("serialize rollout: {e}")))?;
     Ok((StatusCode::CREATED, body))
+}
+
+/// Reject a direct rollout that would land in an environment whose approval
+/// policy set `require_change_record` — for those, promotion (change record +
+/// approvals, Plan 10) is the sanctioned deploy path. An org-wide rollout
+/// (no `namespace_id`) sweeps every namespace, so it is blocked whenever any
+/// active environment opted in. Platform `admin` keys pass as break-glass,
+/// with an audit entry recording the override.
+async fn enforce_promotion_path(
+    state: &AppState,
+    org_id: Uuid,
+    namespace_id: Option<Uuid>,
+    user: &crate::auth::middleware::AuthenticatedUser,
+) -> Result<(), ApiError> {
+    let envs = EnvironmentRepository::new(&state.db)
+        .list_by_org(org_id)
+        .await?;
+    let blocking = envs.iter().find(|e| {
+        e.is_active
+            && e.approval_policy.require_change_record
+            && namespace_id.is_none_or(|ns| e.namespace_id == ns)
+    });
+    let Some(env) = blocking else {
+        return Ok(());
+    };
+
+    if user.has_permission(crate::auth::scopes::Scope::Admin) {
+        AuditEntry::builder(
+            actions::ROLLOUT_BREAK_GLASS,
+            ActorType::User,
+            user.id.clone(),
+        )
+        .org_id(org_id)
+        .resource(ResourceType::Environment, env.id.to_string())
+        .log(&state.db)
+        .await
+        .ok();
+        return Ok(());
+    }
+
+    let hint = if namespace_id.is_none() {
+        " (an org-wide rollout would sweep its namespace; scope the rollout to another namespace, or promote)"
+    } else {
+        ""
+    };
+    Err(ApiError::Conflict(format!(
+        "environment '{}' requires deployments to go through the promotion path \
+         (change record + approval): POST /orgs/{{org}}/environments/{}/promote{}",
+        env.name, env.name, hint
+    )))
 }
 
 /// List rollouts

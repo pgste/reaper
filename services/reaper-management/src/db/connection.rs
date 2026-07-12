@@ -78,6 +78,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "change_requests",
         include_str!("migrations_pg/0012_change_requests.sql"),
     ),
+    (
+        13,
+        "change_request_external_ref",
+        include_str!("migrations_pg/0013_change_request_external_ref.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -238,6 +243,7 @@ impl Database {
             include_str!("migrations/017_git_providers.sql"),
             include_str!("migrations/018_environments.sql"),
             include_str!("migrations/019_change_requests.sql"),
+            include_str!("migrations/020_change_request_external_ref.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

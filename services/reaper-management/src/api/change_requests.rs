@@ -1,11 +1,14 @@
 //! Change-request (env→env promotion) API endpoints (Plan 10 Phase B).
 //!
 //! - `POST /orgs/{org}/environments/{env}/promote` creates a **pending**
-//!   change request (bundle + source data version pinned); it does NOT start a
-//!   rollout until the target environment's approval policy is satisfied.
+//!   change request (bundle + source data version pinned) — it NEVER applies
+//!   inline, whatever the approval policy, so promotion is always an explicit
+//!   two-step act and a single call cannot accidentally deploy to prod.
 //! - `POST /orgs/{org}/promotions/{id}/approve|reject` records an approver
-//!   decision; on reaching the target env's distinct-approver threshold the
-//!   request is approved and the **existing** rollout machinery is invoked.
+//!   decision; once the target env's approval policy is satisfied the request
+//!   applies via the **existing** rollout machinery. Under the default
+//!   zero-approver policy the requester's own approve suffices (self-service
+//!   confirmation); stricter envs demand N distinct approvers.
 //! - `GET /orgs/{org}/promotions[/{id}]` is the auditable change-record trail.
 //!
 //! (The `/promotions` path is distinct from Plan 02's `/change-requests`, which
@@ -27,6 +30,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
+    api::pagination::{PageQuery, Paginated},
     audit::{actions, ActorType, AuditEntry, ResourceType},
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::{
@@ -37,7 +41,8 @@ use crate::{
         ApprovalDecision, ChangeApproval, ChangeRequest, ChangeRequestStatus, CreateChangeRequest,
     },
     domain::deployment::StartRollout,
-    domain::environment::{ApprovalOutcome, Environment, WindowDecision},
+    domain::environment::{ApprovalOutcome, Environment, ExternalChangeRecordMode, WindowDecision},
+    integrations::{ChangeRecordCheck, ServiceNowClient},
     state::AppState,
 };
 
@@ -60,6 +65,13 @@ pub struct PromoteRequest {
     /// Optional rollout strategy on apply (else the namespace/org default).
     #[serde(default)]
     pub strategy_id: Option<Uuid>,
+    /// External ITSM change-record reference (e.g. a ServiceNow CHG number).
+    /// Required — and, in `validated` mode, checked live against the
+    /// configured ServiceNow instance — when the target environment's
+    /// approval policy sets `external_change_record`; stored opaquely
+    /// otherwise.
+    #[serde(default)]
+    pub change_ref: Option<String>,
 }
 
 /// A change request together with its recorded approvals.
@@ -137,6 +149,16 @@ async fn promote(
         return Err(ApiError::NotFound("Bundle not found".to_string()));
     }
 
+    // External change record (e.g. ServiceNow), per the target env's policy:
+    // required in `reference`/`validated` mode, live-checked in `validated`.
+    let change_ref = request
+        .change_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    check_external_change_record(&state, &to_env, change_ref.as_deref()).await?;
+
     // Pin the source environment's current data-plane version so policy + data
     // promote together (applied to the target in Phase C).
     let data_version = DatastoreRepository::new(&state.db)
@@ -155,6 +177,7 @@ async fn promote(
                 data_version,
                 strategy_id: request.strategy_id,
                 requested_by: user.id.clone(),
+                external_change_ref: change_ref,
             },
         )
         .await?;
@@ -176,8 +199,11 @@ async fn promote(
     )
     .await;
 
-    // A zero-approver policy (e.g. dev) is satisfied immediately — apply now.
-    let cr = maybe_apply(&state, &organization.id, cr, &to_env).await?;
+    // Deliberately NO inline apply, whatever the approval policy: a promotion
+    // is always a two-step act (create the change record, then explicitly
+    // approve it), so a single mistyped call can never land in prod. Under
+    // the default zero-approver policy the requester's own approve applies it
+    // — self-service, but never accidental.
 
     let approvals = cr_repo.list_approvals(cr.id).await?;
     Ok((
@@ -326,18 +352,25 @@ async fn reject_promotion(
 pub struct ListQuery {
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
-/// List change requests (the auditable change-record trail).
+/// List change requests (the auditable change-record trail), keyset-paginated
+/// (Plan 07 pattern).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/promotions",
     tag = "environments",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("status" = Option<String>, Query, description = "Filter by status")
+        ("status" = Option<String>, Query, description = "Filter by status"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
-    responses((status = 200, description = "Change requests", body = [ChangeRequest])),
+    responses((status = 200, description = "One page of change requests with a next_cursor to resume")),
     security(("bearer_jwt" = []))
 )]
 async fn list_promotions(
@@ -345,13 +378,22 @@ async fn list_promotions(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<ListQuery>,
-) -> ApiResult<Json<Vec<ChangeRequest>>> {
+) -> ApiResult<Json<Paginated<ChangeRequest>>> {
     let organization = authorize(&state, &user, &org, Scope::PolicyRead).await?;
     let status = query.status.as_deref().map(ChangeRequestStatus::parse);
-    let list = ChangeRequestRepository::new(&state.db)
-        .list_by_org(organization.id, status)
+    let page = PageQuery {
+        limit: query.limit,
+        cursor: query.cursor,
+    }
+    .validate()?;
+
+    let rows = ChangeRequestRepository::new(&state.db)
+        .list_page_by_org(organization.id, status, page.limit + 1, page.after.as_ref())
         .await?;
-    Ok(Json(list))
+
+    Ok(Json(Paginated::from_rows(rows, &page, |cr| {
+        (cr.created_at.to_rfc3339(), cr.id.to_string())
+    })))
 }
 
 /// Get a change request with its approvals.
@@ -415,7 +457,32 @@ async fn maybe_apply(
         return Ok(cr);
     }
 
-    // Satisfied: run the existing rollout machinery into the target namespace.
+    // Re-check the freeze window at APPLY time, not just at request time — a
+    // request opened before a freeze must not slip through by being approved
+    // mid-freeze. The approval itself is recorded; the request stays pending
+    // and a re-approve after the freeze applies it.
+    if let WindowDecision::InFreeze { reason } = to_env.change_windows.is_change_allowed(now()) {
+        return Err(ApiError::Conflict(format!(
+            "environment '{}' is in a freeze window{}; the change request remains pending — \
+             approve again once the freeze lifts",
+            to_env.name,
+            reason.map(|r| format!(": {r}")).unwrap_or_default()
+        )));
+    }
+
+    // Re-check the external change record at APPLY time in `validated` mode —
+    // the record could have been rejected (or the policy tightened) between
+    // request and approval. Fails closed: the request stays pending.
+    check_external_change_record(state, to_env, cr.external_change_ref.as_deref()).await?;
+
+    // Satisfied. FIRST move the pinned data version into the target env's
+    // data plane (Plan 10 Step 7) — policy and data promote together, and a
+    // promotion that cannot resolve its data version fails CLOSED here (the
+    // request stays pending; a later approve retries) rather than deploying
+    // policy against the target's stale data.
+    apply_pinned_data_version(state, org_id, &cr, to_env).await?;
+
+    // Then run the existing rollout machinery into the target namespace.
     let service = DeploymentService::new(state.db.clone());
     let input = StartRollout {
         bundle_id: cr.bundle_id,
@@ -450,6 +517,160 @@ async fn maybe_apply(
         .get(cr.id)
         .await?
         .ok_or_else(|| ApiError::Internal("change request vanished after apply".to_string()))
+}
+
+/// Move the change request's pinned data version from the source env's
+/// datastore into the target env's (Plan 10 Step 7). No-op when the request
+/// pinned no data version (the source env had no datastore — a policy-only
+/// promotion). Fails closed when a pinned version can no longer be resolved
+/// or the target has no datastore to receive it.
+async fn apply_pinned_data_version(
+    state: &AppState,
+    org_id: &Uuid,
+    cr: &ChangeRequest,
+    to_env: &Environment,
+) -> ApiResult<()> {
+    let Some(pinned_version) = cr.data_version else {
+        return Ok(());
+    };
+    // A datastore that existed but had never published pins version 0 —
+    // nothing to move yet.
+    if pinned_version == 0 {
+        return Ok(());
+    }
+
+    let env_repo = EnvironmentRepository::new(&state.db);
+    let from_env = env_repo
+        .get_by_id(cr.from_env_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal("Source environment vanished".to_string()))?;
+
+    let ds_repo = DatastoreRepository::new(&state.db);
+    let source_store = ds_repo
+        .get(*org_id, from_env.namespace_id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict(
+                "promotion pinned a data version but the source environment's datastore \
+                 no longer exists (fail closed)"
+                    .to_string(),
+            )
+        })?;
+    let (meta, document) = ds_repo
+        .get_version_document(source_store.id, pinned_version)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict(format!(
+                "promotion pinned data version {pinned_version} but it is no longer \
+                 available in the source environment (fail closed)"
+            ))
+        })?;
+    let target_store = ds_repo
+        .get(*org_id, to_env.namespace_id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict(format!(
+                "target environment '{}' has no datastore provisioned to receive the \
+                 promoted data version (fail closed)",
+                to_env.name
+            ))
+        })?;
+
+    let imported = ds_repo
+        .import_version(
+            &target_store,
+            &document,
+            (meta.entity_count, meta.tuple_count, meta.binding_count),
+            &format!("promotion:{}", cr.id),
+        )
+        .await?;
+
+    // Wake the target namespace's fleet exactly like a normal publish.
+    let _ = state
+        .event_tx
+        .send(crate::state::ServerEvent::DatastorePublished {
+            datastore_id: target_store.id,
+            org_id: *org_id,
+            namespace_id: Some(to_env.namespace_id),
+            version: imported.version,
+            checksum: imported.checksum.clone(),
+        });
+    crate::events_pg::notify_datastore_published(
+        state,
+        target_store.id,
+        *org_id,
+        Some(to_env.namespace_id),
+        imported.version,
+        &imported.checksum,
+    )
+    .await;
+
+    Ok(())
+}
+
+/// Enforce the target environment's `external_change_record` policy against
+/// the supplied ITSM reference (Plan 10 follow-up). Called at promotion
+/// request time AND again at apply time, so a record that gets rejected in
+/// ServiceNow mid-flight cannot still deploy.
+///
+/// - `off`: a supplied reference only has to be well-formed (it is stored
+///   opaquely as part of the change record).
+/// - `reference`: a well-formed reference is mandatory but not verified.
+/// - `validated`: the reference must exist in the configured ServiceNow
+///   instance with an accepted `approval` value. Missing configuration or an
+///   unreachable instance fails CLOSED with 409.
+async fn check_external_change_record(
+    state: &AppState,
+    to_env: &Environment,
+    reference: Option<&str>,
+) -> ApiResult<()> {
+    let mode = to_env.approval_policy.external_change_record;
+
+    let Some(reference) = reference else {
+        return match mode {
+            ExternalChangeRecordMode::Off => Ok(()),
+            _ => Err(ApiError::BadRequest(format!(
+                "environment '{}' requires an external change-record reference \
+                 (`change_ref`, e.g. a ServiceNow CHG number) on promotion",
+                to_env.name
+            ))),
+        };
+    };
+
+    if !ServiceNowClient::is_valid_reference(reference) {
+        return Err(ApiError::BadRequest(format!(
+            "'{reference}' is not a valid change-record reference \
+             (letters, digits, '-' or '_', at most 64 characters)"
+        )));
+    }
+    if mode != ExternalChangeRecordMode::Validated {
+        return Ok(());
+    }
+
+    let Some(snow) = state.config.integrations.servicenow.clone() else {
+        return Err(ApiError::Conflict(format!(
+            "environment '{}' requires validated external change records but no \
+             ServiceNow instance is configured (fail closed)",
+            to_env.name
+        )));
+    };
+    match ServiceNowClient::new(snow)
+        .validate_change_record(reference)
+        .await
+    {
+        Ok(ChangeRecordCheck::Valid) => Ok(()),
+        Ok(ChangeRecordCheck::NotFound) => Err(ApiError::BadRequest(format!(
+            "change record '{reference}' was not found in ServiceNow"
+        ))),
+        Ok(ChangeRecordCheck::NotApproved(approval)) => Err(ApiError::Conflict(format!(
+            "change record '{reference}' is not approved in ServiceNow \
+             (approval: '{approval}')"
+        ))),
+        Err(e) => Err(ApiError::Conflict(format!(
+            "could not validate change record '{reference}' against ServiceNow \
+             (fail closed): {e}"
+        ))),
+    }
 }
 
 async fn load_scoped(

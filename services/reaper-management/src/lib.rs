@@ -24,6 +24,7 @@ pub mod deployment;
 pub mod domain;
 pub mod events_pg;
 pub mod graceful;
+pub mod integrations;
 pub mod landscape;
 pub mod metrics;
 pub mod middleware;

@@ -7,6 +7,7 @@ mod bundles;
 mod database;
 mod error;
 mod events;
+mod integrations;
 mod oauth;
 mod rate_limit;
 mod server;
@@ -23,6 +24,7 @@ pub use bundles::{BundlesConfig, PromotionApproval};
 pub use database::DatabaseConfig;
 pub use error::ConfigError;
 pub use events::EventsConfig;
+pub use integrations::{IntegrationsConfig, ServiceNowConfig};
 pub use oauth::{BitbucketOAuthConfig, GitHubOAuthConfig, GitLabOAuthConfig, OAuthConfig};
 pub use rate_limit::RateLimitConfig;
 pub use server::ServerConfig;
@@ -58,6 +60,8 @@ pub struct Config {
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
     pub oauth: OAuthConfig,
+    #[serde(default)]
+    pub integrations: IntegrationsConfig,
 }
 
 impl Config {
@@ -147,6 +151,21 @@ impl Config {
                 v.trim().to_ascii_lowercase().as_str(),
                 "1" | "true" | "yes" | "on"
             );
+        }
+
+        // ServiceNow change-record validation (Plan 10 follow-up). Only
+        // consulted when an environment's approval policy sets
+        // `external_change_record: validated`; absent config there fails
+        // closed at promotion time rather than at startup.
+        if let Ok(url) = std::env::var("REAPER_SERVICENOW_URL") {
+            let mut snow = integrations::ServiceNowConfig::new(url);
+            if let Ok(user) = std::env::var("REAPER_SERVICENOW_USER") {
+                snow.username = user;
+            }
+            if let Ok(token) = std::env::var("REAPER_SERVICENOW_TOKEN") {
+                snow.api_token = Some(token);
+            }
+            config.integrations.servicenow = Some(snow);
         }
 
         // Bundle signing overrides
