@@ -764,6 +764,73 @@ impl<'a> DatastoreRepository<'a> {
         })
     }
 
+    /// Import an externally-produced snapshot document as this datastore's
+    /// next version (Plan 10 Step 7): env→env promotion carries the SOURCE
+    /// environment's pinned data snapshot into the TARGET environment's data
+    /// plane, so policy and data move together. The document is stored
+    /// verbatim (fresh checksum) and pinned at the target's current
+    /// change-stream head — replicas following deltas see it exactly like a
+    /// normal publish and full-sync onto it.
+    pub async fn import_version(
+        &self,
+        store: &DatastoreRecord,
+        document_json: &str,
+        counts: (i64, i64, i64),
+        published_by: &str,
+    ) -> Result<PublishedVersion, DatabaseError> {
+        let pool = self.pool()?;
+
+        let checksum = format!("sha256:{:x}", Sha256::digest(document_json.as_bytes()));
+        let version = store.current_version + 1;
+        let now = Utc::now().to_rfc3339();
+        let (entity_count, tuple_count, binding_count) = counts;
+
+        let head_seq: i64 = sqlx::query("SELECT change_seq FROM datastores WHERE id = $1")
+            .bind(store.id.to_string())
+            .fetch_one(pool)
+            .await?
+            .get("change_seq");
+
+        sqlx::query(
+            r#"INSERT INTO adm_versions
+               (id, datastore_id, version, checksum, document,
+                entity_count, tuple_count, binding_count, published_by, published_at,
+                change_seq)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(store.id.to_string())
+        .bind(version)
+        .bind(&checksum)
+        .bind(document_json)
+        .bind(entity_count)
+        .bind(tuple_count)
+        .bind(binding_count)
+        .bind(published_by)
+        .bind(&now)
+        .bind(head_seq)
+        .execute(pool)
+        .await?;
+
+        sqlx::query("UPDATE datastores SET current_version = $1, updated_at = $2 WHERE id = $3")
+            .bind(version)
+            .bind(&now)
+            .bind(store.id.to_string())
+            .execute(pool)
+            .await?;
+
+        Ok(PublishedVersion {
+            version,
+            checksum,
+            change_seq: head_seq,
+            entity_count,
+            tuple_count,
+            binding_count,
+            published_by: published_by.to_string(),
+            published_at: now,
+        })
+    }
+
     /// Record counts via COUNT(*) — the status endpoint must not pay for
     /// materializing every row just to show three numbers.
     pub async fn counts(&self, datastore_id: Uuid) -> Result<(i64, i64, i64), DatabaseError> {

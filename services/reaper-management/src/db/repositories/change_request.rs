@@ -101,6 +101,45 @@ impl<'a> ChangeRequestRepository<'a> {
         rows.iter().map(Self::row_to_cr).collect()
     }
 
+    /// Keyset-paginated listing (Plan 07 pattern; Plan 10 Step 8): rows
+    /// strictly after the `(created_at, id)` position in
+    /// `ORDER BY created_at DESC, id DESC` order, optionally filtered by
+    /// status. `fetch` is page limit + 1 — the caller uses the sentinel row
+    /// to detect whether another page exists.
+    pub async fn list_page_by_org(
+        &self,
+        org_id: Uuid,
+        status: Option<ChangeRequestStatus>,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<ChangeRequest>, DatabaseError> {
+        let pool = self.pool()?;
+
+        // Build the query with positional binds in a fixed order:
+        // org_id [, status] [, created_at, id], fetch.
+        let mut sql = format!("{CR_COLUMNS} WHERE org_id = $1");
+        let mut next = 2;
+        if status.is_some() {
+            sql.push_str(&format!(" AND status = ${next}"));
+            next += 1;
+        }
+        if after.is_some() {
+            sql.push_str(&format!(" AND (created_at, id) < (${next}, ${})", next + 1));
+            next += 2;
+        }
+        sql.push_str(&format!(" ORDER BY created_at DESC, id DESC LIMIT ${next}"));
+
+        let mut query = sqlx::query(&sql).bind(org_id.to_string());
+        if let Some(s) = status {
+            query = query.bind(s.as_str());
+        }
+        if let Some((created_at, id)) = after {
+            query = query.bind(created_at).bind(id);
+        }
+        let rows = query.bind(fetch).fetch_all(pool).await?;
+        rows.iter().map(Self::row_to_cr).collect()
+    }
+
     /// Record (or update) an approver's decision. One row per approver per
     /// request; a re-vote replaces the prior decision.
     pub async fn record_decision(

@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::{
     api::error::{ApiError, ApiResult},
     api::orgs::resolve_org,
+    api::pagination::{PageQuery, Paginated},
     audit::{actions, ActorType, AuditEntry, ResourceType},
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::{
@@ -326,18 +327,25 @@ async fn reject_promotion(
 pub struct ListQuery {
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
-/// List change requests (the auditable change-record trail).
+/// List change requests (the auditable change-record trail), keyset-paginated
+/// (Plan 07 pattern).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/promotions",
     tag = "environments",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("status" = Option<String>, Query, description = "Filter by status")
+        ("status" = Option<String>, Query, description = "Filter by status"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
-    responses((status = 200, description = "Change requests", body = [ChangeRequest])),
+    responses((status = 200, description = "One page of change requests with a next_cursor to resume")),
     security(("bearer_jwt" = []))
 )]
 async fn list_promotions(
@@ -345,13 +353,22 @@ async fn list_promotions(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<ListQuery>,
-) -> ApiResult<Json<Vec<ChangeRequest>>> {
+) -> ApiResult<Json<Paginated<ChangeRequest>>> {
     let organization = authorize(&state, &user, &org, Scope::PolicyRead).await?;
     let status = query.status.as_deref().map(ChangeRequestStatus::parse);
-    let list = ChangeRequestRepository::new(&state.db)
-        .list_by_org(organization.id, status)
+    let page = PageQuery {
+        limit: query.limit,
+        cursor: query.cursor,
+    }
+    .validate()?;
+
+    let rows = ChangeRequestRepository::new(&state.db)
+        .list_page_by_org(organization.id, status, page.limit + 1, page.after.as_ref())
         .await?;
-    Ok(Json(list))
+
+    Ok(Json(Paginated::from_rows(rows, &page, |cr| {
+        (cr.created_at.to_rfc3339(), cr.id.to_string())
+    })))
 }
 
 /// Get a change request with its approvals.
@@ -415,7 +432,14 @@ async fn maybe_apply(
         return Ok(cr);
     }
 
-    // Satisfied: run the existing rollout machinery into the target namespace.
+    // Satisfied. FIRST move the pinned data version into the target env's
+    // data plane (Plan 10 Step 7) — policy and data promote together, and a
+    // promotion that cannot resolve its data version fails CLOSED here (the
+    // request stays pending; a later approve retries) rather than deploying
+    // policy against the target's stale data.
+    apply_pinned_data_version(state, org_id, &cr, to_env).await?;
+
+    // Then run the existing rollout machinery into the target namespace.
     let service = DeploymentService::new(state.db.clone());
     let input = StartRollout {
         bundle_id: cr.bundle_id,
@@ -450,6 +474,95 @@ async fn maybe_apply(
         .get(cr.id)
         .await?
         .ok_or_else(|| ApiError::Internal("change request vanished after apply".to_string()))
+}
+
+/// Move the change request's pinned data version from the source env's
+/// datastore into the target env's (Plan 10 Step 7). No-op when the request
+/// pinned no data version (the source env had no datastore — a policy-only
+/// promotion). Fails closed when a pinned version can no longer be resolved
+/// or the target has no datastore to receive it.
+async fn apply_pinned_data_version(
+    state: &AppState,
+    org_id: &Uuid,
+    cr: &ChangeRequest,
+    to_env: &Environment,
+) -> ApiResult<()> {
+    let Some(pinned_version) = cr.data_version else {
+        return Ok(());
+    };
+    // A datastore that existed but had never published pins version 0 —
+    // nothing to move yet.
+    if pinned_version == 0 {
+        return Ok(());
+    }
+
+    let env_repo = EnvironmentRepository::new(&state.db);
+    let from_env = env_repo
+        .get_by_id(cr.from_env_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal("Source environment vanished".to_string()))?;
+
+    let ds_repo = DatastoreRepository::new(&state.db);
+    let source_store = ds_repo
+        .get(*org_id, from_env.namespace_id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict(
+                "promotion pinned a data version but the source environment's datastore \
+                 no longer exists (fail closed)"
+                    .to_string(),
+            )
+        })?;
+    let (meta, document) = ds_repo
+        .get_version_document(source_store.id, pinned_version)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict(format!(
+                "promotion pinned data version {pinned_version} but it is no longer \
+                 available in the source environment (fail closed)"
+            ))
+        })?;
+    let target_store = ds_repo
+        .get(*org_id, to_env.namespace_id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Conflict(format!(
+                "target environment '{}' has no datastore provisioned to receive the \
+                 promoted data version (fail closed)",
+                to_env.name
+            ))
+        })?;
+
+    let imported = ds_repo
+        .import_version(
+            &target_store,
+            &document,
+            (meta.entity_count, meta.tuple_count, meta.binding_count),
+            &format!("promotion:{}", cr.id),
+        )
+        .await?;
+
+    // Wake the target namespace's fleet exactly like a normal publish.
+    let _ = state
+        .event_tx
+        .send(crate::state::ServerEvent::DatastorePublished {
+            datastore_id: target_store.id,
+            org_id: *org_id,
+            namespace_id: Some(to_env.namespace_id),
+            version: imported.version,
+            checksum: imported.checksum.clone(),
+        });
+    crate::events_pg::notify_datastore_published(
+        state,
+        target_store.id,
+        *org_id,
+        Some(to_env.namespace_id),
+        imported.version,
+        &imported.checksum,
+    )
+    .await;
+
+    Ok(())
 }
 
 async fn load_scoped(

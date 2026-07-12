@@ -5185,7 +5185,7 @@ async fn promotion_change_request_two_person_gate_and_rules() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!(parse_body(r).await.as_array().unwrap().len(), 1);
+    assert_eq!(parse_body(r).await["items"].as_array().unwrap().len(), 1);
 }
 
 /// A freeze window on the target environment blocks a promotion with 409.
@@ -5277,4 +5277,468 @@ async fn promotion_blocked_by_freeze_window() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
+}
+
+/// Plan 10 Phase C (Step 7): promotion carries the pinned data version — the
+/// source env's published snapshot lands in the target env's data plane as a
+/// new version, so policy and data move together.
+#[tokio::test]
+async fn promotion_applies_pinned_data_version_to_target_env() {
+    use reaper_management::db::repositories::DatastoreRepository;
+
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Data Promo Org", "slug": "dpromo-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    // Agent so the rollout has a target.
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/dpromo-org/agents/register",
+            Some(json!({"name": "a1", "hostname": "h", "version": "1.0.0", "labels": {}})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    // Namespaces + environments (prod auto-approves so promote applies inline;
+    // the approval mechanics themselves are covered by the Phase B tests).
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/dpromo-org/namespaces",
+                Some(json!({"slug": slug})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    for (name, tier, nsid) in [("staging", 10, &ns[0]), ("prod", 20, &ns[1])] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/dpromo-org/environments",
+                Some(
+                    json!({"name": name, "tier_order": tier, "namespace_id": nsid,
+                            "approval_policy": {"min_approvers": 0}}),
+                ),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+    }
+
+    // Provision datastores in BOTH envs; seed + publish v1 in staging only.
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("/orgs/dpromo-org/namespaces/{slug}/datastore"),
+                Some(json!({"template": "combined"})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+    let staging_base = "/orgs/dpromo-org/namespaces/staging/datastore";
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{staging_base}/entities"),
+            Some(json!({"entity_id": "alice", "entity_type": "user",
+                        "attributes": {"mfa": true, "clearance": 5, "department": "eng"}})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{staging_base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(parse_body(r).await["version"], 1);
+
+    // Compiled bundle.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/dpromo-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/dpromo-org/bundles",
+            Some(json!({"name": "b", "policy_ids": [policy_id]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let bundle_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/dpromo-org/bundles/{bundle_id}/compile"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    // Promote staging→prod: auto-applies (0 approvers) and moves the data.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/dpromo-org/environments/prod/promote",
+            Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let cr = parse_body(r).await;
+    assert_eq!(cr["status"], "applied");
+    assert_eq!(cr["data_version"], 1, "source data version must be pinned");
+
+    // The target env's datastore received the snapshot as ITS version 1, with
+    // the promoted entity inside.
+    let ds_repo = DatastoreRepository::new(&env.db);
+    let prod_ns = Uuid::parse_str(&ns[1]).unwrap();
+    let prod_store = ds_repo.get(org_id, prod_ns).await.unwrap().unwrap();
+    assert_eq!(prod_store.current_version, 1);
+    let (meta, document) = ds_repo
+        .get_version_document(prod_store.id, 1)
+        .await
+        .unwrap()
+        .expect("promoted snapshot must exist in the target datastore");
+    assert!(meta.published_by.starts_with("promotion:"));
+    assert!(
+        document.contains("alice"),
+        "promoted doc must carry the entity"
+    );
+}
+
+/// Plan 10 Phase C: a pinned data version with no target datastore fails the
+/// apply CLOSED — the change request is not applied and no rollout starts.
+#[tokio::test]
+async fn promotion_with_unresolvable_data_version_fails_closed() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "FC Org", "slug": "fc-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/fc-org/agents/register",
+            Some(json!({"name": "a1", "hostname": "h", "version": "1.0.0", "labels": {}})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/fc-org/namespaces",
+                Some(json!({"slug": slug})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    for (name, tier, nsid) in [("staging", 10, &ns[0]), ("prod", 20, &ns[1])] {
+        env.app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/fc-org/environments",
+                Some(
+                    json!({"name": name, "tier_order": tier, "namespace_id": nsid,
+                            "approval_policy": {"min_approvers": 0}}),
+                ),
+                &key,
+            ))
+            .await
+            .unwrap();
+    }
+
+    // Datastore + published version in staging ONLY — prod has none.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/fc-org/namespaces/staging/datastore",
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/fc-org/namespaces/staging/datastore/publish",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/fc-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/fc-org/bundles",
+            Some(json!({"name": "b", "policy_ids": [policy_id]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let bundle_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/fc-org/bundles/{bundle_id}/compile"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    // Promote: the pinned data version cannot land (no prod datastore) → 409,
+    // and the request must NOT be applied.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/fc-org/environments/prod/promote",
+            Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", "/orgs/fc-org/promotions", None, &key))
+        .await
+        .unwrap();
+    let page = parse_body(r).await;
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0]["status"], "pending",
+        "fail-closed leaves it pending"
+    );
+    assert!(
+        items[0]["rollout_id"].is_null(),
+        "no rollout must have started"
+    );
+}
+
+/// Plan 10 Phase C (Step 8): the change-record trail is keyset-paginated.
+#[tokio::test]
+async fn promotions_list_is_keyset_paginated() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Page Org", "slug": "page-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let mut ns = Vec::new();
+    for slug in ["staging", "prod"] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/page-org/namespaces",
+                Some(json!({"slug": slug})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        ns.push(parse_body(r).await["id"].as_str().unwrap().to_string());
+    }
+    // prod requires 2 approvers so promotions stay pending (no agent needed).
+    for (name, tier, nsid, min) in [("staging", 10, &ns[0], 0), ("prod", 20, &ns[1], 2)] {
+        env.app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/page-org/environments",
+                Some(
+                    json!({"name": name, "tier_order": tier, "namespace_id": nsid,
+                            "approval_policy": {"min_approvers": min}}),
+                ),
+                &key,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/page-org/policies",
+            Some(json!({"name": "p", "language": "reaper", "content": "allow user to read /x"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let policy_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/page-org/bundles",
+            Some(json!({"name": "b", "policy_ids": [policy_id]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let bundle_id = parse_body(r).await["id"].as_str().unwrap().to_string();
+
+    for _ in 0..3 {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/page-org/environments/prod/promote",
+                Some(json!({"bundle_id": bundle_id, "from_env": "staging"})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
+    }
+
+    // Page 1 of 2 + cursor.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/page-org/promotions?limit=2",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let page1 = parse_body(r).await;
+    assert_eq!(page1["items"].as_array().unwrap().len(), 2);
+    let cursor = page1["next_cursor"]
+        .as_str()
+        .expect("next page")
+        .to_string();
+
+    // Page 2: the last one, no further cursor.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!(
+                "/orgs/page-org/promotions?limit=2&cursor={}",
+                urlencoding::encode(&cursor)
+            ),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let page2 = parse_body(r).await;
+    assert_eq!(page2["items"].as_array().unwrap().len(), 1);
+    assert!(page2["next_cursor"].is_null());
 }
