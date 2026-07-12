@@ -83,6 +83,10 @@ impl ReapAstEvaluator {
         request: &PolicyRequest,
         input: Option<&serde_json::Value>,
     ) -> Result<PolicyAction, ReaperError> {
+        // One evaluation = one ReBAC traversal budget, shared across every
+        // condition this policy checks (Plan 08 Phase E).
+        crate::data::relationships::reset_traversal_budget();
+
         // Get user and resource IDs from the DataStore
         let interner = self.store.interner();
         let user_id = interner.intern(

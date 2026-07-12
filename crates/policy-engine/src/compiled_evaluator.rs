@@ -225,6 +225,10 @@ impl CompiledPolicyEvaluator {
     /// no rule matched. Set-level combination treats the unmatched case as
     /// non-decisive (Plan 08 Phase A).
     fn evaluate_fast_matched(&self, request: &PolicyRequest) -> (PolicyAction, bool) {
+        // One evaluation = one ReBAC traversal budget, shared across every
+        // condition this policy checks (Plan 08 Phase E).
+        crate::data::relationships::reset_traversal_budget();
+
         // Check each compiled rule in order
         for rule in &self.compiled_rules {
             // Fast resource check (no string allocations)

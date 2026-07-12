@@ -906,7 +906,9 @@ pub async fn fast_evaluate_policy(
 /// - Batch size is capped at `performance.max_batch_requests` (default 1000);
 ///   an over-cap batch is rejected with 413 before any evaluation.
 /// - The evaluation loop runs on a `spawn_blocking` thread so it cannot starve
-///   the async reactor or block unrelated request latency (Plan 05, Step 3).
+///   the async reactor or block unrelated request latency (Plan 05, Step 3),
+///   and is parallelized across the rayon pool (Plan 08 Phase B) so a large
+///   batch finishes in ~batch/cores time instead of running sequentially.
 /// - Optional decision-cache integration; results preserve input order via an
 ///   explicit `index` field.
 #[utoipa::path(
@@ -997,15 +999,21 @@ pub async fn batch_evaluate_policy(
     // Offload the synchronous evaluation loop to a blocking thread so a large
     // batch (up to `max_batch_requests`) cannot starve the async reactor and
     // block unrelated single-eval / health traffic on a low-core sidecar
-    // (Plan 05, Step 3). Result order is preserved by the explicit `index`.
+    // (Plan 05, Step 3), and fan the loop out across the rayon pool (Plan 08
+    // Phase B): the engine store is lock-free and the decision cache sharded,
+    // so per-request evaluations are independent. `with_min_len` keeps small
+    // batches from paying rayon's split overhead; an indexed collect preserves
+    // input order alongside the explicit `index` field.
     let eval_state = state.clone();
     let eval_policy_name = policy_name.clone();
     let results: Vec<Value> = match tokio::task::spawn_blocking(move || {
+        use rayon::prelude::*;
         let state = eval_state;
         // Resolve the per-policy metric handle once for the whole batch.
         let metrics = state.decision_metrics.for_policy(&eval_policy_name);
         requests
-            .iter()
+            .par_iter()
+            .with_min_len(32)
             .enumerate()
             .map(|(i, req)| {
                 let eval_start = std::time::Instant::now();
