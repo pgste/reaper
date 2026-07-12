@@ -358,8 +358,12 @@ agent:
         - ALL
 
 # =============================================================================
-# PostgreSQL (Bitnami subchart)
+# PostgreSQL (Bitnami subchart) — DEV-GRADE, single primary, no HA/backup
 # =============================================================================
+# For production use a managed HA Postgres (or the CloudNativePG cluster in
+# deploy/kubernetes/postgres-cnpg.yaml): set `postgresql.enabled: false` and
+# point `externalDatabase.url` at the HA endpoint. RPO/RTO targets and both
+# paths are documented in docs/deployment/CONTROL_PLANE_HA_DR.md.
 postgresql:
   enabled: true
   auth:
@@ -378,6 +382,17 @@ postgresql:
     limits:
       cpu: 1000m
       memory: 1Gi
+
+# =============================================================================
+# External database (production path: managed HA Postgres or CNPG cluster)
+# =============================================================================
+# Used when postgresql.enabled=false. The URL should point at a stable
+# primary endpoint that survives failover (a managed endpoint, or the
+# CloudNativePG `reaper-pg-rw` Service). Prefer supplying the URL via
+# management.secrets.existingSecret (key REAPER_DATABASE_URL) over putting
+# credentials in values.
+externalDatabase:
+  url: ""
 
 # =============================================================================
 # Service Account
