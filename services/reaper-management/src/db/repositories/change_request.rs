@@ -31,8 +31,8 @@ impl<'a> ChangeRequestRepository<'a> {
             r#"
             INSERT INTO change_requests
                 (id, org_id, from_env_id, to_env_id, bundle_id, data_version,
-                 strategy_id, status, requested_by, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9)
+                 strategy_id, status, requested_by, external_change_ref, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10)
             "#,
         )
         .bind(id.to_string())
@@ -43,6 +43,7 @@ impl<'a> ChangeRequestRepository<'a> {
         .bind(input.data_version)
         .bind(input.strategy_id.map(|s| s.to_string()))
         .bind(&input.requested_by)
+        .bind(&input.external_change_ref)
         .bind(now.to_rfc3339())
         .execute(pool)
         .await?;
@@ -59,6 +60,7 @@ impl<'a> ChangeRequestRepository<'a> {
             requested_by: input.requested_by,
             rollout_id: None,
             reason: None,
+            external_change_ref: input.external_change_ref,
             created_at: now,
             decided_at: None,
         })
@@ -267,6 +269,7 @@ impl<'a> ChangeRequestRepository<'a> {
             requested_by: row.get("requested_by"),
             rollout_id: rollout_id.as_deref().map(parse_uuid).transpose()?,
             reason: row.get("reason"),
+            external_change_ref: row.get("external_change_ref"),
             created_at: parse_ts(&created_at)?,
             decided_at: decided_at.as_deref().map(parse_ts).transpose()?,
         })
@@ -275,7 +278,8 @@ impl<'a> ChangeRequestRepository<'a> {
 
 const CR_COLUMNS: &str = r#"
     SELECT id, org_id, from_env_id, to_env_id, bundle_id, data_version,
-           strategy_id, status, requested_by, rollout_id, reason, created_at, decided_at
+           strategy_id, status, requested_by, rollout_id, reason,
+           external_change_ref, created_at, decided_at
     FROM change_requests
 "#;
 

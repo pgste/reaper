@@ -64,6 +64,10 @@ pub struct ChangeRequest {
     pub rollout_id: Option<Uuid>,
     /// Rejection / cancellation reason.
     pub reason: Option<String>,
+    /// External ITSM change-record reference (e.g. a ServiceNow CHG number).
+    /// Required / validated per the target environment's approval policy;
+    /// stored opaquely otherwise.
+    pub external_change_ref: Option<String>,
     pub created_at: DateTime<Utc>,
     pub decided_at: Option<DateTime<Utc>>,
 }
@@ -111,4 +115,5 @@ pub struct CreateChangeRequest {
     pub data_version: Option<i64>,
     pub strategy_id: Option<Uuid>,
     pub requested_by: String,
+    pub external_change_ref: Option<String>,
 }

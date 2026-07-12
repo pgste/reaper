@@ -41,7 +41,8 @@ use crate::{
         ApprovalDecision, ChangeApproval, ChangeRequest, ChangeRequestStatus, CreateChangeRequest,
     },
     domain::deployment::StartRollout,
-    domain::environment::{ApprovalOutcome, Environment, WindowDecision},
+    domain::environment::{ApprovalOutcome, Environment, ExternalChangeRecordMode, WindowDecision},
+    integrations::{ChangeRecordCheck, ServiceNowClient},
     state::AppState,
 };
 
@@ -64,6 +65,13 @@ pub struct PromoteRequest {
     /// Optional rollout strategy on apply (else the namespace/org default).
     #[serde(default)]
     pub strategy_id: Option<Uuid>,
+    /// External ITSM change-record reference (e.g. a ServiceNow CHG number).
+    /// Required — and, in `validated` mode, checked live against the
+    /// configured ServiceNow instance — when the target environment's
+    /// approval policy sets `external_change_record`; stored opaquely
+    /// otherwise.
+    #[serde(default)]
+    pub change_ref: Option<String>,
 }
 
 /// A change request together with its recorded approvals.
@@ -141,6 +149,16 @@ async fn promote(
         return Err(ApiError::NotFound("Bundle not found".to_string()));
     }
 
+    // External change record (e.g. ServiceNow), per the target env's policy:
+    // required in `reference`/`validated` mode, live-checked in `validated`.
+    let change_ref = request
+        .change_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    check_external_change_record(&state, &to_env, change_ref.as_deref()).await?;
+
     // Pin the source environment's current data-plane version so policy + data
     // promote together (applied to the target in Phase C).
     let data_version = DatastoreRepository::new(&state.db)
@@ -159,6 +177,7 @@ async fn promote(
                 data_version,
                 strategy_id: request.strategy_id,
                 requested_by: user.id.clone(),
+                external_change_ref: change_ref,
             },
         )
         .await?;
@@ -451,6 +470,11 @@ async fn maybe_apply(
         )));
     }
 
+    // Re-check the external change record at APPLY time in `validated` mode —
+    // the record could have been rejected (or the policy tightened) between
+    // request and approval. Fails closed: the request stays pending.
+    check_external_change_record(state, to_env, cr.external_change_ref.as_deref()).await?;
+
     // Satisfied. FIRST move the pinned data version into the target env's
     // data plane (Plan 10 Step 7) — policy and data promote together, and a
     // promotion that cannot resolve its data version fails CLOSED here (the
@@ -582,6 +606,71 @@ async fn apply_pinned_data_version(
     .await;
 
     Ok(())
+}
+
+/// Enforce the target environment's `external_change_record` policy against
+/// the supplied ITSM reference (Plan 10 follow-up). Called at promotion
+/// request time AND again at apply time, so a record that gets rejected in
+/// ServiceNow mid-flight cannot still deploy.
+///
+/// - `off`: a supplied reference only has to be well-formed (it is stored
+///   opaquely as part of the change record).
+/// - `reference`: a well-formed reference is mandatory but not verified.
+/// - `validated`: the reference must exist in the configured ServiceNow
+///   instance with an accepted `approval` value. Missing configuration or an
+///   unreachable instance fails CLOSED with 409.
+async fn check_external_change_record(
+    state: &AppState,
+    to_env: &Environment,
+    reference: Option<&str>,
+) -> ApiResult<()> {
+    let mode = to_env.approval_policy.external_change_record;
+
+    let Some(reference) = reference else {
+        return match mode {
+            ExternalChangeRecordMode::Off => Ok(()),
+            _ => Err(ApiError::BadRequest(format!(
+                "environment '{}' requires an external change-record reference \
+                 (`change_ref`, e.g. a ServiceNow CHG number) on promotion",
+                to_env.name
+            ))),
+        };
+    };
+
+    if !ServiceNowClient::is_valid_reference(reference) {
+        return Err(ApiError::BadRequest(format!(
+            "'{reference}' is not a valid change-record reference \
+             (letters, digits, '-' or '_', at most 64 characters)"
+        )));
+    }
+    if mode != ExternalChangeRecordMode::Validated {
+        return Ok(());
+    }
+
+    let Some(snow) = state.config.integrations.servicenow.clone() else {
+        return Err(ApiError::Conflict(format!(
+            "environment '{}' requires validated external change records but no \
+             ServiceNow instance is configured (fail closed)",
+            to_env.name
+        )));
+    };
+    match ServiceNowClient::new(snow)
+        .validate_change_record(reference)
+        .await
+    {
+        Ok(ChangeRecordCheck::Valid) => Ok(()),
+        Ok(ChangeRecordCheck::NotFound) => Err(ApiError::BadRequest(format!(
+            "change record '{reference}' was not found in ServiceNow"
+        ))),
+        Ok(ChangeRecordCheck::NotApproved(approval)) => Err(ApiError::Conflict(format!(
+            "change record '{reference}' is not approved in ServiceNow \
+             (approval: '{approval}')"
+        ))),
+        Err(e) => Err(ApiError::Conflict(format!(
+            "could not validate change record '{reference}' against ServiceNow \
+             (fail closed): {e}"
+        ))),
+    }
 }
 
 async fn load_scoped(
