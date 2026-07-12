@@ -135,6 +135,18 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Policy-source sync engine (Plan 09 Step 1): the reconciliation loop
+    // that picks up due sources every `sync.check_interval_secs` and
+    // materializes git syncs into policies + a bundle. This is the loop that
+    // was compiled-but-never-spawned (Product F2). The manual-trigger API
+    // shares the same instance via AppState.
+    {
+        let sync_service = state.sync_service.clone();
+        tokio::spawn(async move {
+            sync_service.start().await;
+        });
+    }
+
     // Change-log retention sweeper: publish-time compaction never bounds a
     // datastore that churns without publishing, so age out old delta marks
     // on a schedule. Pruning is always safe — a replica below the floor

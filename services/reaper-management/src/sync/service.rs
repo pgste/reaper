@@ -10,8 +10,11 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
-use crate::db::repositories::PolicySourceRepository;
+use crate::bundle::{BundleError, BundleService};
+use crate::db::repositories::{BundleRepository, PolicyRepository, PolicySourceRepository};
 use crate::db::Database;
+use crate::domain::bundle::CreateBundle;
+use crate::domain::policy::{CreatePolicy, PolicyLanguage, UpdatePolicy};
 use crate::domain::source::{PolicySource, SourceType, SyncResult, SyncStatus};
 use crate::state::ServerEvent;
 
@@ -33,6 +36,8 @@ pub enum SyncError {
     BundleUrl(#[from] BundleUrlSyncError),
     #[error("Database error: {0}")]
     Database(#[from] crate::db::DatabaseError),
+    #[error("Bundle error: {0}")]
+    Bundle(#[from] BundleError),
     #[error("Source not found: {0}")]
     NotFound(String),
     #[error("Source cannot sync: {0}")]
@@ -52,6 +57,12 @@ pub struct SyncConfig {
     pub check_interval_secs: u64,
     /// Maximum concurrent sync operations
     pub max_concurrent: usize,
+    /// Compile the materialized bundle at sync time (Plan 09 Step 2). Mirrors
+    /// `bundles.auto_compile_on_source_sync`. When false, sync still upserts
+    /// policies and creates the bundle (draft, linked to the commit SHA) but
+    /// leaves compilation to the operator — promotion/rollout is always a
+    /// separate, gated step either way.
+    pub auto_compile: bool,
 }
 
 impl Default for SyncConfig {
@@ -62,8 +73,29 @@ impl Default for SyncConfig {
             bundle_storage_path: PathBuf::from("/tmp/reaper-sync/bundles"),
             check_interval_secs: 60,
             max_concurrent: 5,
+            auto_compile: false,
         }
     }
+}
+
+/// What a git-sync materialization produced (Plan 09 Step 2).
+#[derive(Debug, Default)]
+struct MaterializeOutcome {
+    policies_created: usize,
+    policies_updated: usize,
+    bundle_id: Option<uuid::Uuid>,
+}
+
+/// Derive the org-unique policy name for a synced file. Namespaced by the
+/// source name so two sources shipping the same path never collide, with the
+/// extension stripped and separators flattened: source "prod-policies" +
+/// "auth/rbac.reap" → "prod-policies/auth-rbac".
+fn source_policy_name(source_name: &str, file_path: &str) -> String {
+    let no_ext = std::path::Path::new(file_path)
+        .with_extension("")
+        .to_string_lossy()
+        .replace(['/', '\\'], "-");
+    format!("{source_name}/{no_ext}")
 }
 
 /// Sync service for managing policy source synchronization
@@ -77,6 +109,10 @@ pub struct SyncService {
     running: Arc<RwLock<bool>>,
     /// Optional event broadcaster for SSE notifications
     event_tx: Option<broadcast::Sender<ServerEvent>>,
+    /// Bundle service used to materialize synced policy files into a
+    /// compiled bundle (Plan 09 Step 2). Without it, sync only counts files —
+    /// the pre-Plan-09 behavior kept for unit tests.
+    bundle_service: Option<Arc<BundleService>>,
 }
 
 impl SyncService {
@@ -96,7 +132,15 @@ impl SyncService {
             db,
             running: Arc::new(RwLock::new(false)),
             event_tx: None,
+            bundle_service: None,
         }
+    }
+
+    /// Attach the bundle service so successful git syncs materialize into
+    /// policy rows + a bundle keyed by the commit SHA (Plan 09 Step 2).
+    pub fn with_materializer(mut self, bundle_service: Arc<BundleService>) -> Self {
+        self.bundle_service = Some(bundle_service);
+        self
     }
 
     /// Create a new sync service with event broadcasting
@@ -209,6 +253,23 @@ impl SyncService {
                 .map_err(SyncError::from),
         };
 
+        // Materialize git syncs into policy rows + a bundle (Plan 09 Step 2).
+        // Counting files without persisting them was the F2 gap; a failed
+        // materialization therefore fails the whole sync, not just a log line.
+        let result: Result<SyncResult, SyncError> = match result {
+            Ok(mut sync_result) if matches!(source.source_type, SourceType::Git) => {
+                match self.materialize_git(source, &sync_result).await {
+                    Ok(outcome) => {
+                        sync_result.policies_created = outcome.policies_created;
+                        sync_result.policies_updated = outcome.policies_updated;
+                        Ok(sync_result)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            other => other,
+        };
+
         // Update status based on result
         match &result {
             Ok(sync_result) => {
@@ -261,6 +322,157 @@ impl SyncService {
         }
 
         result
+    }
+
+    /// Materialize a successful git sync: upsert every synced policy file as
+    /// a policy row and create a bundle linked to the commit SHA (Plan 09
+    /// Step 2). Idempotent per SHA — a webhook and a poll landing on the same
+    /// commit never double-apply. Compilation follows `config.auto_compile`;
+    /// promotion/rollout to agents is always a separate, gated step.
+    async fn materialize_git(
+        &self,
+        source: &PolicySource,
+        sync_result: &SyncResult,
+    ) -> Result<MaterializeOutcome, SyncError> {
+        let mut outcome = MaterializeOutcome::default();
+
+        let Some(bundle_service) = &self.bundle_service else {
+            debug!(
+                source_id = %source.id,
+                "No materializer configured; sync counted files only"
+            );
+            return Ok(outcome);
+        };
+        let Some(commit) = sync_result.commit.as_deref() else {
+            return Ok(outcome);
+        };
+
+        // Idempotency: this (source, SHA) pair was already materialized.
+        let bundle_repo = BundleRepository::new(&self.db);
+        if let Some(existing) = bundle_repo.find_by_source_commit(source.id, commit).await? {
+            info!(
+                source_id = %source.id,
+                commit = %commit,
+                bundle_id = %existing,
+                "Commit already materialized; skipping (idempotent)"
+            );
+            outcome.bundle_id = Some(existing);
+            return Ok(outcome);
+        }
+
+        let files = self.git_syncer.get_policy_files(source)?;
+        if files.is_empty() {
+            warn!(
+                source_id = %source.id,
+                commit = %commit,
+                "Sync found no policy files; nothing to materialize"
+            );
+            return Ok(outcome);
+        }
+
+        let policy_repo = PolicyRepository::new(&self.db);
+        let mut policy_ids = Vec::with_capacity(files.len());
+        for file in &files {
+            let name = source_policy_name(&source.name, &file.path);
+            let language = match file.language.as_str() {
+                "cedar" => PolicyLanguage::Cedar,
+                "simple" => PolicyLanguage::Simple,
+                _ => PolicyLanguage::Reaper,
+            };
+
+            match policy_repo.get_by_name(source.org_id, &name).await? {
+                Some(existing) => {
+                    // Policy names are unique per org; never let a git file
+                    // silently take over a policy that a different source (or
+                    // a hand edit) owns.
+                    if existing.source_id != Some(source.id) {
+                        return Err(SyncError::CannotSync(format!(
+                            "policy '{}' already exists but is not owned by this source",
+                            name
+                        )));
+                    }
+                    let latest = policy_repo.get_latest_version(existing.id).await?;
+                    let changed = latest.map(|v| v.content != file.content).unwrap_or(true);
+                    if changed {
+                        policy_repo
+                            .update(
+                                existing.id,
+                                UpdatePolicy {
+                                    content: Some(file.content.clone()),
+                                    ..Default::default()
+                                },
+                                None,
+                            )
+                            .await?;
+                        outcome.policies_updated += 1;
+                    }
+                    policy_ids.push(existing.id);
+                }
+                None => {
+                    let created = policy_repo
+                        .create(
+                            source.org_id,
+                            CreatePolicy {
+                                name,
+                                description: Some(format!(
+                                    "Synced from source '{}' ({})",
+                                    source.name, file.path
+                                )),
+                                team_id: None,
+                                source_id: Some(source.id),
+                                language,
+                                source_path: Some(file.path.clone()),
+                                content: file.content.clone(),
+                            },
+                        )
+                        .await?;
+                    outcome.policies_created += 1;
+                    policy_ids.push(created.id);
+                }
+            }
+        }
+
+        // One bundle per (source, SHA); bundles are UNIQUE(org, name, version)
+        // so the short SHA in the name also guards against duplicates.
+        let short_sha = &commit[..commit.len().min(12)];
+        let bundle = bundle_service
+            .create(
+                source.org_id,
+                &CreateBundle {
+                    name: format!("{}@{}", source.name, short_sha),
+                    description: Some(format!(
+                        "Materialized from git sync of '{}' at commit {}",
+                        source.name, commit
+                    )),
+                    policy_ids: policy_ids.clone(),
+                },
+            )
+            .await?;
+        bundle_repo
+            .link_source(bundle.id, source.id, commit)
+            .await?;
+
+        if self.config.auto_compile {
+            bundle_service.compile(bundle.id).await?;
+            info!(
+                source_id = %source.id,
+                bundle_id = %bundle.id,
+                commit = %commit,
+                "Materialized bundle compiled (auto_compile_on_source_sync)"
+            );
+        }
+
+        info!(
+            source_id = %source.id,
+            bundle_id = %bundle.id,
+            commit = %commit,
+            policies = policy_ids.len(),
+            created = outcome.policies_created,
+            updated = outcome.policies_updated,
+            "Git sync materialized into policies + bundle"
+        );
+        outcome.bundle_id = Some(bundle.id);
+        Ok(outcome)
     }
 
     /// Manually trigger sync for a source
@@ -328,6 +540,7 @@ mod tests {
             bundle_storage_path: PathBuf::from("/tmp/test-sync/bundles"),
             check_interval_secs: 60,
             max_concurrent: 5,
+            auto_compile: false,
         };
 
         let service = SyncService::new(db, config);

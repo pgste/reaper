@@ -19,9 +19,7 @@ use crate::{
     api::pagination::{PageQuery, Paginated},
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::{OrganizationRepository, PolicySourceRepository},
-    domain::source::{
-        CreatePolicySource, PolicySource, SourceType, SyncStatus, UpdatePolicySource,
-    },
+    domain::source::{CreatePolicySource, PolicySource, SourceType, UpdatePolicySource},
     state::AppState,
 };
 
@@ -439,27 +437,31 @@ async fn trigger_sync(
         return Err(ApiError::NotFound("Source not found".to_string()));
     }
 
-    if !source.can_sync() {
-        return Err(ApiError::Conflict(format!(
-            "Source cannot be synced (status: {}, enabled: {})",
-            source.sync_status, source.is_enabled
-        )));
-    }
+    // Run the real sync engine (Plan 09 Step 3 — this was a status-flip
+    // placeholder before). trigger_sync re-checks can_sync internally, so a
+    // concurrent trigger while a sync is in flight maps to 409.
+    let result = state
+        .sync_service
+        .trigger_sync(source_id)
+        .await
+        .map_err(|e| match e {
+            crate::sync::SyncError::NotFound(_) => {
+                ApiError::NotFound("Source not found".to_string())
+            }
+            crate::sync::SyncError::CannotSync(msg) => {
+                ApiError::Conflict(format!("Source cannot be synced ({msg})"))
+            }
+            other => ApiError::Internal(format!("Sync failed: {other}")),
+        })?;
 
-    // Get sync service from state and trigger sync
-    // For now, we'll just mark the source as syncing
-    // In a full implementation, this would use the SyncService
-    source_repo
-        .update_sync_status(source_id, SyncStatus::Syncing, None, None)
-        .await?;
-
-    // TODO: Actually trigger the sync via SyncService
-    // For now, just return a placeholder response
     Ok(Json(SyncResponse {
-        success: true,
-        message: "Sync triggered".to_string(),
-        policies_found: None,
-        commit: None,
+        success: result.success,
+        message: format!(
+            "Sync completed: {} policies found ({} created, {} updated)",
+            result.policies_found, result.policies_created, result.policies_updated
+        ),
+        policies_found: Some(result.policies_found),
+        commit: result.commit,
     }))
 }
 
