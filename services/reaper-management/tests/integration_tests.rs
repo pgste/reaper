@@ -4819,3 +4819,177 @@ async fn db_unique_violation_maps_to_409_problem_json() {
         "application/problem+json"
     );
 }
+
+/// Plan 10 Phase A: first-class environments over namespaces — CRUD, unique
+/// name + namespace binding, and the org-scope guard.
+#[tokio::test]
+async fn environments_crud_and_binding_constraints() {
+    let env = setup_test_env().await;
+
+    // Org + two namespaces + key.
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Env Org", "slug": "env-org"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let mut ns_ids = Vec::new();
+    for slug in ["staging", "prod"] {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/env-org/namespaces",
+                Some(json!({"slug": slug})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        ns_ids.push(
+            parse_body(response).await["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+
+    // Create staging (tier 10) and prod (tier 20).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/env-org/environments",
+            Some(json!({
+                "name": "staging",
+                "tier_order": 10,
+                "namespace_id": ns_ids[0],
+                "approval_policy": {"min_approvers": 0}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/env-org/environments",
+            Some(json!({
+                "name": "prod",
+                "tier_order": 20,
+                "namespace_id": ns_ids[1],
+                "approval_policy": {"min_approvers": 2, "distinct_from_requester": true}
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Duplicate name → 409.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/env-org/environments",
+            Some(json!({"name": "prod", "tier_order": 30, "namespace_id": ns_ids[0]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // Reusing a namespace already bound to an environment → 409.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/env-org/environments",
+            Some(json!({"name": "prod2", "tier_order": 40, "namespace_id": ns_ids[1]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // Namespace from outside the org (nonexistent id) → 422 validation.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/env-org/environments",
+            Some(json!({"name": "bogus", "tier_order": 5, "namespace_id": Uuid::new_v4()})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // List returns both, ordered by tier.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/env-org/environments",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list = parse_body(response).await;
+    let arr = list.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["name"], "staging");
+    assert_eq!(arr[1]["name"], "prod");
+
+    // Get by name, then update the approval policy.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            "/orgs/env-org/environments/prod",
+            Some(json!({"approval_policy": {"min_approvers": 1}})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        parse_body(response).await["approval_policy"]["min_approvers"],
+        1
+    );
+
+    // Delete staging.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "DELETE",
+            "/orgs/env-org/environments/staging",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}

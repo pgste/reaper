@@ -8,6 +8,7 @@ pub mod audit_governance;
 pub mod bundle;
 pub mod datastore;
 pub mod deployment;
+pub mod environment;
 pub mod idempotency;
 pub mod namespace;
 pub mod organization;
@@ -24,6 +25,7 @@ pub use audit_governance::{AuditGovernanceRepository, AuditRetention, LegalHold}
 pub use bundle::BundleRepository;
 pub use datastore::DatastoreRepository;
 pub use deployment::DeploymentRepository;
+pub use environment::EnvironmentRepository;
 pub use idempotency::IdempotencyRepository;
 pub use namespace::NamespaceRepository;
 pub use organization::OrganizationRepository;

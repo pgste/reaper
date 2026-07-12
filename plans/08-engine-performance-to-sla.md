@@ -1,5 +1,21 @@
 # Engine Performance to SLA
 
+> **STATUS: ✅ SHIPPED** — landed via PRs #33–#34 (2026-07-12) across phases A–F.
+> A: the served evaluate-all path queries a resource pruning index instead of
+> linear-scanning + `Arc`-cloning the whole policy set, and a policy-less
+> fan-out is opt-in and hard-capped (no more 1→N DoS amplifier). C: the
+> decision cache is N-way sharded with an allocation-free commutative
+> fingerprint (no global writer lock, no per-probe sorted `Vec`). D:
+> `reaper_decision_duration_seconds` is now request-total on both endpoints
+> with a separate `reaper_engine_eval_seconds` slice, and tokio worker threads
+> are configurable (`REAPER_WORKER_THREADS`) for cgroup-limited sidecars. B:
+> batch eval fans out on rayon inside `spawn_blocking`. E: ReBAC BFS reuses
+> thread-local scratch under a per-evaluation traversal budget. F: a blocking
+> paired A/B perf gate benchmarks merge-base vs head on the same runner, so a
+> ≤10% statistical regression fails CI (self-test proves a synthetic +15%
+> fails). The SLO load-harness (validating the §3 SLO table end-to-end) is the
+> one deferred follow-up; the enforcement gate that guards it is in place.
+
 **Readiness gate:** Blocks CONDITIONAL → READY for at-scale/regulated deployments. The sub-µs headline is real only for a 1-rule policy in isolation; the *served* path does not hold it at policy scale, and a policy-less request is a DoS amplifier.
 **Priority:** P1 (P1-1 served-engine linear scan + P1-2 batch runtime blocking are the two that break the SLA; P2/P3 are throughput/tail refinements).
 **Findings closed:** Synth #10; Perf P1-1, P1-2, P2-1, P2-2, P2-3, P2-4, P3-1, P3-2, P3-3, P3-4.
