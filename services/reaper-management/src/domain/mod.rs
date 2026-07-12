@@ -8,6 +8,7 @@ pub mod billing;
 pub mod bundle;
 pub mod datastore;
 pub mod deployment;
+pub mod environment;
 pub mod namespace;
 pub mod organization;
 pub mod policy;

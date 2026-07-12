@@ -10,6 +10,7 @@ pub mod bundles;
 pub mod datastore;
 pub mod decisions;
 pub mod deployments;
+pub mod environments;
 pub mod error;
 pub mod events;
 pub mod health;
@@ -70,6 +71,7 @@ pub fn build_openapi_router() -> OpenApiRouter<Arc<AppState>> {
         .merge(webhooks_git::routes())
         .merge(webhook_subscriptions::routes())
         .merge(namespaces::routes())
+        .merge(environments::routes())
         .merge(deployments::routes())
         .merge(decisions::routes())
         .merge(audit::routes())

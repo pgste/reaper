@@ -68,6 +68,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "git_providers",
         include_str!("migrations_pg/0010_git_providers.sql"),
     ),
+    (
+        11,
+        "environments",
+        include_str!("migrations_pg/0011_environments.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -226,6 +231,7 @@ impl Database {
             include_str!("migrations/015_idempotency_keys.sql"),
             include_str!("migrations/016_source_materialization.sql"),
             include_str!("migrations/017_git_providers.sql"),
+            include_str!("migrations/018_environments.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {
