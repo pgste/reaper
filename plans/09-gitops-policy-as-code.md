@@ -1,5 +1,19 @@
 # GitOps / Policy-as-Code
 
+> **STATUS: ✅ SHIPPED** — landed via PRs #35–#37 (2026-07-12) across phases A–C.
+> A: the `SyncService` is spawned at boot and its manual trigger is wired to
+> the real engine; a successful git sync now materializes policy rows + a
+> commit-SHA-keyed bundle (idempotent per SHA), and the JWKS SSRF guard is
+> promoted to a shared module the git clone/fetch path calls before any
+> network I/O. B: the git link is reshaped from personal-OAuth-token-in-URL to
+> a GitHub App install minting short-lived installation tokens per sync,
+> HEAD-commit SSH-signature verification (fail-closed on unsigned/untrusted),
+> and HMAC-verified `POST /webhooks/git/{github,gitlab}` push. C: a drift
+> endpoint reports git HEAD vs deployed policies, and a per-source
+> `conflict_mode` (commit_back default / read_only / last_writer_wins) makes
+> "git is the source of truth" enforceable — UI edits become commits.
+> Closes Product F2/F3 and Security P1-3 in full.
+
 **Readiness gate:** NOT READY → CONDITIONAL (restores a named product pillar; closes a P1 security finding on the git ingest path)
 **Priority:** P1 (F2 wiring is S and unblocks the "as code" claim this week; F3 reshape + P1-3 hardening is M)
 **Findings closed:** Product **F2** (sync engine never wired), Product **F3** (git link wrong shape: user-token / broad `repo` scope / poll-only / no App / no webhook / no GitLab), Security **P1-3** (no commit-signature verification, no SSRF guard, plaintext creds on the git source path)
