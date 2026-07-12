@@ -75,6 +75,8 @@ pub enum ResourceType {
     JwksConfig,
     Certificate,
     LegalHold,
+    Environment,
+    ChangeRequest,
 }
 
 impl std::fmt::Display for ResourceType {
@@ -94,6 +96,8 @@ impl std::fmt::Display for ResourceType {
             ResourceType::JwksConfig => write!(f, "jwks_config"),
             ResourceType::Certificate => write!(f, "certificate"),
             ResourceType::LegalHold => write!(f, "legal_hold"),
+            ResourceType::Environment => write!(f, "environment"),
+            ResourceType::ChangeRequest => write!(f, "change_request"),
         }
     }
 }
@@ -117,6 +121,8 @@ impl std::str::FromStr for ResourceType {
             "jwks_config" => Ok(ResourceType::JwksConfig),
             "certificate" => Ok(ResourceType::Certificate),
             "legal_hold" => Ok(ResourceType::LegalHold),
+            "environment" => Ok(ResourceType::Environment),
+            "change_request" => Ok(ResourceType::ChangeRequest),
             _ => Err(format!("Invalid resource type: {}", s)),
         }
     }
@@ -178,6 +184,12 @@ pub mod actions {
     pub const NAMESPACE_CREATE: &str = "namespace.create";
     pub const NAMESPACE_UPDATE: &str = "namespace.update";
     pub const NAMESPACE_DELETE: &str = "namespace.delete";
+
+    // Environments & promotion (Plan 10)
+    pub const ENV_PROMOTE: &str = "env.promote";
+    pub const CHANGE_REQUEST_CREATE: &str = "change_request.create";
+    pub const CHANGE_REQUEST_APPROVE: &str = "change_request.approve";
+    pub const CHANGE_REQUEST_REJECT: &str = "change_request.reject";
 
     // Team actions
     pub const TEAM_CREATE: &str = "team.create";
