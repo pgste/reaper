@@ -38,6 +38,9 @@ memchr = "2.7"  # SIMD-accelerated string search
 lazy_static = "1.4"  # Thread-local regex cache global state
 bumpalo = { version = "3.16", features = ["collections"] }  # Arena allocator for zero-alloc evaluation
 rayon = "1.10"  # Parallel batch evaluation
+# Async durable-ack for mandatory-audit decision logging (oneshot + timeout).
+# Only sync/time are needed in non-test code; the dev-dependency pulls full.
+tokio = { version = "1", features = ["sync", "time"] }
 
 # JSON parsing: sonic-rs (SIMD) for native, serde_json for WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

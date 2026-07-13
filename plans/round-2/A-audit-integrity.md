@@ -110,9 +110,27 @@ registers each `chain_id`+`prev_chain_id` with the management plane at startup �
 is a possible future refinement; the WORM archive + continuity linkage close
 R2-3's core without coupling agent startup to the control plane.)*
 
-## A4 — durable-before-serve for mandatory-audit mode  *(pending)*
+## A4 — durable-before-serve for mandatory-audit mode  *(landed)*
 Move the durable hand-off off the reactor; no served-allow loss window and no
 `Block`-mode reactor stall. **Closes SEC R2-4, PERF R2-P2-2.**
+
+**Design (landed).**
+- New async path `DecisionBuffer::log_durable(entry).await -> bool`: hands the
+  `Arc<DecisionLogEntry>` to the writer over `WriterMsg::EntryAck(entry, oneshot)`;
+  the writer thread writes the NDJSON line, `flush()`es, and `sync_data()`
+  fsyncs the file sink, then acks `true` through the oneshot. Returns `false`
+  (fail closed) when there is no fsync-able file sink or the writer is gone.
+- The eval handler branches on `buffer.mandatory_durable()`
+  (`enabled && audit_required`): mandatory → `await log_durable`, and on `false`
+  return **`503`** *before* the response cache insert, so a non-durably-logged
+  allow is never served. Best-effort mode keeps the fire-and-forget `log()` with
+  zero added latency.
+- **Deviation resolved (stdout-only mandatory):** stdout cannot be fsynced, so a
+  mandatory + stdout-only config would `503` on every request. Rather than a
+  per-request outage, `DecisionLogConfig::validate()` now requires a file sink
+  (`REAPER_DECISION_LOG_FILE`) whenever `audit_required` — the agent fails **fast
+  at startup** with a clear config error. Container `stdout`→Vector deployments
+  mount a file path and tail it. Doc updated in `DECISION_LOG_PIPELINE.md`.
 
 ## A5 — redaction-on-by-default + redactable `resource`  *(pending)*
 Explicit redaction posture at enable time; allow `resource` redaction; ship a
