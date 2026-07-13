@@ -31,6 +31,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(decision_stats))
         .routes(routes!(decision_timeseries))
         .routes(routes!(decision_facets))
+        .routes(routes!(verify_decisions))
         .routes(routes!(get_decision))
 }
 
@@ -38,6 +39,16 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
 pub struct StatsParams {
     pub from: Option<String>,
     pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyParams {
+    /// Restrict to a single writer-boot chain (per-boot `chain_id`).
+    pub chain: Option<String>,
+    /// Inclusive lower `seq` bound.
+    pub from: Option<u64>,
+    /// Inclusive upper `seq` bound.
+    pub to: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +250,95 @@ async fn decision_facets(
         .await
         .map_err(map_store_error)?;
     Ok(Json(json!({ "facets": facets })))
+}
+
+/// GET /api/v1/orgs/{org}/decisions/verify — verify the tamper-evident hash
+/// chain over the store (round-2 A1). Reconstructs `DecisionLogEntry` /
+/// `Checkpoint` rows, groups by per-boot `chain_id`, and runs
+/// `decision_log::verify_records`. Checkpoint signatures are checked against the
+/// keys in `REAPER_DECISION_LOG_CHECKPOINT_VERIFYING_KEY` (comma-separated
+/// `key_id:hex`); with none configured, chains are still verified and
+/// `checkpoints_verified` is 0 with an explanatory note.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/decisions/verify",
+    tag = "decisions",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("chain" = Option<String>, Query, description = "Restrict to one writer-boot chain_id"),
+        ("from" = Option<u64>, Query, description = "Inclusive lower seq bound"),
+        ("to" = Option<u64>, Query, description = "Inclusive upper seq bound")
+    ),
+    responses(
+        (status = 200, description = "Verification report over the store-backed hash chain")
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn verify_decisions(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(org): Path<String>,
+    Query(params): Query<VerifyParams>,
+) -> ApiResult<Json<Value>> {
+    let tenant = authorize(&state, &user, &org).await?;
+    let store = store_or_unavailable(&state)?;
+
+    let tenant_arg = store.tenant_filter().then_some(tenant.as_str());
+    let (dec_rows, cp_rows) = store
+        .verify_range(tenant_arg, params.chain.as_deref(), params.from, params.to)
+        .await
+        .map_err(map_store_error)?;
+
+    // Reconstruct the typed records from the raw store rows.
+    let mut entries = Vec::with_capacity(dec_rows.len());
+    for row in dec_rows {
+        let entry = policy_engine::decision_log::entry_from_store_row(row)
+            .map_err(|e| ApiError::Internal(format!("decision row reconstruction failed: {e}")))?;
+        entries.push(entry);
+    }
+    let mut checkpoints = Vec::with_capacity(cp_rows.len());
+    for row in cp_rows {
+        let cp = policy_engine::decision_log::checkpoint_from_store_row(row).map_err(|e| {
+            ApiError::Internal(format!("checkpoint row reconstruction failed: {e}"))
+        })?;
+        checkpoints.push(cp);
+    }
+
+    // Load checkpoint verifying keys from config (env). None → chains only.
+    let key_spec =
+        std::env::var("REAPER_DECISION_LOG_CHECKPOINT_VERIFYING_KEY").unwrap_or_default();
+    let verifying_keys = policy_engine::decision_log::parse_verifying_keys(&key_spec)
+        .map_err(|e| ApiError::Internal(format!("invalid checkpoint verifying key config: {e}")))?;
+
+    let mut note: Option<String> = None;
+    let checkpoints_for_verify: &[policy_engine::decision_log::Checkpoint] =
+        if verifying_keys.is_empty() && !checkpoints.is_empty() {
+            note = Some(
+                "no REAPER_DECISION_LOG_CHECKPOINT_VERIFYING_KEY configured: verified hash chains \
+             only; checkpoint signatures were not checked (checkpoints_verified=0)"
+                    .to_string(),
+            );
+            &[]
+        } else {
+            &checkpoints
+        };
+
+    // Store-backed: the queryable ClickHouse projection is not byte-identical to
+    // the signed NDJSON, so verify chain LINKAGE over the stored hashes (sound,
+    // no false positives). Byte-exact content re-hashing is the CLI `--file`
+    // path over the immutable WORM archive.
+    let report = policy_engine::decision_log::verify_records(
+        entries,
+        checkpoints_for_verify,
+        &verifying_keys,
+        policy_engine::decision_log::VerifyMode::Linkage,
+    );
+
+    let mut body = serde_json::to_value(&report).unwrap_or_default();
+    if let (Some(obj), Some(note)) = (body.as_object_mut(), note) {
+        obj.insert("note".to_string(), Value::String(note));
+    }
+    Ok(Json(body))
 }
 
 /// GET /api/v1/orgs/{org}/decisions/{decision_id} — explain view for one

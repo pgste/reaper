@@ -172,6 +172,12 @@ enum Commands {
         action: DecisionsAction,
     },
 
+    /// Audit-trail integrity: verify the tamper-evident decision hash chain
+    Audit {
+        #[command(subcommand)]
+        action: AuditAction,
+    },
+
     /// Browse and run the bundled policy examples library
     Library {
         #[command(subcommand)]
@@ -370,6 +376,48 @@ enum DecisionsAction {
         /// entry / NDJSON line containing an "input_data" field. Use '-' to
         /// read from stdin (e.g. pipe a line from decisions.ndjson).
         input: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditAction {
+    /// Verify the tamper-evident hash chain over decision records + signed
+    /// checkpoints. Offline over an NDJSON stream (`--file`) or over a
+    /// ClickHouse store (`--url`). Exits non-zero on any violation.
+    Verify {
+        /// NDJSON stream to verify offline (raw write-ordered decisions +
+        /// checkpoints, one JSON object per line). Air-gapped / WORM archives.
+        #[arg(long)]
+        file: Option<String>,
+
+        /// ClickHouse HTTP URL (e.g. http://clickhouse:8123). Verifies the
+        /// queryable store instead of a file.
+        #[arg(long)]
+        url: Option<String>,
+
+        /// ClickHouse database (default reaper_audit).
+        #[arg(long)]
+        database: Option<String>,
+
+        /// Restrict to one tenant_id (ClickHouse mode).
+        #[arg(long)]
+        tenant: Option<String>,
+
+        /// Restrict to one writer-boot chain_id.
+        #[arg(long)]
+        chain: Option<String>,
+
+        /// Inclusive lower seq bound (ClickHouse mode).
+        #[arg(long)]
+        from: Option<u64>,
+
+        /// Inclusive upper seq bound (ClickHouse mode).
+        #[arg(long)]
+        to: Option<u64>,
+
+        /// Checkpoint verifying key(s) as `key_id:hex` (Ed25519). Repeatable.
+        #[arg(long)]
+        verifying_key: Vec<String>,
     },
 }
 
@@ -850,6 +898,259 @@ fn handle_decisions_decrypt(key: &str, input: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Split an NDJSON audit stream into decision records and checkpoints. Lines
+/// with `record_type == "checkpoint"` are checkpoints; everything else is a
+/// decision record. This is the raw write-ordered stream, so records are
+/// byte-exact and hash re-verification is authoritative.
+fn parse_ndjson_stream(
+    raw: &str,
+) -> anyhow::Result<(
+    Vec<policy_engine::DecisionLogEntry>,
+    Vec<policy_engine::decision_log::Checkpoint>,
+)> {
+    use policy_engine::decision_log::CHECKPOINT_RECORD_TYPE;
+    let mut entries = Vec::new();
+    let mut checkpoints = Vec::new();
+    for (i, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(line)
+            .map_err(|e| anyhow::anyhow!("line {}: invalid JSON: {e}", i + 1))?;
+        if v.get("record_type").and_then(|r| r.as_str()) == Some(CHECKPOINT_RECORD_TYPE) {
+            checkpoints.push(
+                serde_json::from_value(v)
+                    .map_err(|e| anyhow::anyhow!("line {}: bad checkpoint: {e}", i + 1))?,
+            );
+        } else {
+            entries.push(
+                serde_json::from_value(v)
+                    .map_err(|e| anyhow::anyhow!("line {}: bad decision record: {e}", i + 1))?,
+            );
+        }
+    }
+    Ok((entries, checkpoints))
+}
+
+/// Run one server-side-parameterized query against the ClickHouse HTTP
+/// interface, returning JSONEachRow rows.
+async fn clickhouse_query(
+    client: &Client,
+    base: &str,
+    database: &str,
+    sql: &str,
+    params: &[(String, String)],
+) -> anyhow::Result<Vec<Value>> {
+    let mut req = client
+        .post(base)
+        .query(&[("database", database), ("default_format", "JSONEachRow")])
+        .body(sql.to_string());
+    for (name, value) in params {
+        req = req.query(&[(format!("param_{name}"), value.as_str())]);
+    }
+    if let Ok(u) = std::env::var("REAPER_CLICKHOUSE_USER") {
+        req = req.header("X-ClickHouse-User", u);
+    }
+    if let Ok(p) = std::env::var("REAPER_CLICKHOUSE_PASSWORD") {
+        req = req.header("X-ClickHouse-Key", p);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("ClickHouse request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("ClickHouse read failed: {e}"))?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "ClickHouse error: {}",
+            body.lines().next().unwrap_or("unknown error")
+        );
+    }
+    body.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).map_err(|e| anyhow::anyhow!("parse row: {e}")))
+        .collect()
+}
+
+/// Fetch decision + checkpoint rows for verification from a ClickHouse store,
+/// ordered by the exact per-boot write order `(chain_id, seq)`.
+#[allow(clippy::too_many_arguments)]
+async fn clickhouse_verify_rows(
+    client: &Client,
+    base: &str,
+    database: &str,
+    tenant: Option<&str>,
+    chain: Option<&str>,
+    from: Option<u64>,
+    to: Option<u64>,
+) -> anyhow::Result<(Vec<Value>, Vec<Value>)> {
+    // decisions
+    let mut conds: Vec<String> = Vec::new();
+    let mut params: Vec<(String, String)> = Vec::new();
+    if let Some(t) = tenant {
+        conds.push("tenant_id = {tenant:String}".to_string());
+        params.push(("tenant".to_string(), t.to_string()));
+    }
+    if let Some(c) = chain {
+        conds.push("chain_id = {chain:String}".to_string());
+        params.push(("chain".to_string(), c.to_string()));
+    }
+    if let Some(f) = from {
+        conds.push("seq >= {seq_from:UInt64}".to_string());
+        params.push(("seq_from".to_string(), f.to_string()));
+    }
+    if let Some(t) = to {
+        conds.push("seq <= {seq_to:UInt64}".to_string());
+        params.push(("seq_to".to_string(), t.to_string()));
+    }
+    let where_sql = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conds.join(" AND "))
+    };
+    let cols = "seq, chain_id, prev_hash, entry_hash, timestamp, decision_id, trace_id, \
+         principal, action, resource, decision, policy_id, policy_name, policy_version, \
+         matched_rule, evaluation_time_ns, cache_hit, agent_id, context, input_data, replay_input";
+    let dec_sql = format!("SELECT {cols} FROM decisions FINAL {where_sql} ORDER BY chain_id, seq");
+    let dec_rows = clickhouse_query(client, base, database, &dec_sql, &params).await?;
+
+    // checkpoints (same tenant/chain scope)
+    let mut cp_conds: Vec<String> = Vec::new();
+    let mut cp_params: Vec<(String, String)> = Vec::new();
+    if let Some(t) = tenant {
+        cp_conds.push("tenant_id = {tenant:String}".to_string());
+        cp_params.push(("tenant".to_string(), t.to_string()));
+    }
+    if let Some(c) = chain {
+        cp_conds.push("chain_id = {chain:String}".to_string());
+        cp_params.push(("chain".to_string(), c.to_string()));
+    }
+    let cp_where = if cp_conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", cp_conds.join(" AND "))
+    };
+    let cp_sql = format!(
+        "SELECT 'checkpoint' AS record_type, chain_id, seq_start, seq_end, count, prev_hash, \
+         last_entry_hash, monotonic_start_ns, monotonic_end_ns, toString(wallclock) AS wallclock, \
+         key_id, algorithm, signature FROM checkpoints FINAL {cp_where} ORDER BY chain_id, seq_start"
+    );
+    let cp_rows = clickhouse_query(client, base, database, &cp_sql, &cp_params).await?;
+
+    Ok((dec_rows, cp_rows))
+}
+
+/// Print a human-readable verification report; returns whether it passed.
+fn print_verification_report(
+    report: &policy_engine::decision_log::VerificationReport,
+    skipped_checkpoints: bool,
+) -> bool {
+    println!("Audit verification report");
+    println!("  chains checked:        {}", report.chains_checked);
+    println!("  records covered:       {}", report.records_covered);
+    println!("  checkpoints verified:  {}", report.checkpoints_verified);
+    if skipped_checkpoints {
+        println!("  note: no --verifying-key given; checkpoint signatures NOT checked");
+    }
+    if report.ok {
+        println!("  result: OK — hash chain intact");
+    } else {
+        println!(
+            "  result: FAILED — {} violation(s):",
+            report.violations.len()
+        );
+        for v in &report.violations {
+            let seq = v
+                .seq
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "    [{}] chain={} seq={} {}",
+                v.kind, v.chain_id, seq, v.detail
+            );
+        }
+    }
+    report.ok
+}
+
+/// Handle: reaper audit verify — verify the tamper-evident decision hash chain.
+#[allow(clippy::too_many_arguments)]
+async fn handle_audit_verify(
+    file: Option<&str>,
+    url: Option<&str>,
+    database: Option<&str>,
+    tenant: Option<&str>,
+    chain: Option<&str>,
+    from: Option<u64>,
+    to: Option<u64>,
+    verifying_key: &[String],
+    client: &Client,
+) -> anyhow::Result<bool> {
+    use policy_engine::decision_log::{
+        checkpoint_from_store_row, entry_from_store_row, parse_verifying_keys, verify_records,
+        Checkpoint, DecisionLogEntry,
+    };
+
+    let verifying_keys = parse_verifying_keys(&verifying_key.join(","))
+        .map_err(|e| anyhow::anyhow!("invalid --verifying-key: {e}"))?;
+
+    // --file over the raw write-ordered NDJSON is byte-identical to the signed
+    // stream → full content re-hash (authoritative). --url reconstructs from a
+    // queryable store whose column projection is not byte-identical → linkage
+    // over the stored hashes (sound, no false positives; content mutation is
+    // caught by a --file pass over the immutable archive).
+    use policy_engine::decision_log::VerifyMode;
+    let (entries, checkpoints, mode): (Vec<DecisionLogEntry>, Vec<Checkpoint>, VerifyMode) =
+        match (file, url) {
+            (Some(path), _) => {
+                let raw = if path == "-" {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    buf
+                } else {
+                    std::fs::read_to_string(path)
+                        .map_err(|e| anyhow::anyhow!("failed to read {path}: {e}"))?
+                };
+                let (e, c) = parse_ndjson_stream(&raw)?;
+                (e, c, VerifyMode::ByteExact)
+            }
+            (None, Some(base)) => {
+                let base = base.trim_end_matches('/');
+                let db = database.unwrap_or("reaper_audit");
+                let (dec_rows, cp_rows) =
+                    clickhouse_verify_rows(client, base, db, tenant, chain, from, to).await?;
+                let mut entries = Vec::with_capacity(dec_rows.len());
+                for r in dec_rows {
+                    entries.push(entry_from_store_row(r).map_err(|e| anyhow::anyhow!(e))?);
+                }
+                let mut checkpoints = Vec::with_capacity(cp_rows.len());
+                for r in cp_rows {
+                    checkpoints.push(checkpoint_from_store_row(r).map_err(|e| anyhow::anyhow!(e))?);
+                }
+                (entries, checkpoints, VerifyMode::Linkage)
+            }
+            (None, None) => {
+                anyhow::bail!("provide --file <ndjson> or --url <clickhouse-http-url>");
+            }
+        };
+
+    // Checkpoints present but no keys → verify chains only, warn.
+    let skipped_checkpoints = !checkpoints.is_empty() && verifying_keys.is_empty();
+    let cps: Vec<Checkpoint> = if skipped_checkpoints {
+        Vec::new()
+    } else {
+        checkpoints
+    };
+
+    let report = verify_records(entries, &cps, &verifying_keys, mode);
+    Ok(print_verification_report(&report, skipped_checkpoints))
+}
+
 /// Handle: reaper check — evaluate a JSON document against a policy and
 /// report every violation (CI gate: exit 1 when not allowed).
 fn handle_check(
@@ -1306,6 +1607,35 @@ async fn main() -> anyhow::Result<()> {
         Commands::Decisions { ref action } => match action {
             DecisionsAction::Keygen => handle_decisions_keygen()?,
             DecisionsAction::Decrypt { key, input } => handle_decisions_decrypt(key, input)?,
+        },
+
+        Commands::Audit { ref action } => match action {
+            AuditAction::Verify {
+                file,
+                url,
+                database,
+                tenant,
+                chain,
+                from,
+                to,
+                verifying_key,
+            } => {
+                let ok = handle_audit_verify(
+                    file.as_deref(),
+                    url.as_deref(),
+                    database.as_deref(),
+                    tenant.as_deref(),
+                    chain.as_deref(),
+                    *from,
+                    *to,
+                    verifying_key,
+                    &client,
+                )
+                .await?;
+                if !ok {
+                    std::process::exit(1);
+                }
+            }
         },
 
         Commands::Library { ref action } => match action {
@@ -2856,4 +3186,76 @@ async fn handle_management_action(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod audit_verify_tests {
+    use super::*;
+    use policy_engine::decision_log::verify_records;
+    use policy_engine::DecisionLogEntry;
+
+    /// Build an NDJSON stream of a single-boot chain (as the writer would emit).
+    fn chained_ndjson(chain_id: &str, n: u64) -> String {
+        let mut last = String::new();
+        let mut lines = Vec::new();
+        for i in 0..n {
+            let mut e = DecisionLogEntry::new(
+                format!("user_{i}"),
+                "read".to_string(),
+                format!("/api/{i}"),
+                if i % 2 == 0 { "allow" } else { "deny" }.to_string(),
+                "policy_1".to_string(),
+                "p".to_string(),
+            );
+            e.seq = i;
+            e.chain_id = chain_id.to_string();
+            e.prev_hash = last.clone();
+            let h = e.compute_entry_hash(&last);
+            e.entry_hash = h.clone();
+            last = h;
+            lines.push(e.to_ndjson().unwrap());
+        }
+        lines.join("\n")
+    }
+
+    #[test]
+    fn intact_ndjson_stream_verifies_ok() {
+        let raw = chained_ndjson("boot-a", 8);
+        let (entries, checkpoints) = parse_ndjson_stream(&raw).unwrap();
+        assert_eq!(entries.len(), 8);
+        assert!(checkpoints.is_empty());
+        let report = verify_records(
+            entries,
+            &[],
+            &[],
+            policy_engine::decision_log::VerifyMode::ByteExact,
+        );
+        assert!(report.ok, "violations: {:?}", report.violations);
+        assert_eq!(report.chains_checked, 1);
+        assert_eq!(report.records_covered, 8);
+    }
+
+    #[test]
+    fn tampered_ndjson_stream_fails_at_seq() {
+        let raw = chained_ndjson("boot-a", 8);
+        // Tamper: rewrite line 4's resource field without re-chaining.
+        let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+        let mut v: serde_json::Value = serde_json::from_str(&lines[4]).unwrap();
+        v["resource"] = serde_json::json!("/api/hacked");
+        lines[4] = serde_json::to_string(&v).unwrap();
+        let tampered = lines.join("\n");
+
+        let (entries, _) = parse_ndjson_stream(&tampered).unwrap();
+        let report = verify_records(
+            entries,
+            &[],
+            &[],
+            policy_engine::decision_log::VerifyMode::ByteExact,
+        );
+        assert!(!report.ok);
+        assert!(report
+            .violations
+            .iter()
+            .any(|viol| viol.kind == "chain_broken" && viol.seq == Some(4)));
+    }
 }

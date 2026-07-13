@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS reaper_audit.decisions
     -- position in the tamper-evident hash chain (Plan 04). A gap signals a
     -- dropped/deleted record.
     seq              UInt64                 DEFAULT 0 CODEC(DoubleDelta, ZSTD(1)),
+    -- Per-writer-boot chain identity (round-2 A2): matches the checkpoints
+    -- table's chain_id for the same boot. seq restarts at 0 each boot, so a
+    -- verifier reconstructs the hash chain by (chain_id, seq), never table
+    -- order. Empty on pre-A2 records / single-boot NDJSON.
+    chain_id         String                 DEFAULT '' CODEC(ZSTD(1)),
     decision_id      UUID                   CODEC(ZSTD(1)),   -- high entropy: no delta
     trace_id         String                 CODEC(ZSTD(1)),
 

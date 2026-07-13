@@ -511,6 +511,111 @@ impl DecisionStore {
             })
             .unwrap_or(0))
     }
+
+    /// Fetch the raw decision rows and checkpoint rows needed to verify the
+    /// tamper-evident hash chain (round-2 A1). Decisions come back ordered by
+    /// `(chain_id, seq)` — the exact write order per boot, never the table's
+    /// physical order — filtered by tenant and, optionally, one `chain_id` and a
+    /// `[seq_from, seq_to]` window. Checkpoints are scoped to the same
+    /// tenant/chain. Rows are returned raw; the API layer reconstructs
+    /// `DecisionLogEntry`/`Checkpoint` and runs `decision_log::verify_records`.
+    pub async fn verify_range(
+        &self,
+        tenant_id: Option<&str>,
+        chain_id: Option<&str>,
+        seq_from: Option<u64>,
+        seq_to: Option<u64>,
+    ) -> Result<(Vec<Value>, Vec<Value>), DecisionStoreError> {
+        let (dec_sql, dec_params) =
+            build_verify_decisions_sql(&self.config, tenant_id, chain_id, seq_from, seq_to);
+        let decisions = self.run(&dec_sql, &dec_params).await?;
+
+        let (cp_sql, cp_params) = build_verify_checkpoints_sql(&self.config, tenant_id, chain_id);
+        let checkpoints = self.run(&cp_sql, &cp_params).await?;
+
+        Ok((decisions, checkpoints))
+    }
+}
+
+/// Columns needed to reconstruct a `DecisionLogEntry` for hash-chain
+/// verification (round-2 A1): the chain fields plus every stored decision
+/// field. `seq`/`chain_id` drive per-boot ordering; `prev_hash`/`entry_hash`
+/// are the chain links the verifier recomputes.
+const VERIFY_COLUMNS: &str = "seq, chain_id, prev_hash, entry_hash, timestamp, decision_id, \
+     trace_id, principal, action, resource, decision, policy_id, policy_name, policy_version, \
+     matched_rule, evaluation_time_ns, cache_hit, agent_id, context, input_data, replay_input";
+
+/// Decisions query for verification: tenant/chain/seq scoped, ordered by the
+/// exact per-boot write order `(chain_id, seq)`. Every user value is bound as a
+/// server-side parameter — never spliced.
+fn build_verify_decisions_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: Option<&str>,
+    chain_id: Option<&str>,
+    seq_from: Option<u64>,
+    seq_to: Option<u64>,
+) -> (String, Vec<(String, String)>) {
+    let mut params: Vec<(String, String)> = Vec::new();
+    let mut conds: Vec<String> = Vec::new();
+    if config.tenant_filter {
+        conds.push("tenant_id = {tenant:String}".to_string());
+        params.push(("tenant".to_string(), tenant_id.unwrap_or("").to_string()));
+    }
+    if let Some(chain) = chain_id {
+        conds.push("chain_id = {chain:String}".to_string());
+        params.push(("chain".to_string(), chain.to_string()));
+    }
+    if let Some(from) = seq_from {
+        conds.push("seq >= {seq_from:UInt64}".to_string());
+        params.push(("seq_from".to_string(), from.to_string()));
+    }
+    if let Some(to) = seq_to {
+        conds.push("seq <= {seq_to:UInt64}".to_string());
+        params.push(("seq_to".to_string(), to.to_string()));
+    }
+    let where_sql = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conds.join(" AND "))
+    };
+    (
+        format!("SELECT {VERIFY_COLUMNS} FROM decisions FINAL {where_sql} ORDER BY chain_id, seq"),
+        params,
+    )
+}
+
+/// Checkpoints query for verification: same tenant/chain scope. `record_type`
+/// is implied by the table (not stored), so inject it so each row deserializes
+/// into a `Checkpoint` (which requires the discriminator).
+fn build_verify_checkpoints_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: Option<&str>,
+    chain_id: Option<&str>,
+) -> (String, Vec<(String, String)>) {
+    let mut params: Vec<(String, String)> = Vec::new();
+    let mut conds: Vec<String> = Vec::new();
+    if config.tenant_filter {
+        conds.push("tenant_id = {tenant:String}".to_string());
+        params.push(("tenant".to_string(), tenant_id.unwrap_or("").to_string()));
+    }
+    if let Some(chain) = chain_id {
+        conds.push("chain_id = {chain:String}".to_string());
+        params.push(("chain".to_string(), chain.to_string()));
+    }
+    let where_sql = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conds.join(" AND "))
+    };
+    (
+        format!(
+            "SELECT 'checkpoint' AS record_type, chain_id, seq_start, seq_end, count, \
+             prev_hash, last_entry_hash, monotonic_start_ns, monotonic_end_ns, \
+             toString(wallclock) AS wallclock, key_id, algorithm, signature \
+             FROM checkpoints FINAL {where_sql} ORDER BY chain_id, seq_start"
+        ),
+        params,
+    )
 }
 
 /// One bucket of the decision time series.
@@ -1175,6 +1280,51 @@ mod tests {
             &[HoldFilter::default()],
         );
         assert!(sql.ends_with("AND 0"), "{sql}");
+    }
+
+    #[test]
+    fn verify_decisions_sql_is_scoped_and_ordered_by_chain_seq() {
+        let (sql, params) = build_verify_decisions_sql(
+            &config(true),
+            Some("org-1"),
+            Some("boot-abc"),
+            Some(0),
+            Some(99),
+        );
+        // Reconstruction needs the chain fields.
+        assert!(sql.contains("seq, chain_id, prev_hash, entry_hash"));
+        // Never trust physical table order — verification order is explicit.
+        assert!(sql.contains("ORDER BY chain_id, seq"));
+        assert!(sql.contains("tenant_id = {tenant:String}"));
+        assert!(sql.contains("chain_id = {chain:String}"));
+        assert!(sql.contains("seq >= {seq_from:UInt64}"));
+        assert!(sql.contains("seq <= {seq_to:UInt64}"));
+        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("tenant"), Some("org-1"));
+        assert_eq!(get("chain"), Some("boot-abc"));
+        assert_eq!(get("seq_from"), Some("0"));
+        assert_eq!(get("seq_to"), Some("99"));
+    }
+
+    #[test]
+    fn verify_checkpoints_sql_injects_record_type_and_scopes() {
+        let (sql, params) =
+            build_verify_checkpoints_sql(&config(true), Some("org-1"), Some("boot-abc"));
+        assert!(sql.contains("'checkpoint' AS record_type"));
+        assert!(sql.contains("toString(wallclock) AS wallclock"));
+        assert!(sql.contains("tenant_id = {tenant:String}"));
+        assert!(sql.contains("chain_id = {chain:String}"));
+        assert!(params.iter().any(|(n, v)| n == "tenant" && v == "org-1"));
+        assert!(params.iter().any(|(n, v)| n == "chain" && v == "boot-abc"));
+    }
+
+    #[test]
+    fn verify_sql_single_tenant_omits_tenant_filter() {
+        let (sql, params) = build_verify_decisions_sql(&config(false), None, None, None, None);
+        assert!(!sql.contains("tenant_id"));
+        assert!(!params.iter().any(|(n, _)| n == "tenant"));
+        // No filters at all → no WHERE clause.
+        assert!(!sql.contains("WHERE"));
     }
 
     #[test]
