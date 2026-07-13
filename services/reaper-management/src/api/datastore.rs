@@ -23,8 +23,9 @@ use crate::{
     db::repositories::datastore::DatastoreRecord,
     db::repositories::{DatastoreRepository, NamespaceRepository},
     domain::datastore::{
-        AdmEntity, DatastoreTemplate, ModelDefinition, RelationTuple, RoleBinding,
+        materialize, AdmEntity, DatastoreTemplate, ModelDefinition, RelationTuple, RoleBinding,
     },
+    domain::{impact, migration},
     state::{AppState, ServerEvent},
 };
 
@@ -38,6 +39,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(list_bindings, add_binding, remove_binding))
         .routes(routes!(list_tuples, write_tuple, remove_tuple))
         .routes(routes!(publish))
+        .routes(routes!(plan_migration))
         .routes(routes!(get_changes))
         .routes(routes!(list_versions))
         .routes(routes!(get_version))
@@ -634,6 +636,139 @@ async fn publish(
             "role_bindings": published.binding_count,
         },
         "published_at": published.published_at,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Model migrations (Plan 12): dry-run plan + impact analysis
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct PlanMigrationRequest {
+    transforms: Vec<migration::ModelTransform>,
+}
+
+/// Dry-run a model migration: NOTHING is mutated. Returns the record-level
+/// plan (exact affected-row counts per transform), any blockers (fail-closed
+/// coercion errors, non-empty relation removals), and — when applyable — the
+/// access-impact report: which principals gain or lose access, computed by
+/// materializing the proposed state and diffing engine-visible access
+/// against current. A pure rename must report decision_neutral: true.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/migrations/plan",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    request_body = PlanMigrationRequest,
+    responses(
+        (status = 200, description = "Dry-run migration plan + impact report (no mutation)"),
+        (status = 400, description = "Invalid transform (unknown source, name collision, bad default)")
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn plan_migration(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, ns)): Path<(String, String)>,
+    Json(req): Json<PlanMigrationRequest>,
+) -> ApiResult<Json<Value>> {
+    let resolved = authorize(&state, &user, &org, &ns, true).await?;
+    let store = require_store(&state, &resolved).await?;
+    let repo = DatastoreRepository::new(&state.db);
+
+    // Full record sets — the planner and both materializations need them.
+    let entities = repo.list_entities(store.id, None).await?;
+    let bindings = repo.list_bindings(store.id, None, None).await?;
+    let tuples = repo.list_tuples(store.id, None, None, None).await?;
+
+    let plan = migration::plan(&req.transforms, &store.model, &entities, &bindings, &tuples)
+        .map_err(ApiError::BadRequest)?;
+
+    // Materialize both worlds. Deterministic ordering (BTreeMap/BTreeSet in
+    // materialize) keeps the checksums meaningful.
+    let doc_before = materialize(&store.model, &entities, &bindings, &tuples);
+    let doc_after = materialize(
+        &plan.model_after,
+        &plan.entities_after,
+        &plan.bindings_after,
+        &plan.tuples_after,
+    );
+
+    // Structural diff: which materialized entity documents changed.
+    let by_id = |doc: &Value| -> std::collections::BTreeMap<String, Value> {
+        doc["entities"]
+            .as_array()
+            .map(|ents| {
+                ents.iter()
+                    .filter_map(|e| e["id"].as_str().map(|id| (id.to_string(), e.clone())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let before_map = by_id(&doc_before);
+    let after_map = by_id(&doc_after);
+    let mut docs_changed: Vec<&String> = before_map
+        .iter()
+        .filter(|(id, doc)| after_map.get(*id) != Some(doc))
+        .map(|(id, _)| id)
+        .chain(after_map.keys().filter(|id| !before_map.contains_key(*id)))
+        .collect();
+    docs_changed.sort();
+    docs_changed.dedup();
+    let docs_changed_total = docs_changed.len();
+    docs_changed.truncate(100);
+
+    // Access impact via the real engine — skipped when blocked, because a
+    // plan that cannot apply has no meaningful "after" state.
+    let impact_report = if plan.applyable() {
+        let specs = |m: &ModelDefinition| -> Vec<impact::RelationSpec> {
+            m.relations
+                .iter()
+                .map(|r| impact::RelationSpec {
+                    name: r.name.clone(),
+                    traversal: r.traversal,
+                })
+                .collect()
+        };
+        let profile_before = impact::access_profile(&doc_before, &specs(&store.model))
+            .map_err(ApiError::Internal)?;
+        let profile_after = impact::access_profile(&doc_after, &specs(&plan.model_after))
+            .map_err(ApiError::Internal)?;
+        let maps = migration::rename_maps(&req.transforms);
+        Some(impact::diff(
+            &impact::normalize(&profile_before, &maps),
+            &profile_after,
+        ))
+    } else {
+        None
+    };
+
+    let checksum = |doc: &Value| -> String {
+        use sha2::{Digest, Sha256};
+        format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(doc.to_string().as_bytes()))
+        )
+    };
+
+    Ok(Json(json!({
+        "applyable": plan.applyable(),
+        "record_ops": plan.record_ops,
+        "blockers": plan.blockers,
+        "impact": impact_report,
+        "docs_changed": { "total": docs_changed_total, "sample": docs_changed },
+        "before": {
+            "checksum": checksum(&doc_before),
+            "entities": before_map.len(),
+        },
+        "after": {
+            "checksum": checksum(&doc_after),
+            "entities": after_map.len(),
+            "model": plan.model_after,
+        },
     })))
 }
 

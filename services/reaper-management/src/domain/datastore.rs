@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use utoipa::ToSchema;
 
 // ---------------------------------------------------------------------------
 // Model definition (schema layer)
@@ -15,7 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 
 /// Attribute types match the engine's type-strict comparison contract —
 /// validation HERE is what makes `"5"` vs `5` impossible at evaluation time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttrType {
     String,
@@ -25,7 +26,7 @@ pub enum AttrType {
     StringList,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct AttributeDef {
     pub name: String,
     #[serde(rename = "type")]
@@ -50,7 +51,7 @@ pub struct RoleDef {
     pub permissions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct RelationDef {
     pub name: String,
     /// Entity type the relation is declared ON (the tuple's object).

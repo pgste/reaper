@@ -10,6 +10,8 @@ pub mod change_request;
 pub mod datastore;
 pub mod deployment;
 pub mod environment;
+pub mod impact;
+pub mod migration;
 pub mod namespace;
 pub mod organization;
 pub mod policy;
