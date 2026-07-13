@@ -5794,7 +5794,15 @@ async fn direct_rollout_requires_promotion_path_when_env_opts_in() {
         .unwrap();
     let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
     let admin_key = create_test_api_key(&env.db, org_id).await; // platform `admin` scope
-    let member_key = create_scoped_api_key(&env.db, org_id, &["policy:read", "policy:write"]).await;
+                                                                // Deploy-capable but non-admin: holds the B1 deploy scope so requests reach
+                                                                // the promotion-path gate under test (without it they now 403 at the scope
+                                                                // gate — see test_deployment_mutations_require_deploy_scope).
+    let member_key = create_scoped_api_key(
+        &env.db,
+        org_id,
+        &["policy:read", "policy:write", "deployment:write"],
+    )
+    .await;
 
     // Agent so rollouts have a target.
     env.app
@@ -7606,4 +7614,153 @@ async fn migration_rollback_is_forward_inverse_with_provenance() {
     assert_eq!(r.status(), StatusCode::CONFLICT);
     let msg = parse_body(r).await.to_string();
     assert!(msg.contains("irreversible"), "{msg}");
+}
+
+/// SEC R2-1: mutating deployment endpoints (rollout / approve-wave / cancel /
+/// rollback / pin / strategy / auto-rollback config) require a deploy scope
+/// (`deployment:write`, `bundle:promote`, or `org:admin`) — org membership
+/// alone (e.g. a developer or read-only service token) must NOT be able to
+/// roll the fleet. Read endpoints keep the plain membership gate.
+#[tokio::test]
+async fn test_deployment_mutations_require_deploy_scope() {
+    let env = setup_test_env().await;
+    let (org_id, _admin_key) = org_with_key(&env, "Deploy Scope Org", "deploy-scope-org").await;
+
+    // A developer-equivalent token: broad read/write but NO deploy authority.
+    let dev_key = create_scoped_api_key(
+        &env.db,
+        org_id,
+        &[
+            "agent:read",
+            "agent:write",
+            "policy:read",
+            "policy:write",
+            "bundle:read",
+            "bundle:write",
+        ],
+    )
+    .await;
+
+    let some_id = Uuid::new_v4();
+    let mutations: Vec<(&str, String, Option<Value>)> = vec![
+        (
+            "POST",
+            format!("/orgs/deploy-scope-org/bundles/{some_id}/rollout"),
+            Some(json!({})),
+        ),
+        (
+            "POST",
+            format!("/orgs/deploy-scope-org/rollouts/{some_id}/approve"),
+            None,
+        ),
+        (
+            "POST",
+            format!("/orgs/deploy-scope-org/rollouts/{some_id}/cancel"),
+            Some(json!({"reason": "test"})),
+        ),
+        (
+            "POST",
+            "/orgs/deploy-scope-org/rollback".to_string(),
+            Some(json!({"reason": "test"})),
+        ),
+        (
+            "POST",
+            "/orgs/deploy-scope-org/namespaces/prod/rollback".to_string(),
+            Some(json!({"reason": "test"})),
+        ),
+        (
+            "POST",
+            format!("/orgs/deploy-scope-org/agents/{some_id}/pin"),
+            Some(json!({"bundle_id": some_id, "reason": "test"})),
+        ),
+        (
+            "DELETE",
+            format!("/orgs/deploy-scope-org/agents/{some_id}/pin"),
+            None,
+        ),
+        (
+            "POST",
+            "/orgs/deploy-scope-org/deployment-strategies".to_string(),
+            Some(json!({
+                "name": "s",
+                "strategy_type": "immediate",
+                "config": {"type": "immediate"}
+            })),
+        ),
+        (
+            "DELETE",
+            format!("/orgs/deploy-scope-org/deployment-strategies/{some_id}"),
+            None,
+        ),
+        (
+            "POST",
+            "/orgs/deploy-scope-org/auto-rollback".to_string(),
+            Some(json!({"enabled": false})),
+        ),
+        (
+            "POST",
+            "/orgs/deploy-scope-org/namespaces/prod/auto-rollback".to_string(),
+            Some(json!({"enabled": false})),
+        ),
+    ];
+
+    // Without a deploy scope: every mutation is 403 with the actionable message.
+    for (method, uri, body) in &mutations {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(authed_request(method, uri, body.clone(), &dev_key))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {uri} must 403 without a deploy scope"
+        );
+        let msg = parse_body(resp).await.to_string();
+        assert!(
+            msg.contains("deployment:write"),
+            "{method} {uri}: error must name the missing scope: {msg}"
+        );
+    }
+
+    // With deployment:write, bundle:promote, or org:admin the SCOPE gate opens
+    // (the calls then fail on the nonexistent targets — anything but 403).
+    for scopes in [
+        &["deployment:write"][..],
+        &["bundle:promote"][..],
+        &["org:admin"][..],
+    ] {
+        let key = create_scoped_api_key(&env.db, org_id, scopes).await;
+        for (method, uri, body) in &mutations {
+            let resp = env
+                .app
+                .clone()
+                .oneshot(authed_request(method, uri, body.clone(), &key))
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::FORBIDDEN,
+                "{method} {uri} must pass the scope gate with {scopes:?}"
+            );
+        }
+    }
+
+    // Reads keep the plain membership gate: a read-only member still sees state.
+    let ro_key = create_scoped_api_key(&env.db, org_id, &["bundle:read"]).await;
+    for uri in [
+        "/orgs/deploy-scope-org/rollouts".to_string(),
+        "/orgs/deploy-scope-org/pins".to_string(),
+        "/orgs/deploy-scope-org/deployment-strategies".to_string(),
+        "/orgs/deploy-scope-org/auto-rollback".to_string(),
+    ] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(authed_request("GET", &uri, None, &ro_key))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "GET {uri} for a member");
+    }
 }

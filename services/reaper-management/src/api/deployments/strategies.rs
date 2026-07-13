@@ -75,16 +75,8 @@ pub async fn create_strategy(
     Path(org): Path<String>,
     Json(request): Json<CreateStrategyRequest>,
 ) -> Result<(StatusCode, Json<StrategyResponse>), ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot create strategies for other organizations".to_string(),
-        ));
-    }
+    let organization =
+        super::authorize_deploy(&state, &user, &org, "create deployment strategies").await?;
 
     let input = CreateDeploymentStrategy {
         name: request.name,
@@ -173,16 +165,8 @@ pub async fn delete_strategy(
     RequireAuth(user): RequireAuth,
     Path((org, strategy_id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot delete strategies for other organizations".to_string(),
-        ));
-    }
+    let organization =
+        super::authorize_deploy(&state, &user, &org, "delete deployment strategies").await?;
 
     let service = DeploymentService::new(state.db.clone());
 
