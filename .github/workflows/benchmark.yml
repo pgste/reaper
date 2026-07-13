@@ -23,6 +23,13 @@ permissions:
   pages: write
   id-token: write
 
+# Belt-and-braces: never smudge Git-LFS content here. The 100k benchmark data
+# is ALWAYS regenerated at runtime (see the "Generate benchmark data" step),
+# so the data/100k LFS pointers must stay pointers — downloading them burns
+# the repo's LFS bandwidth budget for files the jobs immediately overwrite.
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+
 jobs:
   # Build agent and benchmark tools in parallel
   build-agent:

@@ -53,16 +53,21 @@ async fn git_backing(
     Ok(Some((source, mode)))
 }
 
-/// The policy's strong ETag: the current version's `content_hash` (ADR-2), or
-/// a version marker when a version row is missing (never the case for
-/// API-created policies, which always start at version 1).
-async fn policy_etag(repo: &PolicyRepository<'_>, policy_id: Uuid) -> ApiResult<(i32, String)> {
-    let (version, hash) = repo.current_version_info(policy_id).await?;
-    let tag = match hash {
+/// The policy's strong ETag: the current version's `content_hash` joined with
+/// the row-version counter that EVERY write (content or metadata) bumps
+/// (R2-03 — the old content-hash-only tag was stable across metadata edits,
+/// violating RFC 9110 §8.8.1 and letting concurrent metadata editors clobber
+/// each other). The tag is opaque to clients; the returned `row_version` is
+/// what the repository's SQL guard re-checks. A version marker substitutes
+/// for a missing content hash (never the case for API-created policies,
+/// which always start at version 1).
+async fn policy_etag(repo: &PolicyRepository<'_>, policy_id: Uuid) -> ApiResult<(i64, String)> {
+    let (row_version, version, hash) = repo.current_version_info(policy_id).await?;
+    let content_tag = match hash {
         Some(h) => h,
         None => format!("v{version}"),
     };
-    Ok((version, tag))
+    Ok((row_version, format!("{content_tag}.r{row_version}")))
 }
 
 /// Build policy routes (nested under orgs)
@@ -219,7 +224,8 @@ async fn create_policy(
     ),
     responses(
         (status = 200, description = "Policy details; the `ETag` response header \
-            carries the current content hash for use as `If-Match` on updates")
+            carries an opaque entity tag — changed by every update, content or \
+            metadata — for use as `If-Match` on updates")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -249,7 +255,7 @@ async fn get_policy(
     request_body = UpdatePolicyRequest,
     responses(
         (status = 200, description = "Policy updated; the `ETag` response header \
-            carries the new content hash"),
+            carries the new entity tag"),
         (status = 412, description = "If-Match did not match the current policy \
             (a concurrent writer won) — GET the policy again and retry"),
         (status = 428, description = "If-Match missing while the server enforces \
@@ -330,16 +336,17 @@ async fn update_policy(
     }
 
     // Optimistic concurrency (Plan 07 Phase C): fast-fail a stale If-Match
-    // here; the repository's `AND current_version = $expected` is the atomic
-    // arbiter for writers racing past this check.
-    let (current_version, current_tag) = policy_etag(&policy_repo, existing.id).await?;
+    // here; the repository's `AND row_version = $expected` is the atomic
+    // arbiter for writers racing past this check. row_version bumps on EVERY
+    // write, so metadata-only races resolve to one winner too (R2-03).
+    let (current_row_version, current_tag) = policy_etag(&policy_repo, existing.id).await?;
     let guarded = check_precondition(
         &headers,
         &current_tag,
         state.config.server.require_if_match,
         &format!("policy {}", existing.id),
     )?;
-    let expected_version = guarded.then_some(current_version);
+    let expected_row_version = guarded.then_some(current_row_version);
 
     let input = UpdatePolicy {
         name: request.name,
@@ -349,7 +356,7 @@ async fn update_policy(
     };
 
     let updated = policy_repo
-        .update(existing.id, input, expected_version)
+        .update(existing.id, input, expected_row_version)
         .await?
         .ok_or_else(|| ApiError::NotFound("Policy not found after update".to_string()))?;
 

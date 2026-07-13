@@ -1,0 +1,12 @@
+-- C2 (CODE R2-03): honest policy ETag. The old ETag was the current
+-- version's content_hash, which does not change on metadata-only edits
+-- (name/description/is_active) — two different representations shared one
+-- ETag (RFC 9110 §8.8.1 violation) and concurrent metadata editors silently
+-- clobbered each other even with If-Match enforcement on.
+--
+-- row_version is a dedicated integer bumped by EVERY policy UPDATE (content
+-- or metadata). The ETag is derived from (content_hash, row_version) and the
+-- repository guards every UPDATE with `AND row_version = $expected`, so a
+-- stale writer always loses with 412 — a monotonic counter, not a clock
+-- (the R2-10 timestamp-resolution trap).
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS row_version BIGINT NOT NULL DEFAULT 1;

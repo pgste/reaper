@@ -94,7 +94,8 @@ impl Config {
         }
 
         // If-Match enforcement on policy/bundle PUTs (Plan 07 Phase C) —
-        // warn-only (false) for one release, then enforce.
+        // enforced (true) by default since R2-02; the override is the
+        // one-release migration escape hatch (`REAPER_REQUIRE_IF_MATCH=false`).
         if let Ok(v) = std::env::var("REAPER_REQUIRE_IF_MATCH") {
             config.server.require_if_match =
                 matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on");

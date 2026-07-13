@@ -263,17 +263,22 @@ impl<'a> PolicyRepository<'a> {
 
     /// Update a policy (optionally creates a new version if content provided).
     ///
-    /// `expected_version` is the optimistic-concurrency guard (Plan 07 Phase C):
-    /// when `Some(v)`, the UPDATE carries `AND current_version = v`, so a
-    /// concurrent writer that already bumped the version makes this write match
-    /// zero rows and the call returns [`DatabaseError::VersionConflict`] instead
-    /// of silently clobbering. `None` skips the guard (transitional warn-only
-    /// mode for clients that did not send `If-Match`).
+    /// Every successful UPDATE — content or metadata — bumps `row_version`,
+    /// the monotonic counter the policy ETag derives from (R2-03: metadata
+    /// edits must rotate the ETag too, per RFC 9110 §8.8.1).
+    ///
+    /// `expected_row_version` is the optimistic-concurrency guard (Plan 07
+    /// Phase C): when `Some(v)`, the UPDATE carries `AND row_version = v`, so
+    /// a concurrent writer that already bumped it — including a metadata-only
+    /// writer — makes this write match zero rows and the call returns
+    /// [`DatabaseError::VersionConflict`] instead of silently clobbering.
+    /// `None` skips the guard (internal callers such as git sync, and the
+    /// opt-down warn-only mode for clients that did not send `If-Match`).
     pub async fn update(
         &self,
         id: Uuid,
         input: UpdatePolicy,
-        expected_version: Option<i32>,
+        expected_row_version: Option<i64>,
     ) -> Result<Option<Policy>, DatabaseError> {
         let pool = self
             .db
@@ -292,8 +297,8 @@ impl<'a> PolicyRepository<'a> {
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         // If content is provided, create a new version. The guarded UPDATE of
-        // `policies.current_version` is the atomic arbiter, so it runs FIRST;
-        // the immutable version row is only inserted once this writer has won,
+        // the policies row is the atomic arbiter, so it runs FIRST; the
+        // immutable version row is only inserted once this writer has won,
         // and both statements commit together.
         if let Some(content) = input.content {
             let current_version = self.get_current_version(id).await?;
@@ -303,12 +308,13 @@ impl<'a> PolicyRepository<'a> {
 
             let mut tx = pool.begin().await?;
 
-            let result = if let Some(expected) = expected_version {
+            let result = if let Some(expected) = expected_row_version {
                 sqlx::query(
                     r#"
                     UPDATE policies
-                    SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
-                    WHERE id = $6 AND current_version = $7
+                    SET name = $1, description = $2, is_active = $3, current_version = $4,
+                        row_version = row_version + 1, updated_at = $5
+                    WHERE id = $6 AND row_version = $7
                     "#,
                 )
                 .bind(&name)
@@ -324,7 +330,8 @@ impl<'a> PolicyRepository<'a> {
                 sqlx::query(
                     r#"
                     UPDATE policies
-                    SET name = $1, description = $2, is_active = $3, current_version = $4, updated_at = $5
+                    SET name = $1, description = $2, is_active = $3, current_version = $4,
+                        row_version = row_version + 1, updated_at = $5
                     WHERE id = $6
                     "#,
                 )
@@ -341,8 +348,7 @@ impl<'a> PolicyRepository<'a> {
             if result.rows_affected() == 0 {
                 tx.rollback().await?;
                 return Err(DatabaseError::VersionConflict(format!(
-                    "policy {id} was modified concurrently (expected version {})",
-                    expected_version.unwrap_or(current_version)
+                    "policy {id} was modified concurrently"
                 )));
             }
 
@@ -363,16 +369,17 @@ impl<'a> PolicyRepository<'a> {
 
             tx.commit().await?;
         } else {
-            // Metadata-only update. The same version guard still protects
-            // against racing a concurrent CONTENT update (which bumps the
-            // version); two racing metadata-only edits share a version, so
-            // last-write-wins there — see ADR-2's no-schema-change trade-off.
-            let result = if let Some(expected) = expected_version {
+            // Metadata-only update. Guarded on `row_version`, which EVERY
+            // write bumps — two racing metadata editors resolve to exactly
+            // one winner and one 412 (R2-03 closed; the old
+            // `current_version` guard let the loser clobber silently).
+            let result = if let Some(expected) = expected_row_version {
                 sqlx::query(
                     r#"
                     UPDATE policies
-                    SET name = $1, description = $2, is_active = $3, updated_at = $4
-                    WHERE id = $5 AND current_version = $6
+                    SET name = $1, description = $2, is_active = $3,
+                        row_version = row_version + 1, updated_at = $4
+                    WHERE id = $5 AND row_version = $6
                     "#,
                 )
                 .bind(&name)
@@ -387,7 +394,8 @@ impl<'a> PolicyRepository<'a> {
                 sqlx::query(
                     r#"
                     UPDATE policies
-                    SET name = $1, description = $2, is_active = $3, updated_at = $4
+                    SET name = $1, description = $2, is_active = $3,
+                        row_version = row_version + 1, updated_at = $4
                     WHERE id = $5
                     "#,
                 )
@@ -400,7 +408,7 @@ impl<'a> PolicyRepository<'a> {
                 .await?
             };
 
-            if result.rows_affected() == 0 && expected_version.is_some() {
+            if result.rows_affected() == 0 && expected_row_version.is_some() {
                 return Err(DatabaseError::VersionConflict(format!(
                     "policy {id} was modified concurrently"
                 )));
@@ -410,14 +418,16 @@ impl<'a> PolicyRepository<'a> {
         self.get_by_id(id).await
     }
 
-    /// The policy's current version number together with that version's
-    /// content hash, read as one consistent pair — the source of the policy
-    /// ETag (Plan 07 Phase C, ADR-2: derived from the existing `content_hash`,
-    /// no schema change).
+    /// The policy's `row_version` (bumped by EVERY write — the ETag/guard
+    /// source since R2-03), its current content-version number, and that
+    /// version's content hash, read as one consistent triple. The ETag is
+    /// derived from `(content_hash, row_version)` so it changes on content
+    /// AND metadata edits (RFC 9110 §8.8.1), and the `row_version` is what
+    /// the guarded UPDATE re-checks in SQL.
     pub async fn current_version_info(
         &self,
         id: Uuid,
-    ) -> Result<(i32, Option<String>), DatabaseError> {
+    ) -> Result<(i64, i32, Option<String>), DatabaseError> {
         let pool = self
             .db
             .any_pool()
@@ -425,7 +435,7 @@ impl<'a> PolicyRepository<'a> {
 
         let row = sqlx::query(
             r#"
-            SELECT p.current_version, v.content_hash
+            SELECT p.row_version, p.current_version, v.content_hash
             FROM policies p
             LEFT JOIN policy_versions v
                    ON v.policy_id = p.id AND v.version = p.current_version
@@ -437,9 +447,10 @@ impl<'a> PolicyRepository<'a> {
         .await?
         .ok_or_else(|| DatabaseError::NotFound(format!("Policy {id} not found")))?;
 
+        let row_version: i64 = row.get("row_version");
         let version: i32 = row.get("current_version");
         let content_hash: Option<String> = row.get("content_hash");
-        Ok((version, content_hash))
+        Ok((row_version, version, content_hash))
     }
 
     /// Delete a policy

@@ -328,15 +328,18 @@ async fn test_policy_lifecycle() {
     );
     let response = env.app.clone().oneshot(get_policy).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let tag = etag_of(&response);
 
-    // Update policy (creates new version)
-    let update_policy = authed_request(
+    // Update policy (creates new version). If-Match is required by default
+    // (R2-02): echo the ETag the GET returned.
+    let update_policy = authed_request_if_match(
         "PUT",
         &format!("/orgs/policy-org/policies/{}", policy_id),
         Some(json!({
             "content": "allow admin to access /admin/*"
         })),
         &key,
+        &tag,
     );
     let response = env.app.clone().oneshot(update_policy).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -4139,6 +4142,84 @@ async fn policy_get_returns_etag_and_put_rotates_it() {
     assert_ne!(new_tag, tag, "content update must rotate the ETag");
 }
 
+/// R2-03: a metadata-only edit (rename) is a different representation, so it
+/// MUST rotate the ETag (RFC 9110 §8.8.1) — and a second metadata editor
+/// holding the stale tag must lose with 412 instead of silently clobbering,
+/// even though no content version was created.
+#[tokio::test]
+async fn policy_metadata_update_rotates_etag_and_guards_races() {
+    let env = setup_test_env().await;
+    let (key, path) = seed_policy(&env, "meta-etag-org").await;
+
+    // Both metadata editors read the same ETag.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    let shared_tag = etag_of(&response);
+
+    // Editor A renames (metadata only, no content) — the ETag must rotate.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"name": "renamed-by-a"})),
+            &key,
+            &shared_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let fresh_tag = etag_of(&response);
+    assert_ne!(
+        fresh_tag, shared_tag,
+        "metadata-only update must rotate the ETag (RFC 9110: new representation, new tag)"
+    );
+
+    // Editor B, holding the stale tag, must get 412 — its rename never lands.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"name": "renamed-by-b"})),
+            &key,
+            &shared_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    assert_eq!(parse_body(response).await["name"], "renamed-by-a");
+
+    // A content update with the FRESH tag still works and rotates again.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"content": "allow admin to access /everything"})),
+            &key,
+            &fresh_tag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_ne!(etag_of(&response), fresh_tag);
+}
+
 #[tokio::test]
 async fn policy_lost_update_is_prevented() {
     let env = setup_test_env().await;
@@ -4202,8 +4283,9 @@ async fn policy_lost_update_is_prevented() {
 
 #[tokio::test]
 async fn policy_put_without_if_match_modes() {
-    // Transitional default (warn-only): unguarded PUT still succeeds.
-    let env = setup_test_env().await;
+    // Opt-down mode (warn-only, `require_if_match = false`): unguarded PUT
+    // still succeeds — the one-release migration escape hatch (R2-02).
+    let env = setup_env_with(|c| c.server.require_if_match = false).await;
     let (key, path) = seed_policy(&env, "warn-org").await;
     let response = env
         .app
@@ -4218,8 +4300,9 @@ async fn policy_put_without_if_match_modes() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    // Enforcing mode: missing If-Match → 428 Precondition Required (ADR-3).
-    let env = setup_env_with(|c| c.server.require_if_match = true).await;
+    // DEFAULT config now enforces (R2-02 closed): missing If-Match → 428
+    // Precondition Required (ADR-3's transition release has shipped).
+    let env = setup_test_env().await;
     let (key, path) = seed_policy(&env, "enforce-org").await;
     let response = env
         .app
@@ -6835,7 +6918,7 @@ async fn migration_plan_dry_run_is_decision_neutral_and_mutation_free() {
         .await
         .unwrap();
     assert_eq!(
-        parse_body(r).await["role_bindings"][0]["role"],
+        parse_body(r).await["items"][0]["role"],
         "editor",
         "records must be untouched"
     );
@@ -7173,7 +7256,7 @@ async fn migration_apply_atomic_and_delta_equals_rebuild_across_migration() {
         ))
         .await
         .unwrap();
-    assert_eq!(parse_body(r).await["role_bindings"][0]["role"], "author");
+    assert_eq!(parse_body(r).await["items"][0]["role"], "author");
     let r = env
         .app
         .clone()
@@ -7922,4 +8005,460 @@ async fn test_rollback_config_mode_via_api() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// =============================================================================
+// Round-2 Workstream C — data-plane API hardening.
+// C1 (R2-01): keyset pagination on the entity/binding/tuple lists.
+// C3 (R2-04/R2-05): model-version guard + Idempotency-Key on migration apply.
+// =============================================================================
+
+/// Bootstrap org + api key + namespace + a `combined`-template datastore;
+/// returns (key, datastore base path, org_id).
+async fn seed_datastore(env: &TestEnv, name: &str, slug: &str) -> (String, String, Uuid) {
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": name, "slug": slug})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("/orgs/{slug}/namespaces"),
+            Some(json!({"slug": "main"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    let base = format!("/orgs/{slug}/namespaces/main/datastore");
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    (key, base, org_id)
+}
+
+/// Walk a paginated datastore list with the given page size, returning the
+/// per-page item arrays until `next_cursor` runs out.
+async fn walk_pages(
+    env: &TestEnv,
+    key: &str,
+    uri: &str,
+    limit: i64,
+    extract: impl Fn(&Value) -> String,
+) -> Vec<Vec<String>> {
+    let mut pages = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let sep = if uri.contains('?') { '&' } else { '?' };
+        let page_uri = match &cursor {
+            Some(c) => format!("{uri}{sep}limit={limit}&cursor={c}"),
+            None => format!("{uri}{sep}limit={limit}"),
+        };
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request("GET", &page_uri, None, key))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{page_uri}");
+        let body = parse_body(response).await;
+        let items: Vec<String> = body["items"]
+            .as_array()
+            .expect("paginated envelope has items")
+            .iter()
+            .map(&extract)
+            .collect();
+        pages.push(items);
+        cursor = body["next_cursor"].as_str().map(String::from);
+        if cursor.is_none() {
+            return pages;
+        }
+        assert!(pages.len() < 50, "cursor walk did not terminate");
+    }
+}
+
+/// C1 (R2-01): the ABAC/ReBAC list endpoints return the uniform `Paginated`
+/// envelope, respect `limit`, and the cursor walks the full set without
+/// overlap or gaps (5 rows, page size 2 → 3 pages of 2/2/1). The hard max is
+/// rejected with 400, not clamped.
+#[tokio::test]
+async fn datastore_lists_are_keyset_paginated() {
+    let env = setup_test_env().await;
+    let (key, base, _) = seed_datastore(&env, "Page Org", "page-org").await;
+
+    // 5 entities, 3 bindings, 3 tuples.
+    for i in 0..5 {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("{base}/entities"),
+                Some(json!({
+                    "entity_id": format!("user-{i}"),
+                    "entity_type": "user",
+                    "attributes": {}
+                })),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    for i in 0..3 {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("{base}/role-bindings"),
+                Some(json!({"subject": format!("user-{i}"), "role": "editor"})),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                &format!("{base}/tuples"),
+                Some(json!({
+                    "object": "doc-1",
+                    "relation": "owner",
+                    "subject": format!("user-{i}")
+                })),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // Entities: 3 pages (2 + 2 + 1), no overlap, no gaps, full coverage.
+    let pages = walk_pages(&env, &key, &format!("{base}/entities"), 2, |e| {
+        e["entity_id"].as_str().unwrap().to_string()
+    })
+    .await;
+    assert_eq!(
+        pages.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![2, 2, 1],
+        "5 rows at page size 2 must walk as 2/2/1"
+    );
+    let mut all: Vec<String> = pages.into_iter().flatten().collect();
+    all.sort();
+    assert_eq!(
+        all,
+        (0..5).map(|i| format!("user-{i}")).collect::<Vec<_>>(),
+        "cursor walk must cover every entity exactly once"
+    );
+
+    // The `type` filter composes with pagination.
+    let pages = walk_pages(&env, &key, &format!("{base}/entities?type=user"), 3, |e| {
+        e["entity_id"].as_str().unwrap().to_string()
+    })
+    .await;
+    assert_eq!(pages.iter().map(Vec::len).sum::<usize>(), 5);
+
+    // Role bindings: enveloped + walkable (3 rows at size 2 → 2 + 1).
+    let pages = walk_pages(&env, &key, &format!("{base}/role-bindings"), 2, |b| {
+        b["subject"].as_str().unwrap().to_string()
+    })
+    .await;
+    assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 1]);
+    let mut all: Vec<String> = pages.into_iter().flatten().collect();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 3, "no overlap across binding pages");
+
+    // Tuples: enveloped + walkable.
+    let pages = walk_pages(&env, &key, &format!("{base}/tuples"), 2, |t| {
+        t["subject"].as_str().unwrap().to_string()
+    })
+    .await;
+    assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 1]);
+
+    // Hard max (200) is a 400, not a silent clamp — on all three endpoints.
+    for endpoint in ["entities", "role-bindings", "tuples"] {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request(
+                "GET",
+                &format!("{base}/{endpoint}?limit=201"),
+                None,
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{endpoint} must reject limit > 200"
+        );
+    }
+
+    // An undecodable cursor is a 400, not a scan from nowhere.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/entities?cursor=!!!"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// C3 (R2-04): the migration apply's model UPDATE is guarded on the
+/// model_version the plan was computed against. A plan carrying a stale
+/// `model_before` — here simulated by applying with a datastore record read
+/// BEFORE a concurrent migration landed — fails with VersionConflict (409 at
+/// the API), rolls back the whole transaction, and clobbers nothing.
+#[tokio::test]
+async fn migration_apply_stale_model_version_conflicts() {
+    use reaper_management::db::repositories::{DatastoreRepository, NamespaceRepository};
+    use reaper_management::domain::migration;
+
+    let env = setup_test_env().await;
+    let (key, base, org_id) = seed_datastore(&env, "Stale Mig Org", "stale-mig-org").await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "editor"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Read the datastore record NOW (model_version 0) — the stale snapshot a
+    // slow writer would still be holding.
+    let ns = NamespaceRepository::new(&env.db)
+        .get_by_slug(org_id, "main")
+        .await
+        .unwrap()
+        .unwrap();
+    let repo = DatastoreRepository::new(&env.db);
+    let stale = repo.get(org_id, ns.id).await.unwrap().unwrap();
+    assert_eq!(stale.model_version, 0);
+
+    // A concurrent migration lands first (through the API): editor → author.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(json!({"transforms": [
+                {"op": "rename_role", "from": "editor", "to": "author"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The slow writer now applies a plan computed against the STALE model.
+    let transforms: Vec<migration::ModelTransform> = serde_json::from_value(json!([
+        {"op": "rename_role", "from": "editor", "to": "scribe"}
+    ]))
+    .unwrap();
+    let entities = repo.list_entities(stale.id, None).await.unwrap();
+    let bindings = repo.list_bindings(stale.id, None, None).await.unwrap();
+    let tuples = repo.list_tuples(stale.id, None, None, None).await.unwrap();
+    let plan = migration::plan(&transforms, &stale.model, &entities, &bindings, &tuples).unwrap();
+    let err = repo
+        .apply_migration(&stale, &plan, &[], "stale-writer")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            reaper_management::db::DatabaseError::VersionConflict(_)
+        ),
+        "stale apply must be a VersionConflict, got: {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("model_version 0") && msg.contains("is 1"),
+        "conflict names expected vs actual: {msg}"
+    );
+
+    // Nothing was clobbered: the first migration's state is intact and the
+    // version did not move.
+    let current = repo.get(org_id, ns.id).await.unwrap().unwrap();
+    assert_eq!(
+        current.model_version, 1,
+        "failed apply must not bump the model version"
+    );
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/role-bindings?subject=alice"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        parse_body(response).await["items"][0]["role"],
+        "author",
+        "the winning migration's records must be untouched by the stale apply"
+    );
+}
+
+/// C3 (R2-05): migration apply is a propagation-triggering POST, so it takes
+/// an `Idempotency-Key`. A replayed request returns the ORIGINAL response
+/// (marked Idempotency-Replayed: true), the model version bumps exactly once,
+/// and exactly one data version is published — no duplicate fleet propagation.
+#[tokio::test]
+async fn migration_apply_idempotency_key_replays() {
+    let env = setup_test_env().await;
+    let (key, base, _) = seed_datastore(&env, "Idem Mig Org", "idem-mig-org").await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/role-bindings"),
+            Some(json!({"subject": "alice", "role": "editor"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let transforms = json!({"transforms": [
+        {"op": "rename_role", "from": "editor", "to": "author"}
+    ]});
+
+    // First execution: applied, not a replay.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(transforms.clone()),
+            Some(&key),
+            "mig-key-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(replayed_header(&response).as_deref(), Some("false"));
+    let first = parse_body(response).await;
+    assert_eq!(first["model_version"], 1);
+    assert_eq!(first["published"]["version"], 1);
+
+    // Retry (timeout replay): same stored response, nothing re-applied. A
+    // second live execution would have failed anyway (the plan's `from` role
+    // no longer exists) — the replay never reaches the handler.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(transforms.clone()),
+            Some(&key),
+            "mig-key-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(replayed_header(&response).as_deref(), Some("true"));
+    let second = parse_body(response).await;
+    assert_eq!(
+        first, second,
+        "replay must return the stored response verbatim"
+    );
+
+    // Exactly one migration applied and exactly one version published (no
+    // duplicate propagation record).
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/migrations"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let history = parse_body(response).await;
+    assert_eq!(
+        history["model_version"], 1,
+        "model version bumped exactly once"
+    );
+    assert_eq!(history["migrations"].as_array().unwrap().len(), 1);
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        parse_body(response).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "exactly one published data version — the retry must not re-publish"
+    );
+
+    // Same key, DIFFERENT transforms → 422 (ADR-6), never a silent replay.
+    let response = env
+        .app
+        .clone()
+        .oneshot(idem_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(json!({"transforms": [
+                {"op": "rename_role", "from": "author", "to": "scribe"}
+            ]})),
+            Some(&key),
+            "mig-key-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

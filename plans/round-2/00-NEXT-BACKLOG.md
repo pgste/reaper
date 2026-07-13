@@ -83,20 +83,34 @@ unaltered" question lands on.
 
 ## Workstream C — Data-plane API hardening
 
-- **C1 — Paginate the ABAC/ReBAC list endpoints.** *Closes CODE R2-01.* Entity /
+- **C1 — Paginate the ABAC/ReBAC list endpoints.** *(landed)* *Closes CODE R2-01.* Entity /
   role-binding / tuple lists return everything with no `LIMIT` — the biggest
   tables. Route through the existing `PageQuery`/`Paginated` keyset (as `policies`
   already does). **Effort S.** Availability foot-gun; cheap fix.
-- **C2 — Turn optimistic concurrency from dormant to enforced.** *Closes CODE
+  *Landed: `list_entities_page`/`list_bindings_page`/`list_tuples_page` keyset
+  over `(created_at, id)` with the `LIMIT n+1` sentinel; the three HTTP lists
+  return the uniform `Paginated` envelope (default 50 / hard max 200 → 400);
+  the unbounded repo methods remain for internal snapshot/plan builders only.*
+- **C2 — Turn optimistic concurrency from dormant to enforced.** *(landed)* *Closes CODE
   R2-02, R2-03.* `require_if_match` defaults false (warn-only); policy ETag is
   content-hash so metadata edits silently lose updates. Flip the GA default to
   true; derive ETag from a row-version/`updated_at` every write bumps. **Effort
   S.**
-- **C3 — Version-guard + idempotency on `apply_migration`.** *Closes CODE R2-04,
+  *Landed: `server.require_if_match` defaults **true** (`REAPER_REQUIRE_IF_MATCH=false`
+  is the one-release opt-down); new `policies.row_version` column (migration
+  024/0017) bumped by every UPDATE; ETag = `content_hash.r{row_version}` and the
+  SQL guard is `AND row_version = $expected`, so metadata races 412 instead of
+  clobbering. Docs: `docs/api/VERSIONING.md` §5.*
+- **C3 — Version-guard + idempotency on `apply_migration`.** *(landed)* *Closes CODE R2-04,
   R2-05.* Plan 12's migration apply has no `model_version` optimistic guard and no
   Idempotency-Key — concurrent migrations clobber, retried timeouts double-apply +
   double-propagate. Add the guard (the plan already carries `model_before`) and
   wrap in `idempotency::run`. **Effort S.**
+  *Landed: the model UPDATE carries `AND model_version = $expected` inside the
+  apply transaction (mismatch → full rollback → 409 naming expected vs actual);
+  the endpoint runs under `idempotency::run` scope `datastore.migrate` keyed on
+  the transform fingerprint, mirroring `start_rollout` — a retried timeout
+  replays the stored response instead of double-applying/double-publishing.*
 - **C4 — Typed DTOs + error model on the contract.** *Closes CODE R2-06, R2-08.*
   Datastore/decisions/replay/audit handlers return untyped `Json<Value>`;
   `ProblemDetails` isn't `ToSchema` and omits `instance`. Add DTOs + schema-lint so

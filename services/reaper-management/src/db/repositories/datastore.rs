@@ -47,6 +47,28 @@ pub struct PublishedVersion {
     pub published_at: String,
 }
 
+/// One keyset-paginated list row: the record itself plus its hidden
+/// `(created_at, id)` position, which the API layer folds into the opaque
+/// `next_cursor` (Plan 07 Phase E pattern — same shape as `policies`).
+/// The keyset fields are `#[serde(skip)]`: they are pagination plumbing,
+/// not part of the response contract.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageRow<T> {
+    #[serde(flatten)]
+    pub record: T,
+    #[serde(skip)]
+    pub created_at: String,
+    #[serde(skip)]
+    pub row_id: String,
+}
+
+impl<T> PageRow<T> {
+    /// The keyset position for [`crate::api::pagination::Paginated::from_rows`].
+    pub fn key(&self) -> (String, String) {
+        (self.created_at.clone(), self.row_id.clone())
+    }
+}
+
 pub struct DatastoreRepository<'a> {
     db: &'a Database,
 }
@@ -435,6 +457,10 @@ impl<'a> DatastoreRepository<'a> {
         })
     }
 
+    /// Full entity set — INTERNAL callers only (publish materialization and
+    /// migration planning need every record). The HTTP list endpoint goes
+    /// through [`Self::list_entities_page`]; never wire this to a handler
+    /// (R2-01: unbounded list of the biggest table).
     pub async fn list_entities(
         &self,
         datastore_id: Uuid,
@@ -463,6 +489,57 @@ impl<'a> DatastoreRepository<'a> {
             }
         };
         rows.into_iter().map(Self::row_to_entity).collect()
+    }
+
+    /// Keyset-paginated entity listing (Plan 07 Phase E, closes R2-01): rows
+    /// strictly after the `(created_at, id)` position in
+    /// `ORDER BY created_at ASC, id ASC` order. `fetch` is `page limit + 1` —
+    /// the caller uses the sentinel row to detect whether another page exists.
+    pub async fn list_entities_page(
+        &self,
+        datastore_id: Uuid,
+        entity_type: Option<&str>,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<PageRow<AdmEntity>>, DatabaseError> {
+        let pool = self.pool()?;
+
+        // Positional binds in a fixed order:
+        // datastore_id [, entity_type] [, created_at, id], fetch.
+        let mut sql = String::from(
+            "SELECT id, entity_id, entity_type, attributes, created_at \
+             FROM adm_entities WHERE datastore_id = $1",
+        );
+        let mut next = 2;
+        if entity_type.is_some() {
+            sql.push_str(&format!(" AND entity_type = ${next}"));
+            next += 1;
+        }
+        if after.is_some() {
+            sql.push_str(&format!(" AND (created_at, id) > (${next}, ${})", next + 1));
+            next += 2;
+        }
+        sql.push_str(&format!(" ORDER BY created_at ASC, id ASC LIMIT ${next}"));
+
+        let mut query = sqlx::query(&sql).bind(datastore_id.to_string());
+        if let Some(t) = entity_type {
+            query = query.bind(t);
+        }
+        if let Some((created_at, id)) = after {
+            query = query.bind(created_at).bind(id);
+        }
+        let rows = query.bind(fetch).fetch_all(pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let created_at: String = row.get("created_at");
+                let row_id: String = row.get("id");
+                Ok(PageRow {
+                    record: Self::row_to_entity(row)?,
+                    created_at,
+                    row_id,
+                })
+            })
+            .collect()
     }
 
     pub async fn delete_entity(
@@ -534,6 +611,9 @@ impl<'a> DatastoreRepository<'a> {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Full binding set — INTERNAL callers only (publish materialization,
+    /// migration planning, single-entity views). The HTTP list endpoint goes
+    /// through [`Self::list_bindings_page`] (R2-01).
     pub async fn list_bindings(
         &self,
         datastore_id: Uuid,
@@ -567,6 +647,59 @@ impl<'a> DatastoreRepository<'a> {
                 subject: row.get("subject"),
                 role: row.get("role"),
                 scope: row.get("scope"),
+            })
+            .collect())
+    }
+
+    /// Keyset-paginated role-binding listing (Plan 07 Phase E, closes R2-01).
+    /// Same `(created_at, id)` keyset contract as [`Self::list_entities_page`].
+    pub async fn list_bindings_page(
+        &self,
+        datastore_id: Uuid,
+        subject: Option<&str>,
+        role: Option<&str>,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<PageRow<RoleBinding>>, DatabaseError> {
+        let pool = self.pool()?;
+
+        let mut sql = String::from(
+            "SELECT id, subject, role, scope, created_at \
+             FROM adm_role_bindings WHERE datastore_id = $1",
+        );
+        let mut next = 2;
+        if subject.is_some() {
+            sql.push_str(&format!(" AND subject = ${next}"));
+            next += 1;
+        }
+        if role.is_some() {
+            sql.push_str(&format!(" AND role = ${next}"));
+            next += 1;
+        }
+        if after.is_some() {
+            sql.push_str(&format!(" AND (created_at, id) > (${next}, ${})", next + 1));
+            next += 2;
+        }
+        sql.push_str(&format!(" ORDER BY created_at ASC, id ASC LIMIT ${next}"));
+
+        let mut query = sqlx::query(&sql).bind(datastore_id.to_string());
+        for value in [subject, role].into_iter().flatten() {
+            query = query.bind(value);
+        }
+        if let Some((created_at, id)) = after {
+            query = query.bind(created_at).bind(id);
+        }
+        let rows = query.bind(fetch).fetch_all(pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PageRow {
+                record: RoleBinding {
+                    subject: row.get("subject"),
+                    role: row.get("role"),
+                    scope: row.get("scope"),
+                },
+                created_at: row.get("created_at"),
+                row_id: row.get("id"),
             })
             .collect())
     }
@@ -640,6 +773,9 @@ impl<'a> DatastoreRepository<'a> {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Full tuple set — INTERNAL callers only (publish materialization and
+    /// migration planning). The HTTP list endpoint goes through
+    /// [`Self::list_tuples_page`] (R2-01).
     pub async fn list_tuples(
         &self,
         datastore_id: Uuid,
@@ -673,6 +809,64 @@ impl<'a> DatastoreRepository<'a> {
                 object: row.get("object"),
                 relation: row.get("relation"),
                 subject: row.get("subject"),
+            })
+            .collect())
+    }
+
+    /// Keyset-paginated tuple listing (Plan 07 Phase E, closes R2-01).
+    /// Same `(created_at, id)` keyset contract as [`Self::list_entities_page`].
+    pub async fn list_tuples_page(
+        &self,
+        datastore_id: Uuid,
+        object: Option<&str>,
+        relation: Option<&str>,
+        subject: Option<&str>,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<PageRow<RelationTuple>>, DatabaseError> {
+        let pool = self.pool()?;
+
+        let mut sql = String::from(
+            "SELECT id, object, relation, subject, created_at \
+             FROM adm_tuples WHERE datastore_id = $1",
+        );
+        let mut next = 2;
+        if object.is_some() {
+            sql.push_str(&format!(" AND object = ${next}"));
+            next += 1;
+        }
+        if relation.is_some() {
+            sql.push_str(&format!(" AND relation = ${next}"));
+            next += 1;
+        }
+        if subject.is_some() {
+            sql.push_str(&format!(" AND subject = ${next}"));
+            next += 1;
+        }
+        if after.is_some() {
+            sql.push_str(&format!(" AND (created_at, id) > (${next}, ${})", next + 1));
+            next += 2;
+        }
+        sql.push_str(&format!(" ORDER BY created_at ASC, id ASC LIMIT ${next}"));
+
+        let mut query = sqlx::query(&sql).bind(datastore_id.to_string());
+        for value in [object, relation, subject].into_iter().flatten() {
+            query = query.bind(value);
+        }
+        if let Some((created_at, id)) = after {
+            query = query.bind(created_at).bind(id);
+        }
+        let rows = query.bind(fetch).fetch_all(pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PageRow {
+                record: RelationTuple {
+                    object: row.get("object"),
+                    relation: row.get("relation"),
+                    subject: row.get("subject"),
+                },
+                created_at: row.get("created_at"),
+                row_id: row.get("id"),
             })
             .collect())
     }
@@ -798,15 +992,38 @@ impl<'a> DatastoreRepository<'a> {
         }
 
         // (b) + (c) model update + version bump, atomically with the records.
+        // Optimistic-concurrency guard (R2-04): the plan was computed against
+        // `store.model_version` (== plan.model_before); if another migration
+        // committed since, this UPDATE matches zero rows and the WHOLE
+        // transaction — including the wholesale entity rewrite from the now
+        // stale plan snapshot — rolls back instead of silently clobbering.
+        let expected_model_version = store.model_version;
         let row = sqlx::query(
             "UPDATE datastores SET model = $1, model_version = model_version + 1, \
-             updated_at = $2 WHERE id = $3 RETURNING model_version",
+             updated_at = $2 WHERE id = $3 AND model_version = $4 \
+             RETURNING model_version",
         )
         .bind(&model_json)
         .bind(&now)
         .bind(store.id.to_string())
-        .fetch_one(&mut *tx)
+        .bind(expected_model_version)
+        .fetch_optional(&mut *tx)
         .await?;
+        let Some(row) = row else {
+            tx.rollback().await?;
+            // Best-effort read of the winner's version for the error message.
+            let actual: i64 = sqlx::query("SELECT model_version FROM datastores WHERE id = $1")
+                .bind(store.id.to_string())
+                .fetch_optional(pool)
+                .await?
+                .map(|r| r.get("model_version"))
+                .unwrap_or(-1);
+            return Err(DatabaseError::VersionConflict(format!(
+                "datastore model changed concurrently: migration was planned against \
+                 model_version {expected_model_version}, but the current model_version \
+                 is {actual} — re-plan against the current model and retry"
+            )));
+        };
         let model_version: i64 = row.get("model_version");
 
         // (d) append-only history row.
