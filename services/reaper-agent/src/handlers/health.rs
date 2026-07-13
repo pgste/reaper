@@ -304,6 +304,7 @@ mod tests {
     async fn test_readiness_reports_cold_start_gate_reason() {
         let data_sync = crate::state::DataSyncState {
             version: std::sync::atomic::AtomicI64::new(0),
+            model_version: std::sync::atomic::AtomicI64::new(0),
             checksum: parking_lot::RwLock::new(String::new()),
             last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
             applied_seq: std::sync::atomic::AtomicI64::new(0),
@@ -333,7 +334,7 @@ mod tests {
         assert_eq!(body.0["data_require_sync"], true);
 
         // First verified snapshot opens the gate.
-        state.data_sync.record_sync(1, "sha256:abc".into());
+        state.data_sync.record_sync(1, "sha256:abc".into(), 3);
         let (code, body) = readiness_check(State(state)).await;
         assert_eq!(code, StatusCode::OK);
         assert_eq!(body.0["status"], "ready");
@@ -345,6 +346,7 @@ mod tests {
     async fn test_readiness_reports_staleness_reason() {
         let data_sync = crate::state::DataSyncState {
             version: std::sync::atomic::AtomicI64::new(0),
+            model_version: std::sync::atomic::AtomicI64::new(0),
             checksum: parking_lot::RwLock::new(String::new()),
             last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
             applied_seq: std::sync::atomic::AtomicI64::new(0),
@@ -365,7 +367,7 @@ mod tests {
         state.policy_engine.deploy_policy(policy).unwrap();
 
         // Synced at epoch 1 (1970) with a 10s budget: stale, enforce mode.
-        state.data_sync.record_sync(1, "sha256:abc".into());
+        state.data_sync.record_sync(1, "sha256:abc".into(), 3);
         state
             .data_sync
             .last_synced_epoch

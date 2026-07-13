@@ -511,7 +511,9 @@ pub async fn evaluate_policy(
             // Data-plane provenance: which datastore version/checksum this
             // decision saw, and whether it ran past the staleness budget.
             let (data_version, data_checksum) = state.data_sync.provenance();
-            entry = entry.with_data_sync(data_version, data_checksum, state.data_sync.flag_stale());
+            entry = entry
+                .with_data_sync(data_version, data_checksum, state.data_sync.flag_stale())
+                .with_model_version(state.data_sync.model_provenance());
 
             // "Explain" tier (opt-in, typically denies-only): snapshot the
             // resolved principal/resource attributes the decision branched on.
@@ -836,7 +838,9 @@ pub async fn fast_evaluate_policy(
                     .unwrap_or_default(),
             );
             let (data_version, data_checksum) = state.data_sync.provenance();
-            entry = entry.with_data_sync(data_version, data_checksum, state.data_sync.flag_stale());
+            entry = entry
+                .with_data_sync(data_version, data_checksum, state.data_sync.flag_stale())
+                .with_model_version(state.data_sync.model_provenance());
             if buffer.should_capture_input(decision_str == "allow") {
                 entry.input_data = capture_input_data(
                     &state.data_store,

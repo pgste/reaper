@@ -37,6 +37,9 @@ pub struct PublishedVersion {
     /// Position in the change stream at publish time — replicas loading
     /// this snapshot resume delta pulls from here.
     pub change_seq: i64,
+    /// Model-shape version this document was materialized under (Plan 12
+    /// step 7): decision audit pins exactly which model a decision saw.
+    pub model_version: i64,
     pub entity_count: i64,
     pub tuple_count: i64,
     pub binding_count: i64,
@@ -807,11 +810,13 @@ impl<'a> DatastoreRepository<'a> {
         let model_version: i64 = row.get("model_version");
 
         // (d) append-only history row.
+        let model_before_json = serde_json::to_string(&plan.model_before)
+            .map_err(|e| DatabaseError::Config(format!("serialize model_before: {e}")))?;
         sqlx::query(
             r#"INSERT INTO adm_model_versions
                (id, datastore_id, model_version, transforms, author,
-                model_before_hash, model_after_hash, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                model_before_hash, model_after_hash, model_before, model_after, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
         )
         .bind(Uuid::new_v4().to_string())
         .bind(store.id.to_string())
@@ -820,6 +825,8 @@ impl<'a> DatastoreRepository<'a> {
         .bind(author)
         .bind(&before_hash)
         .bind(&after_hash)
+        .bind(&model_before_json)
+        .bind(&model_json)
         .bind(&now)
         .execute(&mut *tx)
         .await?;
@@ -830,6 +837,44 @@ impl<'a> DatastoreRepository<'a> {
 
         tx.commit().await?;
         Ok(model_version)
+    }
+
+    /// One migration's rollback inputs: its transform list and the FULL
+    /// model it was applied to (stored since Phase 3; None for rows written
+    /// before that, which cannot be auto-rolled-back).
+    pub async fn get_model_version(
+        &self,
+        datastore_id: Uuid,
+        model_version: i64,
+    ) -> Result<
+        Option<(
+            Vec<crate::domain::migration::ModelTransform>,
+            Option<ModelDefinition>,
+        )>,
+        DatabaseError,
+    > {
+        let pool = self.pool()?;
+        let row = sqlx::query(
+            "SELECT transforms, model_before FROM adm_model_versions \
+             WHERE datastore_id = $1 AND model_version = $2",
+        )
+        .bind(datastore_id.to_string())
+        .bind(model_version)
+        .fetch_optional(pool)
+        .await?;
+        row.map(|row| {
+            let transforms = serde_json::from_str(row.get::<String, _>("transforms").as_str())
+                .map_err(|e| DatabaseError::Config(format!("corrupt transforms: {e}")))?;
+            let model_before = row
+                .get::<Option<String>, _>("model_before")
+                .map(|json| {
+                    serde_json::from_str(&json)
+                        .map_err(|e| DatabaseError::Config(format!("corrupt model_before: {e}")))
+                })
+                .transpose()?;
+            Ok((transforms, model_before))
+        })
+        .transpose()
     }
 
     /// The append-only migration history, newest first.
@@ -903,8 +948,8 @@ impl<'a> DatastoreRepository<'a> {
             r#"INSERT INTO adm_versions
                (id, datastore_id, version, checksum, document,
                 entity_count, tuple_count, binding_count, published_by, published_at,
-                change_seq)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
+                change_seq, model_version)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
         )
         .bind(Uuid::new_v4().to_string())
         .bind(store.id.to_string())
@@ -917,6 +962,7 @@ impl<'a> DatastoreRepository<'a> {
         .bind(published_by)
         .bind(&now)
         .bind(head_seq)
+        .bind(store.model_version)
         .execute(pool)
         .await?;
 
@@ -952,6 +998,7 @@ impl<'a> DatastoreRepository<'a> {
             version,
             checksum,
             change_seq: head_seq,
+            model_version: store.model_version,
             entity_count: entities.len() as i64,
             tuple_count: tuples.len() as i64,
             binding_count: bindings.len() as i64,
@@ -991,8 +1038,8 @@ impl<'a> DatastoreRepository<'a> {
             r#"INSERT INTO adm_versions
                (id, datastore_id, version, checksum, document,
                 entity_count, tuple_count, binding_count, published_by, published_at,
-                change_seq)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
+                change_seq, model_version)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
         )
         .bind(Uuid::new_v4().to_string())
         .bind(store.id.to_string())
@@ -1005,6 +1052,7 @@ impl<'a> DatastoreRepository<'a> {
         .bind(published_by)
         .bind(&now)
         .bind(head_seq)
+        .bind(store.model_version)
         .execute(pool)
         .await?;
 
@@ -1019,6 +1067,7 @@ impl<'a> DatastoreRepository<'a> {
             version,
             checksum,
             change_seq: head_seq,
+            model_version: store.model_version,
             entity_count,
             tuple_count,
             binding_count,
@@ -1050,8 +1099,8 @@ impl<'a> DatastoreRepository<'a> {
     ) -> Result<Vec<PublishedVersion>, DatabaseError> {
         let pool = self.pool()?;
         let rows = sqlx::query(
-            "SELECT version, checksum, change_seq, entity_count, tuple_count, binding_count, \
-                    published_by, published_at \
+            "SELECT version, checksum, change_seq, model_version, entity_count, tuple_count, \
+                    binding_count, published_by, published_at \
              FROM adm_versions WHERE datastore_id = $1 ORDER BY version DESC",
         )
         .bind(datastore_id.to_string())
@@ -1063,6 +1112,7 @@ impl<'a> DatastoreRepository<'a> {
                 version: row.get("version"),
                 checksum: row.get("checksum"),
                 change_seq: row.get("change_seq"),
+                model_version: row.get("model_version"),
                 entity_count: row.get("entity_count"),
                 tuple_count: row.get("tuple_count"),
                 binding_count: row.get("binding_count"),
@@ -1080,8 +1130,8 @@ impl<'a> DatastoreRepository<'a> {
     ) -> Result<Option<(PublishedVersion, String)>, DatabaseError> {
         let pool = self.pool()?;
         let row = sqlx::query(
-            "SELECT version, checksum, change_seq, document, entity_count, tuple_count, binding_count, \
-                    published_by, published_at \
+            "SELECT version, checksum, change_seq, model_version, document, entity_count, \
+                    tuple_count, binding_count, published_by, published_at \
              FROM adm_versions WHERE datastore_id = $1 AND version = $2",
         )
         .bind(datastore_id.to_string())
@@ -1094,6 +1144,7 @@ impl<'a> DatastoreRepository<'a> {
                     version: row.get("version"),
                     checksum: row.get("checksum"),
                     change_seq: row.get("change_seq"),
+                    model_version: row.get("model_version"),
                     entity_count: row.get("entity_count"),
                     tuple_count: row.get("tuple_count"),
                     binding_count: row.get("binding_count"),

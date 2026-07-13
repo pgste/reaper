@@ -333,6 +333,7 @@ impl SyncEngine {
                     bundle.version,
                     &bundle.checksum,
                     bundle.change_seq,
+                    bundle.model_version,
                     &bundle.document,
                 )
                 .await?;

@@ -189,6 +189,7 @@ impl AgentClient {
         version: i64,
         checksum: &str,
         change_seq: i64,
+        model_version: i64,
         document: &serde_json::Value,
     ) -> Result<(), AgentClientError> {
         let url = format!(
@@ -199,6 +200,7 @@ impl AgentClient {
             "version": version,
             "checksum": checksum,
             "change_seq": change_seq,
+            "model_version": model_version,
             "document": document,
         });
         let response = self.http_client.post(&url).json(&body).send().await?;

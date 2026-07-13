@@ -82,6 +82,11 @@ pub struct DecisionLogEntry {
     /// against (audits can pin exactly what data a decision saw).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_version: Option<i64>,
+    /// Model-shape version of the datastore the decision evaluated against
+    /// (Plan 12 step 7): audit can attribute a decision to the model in
+    /// force before vs after a migration. Absent on never-migrated stores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_version: Option<i64>,
 
     /// Checksum of the data version (sha256:… as published by the control
     /// plane; verified by the agent on load).
@@ -456,6 +461,7 @@ impl DecisionLogEntry {
             replay_input: None,
             data_version: None,
             data_checksum: None,
+            model_version: None,
             data_stale: false,
             seq: 0,
             prev_hash: String::new(),
@@ -544,6 +550,16 @@ impl DecisionLogEntry {
             self.data_checksum = checksum;
         }
         self.data_stale = stale;
+        self
+    }
+
+    /// Stamp the model-shape version the evaluated store was materialized
+    /// under (0 = never migrated / unknown: skipped, keeping the field
+    /// absent for backward compatibility).
+    pub fn with_model_version(mut self, model_version: i64) -> Self {
+        if model_version > 0 {
+            self.model_version = Some(model_version);
+        }
         self
     }
 
@@ -977,6 +993,27 @@ fn csv_list(v: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_version_provenance_is_optional_and_stamped() {
+        let entry = DecisionLogEntry::new(
+            "alice".to_string(),
+            "read".to_string(),
+            "/x".to_string(),
+            "allow".to_string(),
+            "pid".to_string(),
+            "pname".to_string(),
+        );
+        assert_eq!(entry.model_version, None, "absent on never-migrated stores");
+        // 0 = unknown → stays absent (backward compatible NDJSON).
+        let entry = entry.with_model_version(0);
+        assert_eq!(entry.model_version, None);
+        assert!(!entry.to_ndjson().unwrap().contains("model_version"));
+        // A real model version is stamped and serialized.
+        let entry = entry.with_model_version(4);
+        assert_eq!(entry.model_version, Some(4));
+        assert!(entry.to_ndjson().unwrap().contains("\"model_version\":4"));
+    }
 
     /// Build a chained run of records exactly as the writer thread would.
     fn chained_run(n: u64) -> Vec<DecisionLogEntry> {

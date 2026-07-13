@@ -88,6 +88,10 @@ impl StalenessMode {
 pub struct DataSyncState {
     /// Last verified datastore version (0 = never synced).
     pub version: AtomicI64,
+    /// Model-shape version the synced document was materialized under
+    /// (Plan 12 step 7); 0 = unknown/never-migrated. Stamped onto decision
+    /// entries alongside data_version for audit provenance.
+    pub model_version: AtomicI64,
     /// Checksum of that version ("sha256:…").
     pub checksum: RwLock<String>,
     /// Unix seconds of the last successful sync (0 = never).
@@ -113,6 +117,7 @@ impl DataSyncState {
     pub fn from_env() -> Self {
         Self {
             version: AtomicI64::new(0),
+            model_version: AtomicI64::new(0),
             checksum: RwLock::new(String::new()),
             last_synced_epoch: AtomicU64::new(0),
             applied_seq: AtomicI64::new(0),
@@ -135,11 +140,19 @@ impl DataSyncState {
     }
 
     /// Record a verified sync (called AFTER checksum verification passes).
-    pub fn record_sync(&self, version: i64, checksum: String) {
+    /// `model_version` 0 = the control plane predates model versioning.
+    pub fn record_sync(&self, version: i64, checksum: String, model_version: i64) {
         *self.checksum.write() = checksum;
         self.version.store(version, Ordering::Release);
+        self.model_version.store(model_version, Ordering::Release);
         self.last_synced_epoch
             .store(Self::now_epoch(), Ordering::Release);
+    }
+
+    /// Model-shape version of the synced store (0 = unknown).
+    #[inline]
+    pub fn model_provenance(&self) -> i64 {
+        self.model_version.load(Ordering::Acquire)
     }
 
     /// Refresh the staleness clock WITHOUT changing version/checksum — a

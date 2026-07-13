@@ -15,6 +15,7 @@ use reaper_agent::state::{DataSyncState, StalenessMode};
 fn sync_state(mode: StalenessMode, require_sync: bool, max_staleness_secs: u64) -> DataSyncState {
     DataSyncState {
         version: AtomicI64::new(0),
+        model_version: AtomicI64::new(0),
         checksum: RwLock::new(String::new()),
         last_synced_epoch: AtomicU64::new(0),
         applied_seq: AtomicI64::new(0),
@@ -36,7 +37,7 @@ fn data_gate_denies_before_first_sync() {
 #[test]
 fn data_gate_opens_after_first_sync() {
     let state = sync_state(StalenessMode::Monitor, true, 0);
-    state.record_sync(1, "sha256:abc".to_string());
+    state.record_sync(1, "sha256:abc".to_string(), 2);
     assert_eq!(state.deny_reason(), None, "a synced replica serves");
 }
 
@@ -46,7 +47,7 @@ fn data_gate_opens_after_first_sync() {
 fn data_gate_denies_when_stale_in_enforce_mode() {
     let state = sync_state(StalenessMode::Enforce, false, /* max_staleness */ 1);
     // Record a sync far in the past so the budget is exceeded now.
-    state.record_sync(1, "sha256:abc".to_string());
+    state.record_sync(1, "sha256:abc".to_string(), 2);
     state
         .last_synced_epoch
         .store(1, std::sync::atomic::Ordering::Release); // 1970 → very stale
