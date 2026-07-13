@@ -488,6 +488,7 @@ async fn maybe_apply(
         bundle_id: cr.bundle_id,
         strategy_id: cr.strategy_id,
         namespace_id: Some(to_env.namespace_id),
+        triggered_by: None,
     };
     let result = service
         .start_rollout(*org_id, &input, state)

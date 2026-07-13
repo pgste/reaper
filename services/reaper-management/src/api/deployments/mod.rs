@@ -56,6 +56,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
             rollback_config::update_namespace_rollback_config
         ))
         .routes(routes!(rollback_config::check_rollback_trigger))
+        .routes(routes!(rollback_config::get_rollback_status))
 }
 
 /// Authorize a MUTATING deployment action (rollout / rollback / approve-wave /

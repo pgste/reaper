@@ -18,6 +18,14 @@ data:
   # single-control, or allowSelfApproval=true for a lone automated principal.
   REAPER_PROMOTION_APPROVAL: {{ .Values.management.config.promotionApproval | default "dual_control" | quote }}
   REAPER_PROMOTION_ALLOW_SELF_APPROVAL: {{ .Values.management.config.allowSelfApproval | default false | quote }}
+  # Rollout supervisor (autonomous auto-rollback). Per-org/namespace
+  # monitor|enforce arming lives in the auto-rollback config API; these only
+  # control the supervising loop itself.
+  {{- with .Values.management.config.rolloutSupervisor }}
+  {{- /* no `default` on the boolean: Helm's default would turn false into true */}}
+  REAPER_ROLLOUT_SUPERVISOR_ENABLED: {{ .enabled | quote }}
+  REAPER_ROLLOUT_SUPERVISOR_INTERVAL_SECS: {{ .intervalSeconds | default 30 | quote }}
+  {{- end }}
   {{- if .Values.management.decisionLogs.clickhouseUrl }}
   REAPER_CLICKHOUSE_URL: {{ .Values.management.decisionLogs.clickhouseUrl | quote }}
   REAPER_CLICKHOUSE_DATABASE: {{ .Values.management.decisionLogs.clickhouseDatabase | default "reaper_audit" | quote }}

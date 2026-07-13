@@ -11,16 +11,14 @@ use crate::{
     api::error::ApiError,
     api::orgs::resolve_org,
     auth::middleware::RequireAuth,
-    db::repositories::{
-        AgentDeploymentRepository, OrganizationRepository, RollbackConfigRepository,
-    },
+    db::repositories::{OrganizationRepository, RollbackConfigRepository},
     deployment::DeploymentService,
-    domain::agent_deployment::{RollbackConfig, UpdateRollbackConfig},
+    domain::agent_deployment::{RollbackConfig, RollbackMode, UpdateRollbackConfig},
     domain::namespace::resolve_namespace,
     state::AppState,
 };
 
-use super::types::{CheckRollbackResponse, RollbackConfigResponse};
+use super::types::{CheckRollbackResponse, RollbackConfigResponse, RollbackStatusResponse};
 
 /// Get org-level auto-rollback configuration
 #[utoipa::path(
@@ -115,6 +113,9 @@ pub async fn update_rollback_config(
     }
     if let Some(min_req) = request.min_requests {
         config.min_requests = min_req;
+    }
+    if let Some(mode) = &request.mode {
+        config.mode = mode.parse::<RollbackMode>().map_err(ApiError::BadRequest)?;
     }
     config.updated_at = chrono::Utc::now();
 
@@ -231,6 +232,9 @@ pub async fn update_namespace_rollback_config(
     if let Some(min_req) = request.min_requests {
         config.min_requests = min_req;
     }
+    if let Some(mode) = &request.mode {
+        config.mode = mode.parse::<RollbackMode>().map_err(ApiError::BadRequest)?;
+    }
     config.updated_at = chrono::Utc::now();
 
     repo.upsert(&config)
@@ -280,74 +284,75 @@ pub async fn check_rollback_trigger(
         e => ApiError::Internal(e.to_string()),
     })?;
 
-    // Get rollback config (namespace-specific or org-level fallback)
-    let rollback_repo = RollbackConfigRepository::new(&state.db);
-    let config = rollback_repo
-        .get(organization.id, rollout.namespace_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .or(rollback_repo
-            .get(organization.id, None)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?)
-        .unwrap_or_else(|| RollbackConfig::new(organization.id, rollout.namespace_id));
-
-    if !config.is_enabled {
-        return Ok(Json(CheckRollbackResponse {
-            should_rollback: false,
-            current_error_rate: 0.0,
-            threshold: config.error_rate_threshold,
-            completed_count: 0,
-            min_requests: config.min_requests,
-            reason: "Auto-rollback is disabled".to_string(),
-        }));
-    }
-
-    // Get deployment summary
-    let deployment_repo = AgentDeploymentRepository::new(&state.db);
-    let summary = deployment_repo
-        .get_summary(rollout_id)
+    // One source of truth for the trigger decision: the same evaluation the
+    // autonomous rollout supervisor runs (B2). Response shape unchanged.
+    let eval = service
+        .evaluate_rollback_trigger(organization.id, &rollout)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let completed_count = summary.deployed + summary.failed;
+    Ok(Json(CheckRollbackResponse {
+        should_rollback: eval.should_rollback,
+        current_error_rate: eval.current_error_rate,
+        threshold: eval.threshold,
+        completed_count: eval.completed_count,
+        min_requests: eval.min_requests,
+        reason: eval.reason,
+    }))
+}
 
-    // Check minimum requests threshold
-    if completed_count < config.min_requests {
-        return Ok(Json(CheckRollbackResponse {
-            should_rollback: false,
-            current_error_rate: summary.failure_rate(),
-            threshold: config.error_rate_threshold,
-            completed_count,
-            min_requests: config.min_requests,
-            reason: format!(
-                "Minimum requests not met ({} < {})",
-                completed_count, config.min_requests
-            ),
-        }));
+/// Get the supervisor's auto-rollback view of a rollout (read-only)
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/rollouts/{rollout_id}/rollback-status",
+    tag = "deployments",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("rollout_id" = Uuid, Path, description = "Rollout ID")
+    ),
+    responses(
+        (status = 200, description = "Auto-rollback monitoring status for the rollout"),
+        (status = 404, description = "Rollout not found")
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_rollback_status(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, rollout_id)): Path<(String, Uuid)>,
+) -> Result<Json<RollbackStatusResponse>, ApiError> {
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, &org).await?;
+
+    if user.org_id != organization.id
+        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
+    {
+        return Err(ApiError::Forbidden(
+            "Cannot check rollback for other organizations".to_string(),
+        ));
     }
 
-    let error_rate = summary.failure_rate();
-    let should_rollback = error_rate > config.error_rate_threshold;
+    let service = DeploymentService::new(state.db.clone());
+    let rollout = service.get_rollout(rollout_id).await.map_err(|e| match e {
+        crate::deployment::DeploymentError::RolloutNotFound(_) => {
+            ApiError::NotFound("Rollout not found".to_string())
+        }
+        e => ApiError::Internal(e.to_string()),
+    })?;
 
-    let reason = if should_rollback {
-        format!(
-            "Error rate {:.2}% exceeds threshold {:.2}%",
-            error_rate, config.error_rate_threshold
-        )
-    } else {
-        format!(
-            "Error rate {:.2}% within threshold {:.2}%",
-            error_rate, config.error_rate_threshold
-        )
-    };
+    let eval = service
+        .evaluate_rollback_trigger(organization.id, &rollout)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    Ok(Json(CheckRollbackResponse {
-        should_rollback,
-        current_error_rate: error_rate,
-        threshold: config.error_rate_threshold,
-        completed_count,
-        min_requests: config.min_requests,
-        reason,
+    Ok(Json(RollbackStatusResponse {
+        monitoring: eval.enabled,
+        mode: eval.mode.to_string(),
+        should_rollback: eval.should_rollback,
+        current_error_rate: eval.current_error_rate,
+        threshold: eval.threshold,
+        completed_count: eval.completed_count,
+        min_requests: eval.min_requests,
+        reason: eval.reason,
     }))
 }

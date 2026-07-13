@@ -133,6 +133,19 @@ pub enum ServerEvent {
         namespace_id: Option<uuid::Uuid>,
         success: bool,
     },
+    /// The rollout supervisor's auto-rollback trigger fired for a rollout
+    /// (B2 / PROD R2-1). `enforced` is false in monitor mode (alert only);
+    /// when true, `rollback_rollout_id` names the remediation rollout the
+    /// supervisor started.
+    AutoRollbackTriggered {
+        rollout_id: uuid::Uuid,
+        org_id: uuid::Uuid,
+        namespace_id: Option<uuid::Uuid>,
+        error_rate: f64,
+        threshold: f64,
+        enforced: bool,
+        rollback_rollout_id: Option<uuid::Uuid>,
+    },
     /// A datastore version was published (data plane): agents fetch the
     /// materialized document for `version` and hot-swap their DataStore.
     DatastorePublished {
@@ -182,6 +195,7 @@ impl ServerEvent {
             ServerEvent::RolloutStarted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutWaveCompleted { org_id, .. } => Some(*org_id),
             ServerEvent::RolloutCompleted { org_id, .. } => Some(*org_id),
+            ServerEvent::AutoRollbackTriggered { org_id, .. } => Some(*org_id),
             ServerEvent::DatastorePublished { org_id, .. } => Some(*org_id),
             ServerEvent::AgentDataStale { org_id, .. } => Some(*org_id),
             ServerEvent::AgentDataFresh { org_id, .. } => Some(*org_id),
@@ -207,6 +221,7 @@ impl ServerEvent {
             ServerEvent::RolloutStarted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutWaveCompleted { namespace_id, .. } => *namespace_id,
             ServerEvent::RolloutCompleted { namespace_id, .. } => *namespace_id,
+            ServerEvent::AutoRollbackTriggered { namespace_id, .. } => *namespace_id,
             ServerEvent::DatastorePublished { namespace_id, .. } => *namespace_id,
             ServerEvent::AgentDataStale { namespace_id, .. } => *namespace_id,
             ServerEvent::AgentDataFresh { namespace_id, .. } => *namespace_id,

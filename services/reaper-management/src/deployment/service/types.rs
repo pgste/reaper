@@ -3,6 +3,7 @@
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::domain::agent_deployment::RollbackMode;
 use crate::domain::deployment::{Rollout, RolloutWave};
 
 /// Deployment service errors
@@ -26,6 +27,30 @@ pub enum DeploymentError {
     NoAgentsAvailable,
     #[error("Database error: {0}")]
     Database(#[from] crate::db::DatabaseError),
+}
+
+/// Outcome of evaluating a rollout against its resolved auto-rollback
+/// config — the single source of truth shared by the operator-facing
+/// `check-rollback` / `rollback-status` endpoints and the autonomous
+/// rollout supervisor (B2 / PROD R2-1).
+#[derive(Debug, Clone)]
+pub struct RollbackTriggerEvaluation {
+    /// Whether auto-rollback is enabled for this rollout's namespace/org
+    pub enabled: bool,
+    /// Resolved config mode: monitor (alert only) or enforce (supervisor acts)
+    pub mode: RollbackMode,
+    /// Whether the trigger fired (error rate above threshold with enough data)
+    pub should_rollback: bool,
+    /// Current failure rate percentage across the rollout's agent deployments
+    pub current_error_rate: f64,
+    /// Configured error-rate threshold percentage
+    pub threshold: f64,
+    /// Completed (deployed + failed) agent deployments observed
+    pub completed_count: u32,
+    /// Minimum completed deployments before the trigger may fire
+    pub min_requests: u32,
+    /// Human-readable explanation of the decision
+    pub reason: String,
 }
 
 /// Result of a rollout operation

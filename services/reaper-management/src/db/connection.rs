@@ -93,6 +93,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "model_version_provenance",
         include_str!("migrations_pg/0015_model_version_provenance.sql"),
     ),
+    (
+        16,
+        "rollout_supervisor",
+        include_str!("migrations_pg/0016_rollout_supervisor.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -127,6 +132,9 @@ pub mod advisory_keys {
     pub const MIGRATIONS: i64 = 0x5245_4150_0000_0001;
     /// Elects the single replica that runs a change-log retention sweep.
     pub const CHANGE_LOG_SWEEP: i64 = 0x5245_4150_0000_0002;
+    /// Elects the single replica that runs a rollout-supervisor tick
+    /// (autonomous auto-rollback, B2 / PROD R2-1).
+    pub const ROLLOUT_SUPERVISOR: i64 = 0x5245_4150_0000_0003;
 }
 
 /// Outcome of attempting a Postgres transaction-scoped advisory lock.
@@ -394,6 +402,7 @@ impl Database {
             include_str!("migrations/020_change_request_external_ref.sql"),
             include_str!("migrations/021_model_migrations.sql"),
             include_str!("migrations/022_model_version_provenance.sql"),
+            include_str!("migrations/023_rollout_supervisor.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

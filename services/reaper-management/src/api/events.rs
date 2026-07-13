@@ -328,6 +328,27 @@ fn event_to_sse(event: ServerEvent) -> Event {
             }))
             .unwrap_or_else(|_| Event::default().data("error")),
 
+        ServerEvent::AutoRollbackTriggered {
+            rollout_id,
+            org_id,
+            namespace_id,
+            error_rate,
+            threshold,
+            enforced,
+            rollback_rollout_id,
+        } => Event::default()
+            .event("auto_rollback_triggered")
+            .json_data(serde_json::json!({
+                "rollout_id": rollout_id,
+                "org_id": org_id,
+                "namespace_id": namespace_id,
+                "error_rate": error_rate,
+                "threshold": threshold,
+                "enforced": enforced,
+                "rollback_rollout_id": rollback_rollout_id
+            }))
+            .unwrap_or_else(|_| Event::default().data("error")),
+
         ServerEvent::DatastorePublished {
             datastore_id,
             org_id,

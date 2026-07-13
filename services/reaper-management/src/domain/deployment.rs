@@ -167,6 +167,11 @@ pub struct Rollout {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// Provenance marker for machine-started rollouts. The rollout
+    /// supervisor stamps its rollback rollouts with `"auto_rollback"`
+    /// (see `deployment::supervisor::AUTO_ROLLBACK_TRIGGER`) and skips
+    /// them on later ticks so remediation is never re-rolled-back.
+    pub triggered_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -291,6 +296,10 @@ pub struct StartRollout {
     pub bundle_id: Uuid,
     pub strategy_id: Option<Uuid>,
     pub namespace_id: Option<Uuid>,
+    /// Provenance marker recorded on the rollout row (see
+    /// [`Rollout::triggered_by`]); operator-started rollouts leave it None.
+    #[serde(default)]
+    pub triggered_by: Option<String>,
 }
 
 /// Input for creating a version pin
@@ -362,6 +371,7 @@ mod tests {
             started_at: Some(Utc::now()),
             completed_at: None,
             error: None,
+            triggered_by: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -388,6 +398,7 @@ mod tests {
             started_at: Some(Utc::now()),
             completed_at: None,
             error: None,
+            triggered_by: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

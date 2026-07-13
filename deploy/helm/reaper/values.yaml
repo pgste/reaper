@@ -84,6 +84,15 @@ management:
     # that both requests and executes.
     promotionApproval: dual_control
     allowSelfApproval: false
+    # Rollout supervisor (autonomous auto-rollback, B2/PROD R2-1): the
+    # leader-elected loop that evaluates active rollouts against the
+    # per-org/namespace auto-rollback config every tick. Whether the
+    # supervisor ACTS is governed per org/namespace by the config's
+    # mode (monitor = alert only, the default; enforce = cancel + roll
+    # back) — these knobs only control the loop itself.
+    rolloutSupervisor:
+      enabled: true
+      intervalSeconds: 30
 
   secrets:
     jwtSecret: ""  # Must be set in production

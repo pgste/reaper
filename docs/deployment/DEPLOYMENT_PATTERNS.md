@@ -445,6 +445,61 @@ spec:
 
 ---
 
+## Autonomous Auto-Rollback (Rollout Supervisor)
+
+The management server runs a background **rollout supervisor** that turns the
+auto-rollback configuration into an autonomous control loop: every tick it
+evaluates each active rollout's agent-deployment failure rate against the
+org/namespace auto-rollback config, and — when armed — cancels a breaching
+rollout and rolls the fleet back to the previous bundle without a human in
+the loop. Under multiple management replicas, a per-tick advisory lock elects
+a single supervisor.
+
+### Arming: monitor → enforce
+
+Auto-rollback configs carry a `mode` that gates what the supervisor does when
+the error-rate trigger fires:
+
+| Mode | Behavior |
+|------|----------|
+| `monitor` (default) | Evaluate + write an audit entry (`deployment.auto_rollback_triggered`) + emit the `auto_rollback_triggered` SSE event + increment `reaper_management_auto_rollbacks_total{mode="monitor"}`. **No action taken.** |
+| `enforce` | Cancel the breaching rollout, start an immediate rollback to the previous bundle, audit as `deployment.auto_rollback` (system actor), emit the event, increment the counter with `mode="enforce"`. |
+
+Recommended rollout of the feature itself: enable with the default `monitor`
+mode first, watch the audit log / SSE events for false positives while tuning
+`error_rate_threshold` and `min_requests`, then arm `enforce` per namespace:
+
+```bash
+# 1. Dry-run: enable in monitor mode (org-wide)
+curl -X POST /api/v1/orgs/{org}/auto-rollback \
+  -d '{"is_enabled": true, "error_rate_threshold": 5.0, "min_requests": 100, "mode": "monitor"}'
+
+# 2. After confidence: arm enforcement for one namespace
+curl -X POST /api/v1/orgs/{org}/namespaces/{ns}/auto-rollback \
+  -d '{"is_enabled": true, "mode": "enforce"}'
+
+# Inspect what the supervisor sees for a rollout (read-only)
+curl /api/v1/orgs/{org}/rollouts/{rollout_id}/rollback-status
+```
+
+Rollback rollouts started by the supervisor are stamped
+`triggered_by=auto_rollback` and are excluded from supervision, so the
+remediation itself can never be auto-rolled-back (no rollback loops). In
+monitor mode each breaching rollout is alerted once, not every tick (a
+management-server restart re-alerts once).
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `REAPER_ROLLOUT_SUPERVISOR_ENABLED` | `true` | Set `false` to disable the supervisor loop entirely |
+| `REAPER_ROLLOUT_SUPERVISOR_INTERVAL_SECS` | `30` | Tick interval (minimum 5s) |
+
+In the Helm chart these are set via `management.config.rolloutSupervisor.*`
+(`enabled`, `intervalSeconds`).
+
+---
+
 ## Summary
 
 All three patterns use the **same policy engine core** with **identical performance characteristics**. The difference is in **how policies are managed and deployed**.

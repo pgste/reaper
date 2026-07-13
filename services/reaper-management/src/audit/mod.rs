@@ -176,6 +176,12 @@ pub mod actions {
     pub const ROLLOUT_ROLLBACK: &str = "rollout.rollback";
     pub const ROLLOUT_BREAK_GLASS: &str = "rollout.break_glass";
 
+    // Rollout supervisor (B2 / PROD R2-1): autonomous auto-rollback.
+    // `..._TRIGGERED` = the trigger fired in monitor mode (no action taken);
+    // `DEPLOYMENT_AUTO_ROLLBACK` = enforce mode acted (cancel + rollback).
+    pub const DEPLOYMENT_AUTO_ROLLBACK_TRIGGERED: &str = "deployment.auto_rollback_triggered";
+    pub const DEPLOYMENT_AUTO_ROLLBACK: &str = "deployment.auto_rollback";
+
     // API Key actions
     pub const APIKEY_CREATE: &str = "apikey.create";
     pub const APIKEY_REVOKE: &str = "apikey.revoke";

@@ -4,8 +4,9 @@
 //! canary, percentage-based, and label-selector rollouts.
 
 pub mod service;
+pub mod supervisor;
 
 pub use service::{
-    AgentInfo, DeploymentError, DeploymentService, DryRunResult, RolloutResult, SkippedAgent,
-    StrategyInfo,
+    AgentInfo, DeploymentError, DeploymentService, DryRunResult, RollbackTriggerEvaluation,
+    RolloutResult, SkippedAgent, StrategyInfo,
 };

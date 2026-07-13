@@ -126,6 +126,18 @@ lazy_static! {
     )
     .unwrap();
 
+    // === Rollout Supervisor Metrics ===
+
+    /// Auto-rollback triggers fired by the rollout supervisor (B2 / PROD
+    /// R2-1). mode="monitor" counts dry-run alerts; mode="enforce" counts
+    /// actual cancel+rollback actions.
+    pub static ref AUTO_ROLLBACKS_TOTAL: CounterVec = register_counter_vec!(
+        "reaper_management_auto_rollbacks_total",
+        "Auto-rollback triggers fired by the rollout supervisor",
+        &["org_id", "mode"]
+    )
+    .unwrap();
+
     // === Storage Metrics ===
 
     /// Storage operations

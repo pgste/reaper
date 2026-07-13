@@ -132,6 +132,7 @@ async fn start_rollout_inner(
         bundle_id,
         strategy_id: request.strategy_id,
         namespace_id: request.namespace_id,
+        triggered_by: None,
     };
 
     let result = service
@@ -413,6 +414,7 @@ pub async fn rollback_namespace(
             Some(ns.id),
             request.target_bundle_id,
             &request.reason,
+            None,
             &state,
         )
         .await
@@ -461,6 +463,7 @@ pub async fn rollback_org(
             None,
             request.target_bundle_id,
             &request.reason,
+            None,
             &state,
         )
         .await
