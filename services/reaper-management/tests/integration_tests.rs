@@ -7764,3 +7764,162 @@ async fn test_deployment_mutations_require_deploy_scope() {
         assert_eq!(resp.status(), StatusCode::OK, "GET {uri} for a member");
     }
 }
+
+/// B2 (PROD R2-1): the read-only `rollback-status` endpoint returns the
+/// rollout supervisor's trigger evaluation for an org member (plain
+/// membership gate, like the other deployment reads) and 403s for a member
+/// of another org.
+#[tokio::test]
+async fn test_rollback_status_endpoint_membership() {
+    let env = setup_test_env().await;
+    let (org_id, _admin_key) =
+        org_with_key(&env, "Rollback Status Org", "rollback-status-org").await;
+
+    // A rollout row to evaluate (the endpoint only needs the row; no agents
+    // required) — created through the repositories like other tests do.
+    use reaper_management::db::repositories::DeploymentRepository;
+    use reaper_management::domain::deployment::StartRollout;
+
+    let bundle_id = Uuid::new_v4();
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO bundles (id, org_id, name, version, status, policy_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(bundle_id.to_string())
+    .bind(org_id.to_string())
+    .bind("rs-bundle")
+    .bind("1.0.0")
+    .bind("compiled")
+    .bind(0)
+    .bind(&now)
+    .bind(&now)
+    .execute(env.db.any_pool().unwrap())
+    .await
+    .unwrap();
+
+    let rollout = DeploymentRepository::new(&env.db)
+        .create_rollout(
+            &StartRollout {
+                bundle_id,
+                strategy_id: None,
+                namespace_id: None,
+                triggered_by: None,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+    // A plain read-only member sees the evaluation (200).
+    let member_key = create_scoped_api_key(&env.db, org_id, &["bundle:read"]).await;
+    let uri = format!(
+        "/orgs/rollback-status-org/rollouts/{}/rollback-status",
+        rollout.id
+    );
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &uri, None, &member_key))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = parse_body(resp).await;
+    // No config exists yet → the built-in default: disabled, monitor mode.
+    assert_eq!(body["monitoring"], false);
+    assert_eq!(body["mode"], "monitor");
+    assert_eq!(body["should_rollback"], false);
+    assert_eq!(body["reason"], "Auto-rollback is disabled");
+    assert_eq!(body["min_requests"], 100);
+
+    // A member of ANOTHER org (without the platform admin scope) is 403.
+    let create_org = json_request(
+        "POST",
+        "/orgs",
+        Some(json!({ "name": "Other RS Org", "slug": "other-rs-org" })),
+    );
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let other_org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let other_key = create_scoped_api_key(&env.db, other_org_id, &["bundle:read"]).await;
+
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &uri, None, &other_key))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// B2: the auto-rollback config round-trips the new `mode` field through the
+/// API — default is `monitor`, an update to `enforce` sticks, and an invalid
+/// mode is rejected with 400.
+#[tokio::test]
+async fn test_rollback_config_mode_via_api() {
+    let env = setup_test_env().await;
+    let (_org_id, key) = org_with_key(&env, "Mode Org", "mode-org").await;
+
+    // Default (no config saved yet): monitor.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/mode-org/auto-rollback",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(parse_body(resp).await["mode"], "monitor");
+
+    // Arm enforce.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/mode-org/auto-rollback",
+            Some(json!({"is_enabled": true, "mode": "enforce"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = parse_body(resp).await;
+    assert_eq!(body["mode"], "enforce");
+    assert_eq!(body["is_enabled"], true);
+
+    // Persisted.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/mode-org/auto-rollback",
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(parse_body(resp).await["mode"], "enforce");
+
+    // Invalid mode → 400.
+    let resp = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/mode-org/auto-rollback",
+            Some(json!({"mode": "yolo"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

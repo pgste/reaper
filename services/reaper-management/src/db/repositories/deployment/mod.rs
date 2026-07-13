@@ -116,6 +116,12 @@ impl<'a> DeploymentRepository<'a> {
         self.rollouts().list(org_id, namespace_id, limit).await
     }
 
+    /// List all ACTIVE rollouts across every org (with the owning org id) —
+    /// the rollout supervisor's per-tick work list.
+    pub async fn list_active_rollouts_global(&self) -> Result<Vec<(Rollout, Uuid)>, DatabaseError> {
+        self.rollouts().list_active_global().await
+    }
+
     /// Update rollout status
     pub async fn update_rollout_status(
         &self,
@@ -391,6 +397,7 @@ mod tests {
             bundle_id,
             strategy_id: None,
             namespace_id: None,
+            triggered_by: None,
         };
 
         let rollout = repo.create_rollout(&input, 10).await.unwrap();
@@ -455,6 +462,7 @@ mod tests {
                     bundle_id,
                     strategy_id: None,
                     namespace_id: None,
+                    triggered_by: None,
                 },
                 10,
             )

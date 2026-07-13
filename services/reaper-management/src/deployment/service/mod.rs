@@ -14,10 +14,11 @@ use chrono::Utc;
 
 use crate::db::repositories::{
     AgentDeploymentRepository, AgentRepository, BundleRepository, DeploymentRepository,
+    RollbackConfigRepository,
 };
 use crate::db::Database;
 use crate::domain::agent::AgentStatus;
-use crate::domain::agent_deployment::{AgentDeployment, AgentDeploymentStatus};
+use crate::domain::agent_deployment::{AgentDeployment, AgentDeploymentStatus, RollbackConfig};
 use crate::domain::bundle::BundleStatus;
 use crate::domain::deployment::{
     CreateDeploymentStrategy, CreateVersionPin, DeploymentStrategy, Rollout, RolloutStatus,
@@ -26,7 +27,8 @@ use crate::domain::deployment::{
 use crate::state::{AppState, ServerEvent};
 
 pub use types::{
-    AgentInfo, DeploymentError, DryRunResult, RolloutResult, SkippedAgent, StrategyInfo,
+    AgentInfo, DeploymentError, DryRunResult, RollbackTriggerEvaluation, RolloutResult,
+    SkippedAgent, StrategyInfo,
 };
 
 /// Whether rollout waves wait for agents to confirm their applied version
@@ -372,6 +374,22 @@ impl DeploymentService {
         input: &StartRollout,
         state: &AppState,
     ) -> Result<RolloutResult, DeploymentError> {
+        self.start_rollout_with_options(org_id, input, state, false)
+            .await
+    }
+
+    /// Start a rollout, optionally accepting a Deprecated bundle as the
+    /// target. Only the rollback path sets `allow_deprecated_bundle`: the
+    /// previous known-good bundle is Deprecated by the promotion flow, and
+    /// restoring it is exactly what a rollback is. Direct rollouts keep
+    /// rejecting Deprecated bundles.
+    async fn start_rollout_with_options(
+        &self,
+        org_id: Uuid,
+        input: &StartRollout,
+        state: &AppState,
+        allow_deprecated_bundle: bool,
+    ) -> Result<RolloutResult, DeploymentError> {
         let bundle_repo = BundleRepository::new(&self.db);
         let deploy_repo = DeploymentRepository::new(&self.db);
         let agent_repo = AgentRepository::new(&self.db);
@@ -382,10 +400,12 @@ impl DeploymentService {
             .await?
             .ok_or_else(|| DeploymentError::BundleNotFound(input.bundle_id.to_string()))?;
 
-        if !matches!(
+        let deployable = matches!(
             bundle.status,
             BundleStatus::Compiled | BundleStatus::Staged | BundleStatus::Promoted
-        ) {
+        ) || (allow_deprecated_bundle
+            && bundle.status == BundleStatus::Deprecated);
+        if !deployable {
             return Err(DeploymentError::BundleNotReady(format!(
                 "Bundle status is {:?}, must be Compiled, Staged, or Promoted",
                 bundle.status
@@ -516,6 +536,96 @@ impl DeploymentService {
         Ok(repo.list_rollouts(org_id, namespace_id, limit).await?)
     }
 
+    /// List every ACTIVE rollout across all orgs with the owning org id —
+    /// the rollout supervisor's per-tick work list (single indexed query).
+    pub async fn list_active_rollouts_global(
+        &self,
+    ) -> Result<Vec<(Rollout, Uuid)>, DeploymentError> {
+        let repo = DeploymentRepository::new(&self.db);
+        Ok(repo.list_active_rollouts_global().await?)
+    }
+
+    /// Evaluate a rollout against its resolved auto-rollback configuration
+    /// (namespace-specific, falling back to org-level, defaulting to
+    /// disabled). The one source of truth for the trigger decision: the
+    /// `check-rollback` and `rollback-status` endpoints and the autonomous
+    /// rollout supervisor all call this.
+    pub async fn evaluate_rollback_trigger(
+        &self,
+        org_id: Uuid,
+        rollout: &Rollout,
+    ) -> Result<RollbackTriggerEvaluation, DeploymentError> {
+        // Resolve config: namespace-specific first, then org-level, then the
+        // built-in default (disabled).
+        let rollback_repo = RollbackConfigRepository::new(&self.db);
+        let mut config = rollback_repo.get(org_id, rollout.namespace_id).await?;
+        if config.is_none() {
+            config = rollback_repo.get(org_id, None).await?;
+        }
+        let config = config.unwrap_or_else(|| RollbackConfig::new(org_id, rollout.namespace_id));
+
+        if !config.is_enabled {
+            return Ok(RollbackTriggerEvaluation {
+                enabled: false,
+                mode: config.mode,
+                should_rollback: false,
+                current_error_rate: 0.0,
+                threshold: config.error_rate_threshold,
+                completed_count: 0,
+                min_requests: config.min_requests,
+                reason: "Auto-rollback is disabled".to_string(),
+            });
+        }
+
+        // Failure rate across the rollout's agent deployments.
+        let deployment_repo = AgentDeploymentRepository::new(&self.db);
+        let summary = deployment_repo.get_summary(rollout.id).await?;
+        let completed_count = summary.deployed + summary.failed;
+
+        // Not enough completed deployments to make a call yet.
+        if completed_count < config.min_requests {
+            return Ok(RollbackTriggerEvaluation {
+                enabled: true,
+                mode: config.mode,
+                should_rollback: false,
+                current_error_rate: summary.failure_rate(),
+                threshold: config.error_rate_threshold,
+                completed_count,
+                min_requests: config.min_requests,
+                reason: format!(
+                    "Minimum requests not met ({} < {})",
+                    completed_count, config.min_requests
+                ),
+            });
+        }
+
+        let error_rate = summary.failure_rate();
+        let should_rollback = error_rate > config.error_rate_threshold;
+
+        let reason = if should_rollback {
+            format!(
+                "Error rate {:.2}% exceeds threshold {:.2}%",
+                error_rate, config.error_rate_threshold
+            )
+        } else {
+            format!(
+                "Error rate {:.2}% within threshold {:.2}%",
+                error_rate, config.error_rate_threshold
+            )
+        };
+
+        Ok(RollbackTriggerEvaluation {
+            enabled: true,
+            mode: config.mode,
+            should_rollback,
+            current_error_rate: error_rate,
+            threshold: config.error_rate_threshold,
+            completed_count,
+            min_requests: config.min_requests,
+            reason,
+        })
+    }
+
     /// Approve and proceed with next wave
     pub async fn approve_wave(
         &self,
@@ -593,13 +703,19 @@ impl DeploymentService {
         Ok(rollout)
     }
 
-    /// Rollback to previous bundle
+    /// Rollback to previous bundle.
+    ///
+    /// `triggered_by` is a provenance marker stamped onto the rollback
+    /// rollout's row (None for operator-initiated rollbacks); the rollout
+    /// supervisor passes `AUTO_ROLLBACK_TRIGGER` so it can recognize — and
+    /// never re-roll-back — its own remediation.
     pub async fn rollback(
         &self,
         org_id: Uuid,
         namespace_id: Option<Uuid>,
         target_bundle_id: Option<Uuid>,
         reason: &str,
+        triggered_by: Option<&str>,
         state: &AppState,
     ) -> Result<RolloutResult, DeploymentError> {
         let bundle_repo = BundleRepository::new(&self.db);
@@ -626,14 +742,18 @@ impl DeploymentService {
             "Initiating rollback"
         );
 
-        // Start immediate rollout to the target bundle
+        // Start immediate rollout to the target bundle. The previous bundle
+        // is typically Deprecated (promotion demoted it), which is exactly
+        // what a rollback restores — so accept it here.
         let input = StartRollout {
             bundle_id: target_bundle.id,
             strategy_id: None, // Use immediate
             namespace_id,
+            triggered_by: triggered_by.map(String::from),
         };
 
-        self.start_rollout(org_id, &input, state).await
+        self.start_rollout_with_options(org_id, &input, state, true)
+            .await
     }
 
     // ==================== Version Pin Operations ====================
@@ -827,6 +947,7 @@ mod tests {
             bundle_id,
             strategy_id: None,
             namespace_id: None,
+            triggered_by: None,
         };
 
         let result = service.start_rollout(org_id, &input, &state).await.unwrap();
@@ -849,6 +970,7 @@ mod tests {
             bundle_id,
             strategy_id: None,
             namespace_id: None,
+            triggered_by: None,
         };
         let result = service.start_rollout(org_id, &input, &state).await.unwrap();
         let rollout_id = result.rollout.id;
@@ -931,6 +1053,118 @@ mod tests {
             .expect("deployment recorded");
         assert_eq!(dep.status, AgentDeploymentStatus::Deployed);
         assert!(dep.acknowledged_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_rollback_trigger_paths() {
+        use crate::db::repositories::RollbackConfigRepository;
+        use crate::domain::agent_deployment::{RollbackConfig, RollbackMode};
+
+        let (_temp_dir, db, state) = setup().await;
+        let org_id = create_test_org(&db).await;
+        let bundle_id = create_test_bundle(&db, org_id).await;
+        let agents = create_test_agents(&db, org_id, 4).await;
+        let service = DeploymentService::new(db.clone());
+
+        let result = service
+            .start_rollout(
+                org_id,
+                &StartRollout {
+                    bundle_id,
+                    strategy_id: None,
+                    namespace_id: None,
+                    triggered_by: None,
+                },
+                &state,
+            )
+            .await
+            .unwrap();
+        let rollout = result.rollout;
+
+        // 1. No config at all → built-in default is DISABLED.
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(!eval.enabled);
+        assert!(!eval.should_rollback);
+        assert_eq!(eval.reason, "Auto-rollback is disabled");
+        assert_eq!(eval.mode, RollbackMode::Monitor);
+
+        // Enable at org level: threshold 50%, min 3 completed, enforce.
+        let mut config = RollbackConfig::new(org_id, None);
+        config.is_enabled = true;
+        config.error_rate_threshold = 50.0;
+        config.min_requests = 3;
+        config.mode = RollbackMode::Enforce;
+        RollbackConfigRepository::new(&db)
+            .upsert(&config)
+            .await
+            .unwrap();
+
+        // 2. Enabled but below min_requests (0 completed of 4).
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(eval.enabled);
+        assert!(!eval.should_rollback);
+        assert_eq!(eval.completed_count, 0);
+        assert!(eval.reason.contains("Minimum requests not met"));
+
+        // 3. Enough data, below threshold: 2 deployed + 1 failed of 4 rows
+        //    → 25% failure rate < 50%.
+        let dep_repo = AgentDeploymentRepository::new(&db);
+        let dep_for = |agent: Uuid, deps: &[AgentDeployment]| {
+            deps.iter().find(|d| d.agent_id == agent).unwrap().id
+        };
+        let deps = dep_repo.get_by_rollout(rollout.id).await.unwrap();
+        for a in &agents[..2] {
+            dep_repo
+                .update_status(dep_for(*a, &deps), AgentDeploymentStatus::Deployed, None)
+                .await
+                .unwrap();
+        }
+        dep_repo
+            .update_status(
+                dep_for(agents[2], &deps),
+                AgentDeploymentStatus::Failed,
+                Some("boom"),
+            )
+            .await
+            .unwrap();
+
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(eval.enabled);
+        assert_eq!(eval.completed_count, 3);
+        assert_eq!(eval.current_error_rate, 25.0);
+        assert!(!eval.should_rollback);
+        assert!(eval.reason.contains("within threshold"));
+
+        // 4. Above threshold: 3 failed of 4 rows → 75% > 50% → fires, and
+        //    the config's mode is carried through for the supervisor.
+        for a in [agents[1], agents[3]] {
+            dep_repo
+                .update_status(
+                    dep_for(a, &deps),
+                    AgentDeploymentStatus::Failed,
+                    Some("boom"),
+                )
+                .await
+                .unwrap();
+        }
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(eval.should_rollback);
+        assert_eq!(eval.current_error_rate, 75.0);
+        assert_eq!(eval.threshold, 50.0);
+        assert_eq!(eval.mode, RollbackMode::Enforce);
+        assert!(eval.reason.contains("exceeds threshold"));
     }
 
     #[tokio::test]

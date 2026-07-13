@@ -370,6 +370,8 @@ pub struct RollbackConfigResponse {
     pub error_rate_threshold: f64,
     pub window_seconds: u32,
     pub min_requests: u32,
+    /// Supervisor mode: "monitor" (alert only, default) or "enforce"
+    pub mode: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -384,6 +386,7 @@ impl From<RollbackConfig> for RollbackConfigResponse {
             error_rate_threshold: c.error_rate_threshold,
             window_seconds: c.window_seconds,
             min_requests: c.min_requests,
+            mode: c.mode.to_string(),
             created_at: c.created_at,
             updated_at: c.updated_at,
         }
@@ -402,6 +405,29 @@ pub struct CheckRollbackResponse {
     /// Number of completed deployments in window
     pub completed_count: u32,
     /// Required minimum requests
+    pub min_requests: u32,
+    /// Reason for the decision
+    pub reason: String,
+}
+
+/// Read-only view of the rollout supervisor's auto-rollback evaluation for
+/// one rollout (B2). A thin wrapper over the same trigger evaluation the
+/// supervisor runs each tick.
+#[derive(Debug, Serialize)]
+pub struct RollbackStatusResponse {
+    /// Whether auto-rollback is enabled (i.e. the supervisor is watching)
+    pub monitoring: bool,
+    /// Resolved mode: "monitor" (alert only) or "enforce" (supervisor acts)
+    pub mode: String,
+    /// Whether the trigger currently fires for this rollout
+    pub should_rollback: bool,
+    /// Current error rate percentage
+    pub current_error_rate: f64,
+    /// Configured threshold
+    pub threshold: f64,
+    /// Number of completed deployments observed
+    pub completed_count: u32,
+    /// Required minimum completed deployments
     pub min_requests: u32,
     /// Reason for the decision
     pub reason: String,

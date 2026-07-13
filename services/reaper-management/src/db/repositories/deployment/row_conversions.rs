@@ -98,6 +98,7 @@ pub(super) fn row_to_rollout(row: &sqlx::any::AnyRow) -> Result<Rollout, Databas
                 .map(|dt| dt.with_timezone(&Utc))
         }),
         error: row.get("error"),
+        triggered_by: row.get("triggered_by"),
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now()),

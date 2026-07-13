@@ -205,6 +205,15 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Rollout supervisor (Round-2 B2, closes PROD R2-1): the autonomous
+    // auto-rollback control loop. Leader-elected per tick like the change-log
+    // sweeper; evaluates every active rollout against its auto-rollback
+    // config and — in enforce mode — cancels a breaching rollout and rolls
+    // back to the previous bundle. monitor mode (the config default) only
+    // audits + alerts. REAPER_ROLLOUT_SUPERVISOR_ENABLED=false disables;
+    // REAPER_ROLLOUT_SUPERVISOR_INTERVAL_SECS tunes the tick (default 30s).
+    reaper_management::deployment::supervisor::spawn_rollout_supervisor(state.clone());
+
     // Audit retention sweeper (Plan 04 step 6): the application-driven purge
     // that replaced the static ClickHouse TTL, so legal holds are honored.
     // No-op unless the decision store (REAPER_CLICKHOUSE_URL) is configured.

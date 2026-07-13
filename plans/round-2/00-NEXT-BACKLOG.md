@@ -64,12 +64,20 @@ unaltered" question lands on.
   service tokens) can roll the fleet. Require a deploy scope
   (`BundlePromote`/new `DeploymentWrite`) + `OrgAdmin` fallback, mirroring
   `change_requests.rs` authorize. **Effort S.** High value / low cost.
-- **B2 — Autonomous auto-rollback control loop.** *Closes PROD R2-1.* Thresholds +
+- **B2 — Autonomous auto-rollback control loop.** *(landed)* *Closes PROD R2-1.* Thresholds +
   signal + trigger + action all exist (`rollback_config.rs:274-364`); missing only
   a supervising loop (no `main.rs` task is a rollout supervisor). Reuse the
   existing advisory-lock leader-election. Ship in `monitor` mode, then arm
   `enforce` per namespace. **Effort M.** *The product reviewer's single most
   important next move* — the last safety gap with no operational workaround.
+  *Landed as `deployment/supervisor.rs`: leader-elected loop (advisory key
+  `ROLLOUT_SUPERVISOR`), shared trigger evaluation
+  (`DeploymentService::evaluate_rollback_trigger`), `mode: monitor|enforce` on
+  the rollback config (migration 023/0016, default monitor), loop guard via
+  `rollouts.triggered_by='auto_rollback'`, audit actions
+  `deployment.auto_rollback[_triggered]`, SSE `auto_rollback_triggered`,
+  counter `reaper_management_auto_rollbacks_total`, and read-only
+  `GET /orgs/{org}/rollouts/{id}/rollback-status`.*
 
 ---
 

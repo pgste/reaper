@@ -157,6 +157,44 @@ impl Default for DeploymentSummary {
     }
 }
 
+/// What the rollout supervisor does when the auto-rollback trigger fires
+/// (B2, PROD R2-1). `Monitor` is the safe default: evaluate, record, and
+/// alert but take NO action — a dry run an operator can watch before arming
+/// `Enforce`, which actually cancels the bad rollout and rolls back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RollbackMode {
+    /// Evaluate + audit + alert, but never act (safe dry-run default)
+    #[default]
+    Monitor,
+    /// Cancel the triggering rollout and roll back to the previous bundle
+    Enforce,
+}
+
+impl std::fmt::Display for RollbackMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RollbackMode::Monitor => write!(f, "monitor"),
+            RollbackMode::Enforce => write!(f, "enforce"),
+        }
+    }
+}
+
+impl std::str::FromStr for RollbackMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "monitor" => Ok(RollbackMode::Monitor),
+            "enforce" => Ok(RollbackMode::Enforce),
+            _ => Err(format!(
+                "Invalid rollback mode: {} (expected 'monitor' or 'enforce')",
+                s
+            )),
+        }
+    }
+}
+
 /// Auto-rollback configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackConfig {
@@ -167,6 +205,8 @@ pub struct RollbackConfig {
     pub error_rate_threshold: f64,
     pub window_seconds: u32,
     pub min_requests: u32,
+    /// monitor (dry run, default) vs enforce (supervisor acts)
+    pub mode: RollbackMode,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -182,6 +222,7 @@ impl RollbackConfig {
             error_rate_threshold: 5.0,
             window_seconds: 300,
             min_requests: 100,
+            mode: RollbackMode::Monitor,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -195,6 +236,9 @@ pub struct UpdateRollbackConfig {
     pub error_rate_threshold: Option<f64>,
     pub window_seconds: Option<u32>,
     pub min_requests: Option<u32>,
+    /// "monitor" or "enforce"; validated in the handler so an invalid value
+    /// is a 400 (matching the documented contract), not a body-reject.
+    pub mode: Option<String>,
 }
 
 #[cfg(test)]
@@ -236,6 +280,32 @@ mod tests {
         assert_eq!(
             deployment.error_message.as_deref(),
             Some("Connection timeout")
+        );
+    }
+
+    #[test]
+    fn test_rollback_mode_parse_roundtrip() {
+        assert_eq!(
+            "monitor".parse::<RollbackMode>().unwrap(),
+            RollbackMode::Monitor
+        );
+        assert_eq!(
+            "enforce".parse::<RollbackMode>().unwrap(),
+            RollbackMode::Enforce
+        );
+        assert_eq!(
+            "Enforce".parse::<RollbackMode>().unwrap(),
+            RollbackMode::Enforce
+        );
+        assert!("panic".parse::<RollbackMode>().is_err());
+        for mode in [RollbackMode::Monitor, RollbackMode::Enforce] {
+            assert_eq!(mode.to_string().parse::<RollbackMode>().unwrap(), mode);
+        }
+        // The safe default is monitor: a fresh config never self-acts.
+        assert_eq!(RollbackMode::default(), RollbackMode::Monitor);
+        assert_eq!(
+            RollbackConfig::new(Uuid::new_v4(), None).mode,
+            RollbackMode::Monitor
         );
     }
 

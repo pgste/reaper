@@ -335,10 +335,11 @@ impl<'a> RollbackConfigRepository<'a> {
             i32,
             String,
             String,
+            String,
         )> = if let Some(ns_id) = namespace_id {
             sqlx::query_as(
                 r#"
-                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
+                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at, mode
                 FROM rollback_configs WHERE org_id = $1 AND namespace_id = $2
                 "#,
             )
@@ -349,7 +350,7 @@ impl<'a> RollbackConfigRepository<'a> {
         } else {
             sqlx::query_as(
                 r#"
-                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at
+                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at, mode
                 FROM rollback_configs WHERE org_id = $1 AND namespace_id IS NULL
                 "#,
             )
@@ -361,7 +362,14 @@ impl<'a> RollbackConfigRepository<'a> {
         row.map(|r| self.row_to_config(r)).transpose()
     }
 
-    /// Create or update rollback config
+    /// Create or update rollback config.
+    ///
+    /// Conflict target is the primary key: callers always read the existing
+    /// row first (so `config.id` is stable per (org, namespace)), and the
+    /// UNIQUE(org_id, namespace_id) index can never arbitrate for org-level
+    /// rows — SQL unique indexes treat NULL namespace_ids as distinct, so an
+    /// ON CONFLICT on that pair silently never fired for them and the second
+    /// write of an org-level config died on the id PK instead.
     pub async fn upsert(&self, config: &RollbackConfig) -> Result<(), DatabaseError> {
         let pool = self
             .db
@@ -371,13 +379,14 @@ impl<'a> RollbackConfigRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO rollback_configs
-                (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT(org_id, namespace_id) DO UPDATE SET
+                (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, mode, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT(id) DO UPDATE SET
                 is_enabled = excluded.is_enabled,
                 error_rate_threshold = excluded.error_rate_threshold,
                 window_seconds = excluded.window_seconds,
                 min_requests = excluded.min_requests,
+                mode = excluded.mode,
                 updated_at = excluded.updated_at
             "#,
         )
@@ -388,6 +397,7 @@ impl<'a> RollbackConfigRepository<'a> {
         .bind(config.error_rate_threshold)
         .bind(config.window_seconds as i32)
         .bind(config.min_requests as i32)
+        .bind(config.mode.to_string())
         .bind(config.created_at.to_rfc3339())
         .bind(config.updated_at.to_rfc3339())
         .execute(pool)
@@ -408,6 +418,7 @@ impl<'a> RollbackConfigRepository<'a> {
             i32,
             String,
             String,
+            String,
         ),
     ) -> Result<RollbackConfig, DatabaseError> {
         Ok(RollbackConfig {
@@ -424,6 +435,92 @@ impl<'a> RollbackConfigRepository<'a> {
             updated_at: DateTime::parse_from_rfc3339(&row.8)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| DatabaseError::Config(e.to_string()))?,
+            mode: row.9.parse().map_err(DatabaseError::Config)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::agent_deployment::RollbackMode;
+    use tempfile::TempDir;
+
+    async fn setup_db() -> (TempDir, Database) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::db::ephemeral_test_config(temp_dir.path()).await;
+        let db = Database::new(&config).await.unwrap();
+        db.run_migrations().await.unwrap();
+        (temp_dir, db)
+    }
+
+    async fn insert_org(db: &Database) -> Uuid {
+        let pool = db.any_pool().unwrap();
+        let org_id = Uuid::new_v4();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(org_id.to_string())
+        .bind("Rollback Cfg Org")
+        .bind(format!("rollback-cfg-{}", org_id))
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+        org_id
+    }
+
+    /// A pre-mode row (INSERT without the `mode` column, as any config written
+    /// before migration 023 would look) reads back as `monitor` — the safe
+    /// migration default.
+    #[tokio::test]
+    async fn migration_defaults_mode_to_monitor() {
+        let (_tmp, db) = setup_db().await;
+        let org_id = insert_org(&db).await;
+
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO rollback_configs
+                (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at)
+            VALUES ($1, $2, NULL, 1, 5.0, 300, 100, $3, $4)
+            "#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(org_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(db.any_pool().unwrap())
+        .await
+        .unwrap();
+
+        let cfg = RollbackConfigRepository::new(&db)
+            .get(org_id, None)
+            .await
+            .unwrap()
+            .expect("config present");
+        assert_eq!(cfg.mode, RollbackMode::Monitor);
+        assert!(cfg.is_enabled);
+    }
+
+    /// `mode` round-trips through upsert (insert and update arms).
+    #[tokio::test]
+    async fn mode_roundtrips_through_upsert() {
+        let (_tmp, db) = setup_db().await;
+        let org_id = insert_org(&db).await;
+        let repo = RollbackConfigRepository::new(&db);
+
+        let mut config = RollbackConfig::new(org_id, None);
+        assert_eq!(config.mode, RollbackMode::Monitor);
+        repo.upsert(&config).await.unwrap();
+        let read = repo.get(org_id, None).await.unwrap().unwrap();
+        assert_eq!(read.mode, RollbackMode::Monitor);
+
+        config.mode = RollbackMode::Enforce;
+        repo.upsert(&config).await.unwrap();
+        let read = repo.get(org_id, None).await.unwrap().unwrap();
+        assert_eq!(read.mode, RollbackMode::Enforce);
     }
 }

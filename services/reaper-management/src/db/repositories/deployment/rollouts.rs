@@ -30,8 +30,8 @@ impl<'a> RolloutOps<'a> {
 
         let sql = r#"
             INSERT INTO rollouts (id, bundle_id, strategy_id, namespace_id, status, current_wave,
-                                  target_agent_count, deployed_agent_count, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
+                                  target_agent_count, deployed_agent_count, triggered_by, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8, $9)
         "#;
 
         sqlx::query(sql)
@@ -41,6 +41,7 @@ impl<'a> RolloutOps<'a> {
             .bind(input.namespace_id.map(|id| id.to_string()))
             .bind(RolloutStatus::Pending.to_string())
             .bind(target_agent_count as i32)
+            .bind(input.triggered_by.as_deref())
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
             .execute(pool)
@@ -61,7 +62,7 @@ impl<'a> RolloutOps<'a> {
         let sql = r#"
             SELECT id, bundle_id, strategy_id, namespace_id, status, current_wave,
                    target_agent_count, deployed_agent_count, started_at, completed_at,
-                   error, created_at, updated_at
+                   error, triggered_by, created_at, updated_at
             FROM rollouts
             WHERE id = $1
         "#;
@@ -87,7 +88,7 @@ impl<'a> RolloutOps<'a> {
         let sql = r#"
             SELECT id, bundle_id, strategy_id, namespace_id, status, current_wave,
                    target_agent_count, deployed_agent_count, started_at, completed_at,
-                   error, created_at, updated_at
+                   error, triggered_by, created_at, updated_at
             FROM rollouts
             WHERE bundle_id = $1 AND status NOT IN ('completed', 'failed', 'rolled_back', 'cancelled')
             ORDER BY created_at DESC
@@ -117,7 +118,7 @@ impl<'a> RolloutOps<'a> {
             let sql = r#"
                 SELECT r.id, r.bundle_id, r.strategy_id, r.namespace_id, r.status, r.current_wave,
                        r.target_agent_count, r.deployed_agent_count, r.started_at, r.completed_at,
-                       r.error, r.created_at, r.updated_at
+                       r.error, r.triggered_by, r.created_at, r.updated_at
                 FROM rollouts r
                 INNER JOIN bundles b ON r.bundle_id = b.id
                 WHERE b.org_id = $1 AND r.namespace_id = $2
@@ -134,7 +135,7 @@ impl<'a> RolloutOps<'a> {
             let sql = r#"
                 SELECT r.id, r.bundle_id, r.strategy_id, r.namespace_id, r.status, r.current_wave,
                        r.target_agent_count, r.deployed_agent_count, r.started_at, r.completed_at,
-                       r.error, r.created_at, r.updated_at
+                       r.error, r.triggered_by, r.created_at, r.updated_at
                 FROM rollouts r
                 INNER JOIN bundles b ON r.bundle_id = b.id
                 WHERE b.org_id = $1
@@ -149,6 +150,41 @@ impl<'a> RolloutOps<'a> {
         };
 
         rows.iter().map(row_to_rollout).collect()
+    }
+
+    /// List every ACTIVE rollout across ALL orgs, with the owning org id
+    /// (resolved through the bundle). One indexed query per supervisor tick
+    /// (`idx_rollouts_status`, migration 023): the rollout supervisor
+    /// evaluates each of these against its org's auto-rollback config.
+    pub async fn list_active_global(&self) -> Result<Vec<(Rollout, Uuid)>, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+
+        let sql = r#"
+            SELECT r.id, r.bundle_id, r.strategy_id, r.namespace_id, r.status, r.current_wave,
+                   r.target_agent_count, r.deployed_agent_count, r.started_at, r.completed_at,
+                   r.error, r.triggered_by, r.created_at, r.updated_at, b.org_id
+            FROM rollouts r
+            INNER JOIN bundles b ON r.bundle_id = b.id
+            WHERE r.status IN ('pending', 'in_progress', 'awaiting_approval')
+            ORDER BY r.created_at
+        "#;
+
+        let rows = sqlx::query(sql).fetch_all(pool).await?;
+
+        rows.iter()
+            .map(|row| {
+                use sqlx::Row;
+                let rollout = row_to_rollout(row)?;
+                let org_id: String = row.get("org_id");
+                let org_id = org_id
+                    .parse()
+                    .map_err(|e| DatabaseError::Config(format!("Invalid UUID: {}", e)))?;
+                Ok((rollout, org_id))
+            })
+            .collect()
     }
 
     /// Update rollout status
