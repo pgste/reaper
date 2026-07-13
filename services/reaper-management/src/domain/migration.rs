@@ -633,6 +633,51 @@ pub struct RenameMaps {
     pub roles: BTreeMap<String, String>,
 }
 
+/// The vocabulary-breaking changes a bare model overwrite would make —
+/// used by `PUT …/model` to REJECT silent renames/removals/retypes and
+/// direct callers to the migration endpoint. Additive edits (new roles,
+/// relations, types, attributes) and permission-list tuning pass; anything
+/// that would strand existing records does not.
+pub fn vocabulary_breaking_changes(old: &ModelDefinition, new: &ModelDefinition) -> Vec<String> {
+    let mut breaks = Vec::new();
+    for role in &old.roles {
+        if new.role(&role.name).is_none() {
+            breaks.push(format!("role '{}' removed", role.name));
+        }
+    }
+    for rel in &old.relations {
+        match new.relation(&rel.name) {
+            None => breaks.push(format!("relation '{}' removed", rel.name)),
+            Some(n) if n.traversal != rel.traversal => breaks.push(format!(
+                "relation '{}' traversal changed (flips edge direction)",
+                rel.name
+            )),
+            Some(n) if n.object != rel.object => breaks.push(format!(
+                "relation '{}' object type changed ('{}' → '{}')",
+                rel.name, rel.object, n.object
+            )),
+            _ => {}
+        }
+    }
+    for t in &old.entity_types {
+        let Some(nt) = new.entity_type(&t.name) else {
+            breaks.push(format!("entity type '{}' removed", t.name));
+            continue;
+        };
+        for attr in &t.attributes {
+            match nt.attributes.iter().find(|a| a.name == attr.name) {
+                None => breaks.push(format!("attribute '{}.{}' removed", t.name, attr.name)),
+                Some(na) if na.attr_type != attr.attr_type => breaks.push(format!(
+                    "attribute '{}.{}' retyped ({:?} → {:?})",
+                    t.name, attr.name, attr.attr_type, na.attr_type
+                )),
+                _ => {}
+            }
+        }
+    }
+    breaks
+}
+
 pub fn rename_maps(transforms: &[ModelTransform]) -> RenameMaps {
     let mut maps = RenameMaps::default();
     for t in transforms {

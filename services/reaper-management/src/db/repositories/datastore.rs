@@ -23,6 +23,8 @@ pub struct DatastoreRecord {
     pub template: String,
     pub model: ModelDefinition,
     pub current_version: i64,
+    /// Model-shape version (0 = never migrated); bumped by apply_migration.
+    pub model_version: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -76,8 +78,9 @@ impl<'a> DatastoreRepository<'a> {
 
         sqlx::query(
             r#"INSERT INTO datastores
-               (id, org_id, namespace_id, template, model, current_version, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, 0, $6, $7)"#,
+               (id, org_id, namespace_id, template, model, current_version, model_version,
+                created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, 0, 0, $6, $7)"#,
         )
         .bind(id.to_string())
         .bind(org_id.to_string())
@@ -96,6 +99,7 @@ impl<'a> DatastoreRepository<'a> {
             template: template.as_str().to_string(),
             model,
             current_version: 0,
+            model_version: 0,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -109,7 +113,7 @@ impl<'a> DatastoreRepository<'a> {
         let pool = self.pool()?;
         let row = sqlx::query(
             r#"SELECT id, org_id, namespace_id, template, model, current_version,
-                      created_at, updated_at
+                      model_version, created_at, updated_at
                FROM datastores WHERE org_id = $1 AND namespace_id = $2"#,
         )
         .bind(org_id.to_string())
@@ -135,6 +139,7 @@ impl<'a> DatastoreRepository<'a> {
             template: row.get("template"),
             model,
             current_version: row.get("current_version"),
+            model_version: row.get("model_version"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
@@ -667,6 +672,197 @@ impl<'a> DatastoreRepository<'a> {
                 subject: row.get("subject"),
             })
             .collect())
+    }
+
+    // ------------------------------------------------------------------
+    // Model migrations (Plan 12 step 4)
+    // ------------------------------------------------------------------
+
+    /// Apply a planned model migration ATOMICALLY: record transforms, the
+    /// model update, the model-version bump, the append-only history row,
+    /// and the outbox dirty markers all commit in ONE transaction — no
+    /// partially-migrated state is ever observable by a syncing agent, and
+    /// a crash anywhere in here rolls the whole thing back (the shipped
+    /// transactional-outbox invariant).
+    ///
+    /// `dirty` is the exact set of materialized documents the migration
+    /// changes (entity_id, tombstone) — computed by the caller from the
+    /// before/after materialization diff.
+    pub async fn apply_migration(
+        &self,
+        store: &DatastoreRecord,
+        plan: &crate::domain::migration::MigrationPlan,
+        dirty: &[(String, bool)],
+        author: &str,
+    ) -> Result<i64, DatabaseError> {
+        use crate::domain::migration::RecordOp;
+
+        if !plan.applyable() {
+            return Err(DatabaseError::Config(
+                "refusing to apply a blocked migration plan".to_string(),
+            ));
+        }
+
+        let pool = self.pool()?;
+        let now = Utc::now().to_rfc3339();
+        let model_json = serde_json::to_string(&plan.model_after)
+            .map_err(|e| DatabaseError::Config(format!("serialize model: {e}")))?;
+        let transforms_json = serde_json::to_string(&plan.transforms)
+            .map_err(|e| DatabaseError::Config(format!("serialize transforms: {e}")))?;
+        let model_hash = |m: &ModelDefinition| -> Result<String, DatabaseError> {
+            let json = serde_json::to_string(m)
+                .map_err(|e| DatabaseError::Config(format!("hash model: {e}")))?;
+            Ok(format!("sha256:{:x}", Sha256::digest(json.as_bytes())))
+        };
+        let before_hash = model_hash(&plan.model_before)?;
+        let after_hash = model_hash(&plan.model_after)?;
+
+        let mut tx = pool.begin().await?;
+
+        // (a) Record transforms. Bulk vocabulary updates come from the
+        // planned ops; entity-level changes (attribute renames/removals/
+        // retypes, entity-type renames) are written from the plan's
+        // computed after-state — the SAME state the dry-run materialized,
+        // so what was analyzed is exactly what is persisted.
+        for op in &plan.record_ops {
+            match op {
+                RecordOp::UpdateBindingRole { from, to, .. } => {
+                    sqlx::query(
+                        "UPDATE adm_role_bindings SET role = $1 \
+                         WHERE datastore_id = $2 AND role = $3",
+                    )
+                    .bind(to)
+                    .bind(store.id.to_string())
+                    .bind(from)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                RecordOp::UpdateTupleRelation { from, to, .. } => {
+                    sqlx::query(
+                        "UPDATE adm_tuples SET relation = $1 \
+                         WHERE datastore_id = $2 AND relation = $3",
+                    )
+                    .bind(to)
+                    .bind(store.id.to_string())
+                    .bind(from)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                RecordOp::DeleteTuples { relation, .. } => {
+                    sqlx::query("DELETE FROM adm_tuples WHERE datastore_id = $1 AND relation = $2")
+                        .bind(store.id.to_string())
+                        .bind(relation)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                RecordOp::UpdateEntityType { .. }
+                | RecordOp::RenameEntityAttribute { .. }
+                | RecordOp::RemoveEntityAttribute { .. }
+                | RecordOp::RetypeEntityAttribute { .. } => {
+                    // Handled uniformly below via the entity-state rewrite.
+                }
+            }
+        }
+
+        // Entity rows whose planned after-state differs are rewritten
+        // wholesale (type + attributes) — one uniform path for every
+        // entity-level transform.
+        let needs_entity_rewrite = plan.record_ops.iter().any(|op| {
+            matches!(
+                op,
+                RecordOp::UpdateEntityType { .. }
+                    | RecordOp::RenameEntityAttribute { .. }
+                    | RecordOp::RemoveEntityAttribute { .. }
+                    | RecordOp::RetypeEntityAttribute { .. }
+            )
+        });
+        if needs_entity_rewrite {
+            for entity in &plan.entities_after {
+                let attrs_json = serde_json::to_string(&entity.attributes)
+                    .map_err(|e| DatabaseError::Config(format!("serialize attributes: {e}")))?;
+                sqlx::query(
+                    "UPDATE adm_entities SET entity_type = $1, attributes = $2, updated_at = $3 \
+                     WHERE datastore_id = $4 AND entity_id = $5",
+                )
+                .bind(&entity.entity_type)
+                .bind(&attrs_json)
+                .bind(&now)
+                .bind(store.id.to_string())
+                .bind(&entity.entity_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        // (b) + (c) model update + version bump, atomically with the records.
+        let row = sqlx::query(
+            "UPDATE datastores SET model = $1, model_version = model_version + 1, \
+             updated_at = $2 WHERE id = $3 RETURNING model_version",
+        )
+        .bind(&model_json)
+        .bind(&now)
+        .bind(store.id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let model_version: i64 = row.get("model_version");
+
+        // (d) append-only history row.
+        sqlx::query(
+            r#"INSERT INTO adm_model_versions
+               (id, datastore_id, model_version, transforms, author,
+                model_before_hash, model_after_hash, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(store.id.to_string())
+        .bind(model_version)
+        .bind(&transforms_json)
+        .bind(author)
+        .bind(&before_hash)
+        .bind(&after_hash)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        // (e) outbox markers for every changed document — inside the SAME
+        // transaction (the D2 invariant: mutation + log commit together).
+        Self::record_changes_in(&mut tx, store.id, dirty).await?;
+
+        tx.commit().await?;
+        Ok(model_version)
+    }
+
+    /// The append-only migration history, newest first.
+    pub async fn list_model_versions(
+        &self,
+        datastore_id: Uuid,
+    ) -> Result<Vec<serde_json::Value>, DatabaseError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query(
+            "SELECT model_version, transforms, author, model_before_hash, \
+                    model_after_hash, created_at \
+             FROM adm_model_versions WHERE datastore_id = $1 \
+             ORDER BY model_version DESC",
+        )
+        .bind(datastore_id.to_string())
+        .fetch_all(pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let transforms: serde_json::Value = serde_json::from_str(
+                    row.get::<String, _>("transforms").as_str(),
+                )
+                .map_err(|e| DatabaseError::Config(format!("corrupt transforms json: {e}")))?;
+                Ok(serde_json::json!({
+                    "model_version": row.get::<i64, _>("model_version"),
+                    "transforms": transforms,
+                    "author": row.get::<String, _>("author"),
+                    "model_before_hash": row.get::<String, _>("model_before_hash"),
+                    "model_after_hash": row.get::<String, _>("model_after_hash"),
+                    "created_at": row.get::<String, _>("created_at"),
+                }))
+            })
+            .collect()
     }
 
     // ------------------------------------------------------------------
