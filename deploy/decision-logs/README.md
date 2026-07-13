@@ -168,6 +168,32 @@ you know exactly which policy logic ran.
   HIPAA's 6y dominates). Dedup by `decision_id` via `ReplacingMergeTree` (exactly-
   once *results* without exactly-once delivery, which is a myth).
 
+## Immutable audit anchor (WORM) — tamper-evidence you can prove
+
+ClickHouse is the queryable path, but anyone with ClickHouse write access can
+rewrite or delete rows there. The **`s3_worm` sink** (in `vector.toml`, gated on
+`decisionLogs.worm.enabled` in Helm) writes the SAME decisions **and**
+checkpoints to an **S3 Object-Lock (WORM)** bucket that even a bucket admin
+cannot alter or delete before retention expires. Create the bucket with Object
+Lock **enabled** and a default retention in **COMPLIANCE mode** (strictest
+applicable window, e.g. SOX 7y / HIPAA 6y), and grant the shipper `PutObject`
+only.
+
+How it composes with the verifier:
+
+- **Authoritative proof** — `reaper-cli audit verify --file <ndjson>` pulls the
+  raw, write-ordered objects from the WORM bucket and runs **ByteExact**
+  (recomputes every `entry_hash` from content + verifies checkpoint signatures).
+  This catches content mutation the queryable-store `Linkage` pass cannot.
+- **Cross-boot linkage (SEC R2-3)** — each writer boot mints a fresh `chain_id`;
+  its FIRST signed checkpoint carries `prev_chain_id` / `prev_chain_head`
+  pointing at the previous boot's terminal chain head (persisted by the agent in
+  a small **continuity file**, `REAPER_DECISION_LOG_CONTINUITY_FILE`). The
+  verifier flags a genesis that names an absent prior boot
+  (`missing_prior_boot`) or a mismatched head (`boot_linkage_broken`) — so
+  deleting an *entire* boot from the archive is detectable via the next boot's
+  dangling reference, not just deleting records within a boot.
+
 ## Scale
 
 At fleet scale put **Redpanda/Kafka** in front (replay + fan-out) and run
@@ -179,5 +205,6 @@ existing hardware.
 
 - `clickhouse-schema.sql` — the `decisions` table (ReplacingMergeTree dedup,
   codecs, monthly partitions, TTL-to-S3) + per-minute rollup MV.
-- `vector.toml` — agent NDJSON → ClickHouse (+ commented S3 WORM branch).
+- `vector.toml` — agent NDJSON → ClickHouse (+ S3 Object-Lock WORM branch,
+  commented for dev; uncomment + set `S3_WORM_BUCKET` for production).
 - `docker-compose.yml` — runnable ClickHouse + Vector (+ optional MinIO).

@@ -95,15 +95,41 @@ when_full = "block"
 enabled = true
 
 # --- compliance archive: S3/MinIO WORM (complete, immutable, unsampled) -----
-# Enable for the at-least-once/compliance tier. Bucket should have Object Lock
-# (COMPLIANCE mode) with retention = strictest applicable (e.g. HIPAA 6y).
+# THE IMMUTABLE AUDIT ANCHOR (round-2 A3.1, closes SEC R2-3). ClickHouse above
+# is the queryable path — but an insider with ClickHouse write access can rewrite
+# or delete rows there. This sink writes the SAME decisions + checkpoints to an
+# S3 bucket with Object Lock, which even a bucket admin cannot alter or delete
+# before its retention expires. It is the independent copy a regulator's
+# `reaper-cli audit verify --file` runs ByteExact against for the authoritative
+# proof; cross-boot genesis linkage (A3.2) makes deleting a whole writer boot
+# from this archive detectable via the next boot's dangling reference.
+#
+# BUCKET SETUP (required, do NOT skip for regulated deployments):
+#   - Create the bucket with Object Lock ENABLED at creation time.
+#   - Set a default retention in COMPLIANCE mode (not GOVERNANCE — compliance
+#     mode cannot be shortened or bypassed, even by root) for the strictest
+#     applicable window (e.g. SOX 7y, HIPAA 6y).
+#   - Grant the Vector principal PutObject only (no Delete/BypassGovernance).
+#
+# PRODUCTION vs DEV: this reference file leaves the sink commented so a bare
+# `vector --config vector.toml` dev run over stdin needs no S3. For production,
+# UNCOMMENT the block below (and set S3_WORM_BUCKET / creds) — regulated
+# deployments MUST run it. The Helm chart gates the equivalent sink on
+# `decisionLogs.worm.enabled`, so it renders only when enabled there.
 # [sinks.s3_worm]
 # type = "aws_s3"
 # inputs = ["decisions_fmt", "checkpoints_fmt"]
-# bucket = "reaper-audit-worm"
-# key_prefix = "decisions/date=%Y-%m-%d/"
-# compression = "zstd"
+# bucket = "${S3_WORM_BUCKET}"
+# region = "${S3_WORM_REGION:-us-east-1}"
+# # endpoint = "${S3_WORM_ENDPOINT}"   # set for MinIO / S3-compatible stores
+# key_prefix = "${S3_WORM_PREFIX:-decisions/}date=%Y-%m-%d/hour=%H/"
+# compression = "gzip"                  # NDJSON, gzip, time-partitioned keys
 # encoding.codec = "ndjson"
+# # Object Lock retention is enforced on the BUCKET (default retention); Vector
+# # only needs PutObject. At-least-once so nothing is lost before it lands.
 # [sinks.s3_worm.buffer]
 # type = "disk"
 # max_size = 2000000000
+#
+# [sinks.s3_worm.acknowledgements]
+# enabled = true

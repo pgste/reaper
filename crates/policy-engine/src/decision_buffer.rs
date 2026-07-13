@@ -37,7 +37,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
@@ -102,6 +102,68 @@ enum WriterMsg {
     Flush,
 }
 
+/// Cross-boot continuity record (round-2 A3.2). The writer persists this as
+/// checkpoints emit and on graceful shutdown, so the NEXT writer boot can read
+/// the prior boot's terminal chain head and stamp it into its genesis checkpoint
+/// — making a whole-boot deletion detectable via the dangling reference.
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+struct ContinuityRecord {
+    /// The prior boot's chain_id.
+    chain_id: String,
+    /// The prior boot's terminal chain head (last emitted checkpoint's
+    /// `last_entry_hash`).
+    last_head: String,
+    /// The prior boot's last covered seq (informational).
+    last_seq: u64,
+}
+
+/// Best-effort read of the prior boot's continuity record. A missing file is a
+/// first-ever boot (`None`, no warning); a corrupt/unparseable file is tolerated
+/// (`None`, with a warning) so a tampered/garbage file never blocks startup.
+fn read_continuity(path: &Path) -> Option<ContinuityRecord> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<ContinuityRecord>(&raw) {
+        Ok(rec) if !rec.chain_id.is_empty() && !rec.last_head.is_empty() => Some(rec),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "decision-log continuity file is corrupt; treating as no prior boot"
+            );
+            None
+        }
+    }
+}
+
+/// Best-effort rewrite of the continuity file (temp-file + rename, so a crash
+/// mid-write can't corrupt it). Never panics — a failure is logged and ignored,
+/// bounding the loss to at most the current checkpoint window.
+fn write_continuity_best_effort(path: &Path, rec: &ContinuityRecord) {
+    let json = match serde_json::to_string(rec) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let tmp = path.with_extension("continuity.tmp");
+    if std::fs::write(&tmp, json.as_bytes()).is_ok() {
+        if std::fs::rename(&tmp, path).is_err() {
+            // Rename failed (e.g. cross-device); fall back to a direct write.
+            let _ = std::fs::write(path, json.as_bytes());
+            let _ = std::fs::remove_file(&tmp);
+        }
+    } else {
+        tracing::warn!(
+            path = %path.display(),
+            "decision-log continuity file write failed (best-effort; ignored)"
+        );
+    }
+}
+
 /// Running hash state for the durable decision stream. Lives only on the
 /// single-threaded writer, so it needs no synchronization. Stamps each record's
 /// `prev_hash`/`entry_hash` in write order — the tamper-evident chain a
@@ -155,6 +217,17 @@ struct Checkpointer {
     /// hash). Empty before the first checkpoint. Threads the chain across
     /// checkpoints so a verifier can prove no gap hides between two of them.
     prev_checkpoint_hash: String,
+    /// Genesis anchor (round-2 A3.2): the PRIOR boot's chain_id + terminal chain
+    /// head, read from the continuity file at startup (empty for a first-ever
+    /// boot). Stamped onto this boot's FIRST checkpoint only.
+    genesis_prev_chain_id: String,
+    genesis_prev_chain_head: String,
+    /// Whether this boot's genesis anchor has already been stamped onto a
+    /// checkpoint (only the first checkpoint carries it).
+    genesis_emitted: bool,
+    /// Where to persist this boot's `{chain_id, last_head, last_seq}` as
+    /// checkpoints emit, so the next boot can link to it. `None` disables it.
+    continuity_path: Option<PathBuf>,
     // --- open-window state (None until the first record after a checkpoint) ---
     seq_start: Option<u64>,
     seq_end: u64,
@@ -164,11 +237,15 @@ struct Checkpointer {
 }
 
 impl Checkpointer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         chain_id: String,
         signing: Option<(reaper_core::bundle_signing::SigningKey, String)>,
         every: usize,
         interval_secs: u64,
+        genesis_prev_chain_id: String,
+        genesis_prev_chain_head: String,
+        continuity_path: Option<PathBuf>,
     ) -> Self {
         Self {
             chain_id,
@@ -177,6 +254,10 @@ impl Checkpointer {
             interval: (interval_secs > 0).then(|| Duration::from_secs(interval_secs)),
             base: Instant::now(),
             prev_checkpoint_hash: String::new(),
+            genesis_prev_chain_id,
+            genesis_prev_chain_head,
+            genesis_emitted: false,
+            continuity_path,
             seq_start: None,
             seq_end: 0,
             count: 0,
@@ -224,6 +305,15 @@ impl Checkpointer {
             monotonic_end_ns,
             chrono::Utc::now().to_rfc3339(),
         );
+        // Genesis anchor (round-2 A3.2): only this boot's FIRST checkpoint carries
+        // the prior boot's chain_id + terminal head, signed into the checkpoint so
+        // the linkage is authenticated. Subsequent checkpoints leave it empty
+        // (serializes away → byte-identical to a pre-A3 checkpoint).
+        if !self.genesis_emitted {
+            checkpoint.prev_chain_id = self.genesis_prev_chain_id.clone();
+            checkpoint.prev_chain_head = self.genesis_prev_chain_head.clone();
+            self.genesis_emitted = true;
+        }
         if let Some((ref key, ref key_id)) = self.signing {
             checkpoint.sign(key, key_id);
         }
@@ -237,6 +327,18 @@ impl Checkpointer {
         }
         // The chain head of this window becomes the next window's start hash.
         self.prev_checkpoint_hash = self.last_hash.clone();
+        // Persist continuity so the next boot links to this head. Best-effort:
+        // never panics the writer; a failure bounds loss to < one window.
+        if let Some(ref path) = self.continuity_path {
+            write_continuity_best_effort(
+                path,
+                &ContinuityRecord {
+                    chain_id: self.chain_id.clone(),
+                    last_head: self.last_hash.clone(),
+                    last_seq: self.seq_end,
+                },
+            );
+        }
         self.seq_start = None;
         self.count = 0;
     }
@@ -910,11 +1012,25 @@ fn build_checkpointer(
         }
     };
 
+    // Cross-boot continuity (round-2 A3.2): read the PRIOR boot's terminal chain
+    // head from the continuity file (if any) so this boot's genesis checkpoint
+    // links to it. A missing/corrupt file → a first-ever (root) boot.
+    let (genesis_prev_chain_id, genesis_prev_chain_head) = match config.continuity_path.as_deref() {
+        Some(path) => match read_continuity(path) {
+            Some(rec) => (rec.chain_id, rec.last_head),
+            None => (String::new(), String::new()),
+        },
+        None => (String::new(), String::new()),
+    };
+
     Ok(Some(Checkpointer::new(
         chain_id,
         signing,
         config.checkpoint_every,
         config.checkpoint_interval_secs,
+        genesis_prev_chain_id,
+        genesis_prev_chain_head,
+        config.continuity_path.clone(),
     )))
 }
 
@@ -1523,6 +1639,125 @@ mod tests {
                 .collect();
             verify_checkpoint(cp, &covered, &vk, Some("k1")).unwrap();
         }
+    }
+
+    #[test]
+    fn test_cross_boot_continuity_links_boots() {
+        // Two writer boots sharing one archive file + one continuity file: boot 2
+        // must read boot 1's terminal head from the continuity file and stamp it
+        // into its genesis checkpoint, so verify_records links the boots.
+        use crate::decision_log::{verify_records, Checkpoint, DecisionLogEntry, VerifyMode};
+        use reaper_core::bundle_signing::{SigAlgorithm, SigningKey, VerifyingKey};
+
+        let signing = SigningKey::from_hex(SigAlgorithm::Ed25519Sha256, &"07".repeat(32)).unwrap();
+        let vk = VerifyingKey::from_hex(signing.algorithm(), &signing.public_key_hex()).unwrap();
+
+        let pid = std::process::id();
+        let archive =
+            std::env::temp_dir().join(format!("reaper_declog_continuity_arc_{pid}.ndjson"));
+        let continuity = std::env::temp_dir().join(format!("reaper_declog_continuity_{pid}.json"));
+        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_file(&continuity);
+
+        let make_config = || DecisionLogConfig {
+            enabled: true,
+            buffer_capacity: 100,
+            file_path: Some(archive.to_string_lossy().to_string()),
+            continuity_path: Some(continuity.clone()),
+            checkpoint_every: 5,
+            checkpoint_signing_key: Some("07".repeat(32)),
+            checkpoint_key_id: Some("k1".to_string()),
+            ..Default::default()
+        };
+
+        // ---- Boot 1 ----
+        let boot1 = DecisionBuffer::new(make_config()).unwrap();
+        for _ in 0..5 {
+            boot1.log(test_entry("allow"));
+        }
+        boot1.flush().unwrap();
+        // The count-triggered checkpoint writes continuity synchronously; poll it.
+        let mut boot1_continuity = None;
+        for _ in 0..300 {
+            if let Some(rec) = read_continuity(&continuity) {
+                boot1_continuity = Some(rec);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        drop(boot1);
+        let boot1_continuity = boot1_continuity.expect("boot 1 wrote continuity");
+        assert!(!boot1_continuity.chain_id.is_empty());
+        assert!(!boot1_continuity.last_head.is_empty());
+
+        // ---- Boot 2 (fresh chain_id, reads boot 1's continuity) ----
+        let boot2 = DecisionBuffer::new(make_config()).unwrap();
+        for _ in 0..5 {
+            boot2.log(test_entry("allow"));
+        }
+        boot2.flush().unwrap();
+        // Poll until boot 2's genesis checkpoint (carrying prev_chain_id) lands.
+        let mut have_genesis = false;
+        for _ in 0..300 {
+            let contents = std::fs::read_to_string(&archive).unwrap_or_default();
+            have_genesis = contents.lines().any(|l| {
+                serde_json::from_str::<serde_json::Value>(l)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("prev_chain_id")
+                            .and_then(|p| p.as_str())
+                            .map(|s| !s.is_empty())
+                    })
+                    .unwrap_or(false)
+            });
+            if have_genesis {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        drop(boot2);
+        assert!(have_genesis, "boot 2 must emit a genesis checkpoint");
+
+        // Parse the whole archive (both boots) into decisions + checkpoints.
+        let contents = std::fs::read_to_string(&archive).unwrap_or_default();
+        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_file(&continuity);
+        let mut decisions: Vec<DecisionLogEntry> = Vec::new();
+        let mut checkpoints: Vec<Checkpoint> = Vec::new();
+        for line in contents.lines() {
+            let v: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("record_type").and_then(|r| r.as_str()) == Some("checkpoint") {
+                checkpoints.push(serde_json::from_value(v).unwrap());
+            } else {
+                decisions.push(serde_json::from_value(v).unwrap());
+            }
+        }
+
+        // Exactly one checkpoint carries the genesis anchor, pointing at boot 1.
+        let genesis: Vec<&Checkpoint> = checkpoints
+            .iter()
+            .filter(|c| !c.prev_chain_id.is_empty())
+            .collect();
+        assert_eq!(
+            genesis.len(),
+            1,
+            "only boot 2's first checkpoint is genesis"
+        );
+        assert_eq!(genesis[0].prev_chain_id, boot1_continuity.chain_id);
+        assert_eq!(genesis[0].prev_chain_head, boot1_continuity.last_head);
+
+        // End-to-end: the archive verifies and the boots are linked.
+        let report = verify_records(
+            decisions,
+            &checkpoints,
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(report.ok, "violations: {:?}", report.violations);
+        assert_eq!(report.boots_linked, 1);
     }
 
     #[test]

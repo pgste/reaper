@@ -1053,6 +1053,9 @@ fn print_verification_report(
     println!("  chains checked:        {}", report.chains_checked);
     println!("  records covered:       {}", report.records_covered);
     println!("  checkpoints verified:  {}", report.checkpoints_verified);
+    if report.boots_linked > 0 {
+        println!("  cross-boot links:      {}", report.boots_linked);
+    }
     if skipped_checkpoints {
         println!("  note: no --verifying-key given; checkpoint signatures NOT checked");
     }

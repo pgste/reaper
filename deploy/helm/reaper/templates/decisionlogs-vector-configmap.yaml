@@ -56,4 +56,29 @@ data:
 
     [sinks.clickhouse.acknowledgements]
     enabled = true
+{{- if .Values.decisionLogs.worm.enabled }}
+
+    # Immutable WORM archive (SEC R2-3): the SAME stream written to an S3
+    # Object-Lock bucket a ClickHouse insider cannot rewrite. This is the
+    # independent copy `reaper-cli audit verify --file` runs ByteExact against.
+    # The bucket MUST have Object Lock (COMPLIANCE mode) + retention configured.
+    [sinks.s3_worm]
+    type = "aws_s3"
+    inputs = ["parse"]
+    bucket = {{ .Values.decisionLogs.worm.bucket | quote }}
+    region = {{ .Values.decisionLogs.worm.region | quote }}
+    {{- if .Values.decisionLogs.worm.endpoint }}
+    endpoint = {{ .Values.decisionLogs.worm.endpoint | quote }}
+    {{- end }}
+    key_prefix = "{{ .Values.decisionLogs.worm.keyPrefix }}date=%Y-%m-%d/hour=%H/"
+    compression = "gzip"
+    encoding.codec = "ndjson"
+
+    [sinks.s3_worm.buffer]
+    type = "disk"
+    max_size = {{ .Values.decisionLogs.vector.bufferMaxBytes }}
+
+    [sinks.s3_worm.acknowledgements]
+    enabled = true
+{{- end }}
 {{- end }}
