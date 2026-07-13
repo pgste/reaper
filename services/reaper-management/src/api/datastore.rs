@@ -9,7 +9,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    response::Json,
+    http::{HeaderMap, StatusCode},
+    response::{Json, Response},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -19,9 +20,12 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
+    api::idempotency,
+    api::pagination::{PageQuery, Paginated},
     auth::{middleware::AuthenticatedUser, middleware::RequireAuth, scopes::Scope},
-    db::repositories::datastore::DatastoreRecord,
+    db::repositories::datastore::{DatastoreRecord, PageRow},
     db::repositories::{DatastoreRepository, NamespaceRepository},
+    db::DatabaseError,
     domain::datastore::{
         materialize, AdmEntity, DatastoreTemplate, ModelDefinition, RelationTuple, RoleBinding,
     },
@@ -277,17 +281,28 @@ async fn put_model(
 struct EntityListParams {
     #[serde(rename = "type")]
     entity_type: Option<String>,
+    limit: Option<i64>,
+    cursor: Option<String>,
 }
 
+/// List entities, keyset-paginated (Plan 07 Phase E; closes R2-01 — the entity
+/// table is the biggest table in a real deployment and must never be listed
+/// unbounded).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore/entities",
     tag = "datastore",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("ns" = String, Path, description = "Namespace slug")
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("type" = Option<String>, Query, description = "Filter by entity type"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
-    responses((status = 200, description = "List of entities")),
+    responses(
+        (status = 200, description = "One page of entities with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn list_entities(
@@ -295,13 +310,23 @@ async fn list_entities(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Query(params): Query<EntityListParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Paginated<PageRow<AdmEntity>>>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
-    let entities = DatastoreRepository::new(&state.db)
-        .list_entities(store.id, params.entity_type.as_deref())
+    let page = PageQuery {
+        limit: params.limit,
+        cursor: params.cursor,
+    }
+    .validate()?;
+    let rows = DatastoreRepository::new(&state.db)
+        .list_entities_page(
+            store.id,
+            params.entity_type.as_deref(),
+            page.limit + 1,
+            page.after.as_ref(),
+        )
         .await?;
-    Ok(Json(json!({"entities": entities, "count": entities.len()})))
+    Ok(Json(Paginated::from_rows(rows, &page, PageRow::key)))
 }
 
 #[utoipa::path(
@@ -433,17 +458,27 @@ async fn put_attributes(
 struct BindingListParams {
     subject: Option<String>,
     role: Option<String>,
+    limit: Option<i64>,
+    cursor: Option<String>,
 }
 
+/// List role bindings, keyset-paginated (Plan 07 Phase E; closes R2-01).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
     tag = "datastore",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("ns" = String, Path, description = "Namespace slug")
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("subject" = Option<String>, Query, description = "Filter by subject"),
+        ("role" = Option<String>, Query, description = "Filter by role"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
-    responses((status = 200, description = "List of role bindings")),
+    responses(
+        (status = 200, description = "One page of role bindings with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn list_bindings(
@@ -451,15 +486,24 @@ async fn list_bindings(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Query(params): Query<BindingListParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Paginated<PageRow<RoleBinding>>>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
-    let bindings = DatastoreRepository::new(&state.db)
-        .list_bindings(store.id, params.subject.as_deref(), params.role.as_deref())
+    let page = PageQuery {
+        limit: params.limit,
+        cursor: params.cursor,
+    }
+    .validate()?;
+    let rows = DatastoreRepository::new(&state.db)
+        .list_bindings_page(
+            store.id,
+            params.subject.as_deref(),
+            params.role.as_deref(),
+            page.limit + 1,
+            page.after.as_ref(),
+        )
         .await?;
-    Ok(Json(
-        json!({"role_bindings": bindings, "count": bindings.len()}),
-    ))
+    Ok(Json(Paginated::from_rows(rows, &page, PageRow::key)))
 }
 
 #[utoipa::path(
@@ -537,17 +581,28 @@ struct TupleListParams {
     object: Option<String>,
     relation: Option<String>,
     subject: Option<String>,
+    limit: Option<i64>,
+    cursor: Option<String>,
 }
 
+/// List relationship tuples, keyset-paginated (Plan 07 Phase E; closes R2-01).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore/tuples",
     tag = "datastore",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("ns" = String, Path, description = "Namespace slug")
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("object" = Option<String>, Query, description = "Filter by object"),
+        ("relation" = Option<String>, Query, description = "Filter by relation"),
+        ("subject" = Option<String>, Query, description = "Filter by subject"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
-    responses((status = 200, description = "List of relationship tuples")),
+    responses(
+        (status = 200, description = "One page of relationship tuples with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn list_tuples(
@@ -555,18 +610,25 @@ async fn list_tuples(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Query(params): Query<TupleListParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Paginated<PageRow<RelationTuple>>>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
-    let tuples = DatastoreRepository::new(&state.db)
-        .list_tuples(
+    let page = PageQuery {
+        limit: params.limit,
+        cursor: params.cursor,
+    }
+    .validate()?;
+    let rows = DatastoreRepository::new(&state.db)
+        .list_tuples_page(
             store.id,
             params.object.as_deref(),
             params.relation.as_deref(),
             params.subject.as_deref(),
+            page.limit + 1,
+            page.after.as_ref(),
         )
         .await?;
-    Ok(Json(json!({"tuples": tuples, "count": tuples.len()})))
+    Ok(Json(Paginated::from_rows(rows, &page, PageRow::key)))
 }
 
 #[utoipa::path(
@@ -706,24 +768,49 @@ async fn plan_migration(
     Ok(Json(prepared.report(&store)))
 }
 
+/// Map the repository's model-version guard failure (R2-04) to 409 Conflict:
+/// the migration was planned against a model that a concurrent writer has
+/// since changed — never silently rewrite entities from a stale snapshot.
+/// (The generic `DatabaseError → ApiError` mapping sends `VersionConflict` to
+/// 412, which is right for `If-Match` flows but wrong here: no precondition
+/// header was involved.)
+fn model_conflict_to_api(e: DatabaseError) -> ApiError {
+    match e {
+        DatabaseError::VersionConflict(msg) => ApiError::Conflict(msg),
+        e => e.into(),
+    }
+}
+
 /// Apply a planned migration ATOMICALLY, then publish the new data version
 /// so the fleet converges via the existing delta path. The plan is
 /// recomputed server-side from the transforms — a client can never smuggle
 /// a stale or hand-edited plan past the blockers. Blocked plans are refused
-/// with 409 and the blocker list; nothing is mutated.
+/// with 409 and the blocker list; nothing is mutated. The model UPDATE is
+/// guarded on the plan's `model_before` version (R2-04): a concurrent
+/// migration makes this one fail with 409 instead of clobbering. Because a
+/// successful apply publishes and fans out to the fleet, the endpoint accepts
+/// an `Idempotency-Key` (R2-05): a retried timeout replays the original
+/// response instead of double-applying and double-propagating.
 #[utoipa::path(
     post,
     path = "/orgs/{org}/namespaces/{ns}/datastore/migrations/apply",
     tag = "datastore",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("ns" = String, Path, description = "Namespace slug")
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("Idempotency-Key" = Option<String>, Header,
+         description = "Optional retry-safety key: a replay within the retention \
+                        window returns the original response without re-applying \
+                        the migration or re-propagating to the fleet (Plan 07 Phase D)")
     ),
     request_body = PlanMigrationRequest,
     responses(
         (status = 200, description = "Migration applied atomically + new data version published"),
         (status = 400, description = "Invalid transform"),
-        (status = 409, description = "Plan is blocked (coercion errors / non-empty relation)")
+        (status = 409, description = "Plan is blocked (coercion errors / non-empty relation), \
+            the model changed concurrently since the plan's model_before (re-plan and retry), \
+            or the original request for this Idempotency-Key is still in flight"),
+        (status = 422, description = "Idempotency-Key was already used for a different request")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -731,8 +818,35 @@ async fn apply_migration(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
+    headers: HeaderMap,
     Json(req): Json<PlanMigrationRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
+    // Propagation-triggering POST (publish + fleet fan-out): a retried
+    // request must not apply the migration twice (Plan 07 Phase D, R2-05).
+    let transforms_json = serde_json::to_string(&req.transforms)
+        .map_err(|e| ApiError::Internal(format!("serialize transforms: {e}")))?;
+    let fingerprint = idempotency::fingerprint(&["datastore.migrate", &org, &ns, &transforms_json]);
+    let scope_id = format!("{org}/{ns}");
+    let db = state.db.clone();
+    idempotency::run(
+        &db,
+        &headers,
+        "datastore.migrate",
+        &scope_id,
+        &fingerprint,
+        || apply_migration_inner(state, user, org, ns, req),
+    )
+    .await
+}
+
+/// The actual migration side effect; runs at most once per idempotency key.
+async fn apply_migration_inner(
+    state: Arc<AppState>,
+    user: AuthenticatedUser,
+    org: String,
+    ns: String,
+    req: PlanMigrationRequest,
+) -> ApiResult<(StatusCode, Value)> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let prepared = prepare_migration(&state, &store, &req.transforms).await?;
@@ -749,7 +863,8 @@ async fn apply_migration(
     }
 
     let repo = DatastoreRepository::new(&state.db);
-    // One transaction: records + model + model_version + history + outbox.
+    // One transaction: records + model + model_version + history + outbox,
+    // guarded on the model_version the plan was computed against (R2-04).
     let model_version = repo
         .apply_migration(
             &store,
@@ -757,7 +872,8 @@ async fn apply_migration(
             &prepared.dirty,
             &user.id.to_string(),
         )
-        .await?;
+        .await
+        .map_err(model_conflict_to_api)?;
 
     // Publish the post-migration data version so agents converge (snapshot
     // lineage pinned at the migration's change_seq). A crash between the
@@ -767,16 +883,19 @@ async fn apply_migration(
     let published = repo.publish(&updated, &user.id.to_string()).await?;
     notify_published(&state, &resolved, updated.id, &published).await;
 
-    Ok(Json(json!({
-        "model_version": model_version,
-        "record_ops": prepared.plan.record_ops,
-        "impact": prepared.impact,
-        "docs_changed": prepared.dirty.len(),
-        "published": {
-            "version": published.version,
-            "checksum": published.checksum,
-        },
-    })))
+    Ok((
+        StatusCode::OK,
+        json!({
+            "model_version": model_version,
+            "record_ops": prepared.plan.record_ops,
+            "impact": prepared.impact,
+            "docs_changed": prepared.dirty.len(),
+            "published": {
+                "version": published.version,
+                "checksum": published.checksum,
+            },
+        }),
+    ))
 }
 
 /// The append-only migration history (newest first): transforms, author,
@@ -827,7 +946,8 @@ async fn list_migrations(
     responses(
         (status = 200, description = "Inverse migration applied as a new forward model version"),
         (status = 404, description = "No such migration"),
-        (status = 409, description = "Migration is irreversible or the inverse plan is blocked")
+        (status = 409, description = "Migration is irreversible, the inverse plan is blocked, \
+            or the model changed concurrently (re-plan and retry)")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -875,7 +995,8 @@ async fn rollback_migration(
             &prepared.dirty,
             &user.id.to_string(),
         )
-        .await?;
+        .await
+        .map_err(model_conflict_to_api)?;
     let updated = require_store(&state, &resolved).await?;
     let published = repo.publish(&updated, &user.id.to_string()).await?;
     notify_published(&state, &resolved, updated.id, &published).await;

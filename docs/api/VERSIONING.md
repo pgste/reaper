@@ -74,27 +74,31 @@ rollback lever, not a supported surface — migrate clients to `/api/v1`.
 Governed mutable resources — today **policies** and **bundles** — carry an
 `ETag` on every `GET`/`PUT` response:
 
-- **Policies**: the current version's content hash.
+- **Policies**: an opaque tag derived from the content hash **and a row
+  version that every write bumps** — so it changes on content updates *and*
+  on metadata-only edits (name/description/is_active), per RFC 9110 §8.8.1.
+  Treat it as opaque; its format is not contract.
 - **Bundles**: the current modification stamp.
 
 A `PUT` must echo the ETag it read via `If-Match`. If a concurrent writer got
-there first, the request fails with **412 Precondition Failed** — re-`GET` for
-the fresh ETag, re-apply your change, and retry. `If-Match: *` means "the
-resource exists in some state" and always writes guarded against the state read
-at request time.
+there first — including a metadata-only writer — the request fails with
+**412 Precondition Failed** — re-`GET` for the fresh ETag, re-apply your
+change, and retry. `If-Match: *` means "the resource exists in some state" and
+always writes guarded against the state read at request time.
 
-Enforcement is transitional: in the current release a `PUT` without `If-Match`
-still succeeds (unguarded, logged as deprecated). Once
-`server.require_if_match` flips on (next release, or today via
-`REAPER_REQUIRE_IF_MATCH=true`), a missing `If-Match` is rejected with
-**428 Precondition Required**. SDK/CLI/automation should start sending
-`If-Match` now.
+Enforcement is **on by default**: a `PUT` without `If-Match` is rejected with
+**428 Precondition Required**. The earlier warn-only transition release has
+shipped; operators still migrating automation can opt back down for one
+release with `REAPER_REQUIRE_IF_MATCH=false` (or
+`server.require_if_match = false`), in which mode an unguarded `PUT` proceeds
+and logs a deprecation warning. A stale `If-Match`, when sent, always fails
+with 412 regardless of the flag.
 
 ## 6. Idempotency keys (`Idempotency-Key`)
 
 Propagation-triggering POSTs — **bundle promote/rollback**, **rollout create**,
-and **org create** — accept an optional `Idempotency-Key` header so automation
-can retry a timed-out request safely:
+**org create**, and **datastore migration apply** — accept an optional
+`Idempotency-Key` header so automation can retry a timed-out request safely:
 
 - The first execution stores its response; a **replay** of the same key within
   the retention window (default 48 h, `REAPER_IDEMPOTENCY_RETENTION_SECS`)
@@ -113,7 +117,10 @@ can retry a timed-out request safely:
   `{ "items": [...], "next_cursor": "..." }`; pass `next_cursor` back as
   `?cursor=` and stop when it is absent. Cursors never drift under concurrent
   inserts (no OFFSET). The decisions store allows `limit` up to 1000 and still
-  accepts `offset` (deprecated) when no cursor is given.
+  accepts `offset` (deprecated) when no cursor is given. The datastore
+  **entity / role-binding / tuple** lists — the largest tables in a real
+  deployment — use the same envelope and bounds (round-2 hardening, R2-01);
+  they previously returned the whole table unbounded.
 - Errors are RFC 9457 **`application/problem+json`**: `type` (stable problem
   URI), `title`, `status`, `detail`, plus the Reaper `code` extension. Database
   constraint breaches surface as client errors — unique → **409**,
@@ -128,5 +135,5 @@ can retry a timed-out request safely:
   regenerate on each release to pick up additive changes.
 - On `PUT`, echo the last-read `ETag` as `If-Match`; on 412, re-read and retry.
 - Send an `Idempotency-Key` (a fresh UUID per logical operation) on promote,
-  rollback, rollout-create, and org-create; retry with the SAME key after a
-  timeout.
+  rollback, rollout-create, org-create, and datastore migration apply; retry
+  with the SAME key after a timeout.

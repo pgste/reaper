@@ -1,19 +1,23 @@
 //! ETag / `If-Match` optimistic-concurrency preconditions (Plan 07, Phase C).
 //!
 //! Policies derive their ETag from the current version's `content_hash`
-//! (ADR-2 — an existing column, no schema change); bundles from their
-//! `updated_at` timestamp (bumped by every bundle write path). A `PUT` must
-//! echo the ETag it read via `If-Match`; the repository then re-checks the
-//! version/timestamp **inside the UPDATE's WHERE clause**, so the precondition
-//! check here is a fast fail and the SQL guard is the atomic arbiter — two
-//! writers racing past this check still resolve to exactly one winner.
+//! joined with the `row_version` counter that EVERY write — content or
+//! metadata — bumps (R2-03: two representations must never share one tag,
+//! RFC 9110 §8.8.1); bundles from their `updated_at` timestamp (bumped by
+//! every bundle write path). A `PUT` must echo the ETag it read via
+//! `If-Match`; the repository then re-checks the version/timestamp **inside
+//! the UPDATE's WHERE clause**, so the precondition check here is a fast fail
+//! and the SQL guard is the atomic arbiter — two writers racing past this
+//! check still resolve to exactly one winner.
 //!
-//! Enforcement is transitional (ADR-3 + rollout risk): with
-//! `server.require_if_match = false` (this release's default), a `PUT` without
-//! `If-Match` proceeds unguarded and logs a deprecation warning; with the flag
-//! on it is rejected with 428. A *stale* `If-Match`, when sent, always fails
-//! with 412 regardless of the flag — honoring an explicit precondition is
-//! never a compatibility break.
+//! Enforcement is ON by default (`server.require_if_match = true` since
+//! R2-02; the ADR-3 warn-only transition release has shipped): a `PUT`
+//! without `If-Match` is rejected with 428. Operators migrating automation
+//! can opt back down for one release with `REAPER_REQUIRE_IF_MATCH=false`,
+//! in which mode the write proceeds unguarded and logs a deprecation
+//! warning. A *stale* `If-Match`, when sent, always fails with 412
+//! regardless of the flag — honoring an explicit precondition is never a
+//! compatibility break.
 
 use axum::http::{header, HeaderMap};
 
@@ -73,7 +77,8 @@ pub fn check_precondition(
                 tracing::warn!(
                     resource = %resource,
                     "PUT without If-Match — running unguarded (deprecated; \
-                     enforcement arrives when server.require_if_match flips on)"
+                     this deployment opted down from the enforced default \
+                     via server.require_if_match=false / REAPER_REQUIRE_IF_MATCH=false)"
                 );
                 Ok(false)
             }

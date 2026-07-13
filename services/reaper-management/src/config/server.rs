@@ -19,14 +19,16 @@ pub struct ServerConfig {
     /// `REAPER_SERVE_ROOT_ALIAS=true`.
     #[serde(default)]
     pub serve_root_alias: bool,
-    /// Optimistic-concurrency enforcement (Plan 07 Phase C, ADR-3): when true,
-    /// a `PUT` on a policy or bundle without an `If-Match` header is rejected
-    /// with **428 Precondition Required**. Default **false** for one release
-    /// (warn-only: the write proceeds unguarded and a deprecation warning is
-    /// logged), then flips to true. A stale `If-Match`, when sent, always
-    /// fails with 412 regardless of this flag. Env override:
-    /// `REAPER_REQUIRE_IF_MATCH=true`.
-    #[serde(default)]
+    /// Optimistic-concurrency enforcement (Plan 07 Phase C, ADR-3): when true
+    /// (the default since the round-2 hardening, R2-02), a `PUT` on a policy
+    /// or bundle without an `If-Match` header is rejected with **428
+    /// Precondition Required**. The ADR-3 warn-only transition release has
+    /// shipped; operators migrating automation that never sent `If-Match`
+    /// can opt back down for one release with `REAPER_REQUIRE_IF_MATCH=false`
+    /// (or `server.require_if_match = false`) — in that mode the write
+    /// proceeds unguarded and a deprecation warning is logged. A stale
+    /// `If-Match`, when sent, always fails with 412 regardless of this flag.
+    #[serde(default = "default_require_if_match")]
     pub require_if_match: bool,
 }
 
@@ -36,7 +38,7 @@ impl Default for ServerConfig {
             bind_address: default_bind_address(),
             port: default_port(),
             serve_root_alias: false,
-            require_if_match: false,
+            require_if_match: default_require_if_match(),
         }
     }
 }
@@ -64,4 +66,8 @@ fn default_bind_address() -> String {
 
 fn default_port() -> u16 {
     8081
+}
+
+fn default_require_if_match() -> bool {
+    true
 }
