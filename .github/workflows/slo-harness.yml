@@ -1,0 +1,149 @@
+# Nightly served-path SLO harness (Plan 08 §3; closes PERF R2-P1-1).
+#
+# Drives a REAL release reaper-agent over HTTP through the four §3 SLO rows
+# (targeted / evaluate-all / ReBAC / batch) with benchmarks/reaper-vs-opa's
+# slo-harness and asserts request-total p50/p99/p999 against the checked-in
+# benchmarks/reaper-vs-opa/slo.yaml table.
+#
+# ABSOLUTE numbers on a shared runner are noisy, so:
+#   * every threshold is scaled by SLO_MULTIPLIER (default 250 — an OBSERVED
+#     starting point: a local 10k-policy run at concurrency 4 measured
+#     targeted p50≈200µs vs the 2µs table cell, i.e. the TCP-loopback floor
+#     alone is ~100x the tightest µs-scale cell; 250 gives ~2.5x headroom for
+#     slower shared runners while still catching order-of-magnitude
+#     served-path regressions. Tighten it as nightly data accumulates.
+#     Multiplier 1.0 = the REAL SLA and is only meaningful on dedicated,
+#     isolated hardware).
+#   * the harness runs at low concurrency (4) and a CI-feasible request count;
+#     the achieved rps is REPORTED, not the table's 5k rps target — load
+#     targets are for dedicated hardware.
+#   * this workflow is schedule/dispatch-only and NEVER blocks PRs. The
+#     PR-blocking protection for the served path is perf-gate.yml's paired
+#     A/B HTTP job, which cancels runner variance by construction.
+#
+# Full HDR result JSON for every scenario is uploaded as an artifact for
+# trend analysis.
+
+name: SLO Harness
+
+on:
+  schedule:
+    - cron: "23 3 * * *" # nightly
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: "Measured requests per scenario (batch: calls)"
+        required: false
+        default: "20000"
+      multiplier:
+        description: "SLO_MULTIPLIER applied to every slo.yaml threshold"
+        required: false
+        default: "250"
+
+permissions:
+  contents: read
+
+# Never download Git-LFS content: the harness regenerates its policy sets and
+# the rebac data (data/10k) is a plain checked-in file (same policy as the
+# other perf workflows — the 100k LFS objects would be paid for and unused).
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+
+concurrency:
+  group: slo-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  slo-harness:
+    name: Served-path SLO (4 scenarios, absolute w/ multiplier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-slo"
+          cache-on-failure: true
+          workspaces: |
+            .
+            benchmarks/reaper-vs-opa
+
+      - name: Build release agent
+        run: cargo build --release --bin reaper-agent
+
+      - name: Build SLO harness + data generator
+        working-directory: benchmarks/reaper-vs-opa
+        run: cargo build --release --bin slo-harness --bin generate-data
+
+      - name: Generate SLO policy sets
+        working-directory: benchmarks/reaper-vs-opa
+        run: |
+          ./target/release/generate-data --count 10000 \
+            --output "$RUNNER_TEMP/slo-simple-10k.json" \
+            policy-set --language simple --resource-prefix /slo/eval
+          ./target/release/generate-data --count 10000 \
+            --output "$RUNNER_TEMP/slo-dsl-10k.json" \
+            policy-set --language dsl --resource-prefix /slo/targeted
+
+      - name: Run the four SLO scenarios (fresh agent each)
+        working-directory: benchmarks/reaper-vs-opa
+        env:
+          SLO_MULTIPLIER: ${{ github.event.inputs.multiplier || '250' }}
+          REQUESTS: ${{ github.event.inputs.requests || '20000' }}
+        run: |
+          set -uo pipefail
+          AGENT=../../target/release/reaper-agent
+          HARNESS=./target/release/slo-harness
+          mkdir -p "$RUNNER_TEMP/slo-results"
+          FAILED=0
+
+          start_agent() { # $1 = extra env ("" for none)
+            env $1 RUST_LOG=warn "$AGENT" > "$RUNNER_TEMP/agent-$SCENARIO.log" 2>&1 &
+            AGENT_PID=$!
+            for _ in $(seq 1 30); do
+              curl -sf http://localhost:8080/health > /dev/null && return 0
+              sleep 1
+            done
+            echo "agent failed to become healthy"; cat "$RUNNER_TEMP/agent-$SCENARIO.log"; return 1
+          }
+          stop_agent() { kill "$AGENT_PID" 2>/dev/null || true; wait "$AGENT_PID" 2>/dev/null || true; }
+
+          run_scenario() { # $1 scenario, $2 agent env, $3.. harness args
+            SCENARIO="$1"; AGENT_ENV="$2"; shift 2
+            echo "::group::$SCENARIO"
+            start_agent "$AGENT_ENV" || { FAILED=1; echo "::endgroup::"; return; }
+            if ! "$HARNESS" --scenario "$SCENARIO" \
+                --requests "$REQUESTS" --concurrency 4 \
+                --assert-slo slo.yaml --slo-multiplier "$SLO_MULTIPLIER" \
+                --save "$RUNNER_TEMP/slo-results/$SCENARIO.json" "$@"; then
+              FAILED=1
+            fi
+            stop_agent
+            echo "::endgroup::"
+          }
+
+          # evaluate-all: needs the arm switch AND a prunable (Simple) set —
+          # the pruning index does not prune DSL yet (R2-P2-1).
+          run_scenario slo-evaluate-all "REAPER_ALLOW_EVALUATE_ALL=true" \
+            --evaluate-all-policy-set "$RUNNER_TEMP/slo-simple-10k.json"
+          run_scenario slo-targeted "" \
+            --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
+          run_scenario slo-batch "" \
+            --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
+          run_scenario slo-rebac "" \
+            --rebac-policy policies/reaper/rebac.reap \
+            --rebac-data data/10k/rebac.json
+
+          exit $FAILED
+
+      - name: Upload HDR result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slo-harness-results
+          path: ${{ runner.temp }}/slo-results/

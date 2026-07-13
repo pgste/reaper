@@ -225,7 +225,7 @@ async fn main() -> Result<()> {
     // that compares latency over non-equivalent decisions is meaningless, so a
     // divergence aborts the run rather than producing a misleading number.
     eprintln!("{}", "⚖️  Enforcing cross-engine decision parity...".bold());
-    let parity_sample = args.requests.min(2000).max(200);
+    let parity_sample = args.requests.clamp(200, 2000);
     for scenario in &scenarios {
         enforce_decision_parity(&args.reaper_url, &args.opa_url, scenario, parity_sample).await?;
     }

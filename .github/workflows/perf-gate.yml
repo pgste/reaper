@@ -27,6 +27,7 @@ on:
       - "Cargo.lock"
       - ".github/workflows/perf-gate.yml"
       - "scripts/perf_ab_gate.py"
+      - "benchmarks/reaper-vs-opa/**"
   workflow_dispatch: {}
 
 permissions:
@@ -88,3 +89,110 @@ jobs:
 
       - name: Compare baselines (blocking)
         run: python3 scripts/perf_ab_gate.py --criterion-dir target/criterion --base base --head head
+
+  # Served-path HTTP A/B gate (Plan 08 §3 / PERF R2-P1-1). The criterion job
+  # above gates the ENGINE slice; this sibling job gates the REQUEST-TOTAL
+  # path a client actually experiences — JSON deser, policy lookup, decision
+  # cache, audit capture, response serialization — by driving the slo-harness
+  # `slo-targeted` scenario (1k DSL policies, reduced N) against a release
+  # agent built from the merge-base AND from the PR head, interleaved
+  # base/head/base/head... in the SAME job on the SAME runner. The harness and
+  # policy set are built ONCE from the PR head so the measuring instrument is
+  # identical on both sides; only the agent under test changes.
+  #
+  # Gate rule (scripts/perf_ab_gate.py --http-ab): regression iff
+  # median(head p99) > median(base p99) * 1.25 AND min(head) > max(base) —
+  # every head run slower than every base run, the sample analog of
+  # non-overlapping confidence intervals. HTTP loopback jitters more than
+  # in-process criterion, hence the looser 25% threshold; the paired design
+  # still cancels machine-to-machine variance by construction.
+  #
+  # Added PR-CI time budget (~4-6 min warm): the two agent release builds are
+  # incremental via the shared cache, the harness build is ~1 min, and the
+  # measured phase is 6 short runs (3 per side × ~20-30 s each: agent start +
+  # 1k-policy deploy + 5k requests). Cold-cache runs take longer (full release
+  # builds) but run in parallel with the criterion job, not after it.
+  http-slo-ab:
+    name: Paired A/B served-path HTTP gate (slo-targeted @ 1k)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout PR head (full history for merge-base)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-slo-ab"
+          cache-on-failure: true
+          workspaces: |
+            .
+            benchmarks/reaper-vs-opa
+
+      - name: Gate self-test (incl. http-ab verdicts)
+        run: python3 scripts/perf_ab_gate.py --self-test
+
+      - name: Build harness + policy set from PR head (fixed instrument)
+        working-directory: benchmarks/reaper-vs-opa
+        run: |
+          set -euo pipefail
+          cargo build --release --bin slo-harness --bin generate-data
+          cp target/release/slo-harness "$RUNNER_TEMP/slo-harness"
+          ./target/release/generate-data --count 1000 \
+            --output "$RUNNER_TEMP/slo-dsl-1k.json" \
+            policy-set --language dsl --resource-prefix /slo/targeted
+
+      - name: Build merge-base agent (baseline "base")
+        run: |
+          set -euo pipefail
+          BASE_REF="${{ github.event.pull_request.base.ref || 'main' }}"
+          BASE_SHA="$(git merge-base HEAD "origin/${BASE_REF}")"
+          echo "merge-base with origin/${BASE_REF}: ${BASE_SHA}"
+          git checkout --quiet "${BASE_SHA}"
+          cargo build --release --bin reaper-agent
+          cp target/release/reaper-agent "$RUNNER_TEMP/agent-base"
+
+      - name: Build PR-head agent (baseline "head")
+        run: |
+          set -euo pipefail
+          git checkout --quiet "${{ github.event.pull_request.head.sha || github.sha }}"
+          cargo build --release --bin reaper-agent
+          cp target/release/reaper-agent "$RUNNER_TEMP/agent-head"
+
+      - name: Interleaved A/B runs (3 per side, same runner)
+        run: |
+          set -euo pipefail
+          run_once() { # $1 = agent binary, $2 = output json
+            RUST_LOG=warn "$1" > /dev/null 2>&1 &
+            AGENT_PID=$!
+            for _ in $(seq 1 30); do
+              curl -sf http://localhost:8080/health > /dev/null && break
+              sleep 1
+            done
+            "$RUNNER_TEMP/slo-harness" --scenario slo-targeted \
+              --policy-set "$RUNNER_TEMP/slo-dsl-1k.json" \
+              --requests 5000 --concurrency 8 --warmup 1000 \
+              --output json --save "$2"
+            kill "$AGENT_PID" 2>/dev/null || true
+            wait "$AGENT_PID" 2>/dev/null || true
+          }
+          # Interleave base/head so slow runner drift hits both sides equally.
+          for i in 1 2 3; do
+            run_once "$RUNNER_TEMP/agent-base" "$RUNNER_TEMP/base-$i.json"
+            run_once "$RUNNER_TEMP/agent-head" "$RUNNER_TEMP/head-$i.json"
+          done
+          jq -s 'map(.[0])' "$RUNNER_TEMP"/base-*.json > "$RUNNER_TEMP/base-runs.json"
+          jq -s 'map(.[0])' "$RUNNER_TEMP"/head-*.json > "$RUNNER_TEMP/head-runs.json"
+
+      - name: Compare request-total p99 (blocking)
+        run: |
+          python3 scripts/perf_ab_gate.py --http-ab \
+            --base-json "$RUNNER_TEMP/base-runs.json" \
+            --head-json "$RUNNER_TEMP/head-runs.json" \
+            --metric p99_us --http-threshold 1.25
