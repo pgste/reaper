@@ -259,6 +259,43 @@ fn contract_is_publishable() {
 
     let paths = doc["paths"].as_object().expect("spec has a paths object");
 
+    // --- Path-template ↔ declared-parameter parity. Hard fail: every {param}
+    // in a path template must be declared as a `in: path` parameter on each
+    // of its operations. utoipa silently keeps only ONE `params(...)` block
+    // per #[utoipa::path], so a second block drops the first's path params —
+    // exactly the drift openapi-spec-validator rejected in CI
+    // ("Path parameter 'ns' ... was not resolved"). Catch it locally.
+    for (template, item) in paths {
+        let vars: Vec<&str> = template
+            .split('/')
+            .filter(|seg| seg.starts_with('{') && seg.ends_with('}'))
+            .map(|seg| &seg[1..seg.len() - 1])
+            .collect();
+        if vars.is_empty() {
+            continue;
+        }
+        for (method, op) in item.as_object().into_iter().flatten() {
+            if !op.is_object() || method == "parameters" {
+                continue;
+            }
+            let declared: Vec<&str> = op["parameters"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|p| p["in"] == "path")
+                .filter_map(|p| p["name"].as_str())
+                .collect();
+            for var in &vars {
+                assert!(
+                    declared.contains(var),
+                    "{method} {template}: path template variable `{{{var}}}` has no \
+                     declared `in: path` parameter (check for a duplicate params(...) \
+                     block in the #[utoipa::path] annotation)"
+                );
+            }
+        }
+    }
+
     let mut no_description = Vec::new();
     let mut no_4xx = Vec::new();
     let mut untyped_success = Vec::new();

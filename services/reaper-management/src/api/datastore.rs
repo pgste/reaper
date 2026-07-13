@@ -1492,9 +1492,7 @@ struct ChangesResponse {
     tag = "datastore",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("ns" = String, Path, description = "Namespace slug")
-    ),
-    params(
+        ("ns" = String, Path, description = "Namespace slug"),
         ("since" = Option<i64>, Query, description = "Last applied sequence (exclusive; default 0)"),
         ("limit" = Option<i64>, Query, description = "Max deltas per page (default 500, max 2000)")
     ),
