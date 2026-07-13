@@ -6994,3 +6994,386 @@ async fn migration_plan_fails_closed_and_reports_access_loss_exactly() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 }
+
+/// Plan 12 Phase 2: atomic apply + fleet convergence. Applying a rename
+/// migration persists records+model+history+outbox together, publishes a
+/// new data version, and an agent following DELTAS from the pre-migration
+/// snapshot converges to exactly the post-migration snapshot
+/// (delta ≡ rebuild across a migration). A blocked apply mutates nothing.
+#[tokio::test]
+async fn migration_apply_atomic_and_delta_equals_rebuild_across_migration() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Apply Org", "slug": "apply-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/apply-org/namespaces",
+            Some(json!({"slug": "main"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let base = "/orgs/apply-org/namespaces/main/datastore";
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    for (uri, body) in [
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "alice", "entity_type": "user",
+                   "attributes": {"department": "eng"}}),
+        ),
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "bob", "entity_type": "user", "attributes": {}}),
+        ),
+        (
+            format!("{base}/role-bindings"),
+            json!({"subject": "alice", "role": "editor"}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "doc-1", "relation": "owner", "subject": "alice"}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "team-a", "relation": "member_of", "subject": "alice"}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request("POST", &uri, Some(body), &key))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    // Publish v1 — the pre-migration snapshot an agent has loaded.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(parse_body(r).await["version"], 1);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/changes?since=0"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let pre_head = parse_body(r).await["head_seq"].as_i64().unwrap();
+
+    // "Agent A": fresh-loaded v1, keyed by entity id.
+    let doc_map = |document: &Value| -> std::collections::BTreeMap<String, Value> {
+        document["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["id"].as_str().unwrap().to_string(), e.clone()))
+            .collect()
+    };
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/1"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let mut agent_a = doc_map(&parse_body(r).await["document"]);
+
+    // APPLY the migration: rename role + relation in one chain.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(json!({"transforms": [
+                {"op": "rename_role", "from": "editor", "to": "author"},
+                {"op": "rename_relation", "from": "owner", "to": "possessor"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let applied = parse_body(r).await;
+    assert_eq!(applied["model_version"], 1);
+    assert_eq!(applied["published"]["version"], 2);
+    assert_eq!(applied["impact"]["decision_neutral"], true);
+
+    // Persisted state: model, records, history all moved together.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &format!("{base}/model"), None, &key))
+        .await
+        .unwrap();
+    let model = parse_body(r).await;
+    let roles: Vec<&str> = model["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    assert!(roles.contains(&"author") && !roles.contains(&"editor"));
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/role-bindings?subject=alice"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(parse_body(r).await["role_bindings"][0]["role"], "author");
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/migrations"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let history = parse_body(r).await;
+    assert_eq!(history["model_version"], 1);
+    assert_eq!(
+        history["migrations"][0]["transforms"][0]["op"],
+        "rename_role"
+    );
+    assert_ne!(
+        history["migrations"][0]["model_before_hash"],
+        history["migrations"][0]["model_after_hash"]
+    );
+
+    // delta ≡ rebuild across the migration: agent A pulls deltas from its
+    // pre-migration position and must land EXACTLY on the v2 snapshot.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/changes?since={pre_head}"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let changes = parse_body(r).await;
+    assert_eq!(changes["snapshot_required"], false);
+    let deltas = changes["deltas"].as_array().unwrap();
+    assert!(!deltas.is_empty(), "migration must emit deltas");
+    for d in deltas {
+        let id = d["entity_id"].as_str().unwrap().to_string();
+        match d["op"].as_str().unwrap() {
+            "upsert" => {
+                agent_a.insert(id, d["document"].clone());
+            }
+            "delete" => {
+                agent_a.remove(&id);
+            }
+            other => panic!("unknown delta op {other}"),
+        }
+    }
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/2"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let agent_b = doc_map(&parse_body(r).await["document"]);
+    assert_eq!(
+        agent_a, agent_b,
+        "delta-following agent must equal fresh-snapshot agent across the migration"
+    );
+
+    // A blocked apply is refused with 409 and mutates NOTHING.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(json!({"transforms": [
+                {"op": "retype_attribute", "entity_type": "user",
+                 "name": "department", "to": "int"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/migrations"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        parse_body(r).await["model_version"],
+        1,
+        "blocked apply must not bump the model version"
+    );
+}
+
+/// Plan 12 Phase 2: the blind model overwrite is gone. PUT …/model still
+/// accepts ADDITIVE edits, but a vocabulary-breaking overwrite (role
+/// removed, attribute retyped) is rejected with a pointer to the migration
+/// endpoints.
+#[tokio::test]
+async fn put_model_rejects_vocabulary_breaking_overwrites() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Guard Org", "slug": "guard-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/guard-org/namespaces",
+            Some(json!({"slug": "main"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let base = "/orgs/guard-org/namespaces/main/datastore";
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &format!("{base}/model"), None, &key))
+        .await
+        .unwrap();
+    let mut model = parse_body(r).await;
+
+    // Additive: a brand-new role passes.
+    model["roles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "auditor", "permissions": ["resource:read"]}));
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            &format!("{base}/model"),
+            Some(model.clone()),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // Breaking: silently dropping a role is refused with direction to the
+    // migration path.
+    model["roles"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["name"] != "editor");
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            &format!("{base}/model"),
+            Some(model),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let err = parse_body(r).await;
+    let msg = err.to_string();
+    assert!(
+        msg.contains("editor") && msg.contains("migrations"),
+        "{msg}"
+    );
+
+    // The model on disk still has editor.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &format!("{base}/model"), None, &key))
+        .await
+        .unwrap();
+    let roles: Vec<String> = parse_body(r).await["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str().map(String::from))
+        .collect();
+    assert!(roles.contains(&"editor".to_string()));
+    assert!(roles.contains(&"auditor".to_string()));
+}

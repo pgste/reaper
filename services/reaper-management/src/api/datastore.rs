@@ -40,6 +40,8 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(list_tuples, write_tuple, remove_tuple))
         .routes(routes!(publish))
         .routes(routes!(plan_migration))
+        .routes(routes!(apply_migration))
+        .routes(routes!(list_migrations))
         .routes(routes!(get_changes))
         .routes(routes!(list_versions))
         .routes(routes!(get_version))
@@ -80,6 +82,33 @@ async fn authorize(
         org_id: organization.id,
         namespace_id: namespace.id,
     })
+}
+
+/// Wake the fleet after a publish: agents/sync on THIS instance via the
+/// broadcast stream, sibling management instances via pg_notify (no-op on
+/// SQLite) so their connected agents wake too.
+async fn notify_published(
+    state: &AppState,
+    resolved: &Resolved,
+    datastore_id: Uuid,
+    published: &crate::db::repositories::datastore::PublishedVersion,
+) {
+    let _ = state.event_tx.send(ServerEvent::DatastorePublished {
+        datastore_id,
+        org_id: resolved.org_id,
+        namespace_id: Some(resolved.namespace_id),
+        version: published.version,
+        checksum: published.checksum.clone(),
+    });
+    crate::events_pg::notify_datastore_published(
+        state,
+        datastore_id,
+        resolved.org_id,
+        Some(resolved.namespace_id),
+        published.version,
+        &published.checksum,
+    )
+    .await;
 }
 
 async fn require_store(state: &AppState, resolved: &Resolved) -> ApiResult<DatastoreRecord> {
@@ -219,6 +248,20 @@ async fn put_model(
 ) -> ApiResult<Json<Value>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
+    // A bare overwrite that changes vocabulary would silently strand every
+    // record still using the old names/types — the exact hazard the
+    // migration engine exists to prevent (Plan 12 step 4). Additive edits
+    // pass; renames/removals/retypes must go through …/migrations/plan +
+    // apply, which transform the records atomically alongside the model.
+    let breaks = migration::vocabulary_breaking_changes(&store.model, &model);
+    if !breaks.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "model overwrite would break existing vocabulary ({}); use \
+             POST …/datastore/migrations/plan + /apply so records are \
+             transformed with the model",
+            breaks.join("; ")
+        )));
+    }
     DatastoreRepository::new(&state.db)
         .update_model(store.id, &model)
         .await?;
@@ -606,26 +649,7 @@ async fn publish(
     let published = DatastoreRepository::new(&state.db)
         .publish(&store, &user.id.to_string())
         .await?;
-
-    // Wake the fleet: agents/sync subscribed to the org event stream fetch
-    // the new version and hot-swap their DataStore.
-    let _ = state.event_tx.send(ServerEvent::DatastorePublished {
-        datastore_id: store.id,
-        org_id: resolved.org_id,
-        namespace_id: Some(resolved.namespace_id),
-        version: published.version,
-        checksum: published.checksum.clone(),
-    });
-    // …and sibling management instances via pg_notify (no-op on SQLite).
-    crate::events_pg::notify_datastore_published(
-        &state,
-        store.id,
-        resolved.org_id,
-        Some(resolved.namespace_id),
-        published.version,
-        &published.checksum,
-    )
-    .await;
+    notify_published(&state, &resolved, store.id, &published).await;
 
     Ok(Json(json!({
         "version": published.version,
@@ -677,6 +701,127 @@ async fn plan_migration(
 ) -> ApiResult<Json<Value>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
+    let prepared = prepare_migration(&state, &store, &req.transforms).await?;
+    Ok(Json(prepared.report(&store)))
+}
+
+/// Apply a planned migration ATOMICALLY, then publish the new data version
+/// so the fleet converges via the existing delta path. The plan is
+/// recomputed server-side from the transforms — a client can never smuggle
+/// a stale or hand-edited plan past the blockers. Blocked plans are refused
+/// with 409 and the blocker list; nothing is mutated.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/migrations/apply",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    request_body = PlanMigrationRequest,
+    responses(
+        (status = 200, description = "Migration applied atomically + new data version published"),
+        (status = 400, description = "Invalid transform"),
+        (status = 409, description = "Plan is blocked (coercion errors / non-empty relation)")
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn apply_migration(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, ns)): Path<(String, String)>,
+    Json(req): Json<PlanMigrationRequest>,
+) -> ApiResult<Json<Value>> {
+    let resolved = authorize(&state, &user, &org, &ns, true).await?;
+    let store = require_store(&state, &resolved).await?;
+    let prepared = prepare_migration(&state, &store, &req.transforms).await?;
+
+    if !prepared.plan.applyable() {
+        return Err(ApiError::Conflict(
+            serde_json::to_string(&json!({
+                "error": "migration plan is blocked (fail closed) — resolve the blockers or \
+                          adjust the transforms",
+                "blockers": prepared.plan.blockers,
+            }))
+            .unwrap_or_else(|_| "migration plan is blocked".to_string()),
+        ));
+    }
+
+    let repo = DatastoreRepository::new(&state.db);
+    // One transaction: records + model + model_version + history + outbox.
+    let model_version = repo
+        .apply_migration(
+            &store,
+            &prepared.plan,
+            &prepared.dirty,
+            &user.id.to_string(),
+        )
+        .await?;
+
+    // Publish the post-migration data version so agents converge (snapshot
+    // lineage pinned at the migration's change_seq). A crash between the
+    // committed apply and this publish is recoverable by re-publishing —
+    // the records, model, and outbox are already consistent.
+    let updated = require_store(&state, &resolved).await?;
+    let published = repo.publish(&updated, &user.id.to_string()).await?;
+    notify_published(&state, &resolved, updated.id, &published).await;
+
+    Ok(Json(json!({
+        "model_version": model_version,
+        "record_ops": prepared.plan.record_ops,
+        "impact": prepared.impact,
+        "docs_changed": prepared.dirty.len(),
+        "published": {
+            "version": published.version,
+            "checksum": published.checksum,
+        },
+    })))
+}
+
+/// The append-only migration history (newest first): transforms, author,
+/// before/after model hashes per model version.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/migrations",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug")
+    ),
+    responses((status = 200, description = "Migration history")),
+    security(("bearer_jwt" = []))
+)]
+async fn list_migrations(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, ns)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let resolved = authorize(&state, &user, &org, &ns, false).await?;
+    let store = require_store(&state, &resolved).await?;
+    let history = DatastoreRepository::new(&state.db)
+        .list_model_versions(store.id)
+        .await?;
+    Ok(Json(json!({
+        "model_version": store.model_version,
+        "migrations": history,
+    })))
+}
+
+/// Everything a dry-run computes; `apply` persists exactly this state.
+struct PreparedMigration {
+    plan: migration::MigrationPlan,
+    doc_before: Value,
+    doc_after: Value,
+    /// FULL dirty set for the outbox: (entity_id, tombstone).
+    dirty: Vec<(String, bool)>,
+    impact: Option<impact::ImpactReport>,
+}
+
+async fn prepare_migration(
+    state: &AppState,
+    store: &DatastoreRecord,
+    transforms: &[migration::ModelTransform],
+) -> ApiResult<PreparedMigration> {
     let repo = DatastoreRepository::new(&state.db);
 
     // Full record sets — the planner and both materializations need them.
@@ -684,7 +829,7 @@ async fn plan_migration(
     let bindings = repo.list_bindings(store.id, None, None).await?;
     let tuples = repo.list_tuples(store.id, None, None, None).await?;
 
-    let plan = migration::plan(&req.transforms, &store.model, &entities, &bindings, &tuples)
+    let plan = migration::plan(transforms, &store.model, &entities, &bindings, &tuples)
         .map_err(ApiError::BadRequest)?;
 
     // Materialize both worlds. Deterministic ordering (BTreeMap/BTreeSet in
@@ -697,7 +842,8 @@ async fn plan_migration(
         &plan.tuples_after,
     );
 
-    // Structural diff: which materialized entity documents changed.
+    // Structural diff → the exact outbox dirty set: docs that changed or
+    // appeared get an upsert mark; docs that vanished get a tombstone.
     let by_id = |doc: &Value| -> std::collections::BTreeMap<String, Value> {
         doc["entities"]
             .as_array()
@@ -710,20 +856,24 @@ async fn plan_migration(
     };
     let before_map = by_id(&doc_before);
     let after_map = by_id(&doc_after);
-    let mut docs_changed: Vec<&String> = before_map
-        .iter()
-        .filter(|(id, doc)| after_map.get(*id) != Some(doc))
-        .map(|(id, _)| id)
-        .chain(after_map.keys().filter(|id| !before_map.contains_key(*id)))
-        .collect();
-    docs_changed.sort();
-    docs_changed.dedup();
-    let docs_changed_total = docs_changed.len();
-    docs_changed.truncate(100);
+    let mut dirty: Vec<(String, bool)> = Vec::new();
+    for (id, doc) in &before_map {
+        match after_map.get(id) {
+            None => dirty.push((id.clone(), true)),
+            Some(after_doc) if after_doc != doc => dirty.push((id.clone(), false)),
+            _ => {}
+        }
+    }
+    for id in after_map.keys() {
+        if !before_map.contains_key(id) {
+            dirty.push((id.clone(), false));
+        }
+    }
+    dirty.sort();
 
     // Access impact via the real engine — skipped when blocked, because a
     // plan that cannot apply has no meaningful "after" state.
-    let impact_report = if plan.applyable() {
+    let impact = if plan.applyable() {
         let specs = |m: &ModelDefinition| -> Vec<impact::RelationSpec> {
             m.relations
                 .iter()
@@ -737,7 +887,7 @@ async fn plan_migration(
             .map_err(ApiError::Internal)?;
         let profile_after = impact::access_profile(&doc_after, &specs(&plan.model_after))
             .map_err(ApiError::Internal)?;
-        let maps = migration::rename_maps(&req.transforms);
+        let maps = migration::rename_maps(transforms);
         Some(impact::diff(
             &impact::normalize(&profile_before, &maps),
             &profile_after,
@@ -746,30 +896,44 @@ async fn plan_migration(
         None
     };
 
-    let checksum = |doc: &Value| -> String {
-        use sha2::{Digest, Sha256};
-        format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(doc.to_string().as_bytes()))
-        )
-    };
+    Ok(PreparedMigration {
+        plan,
+        doc_before,
+        doc_after,
+        dirty,
+        impact,
+    })
+}
 
-    Ok(Json(json!({
-        "applyable": plan.applyable(),
-        "record_ops": plan.record_ops,
-        "blockers": plan.blockers,
-        "impact": impact_report,
-        "docs_changed": { "total": docs_changed_total, "sample": docs_changed },
-        "before": {
-            "checksum": checksum(&doc_before),
-            "entities": before_map.len(),
-        },
-        "after": {
-            "checksum": checksum(&doc_after),
-            "entities": after_map.len(),
-            "model": plan.model_after,
-        },
-    })))
+impl PreparedMigration {
+    fn report(&self, store: &DatastoreRecord) -> Value {
+        let checksum = |doc: &Value| -> String {
+            use sha2::{Digest, Sha256};
+            format!(
+                "sha256:{}",
+                hex::encode(Sha256::digest(doc.to_string().as_bytes()))
+            )
+        };
+        let count = |doc: &Value| doc["entities"].as_array().map(|a| a.len()).unwrap_or(0);
+        let sample: Vec<&String> = self.dirty.iter().take(100).map(|(id, _)| id).collect();
+        json!({
+            "applyable": self.plan.applyable(),
+            "record_ops": self.plan.record_ops,
+            "blockers": self.plan.blockers,
+            "impact": self.impact,
+            "docs_changed": { "total": self.dirty.len(), "sample": sample },
+            "before": {
+                "checksum": checksum(&self.doc_before),
+                "entities": count(&self.doc_before),
+                "model_version": store.model_version,
+            },
+            "after": {
+                "checksum": checksum(&self.doc_after),
+                "entities": count(&self.doc_after),
+                "model": self.plan.model_after,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
