@@ -105,6 +105,12 @@ pub struct DecisionLogEntry {
     #[serde(default)]
     pub seq: u64,
 
+    /// Per-writer-boot chain identity (matches the Checkpoint.chain_id for the
+    /// same boot). Empty on pre-A2 records and the in-memory ring. Bound into
+    /// the entry hash.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub chain_id: String,
+
     /// Hash of the previous record in the durable stream. Empty on the in-memory
     /// query ring (the chain is a property of the durable audit artifact, not
     /// the ring); stamped by the writer thread. Plan 04.
@@ -411,6 +417,402 @@ pub fn verify_checkpoint(
     Ok(())
 }
 
+/// Verify chain *linkage* over a run using the STORED `prev_hash`/`entry_hash`
+/// values only — never recomputing `entry_hash` from content (round-2 A1,
+/// [`VerifyMode::Linkage`]). Each record's `prev_hash` must equal the previous
+/// record's stored `entry_hash`, and the run must link from `start_prev`. This
+/// is sound over a queryable store whose column projection is not byte-identical
+/// to the signed stream: it detects deletion, insertion, reordering, and
+/// truncation (any of which break linkage), while a pure content edit that
+/// preserves the stored hashes is left to a [`VerifyMode::ByteExact`] pass over
+/// the immutable archive.
+pub fn verify_chain_linkage(
+    entries: &[DecisionLogEntry],
+    start_prev: &str,
+) -> Result<(), ChainError> {
+    let mut prev = start_prev.to_string();
+    for e in entries {
+        if e.prev_hash != prev {
+            return Err(ChainError {
+                seq: e.seq,
+                reason: "prev_hash does not link to the previous record's stored \
+                         entry_hash (insertion, deletion, reordering, or truncation)"
+                    .to_string(),
+            });
+        }
+        if e.entry_hash.is_empty() {
+            return Err(ChainError {
+                seq: e.seq,
+                reason: "record has no stored entry_hash to link the chain".to_string(),
+            });
+        }
+        prev = e.entry_hash.clone();
+    }
+    Ok(())
+}
+
+/// Linkage-mode checkpoint verification (round-2 A1): authenticate the
+/// checkpoint signature, confirm count + `seq` range + `last_entry_hash` against
+/// the covered records' STORED values, and verify linkage (not content hashes)
+/// across the covered range. Companion to [`verify_checkpoint`] for
+/// [`VerifyMode::Linkage`].
+pub fn verify_checkpoint_linkage(
+    checkpoint: &Checkpoint,
+    entries: &[DecisionLogEntry],
+    vk: &reaper_core::bundle_signing::VerifyingKey,
+    expected_key_id: Option<&str>,
+) -> Result<(), CheckpointError> {
+    checkpoint
+        .verify_signature(vk, expected_key_id)
+        .map_err(|e| CheckpointError {
+            seq: None,
+            reason: format!("signature invalid: {e}"),
+        })?;
+
+    verify_chain_linkage(entries, &checkpoint.prev_hash).map_err(|e| CheckpointError {
+        seq: Some(e.seq),
+        reason: e.reason,
+    })?;
+
+    if entries.len() as u64 != checkpoint.count {
+        return Err(CheckpointError {
+            seq: None,
+            reason: format!(
+                "count mismatch: checkpoint claims {} records, range has {}",
+                checkpoint.count,
+                entries.len()
+            ),
+        });
+    }
+    match (entries.first(), entries.last()) {
+        (Some(first), Some(last)) => {
+            if first.seq != checkpoint.seq_start {
+                return Err(CheckpointError {
+                    seq: Some(first.seq),
+                    reason: format!(
+                        "seq_start mismatch: checkpoint claims {}, range starts at {}",
+                        checkpoint.seq_start, first.seq
+                    ),
+                });
+            }
+            if last.seq != checkpoint.seq_end {
+                return Err(CheckpointError {
+                    seq: Some(last.seq),
+                    reason: format!(
+                        "seq_end mismatch: checkpoint claims {}, range ends at {}",
+                        checkpoint.seq_end, last.seq
+                    ),
+                });
+            }
+            if last.entry_hash != checkpoint.last_entry_hash {
+                return Err(CheckpointError {
+                    seq: Some(last.seq),
+                    reason: "last_entry_hash does not match the covered records".to_string(),
+                });
+            }
+        }
+        _ => {
+            if checkpoint.count != 0 {
+                return Err(CheckpointError {
+                    seq: None,
+                    reason: "checkpoint claims records but none were supplied".to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How strictly a run of records is checked against the chain (round-2 A1).
+///
+/// The two modes exist because a *queryable* store (ClickHouse) projects each
+/// record into typed columns — timestamps are re-rendered, and A2-absent fields
+/// (`data_version`, `model_version`, …) have no columns — so a record
+/// reconstructed from store rows does **not** reproduce the exact bytes that
+/// were hashed. Recomputing `entry_hash` from a store reconstruction therefore
+/// false-positives on clean data. The modes make the guarantee explicit:
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyMode {
+    /// Recompute each `entry_hash` from record content (the full cryptographic
+    /// guarantee: detects content mutation, insertion, deletion, reordering).
+    /// Requires **byte-identical** input — the raw write-ordered NDJSON stream
+    /// (`reaper-cli audit verify --file`, or the immutable WORM archive). This
+    /// is the authoritative proof.
+    ByteExact,
+    /// Verify chain *linkage* using the **stored** `prev_hash`/`entry_hash`
+    /// values plus checkpoint signatures, without recomputing content hashes.
+    /// Sound over a queryable store (no false positives on reformatting) and
+    /// detects deletion, insertion, reordering, truncation, and checkpoint
+    /// tampering — but NOT a pure in-place content edit that preserves the
+    /// stored hashes (that class is covered by a `ByteExact` pass over the
+    /// immutable archive). The operational-monitoring guarantee.
+    Linkage,
+}
+
+impl VerifyMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            VerifyMode::ByteExact => "byte_exact",
+            VerifyMode::Linkage => "linkage",
+        }
+    }
+}
+
+/// Structured result of verifying a store-backed (or file-backed) run of
+/// decision records against their signed checkpoints (Plan 04 / round-2 A1).
+#[derive(Debug, Clone, Serialize)]
+pub struct VerificationReport {
+    /// Which guarantee this report carries (`byte_exact` vs `linkage`).
+    pub mode: &'static str,
+    /// Number of distinct `chain_id`s (writer boots) covered.
+    pub chains_checked: usize,
+    /// Total decision records considered across all chains.
+    pub records_covered: usize,
+    /// Number of checkpoints that verified against their covered range.
+    pub checkpoints_verified: usize,
+    /// True iff no violation was found.
+    pub ok: bool,
+    /// Every violation found (empty when `ok`).
+    pub violations: Vec<VerificationViolation>,
+}
+
+/// A single verification failure, naming the chain and (when known) the `seq`.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerificationViolation {
+    pub chain_id: String,
+    pub seq: Option<u64>,
+    pub kind: String,
+    pub detail: String,
+}
+
+/// Verify a set of decision records against their signed checkpoints, grouping
+/// by `chain_id` so multiple writer boots (each with its own `seq` sequence
+/// restarting at 0) are checked independently and never cross-contaminate.
+///
+/// For each chain: sort by `seq` ascending, run [`verify_chain`] over it, and
+/// verify every checkpoint that belongs to the chain against the covered
+/// `[seq_start, seq_end]` sub-range. Signed checkpoints need a verifying key
+/// selected by `key_id`; if `key_id` is empty and exactly one key was supplied,
+/// that key is used. A signed checkpoint with no matching key is a violation
+/// (its authenticity cannot be established).
+pub fn verify_records(
+    entries: Vec<DecisionLogEntry>,
+    checkpoints: &[Checkpoint],
+    verifying_keys: &[(String, reaper_core::bundle_signing::VerifyingKey)],
+    mode: VerifyMode,
+) -> VerificationReport {
+    use std::collections::BTreeMap;
+
+    let records_covered = entries.len();
+    let mut violations: Vec<VerificationViolation> = Vec::new();
+
+    // Group entries by chain_id, preserving a stable ordering of chains.
+    let mut by_chain: BTreeMap<String, Vec<DecisionLogEntry>> = BTreeMap::new();
+    for e in entries {
+        by_chain.entry(e.chain_id.clone()).or_default().push(e);
+    }
+    // Every checkpoint's chain must be represented even if it covers no
+    // presented records (so a checkpoint over deleted records still reports).
+    for cp in checkpoints {
+        by_chain.entry(cp.chain_id.clone()).or_default();
+    }
+
+    let chains_checked = by_chain.len();
+
+    // Resolve the verifying key for a checkpoint by key_id (falling back to the
+    // sole key when the checkpoint's key_id is empty and exactly one is given).
+    let pick_key = |key_id: &str| -> Option<&reaper_core::bundle_signing::VerifyingKey> {
+        if let Some((_, vk)) = verifying_keys.iter().find(|(id, _)| id == key_id) {
+            return Some(vk);
+        }
+        if key_id.is_empty() && verifying_keys.len() == 1 {
+            return Some(&verifying_keys[0].1);
+        }
+        None
+    };
+
+    let mut checkpoints_verified = 0usize;
+
+    for (chain_id, mut chain_entries) in by_chain {
+        chain_entries.sort_by_key(|e| e.seq);
+
+        // Whole-chain integrity: content re-hash (ByteExact) over a
+        // byte-identical stream, or linkage over stored hashes (Linkage) for a
+        // queryable store whose projection is not byte-identical.
+        let chain_result = match mode {
+            VerifyMode::ByteExact => verify_chain(&chain_entries),
+            VerifyMode::Linkage => verify_chain_linkage(&chain_entries, ""),
+        };
+        if let Err(e) = chain_result {
+            violations.push(VerificationViolation {
+                chain_id: chain_id.clone(),
+                seq: Some(e.seq),
+                kind: "chain_broken".to_string(),
+                detail: e.reason,
+            });
+        }
+
+        // Every checkpoint that belongs to this chain, over its covered range.
+        for cp in checkpoints.iter().filter(|c| c.chain_id == chain_id) {
+            let covered: Vec<DecisionLogEntry> = chain_entries
+                .iter()
+                .filter(|e| e.seq >= cp.seq_start && e.seq <= cp.seq_end)
+                .cloned()
+                .collect();
+
+            let Some(vk) = pick_key(&cp.key_id) else {
+                violations.push(VerificationViolation {
+                    chain_id: chain_id.clone(),
+                    seq: None,
+                    kind: "no_verifying_key".to_string(),
+                    detail: format!("no verifying key for key_id={:?}", cp.key_id),
+                });
+                continue;
+            };
+            let expected_key_id = (!cp.key_id.is_empty()).then_some(cp.key_id.as_str());
+            let cp_result = match mode {
+                VerifyMode::ByteExact => verify_checkpoint(cp, &covered, vk, expected_key_id),
+                VerifyMode::Linkage => verify_checkpoint_linkage(cp, &covered, vk, expected_key_id),
+            };
+            match cp_result {
+                Ok(()) => checkpoints_verified += 1,
+                Err(e) => violations.push(VerificationViolation {
+                    chain_id: chain_id.clone(),
+                    seq: e.seq,
+                    kind: "checkpoint_invalid".to_string(),
+                    detail: e.reason,
+                }),
+            }
+        }
+    }
+
+    VerificationReport {
+        mode: mode.as_str(),
+        chains_checked,
+        records_covered,
+        checkpoints_verified,
+        ok: violations.is_empty(),
+        violations,
+    }
+}
+
+/// Parse `key_id:hex,key_id2:hex2` checkpoint verifying-key pairs (round-2 A1).
+/// Ed25519 is assumed (the default checkpoint algorithm). Whitespace and empty
+/// entries are ignored; the first malformed pair returns an error.
+pub fn parse_verifying_keys(
+    spec: &str,
+) -> Result<Vec<(String, reaper_core::bundle_signing::VerifyingKey)>, String> {
+    use reaper_core::bundle_signing::{SigAlgorithm, VerifyingKey};
+    let mut out = Vec::new();
+    for item in spec.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let (key_id, hex) = item
+            .split_once(':')
+            .ok_or_else(|| format!("expected key_id:hex, got {item:?}"))?;
+        let vk = VerifyingKey::from_hex(SigAlgorithm::Ed25519Sha256, hex.trim())
+            .map_err(|e| format!("bad verifying key for {:?}: {e}", key_id.trim()))?;
+        out.push((key_id.trim().to_string(), vk));
+    }
+    Ok(out)
+}
+
+/// Reconstruct a [`DecisionLogEntry`] from a ClickHouse JSONEachRow row
+/// (round-2 A1). ClickHouse projects the NDJSON record into typed columns, so
+/// this undoes the projection best-effort: it decodes the embedded JSON strings
+/// (`context`/`input_data`/`replay_input`), coerces quoted 64-bit integers and
+/// the `UInt8` `cache_hit` flag back to their serde types, and drops empty
+/// skip-serialized optionals so they deserialize as absent (not `Some("")`).
+///
+/// NOTE: exact hash re-verification needs byte-identical canonical bytes. A
+/// queryable store may reformat some values (e.g. timestamps) relative to the
+/// signed NDJSON, so the AUTHORITATIVE verification is over the raw
+/// write-ordered stream (NDJSON / S3 WORM) via `reaper-cli audit verify
+/// --file`. This path is a convenience over the queryable store.
+pub fn entry_from_store_row(mut v: serde_json::Value) -> Result<DecisionLogEntry, String> {
+    let obj = v
+        .as_object_mut()
+        .ok_or_else(|| "decision row is not a JSON object".to_string())?;
+
+    // Quoted UInt64 → number (ClickHouse quotes 64-bit ints by default).
+    for key in ["seq", "evaluation_time_ns"] {
+        if let Some(n) = obj
+            .get(key)
+            .and_then(|x| x.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            obj.insert(key.to_string(), serde_json::Value::from(n));
+        }
+    }
+    // UInt8 cache_hit → bool.
+    if let Some(c) = obj.get("cache_hit") {
+        let truthy = c
+            .as_u64()
+            .map(|n| n != 0)
+            .or_else(|| c.as_bool())
+            .unwrap_or(false);
+        obj.insert("cache_hit".to_string(), serde_json::Value::Bool(truthy));
+    }
+    // context is a required map (serde default) — decode the embedded JSON
+    // string, or an empty map when blank.
+    let ctx = match obj.get("context").and_then(serde_json::Value::as_str) {
+        Some(s) if !s.trim().is_empty() && s != "{}" => serde_json::from_str(s)
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
+        _ => serde_json::Value::Object(Default::default()),
+    };
+    obj.insert("context".to_string(), ctx);
+    // Optional JSON blobs: decode or drop so the field is absent.
+    for key in ["input_data", "replay_input"] {
+        match obj.get(key).and_then(serde_json::Value::as_str) {
+            Some(s) if !s.trim().is_empty() && s != "{}" => {
+                let val = serde_json::from_str(s).unwrap_or(serde_json::Value::Null);
+                obj.insert(key.to_string(), val);
+            }
+            _ => {
+                obj.remove(key);
+            }
+        }
+    }
+    // Empty optional strings → absent (match the original skip_serializing).
+    for key in ["trace_id", "policy_version", "matched_rule", "agent_id"] {
+        if obj.get(key).and_then(serde_json::Value::as_str) == Some("") {
+            obj.remove(key);
+        }
+    }
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
+/// Reconstruct a [`Checkpoint`] from a ClickHouse JSONEachRow row (round-2 A1):
+/// coerce quoted 64-bit integers to numbers and ensure the `record_type`
+/// discriminator is present (the checkpoints table implies it rather than
+/// storing it — the verify query injects it).
+pub fn checkpoint_from_store_row(mut v: serde_json::Value) -> Result<Checkpoint, String> {
+    let obj = v
+        .as_object_mut()
+        .ok_or_else(|| "checkpoint row is not a JSON object".to_string())?;
+    for key in [
+        "seq_start",
+        "seq_end",
+        "count",
+        "monotonic_start_ns",
+        "monotonic_end_ns",
+    ] {
+        if let Some(n) = obj
+            .get(key)
+            .and_then(|x| x.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            obj.insert(key.to_string(), serde_json::Value::from(n));
+        }
+    }
+    obj.entry("record_type".to_string())
+        .or_insert_with(|| serde_json::Value::from(CHECKPOINT_RECORD_TYPE));
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
 /// Recursively sort object keys so the same record always hashes to the same
 /// bytes, regardless of `HashMap`/JSON iteration order.
 fn canonicalize(v: &serde_json::Value) -> serde_json::Value {
@@ -464,6 +866,7 @@ impl DecisionLogEntry {
             model_version: None,
             data_stale: false,
             seq: 0,
+            chain_id: String::new(),
             prev_hash: String::new(),
             entry_hash: String::new(),
         }
@@ -1430,6 +1833,256 @@ mod tests {
         let short = &entries[..7];
         let err = verify_checkpoint(&cp, short, &vk, Some("k1")).unwrap_err();
         assert!(err.reason.contains("count mismatch"), "{}", err.reason);
+    }
+
+    // ---- Store-backed verifier (round-2 A1) ----
+
+    /// Build a chained run stamped with a specific `chain_id` (as the writer
+    /// does for a given boot), starting at `seq_base`.
+    fn chained_run_for(chain_id: &str, seq_base: u64, n: u64) -> Vec<DecisionLogEntry> {
+        let mut last = String::new();
+        (0..n)
+            .map(|i| {
+                let mut e = DecisionLogEntry::new(
+                    format!("user_{i}"),
+                    "read".to_string(),
+                    format!("/api/{i}"),
+                    if i % 2 == 0 { "allow" } else { "deny" }.to_string(),
+                    "policy_1".to_string(),
+                    "p".to_string(),
+                );
+                e.seq = seq_base + i;
+                e.chain_id = chain_id.to_string();
+                e.prev_hash = last.clone();
+                let h = e.compute_entry_hash(&last);
+                e.entry_hash = h.clone();
+                last = h;
+                e
+            })
+            .collect()
+    }
+
+    /// A signed checkpoint over a whole chained run (with its chain_id).
+    fn signed_checkpoint_for(
+        chain_id: &str,
+        entries: &[DecisionLogEntry],
+        key: &reaper_core::bundle_signing::SigningKey,
+        key_id: &str,
+    ) -> Checkpoint {
+        let mut cp = Checkpoint::new(
+            chain_id.to_string(),
+            entries.first().unwrap().seq,
+            entries.last().unwrap().seq,
+            entries.len() as u64,
+            entries.first().unwrap().prev_hash.clone(),
+            entries.last().unwrap().entry_hash.clone(),
+            0,
+            1_000,
+            "2026-01-01T00:00:00+00:00".to_string(),
+        );
+        cp.sign(key, key_id);
+        cp
+    }
+
+    #[test]
+    fn test_verify_records_intact_single_boot_ok() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let entries = chained_run_for("boot-a", 0, 10);
+        let cp = signed_checkpoint_for("boot-a", &entries, &key, "k1");
+
+        let report = verify_records(
+            entries.clone(),
+            &[cp],
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(report.ok, "violations: {:?}", report.violations);
+        assert_eq!(report.chains_checked, 1);
+        assert_eq!(report.records_covered, 10);
+        assert_eq!(report.checkpoints_verified, 1);
+    }
+
+    #[test]
+    fn test_verify_records_detects_mutated_record() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let mut entries = chained_run_for("boot-a", 0, 10);
+        let cp = signed_checkpoint_for("boot-a", &entries, &key, "k1");
+        // Mutate seq 4 without re-chaining.
+        entries[4].resource = "/api/hacked".to_string();
+
+        let report = verify_records(
+            entries,
+            &[cp],
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(!report.ok);
+        // The chain break AND the checkpoint break both name seq 4.
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.seq == Some(4) && v.kind == "chain_broken"));
+    }
+
+    #[test]
+    fn test_verify_records_two_boots_independent() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        // Two boots, both seq starting at 0, distinct chain_ids.
+        let a = chained_run_for("boot-a", 0, 6);
+        let b = chained_run_for("boot-b", 0, 8);
+        let cp_a = signed_checkpoint_for("boot-a", &a, &key, "k1");
+        let cp_b = signed_checkpoint_for("boot-b", &b, &key, "k1");
+
+        // Interleave the records to prove grouping — not stream order — drives it.
+        let mut mixed = Vec::new();
+        for i in 0..8 {
+            if let Some(e) = a.get(i) {
+                mixed.push(e.clone());
+            }
+            if let Some(e) = b.get(i) {
+                mixed.push(e.clone());
+            }
+        }
+
+        let report = verify_records(
+            mixed,
+            &[cp_a, cp_b],
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(report.ok, "violations: {:?}", report.violations);
+        assert_eq!(report.chains_checked, 2);
+        assert_eq!(report.records_covered, 14);
+        assert_eq!(report.checkpoints_verified, 2);
+    }
+
+    #[test]
+    fn test_verify_records_detects_deleted_middle_record() {
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let mut entries = chained_run_for("boot-a", 0, 10);
+        let cp = signed_checkpoint_for("boot-a", &entries, &key, "k1");
+        // Delete seq 5 → seq 6 no longer links, and the checkpoint count drops.
+        entries.remove(5);
+
+        let report = verify_records(
+            entries,
+            &[cp],
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(!report.ok);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.kind == "chain_broken" && v.seq == Some(6)));
+    }
+
+    #[test]
+    fn test_parse_verifying_keys() {
+        let key = test_signing_key();
+        let hex = key.public_key_hex();
+        let keys = parse_verifying_keys(&format!("k1:{hex}, k2:{hex}")).unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].0, "k1");
+        assert_eq!(keys[1].0, "k2");
+        // Malformed pair errors.
+        assert!(parse_verifying_keys("no-colon").is_err());
+        // Empty spec → no keys.
+        assert!(parse_verifying_keys("  ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_entry_from_store_row_reconstructs_and_verifies() {
+        // A single-record chain, hashed with everything the store keeps.
+        let entries = chained_run_for("boot-a", 0, 1);
+        let original = &entries[0];
+
+        // Emulate a ClickHouse JSONEachRow projection: quoted UInt64s, UInt8
+        // cache_hit, context as a JSON string, empty optionals as "".
+        let row = serde_json::json!({
+            "seq": original.seq.to_string(),
+            "chain_id": original.chain_id,
+            "prev_hash": original.prev_hash,
+            "entry_hash": original.entry_hash,
+            "timestamp": original.timestamp,
+            "decision_id": original.decision_id,
+            "trace_id": "",
+            "principal": original.principal,
+            "action": original.action,
+            "resource": original.resource,
+            "decision": original.decision,
+            "policy_id": original.policy_id,
+            "policy_name": original.policy_name,
+            "policy_version": "",
+            "matched_rule": "",
+            "evaluation_time_ns": original.evaluation_time_ns.to_string(),
+            "cache_hit": 0u8,
+            "agent_id": "",
+            "context": serde_json::to_string(&original.context).unwrap(),
+            "input_data": "",
+            "replay_input": "",
+        });
+        let rebuilt = entry_from_store_row(row).unwrap();
+        // Byte-exact reconstruction → the chain re-verifies.
+        assert_eq!(rebuilt.entry_hash, original.entry_hash);
+        assert_eq!(rebuilt.chain_id, "boot-a");
+        assert!(verify_chain(&[rebuilt]).is_ok());
+    }
+
+    #[test]
+    fn test_verify_records_signed_checkpoint_without_key_is_violation() {
+        let key = test_signing_key();
+        let entries = chained_run_for("boot-a", 0, 4);
+        let cp = signed_checkpoint_for("boot-a", &entries, &key, "k1");
+        // No verifying keys supplied: chain still checks, checkpoint cannot.
+        let report = verify_records(entries, &[cp], &[], VerifyMode::ByteExact);
+        assert!(!report.ok);
+        assert_eq!(report.checkpoints_verified, 0);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.kind == "no_verifying_key"));
+    }
+
+    #[test]
+    fn test_linkage_mode_sound_over_store_projection() {
+        // Simulate a queryable store whose projection is NOT byte-identical to
+        // the signed stream: keep the STORED prev_hash/entry_hash but reformat a
+        // content field (as ClickHouse would with a DateTime64 timestamp). A
+        // ByteExact pass would false-positive; Linkage must report OK because the
+        // stored hashes still link.
+        let key = test_signing_key();
+        let mut entries = chained_run_for("boot-a", 0, 5);
+        for e in &mut entries {
+            e.timestamp = format!("{} (store-rerendered)", e.timestamp); // content drift
+        }
+        // ByteExact would now fail (content no longer hashes to stored entry_hash).
+        let bad = verify_records(entries.clone(), &[], &[], VerifyMode::ByteExact);
+        assert!(!bad.ok, "byte-exact must reject a reformatted projection");
+        // Linkage over the stored hashes is sound → OK, no false positive.
+        let ok = verify_records(entries.clone(), &[], &[], VerifyMode::Linkage);
+        assert!(
+            ok.ok,
+            "linkage over stored hashes must not false-positive: {:?}",
+            ok.violations
+        );
+        assert_eq!(ok.mode, "linkage");
+
+        // Linkage still catches a deleted middle record (linkage breaks).
+        let cp = signed_checkpoint_for("boot-a", &entries, &key, "k1");
+        let mut deleted = entries.clone();
+        deleted.remove(2);
+        let caught = verify_records(
+            deleted,
+            &[cp],
+            &[("k1".to_string(), verifying_of(&key))],
+            VerifyMode::Linkage,
+        );
+        assert!(!caught.ok, "linkage must catch a deletion");
     }
 
     #[test]

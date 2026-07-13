@@ -39,6 +39,9 @@ inputs = ["route._unmatched"]
 source = '''
 .timestamp = to_timestamp!(.timestamp)     # RFC3339 -> DateTime64
 .decision_id = string!(.decision_id)        # required for ReplacingMergeTree dedup
+# chain_id (round-2 A2) flows through untouched: the ClickHouse sink is
+# field-name driven (JSONEachRow), so the NDJSON `chain_id` maps 1:1 to the
+# decisions.chain_id column. No explicit mapping needed here.
 # context/input_data may be objects; store them as JSON strings for the String columns.
 if is_object(.context)    { .context = encode_json(.context) }
 if is_object(.input_data) { .input_data = encode_json(.input_data) }

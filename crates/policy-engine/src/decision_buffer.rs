@@ -107,18 +107,27 @@ enum WriterMsg {
 /// `prev_hash`/`entry_hash` in write order — the tamper-evident chain a
 /// regulator verifies over the NDJSON/ClickHouse artifact (Plan 04).
 struct HashChain {
+    /// Per-writer-boot chain identity, stamped into every record before it is
+    /// hashed so the record is bound to this chain (round-2 A2). Matches the
+    /// Checkpointer's `chain_id` for the same boot.
+    chain_id: String,
     last_hash: String,
 }
 
 impl HashChain {
-    fn new() -> Self {
+    fn new(chain_id: String) -> Self {
         Self {
+            chain_id,
             last_hash: String::new(),
         }
     }
 
     /// Link `record` to the chain and advance it.
     fn stamp(&mut self, record: &mut DecisionLogEntry) {
+        // Bind the chain identity into the record BEFORE hashing, so the
+        // entry_hash covers it (a record cannot be moved to another chain
+        // undetected).
+        record.chain_id = self.chain_id.clone();
         record.prev_hash = self.last_hash.clone();
         let hash = record.compute_entry_hash(&self.last_hash);
         record.entry_hash = hash.clone();
@@ -156,12 +165,13 @@ struct Checkpointer {
 
 impl Checkpointer {
     fn new(
+        chain_id: String,
         signing: Option<(reaper_core::bundle_signing::SigningKey, String)>,
         every: usize,
         interval_secs: u64,
     ) -> Self {
         Self {
-            chain_id: uuid::Uuid::new_v4().to_string(),
+            chain_id,
             signing,
             every,
             interval: (interval_secs > 0).then(|| Duration::from_secs(interval_secs)),
@@ -410,10 +420,17 @@ impl DecisionBuffer {
             };
             let mut sinks = WriterSinks { file, stdout };
 
+            // One chain identity per writer boot (round-2 A2), shared by the
+            // HashChain (stamped into every decision record) and the
+            // Checkpointer (stamped into every checkpoint) — so a boot's
+            // decisions and checkpoints carry the SAME chain_id and a verifier
+            // can reconstruct the chain from the queryable store.
+            let chain_id = uuid::Uuid::new_v4().to_string();
+
             // Signed-checkpoint emitter (Plan 04 step 3). Built here — with the
             // durable sink — so the signing key is validated (fail closed) before
             // the writer starts; moved into the writer thread which owns it.
-            let mut checkpointer = build_checkpointer(&config)?;
+            let mut checkpointer = build_checkpointer(&config, chain_id.clone())?;
             let tick = checkpointer.as_ref().and_then(|c| c.interval);
 
             let (tx, rx) = sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
@@ -426,8 +443,9 @@ impl DecisionBuffer {
                 .name("decision-log-writer".to_string())
                 .spawn(move || {
                     // Chain + checkpoint state live only here — the writer is
-                    // single-threaded, so no synchronization is needed.
-                    let mut chain = HashChain::new();
+                    // single-threaded, so no synchronization is needed. The
+                    // HashChain shares the boot's chain_id with the checkpointer.
+                    let mut chain = HashChain::new(chain_id);
                     loop {
                         // With a time-based checkpoint interval, block only up to
                         // the interval so a low-traffic tail still gets attested;
@@ -852,7 +870,10 @@ impl DecisionBuffer {
 /// checkpoint trigger is configured. Fails closed if a signing key is present
 /// but invalid — the agent must not start emitting checkpoints under a bad key.
 /// With triggers set but no key, warns and returns an unsigned emitter.
-fn build_checkpointer(config: &DecisionLogConfig) -> std::io::Result<Option<Checkpointer>> {
+fn build_checkpointer(
+    config: &DecisionLogConfig,
+    chain_id: String,
+) -> std::io::Result<Option<Checkpointer>> {
     use reaper_core::bundle_signing::{SigAlgorithm, SigningKey};
 
     if config.checkpoint_every == 0 && config.checkpoint_interval_secs == 0 {
@@ -890,6 +911,7 @@ fn build_checkpointer(config: &DecisionLogConfig) -> std::io::Result<Option<Chec
     };
 
     Ok(Some(Checkpointer::new(
+        chain_id,
         signing,
         config.checkpoint_every,
         config.checkpoint_interval_secs,
@@ -1478,6 +1500,14 @@ mod tests {
 
         // Both checkpoints share one chain id (single writer boot).
         assert_eq!(checkpoints[0].chain_id, checkpoints[1].chain_id);
+        // A2: every decision record carries that SAME chain_id, so the chain is
+        // reconstructable from the store by chain_id.
+        let boot_chain = &checkpoints[0].chain_id;
+        assert!(!boot_chain.is_empty());
+        assert!(
+            decisions.iter().all(|d| &d.chain_id == boot_chain),
+            "decisions must carry the writer boot's chain_id"
+        );
         // Contiguous coverage: [0,4] then [5,9].
         assert_eq!((checkpoints[0].seq_start, checkpoints[0].seq_end), (0, 4));
         assert_eq!((checkpoints[1].seq_start, checkpoints[1].seq_end), (5, 9));

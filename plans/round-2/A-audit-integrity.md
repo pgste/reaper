@@ -9,7 +9,7 @@ Items A1–A5; implemented in order. This doc is updated as each lands.
 
 ---
 
-## A1 + A2 — store-backed verifier + chain verifiable from the store *(combined)*
+## A1 + A2 — store-backed verifier + chain verifiable from the store *(combined, landed)*
 
 **Why combined:** A1 (ship a verifier) cannot be *correct* across writer boots
 without A2 (make the chain reconstructable from the queryable store). The
@@ -33,20 +33,39 @@ on A1 alone would work on a single-boot NDJSON file but not against production.
 
 ### A1 — the verifier
 - **Reusable core** in `policy-engine::decision_log`: `verify_records(entries,
-  checkpoints, keys) -> VerificationReport` — groups entries by `chain_id`, sorts
-  by `seq`, runs `verify_chain` per chain, and `verify_checkpoint` per checkpoint
-  against its covered range. Reports chains checked, checkpoints verified,
-  records covered, and the first violation (with `seq`) if any.
-- **`reaper-cli audit verify`** — two modes: `--file <ndjson>` (offline /
-  air-gapped, reads the raw write-ordered stream) and ClickHouse
-  (`--url/--tenant/--chain/--from/--to`). Prints the report; exits non-zero on a
-  violation. Checkpoint signatures verified with `--verifying-key <hex>`.
-- **`GET /orgs/{org}/decisions/verify`** — admin-scoped management endpoint that
-  runs the same over the store and returns the structured report (the surface a
-  scheduled verifier or a regulator's read-only credential hits).
+  checkpoints, keys, mode) -> VerificationReport` — groups entries by `chain_id`,
+  sorts by `seq`, verifies each chain and every checkpoint over its covered
+  range. Reports the mode, chains checked, checkpoints verified, records covered,
+  and every violation (with `seq`).
+- **Two `VerifyMode`s — the soundness decision.** A *queryable* store projects
+  each record into typed columns (timestamps re-rendered; A2-absent fields like
+  `data_version`/`model_version` have no columns), so a record reconstructed from
+  store rows does **not** reproduce the exact bytes that were hashed.
+  Recomputing `entry_hash` from a reconstruction therefore false-positives on
+  clean data — unacceptable for a "prove the audit is intact" tool. So:
+  - **`ByteExact`** recomputes every `entry_hash` from content (full crypto
+    guarantee: catches content mutation too). Requires the byte-identical raw
+    NDJSON — used by `--file` over the write-ordered stream / immutable WORM
+    archive. **Authoritative.**
+  - **`Linkage`** verifies chain linkage using the **stored**
+    `prev_hash`/`entry_hash` plus checkpoint signatures, without recomputing
+    content hashes. Sound over the store (no false positives); catches deletion,
+    insertion, reordering, truncation, and checkpoint tampering. A pure in-place
+    content edit that preserves the stored hashes is left to a `ByteExact` pass
+    over the immutable archive (A3). **Operational-monitoring guarantee.**
+  The report carries `mode` so the caller always knows which guarantee it holds.
+- **`reaper-cli audit verify`** — `--file <ndjson>` (offline / air-gapped →
+  `ByteExact`, authoritative) or ClickHouse `--url/--tenant/--chain/--from/--to`
+  (→ `Linkage`). Prints the report; exits non-zero on a violation. Checkpoint
+  signatures verified with `--verifying-key key_id:hex` (repeatable).
+- **`GET /orgs/{org}/decisions/verify`** — admin-scoped management endpoint
+  running `Linkage` over the store, returning the structured report (the surface
+  a scheduled verifier or a regulator's read-only credential hits). Verifying
+  keys from `REAPER_DECISION_LOG_CHECKPOINT_VERIFYING_KEY`.
 
 **Closes:** SEC R2-2, PROD R2-10 (audit tamper-evidence becomes operable, not a
-library-only property).
+library-only property), with the honest guarantee split: byte-exact crypto proof
+via `--file`/WORM, sound structural monitoring via the store endpoint.
 
 ---
 
