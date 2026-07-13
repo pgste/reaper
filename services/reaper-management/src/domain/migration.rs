@@ -633,6 +633,33 @@ pub struct RenameMaps {
     pub roles: BTreeMap<String, String>,
 }
 
+/// Compose the rollback of an applied migration as a NEW forward transform
+/// chain (ADR-3: history is append-only; an undo is a visible event, never
+/// a rewritten past). Inverses are computed against the model state each
+/// forward transform was applied to (replayed from `model_before`) and
+/// emitted in REVERSE order. Errors if any transform is irreversible
+/// (RemoveAttribute — its values need an explicit backfill) or the replay
+/// fails.
+pub fn compose_rollback(
+    transforms: &[ModelTransform],
+    model_before: &ModelDefinition,
+) -> Result<Vec<ModelTransform>, String> {
+    let mut state = model_before.clone();
+    let mut inverses = Vec::with_capacity(transforms.len());
+    for t in transforms {
+        let inv = t.inverse(&state).ok_or_else(|| {
+            format!(
+                "transform {t:?} is irreversible (its record data is gone); \
+                 restore from the pre-migration data version instead"
+            )
+        })?;
+        state = t.apply_to_model(&state)?;
+        inverses.push(inv);
+    }
+    inverses.reverse();
+    Ok(inverses)
+}
+
 /// The vocabulary-breaking changes a bare model overwrite would make —
 /// used by `PUT …/model` to REJECT silent renames/removals/retypes and
 /// direct callers to the migration endpoint. Additive edits (new roles,
@@ -960,6 +987,52 @@ mod tests {
         assert_eq!(p.tuples_after[0].relation, "possessor");
         let maps = rename_maps(&ts);
         assert_eq!(maps.relations.get("owner").unwrap(), "possessor");
+    }
+
+    #[test]
+    fn compose_rollback_reverses_the_chain_and_refuses_irreversible() {
+        let m = model();
+        let ts = vec![
+            ModelTransform::RenameRole {
+                from: "editor".into(),
+                to: "author".into(),
+            },
+            ModelTransform::RenameRole {
+                from: "author".into(),
+                to: "writer".into(),
+            },
+        ];
+        let inv = compose_rollback(&ts, &m).unwrap();
+        // Reverse order: undo writer->author first, then author->editor.
+        assert_eq!(
+            inv,
+            vec![
+                ModelTransform::RenameRole {
+                    from: "writer".into(),
+                    to: "author".into(),
+                },
+                ModelTransform::RenameRole {
+                    from: "author".into(),
+                    to: "editor".into(),
+                },
+            ]
+        );
+        // Applying forward then rollback lands on the original model.
+        let mut state = m.clone();
+        for t in ts.iter().chain(inv.iter()) {
+            state = t.apply_to_model(&state).unwrap();
+        }
+        assert_eq!(
+            serde_json::to_value(&state).unwrap(),
+            serde_json::to_value(&m).unwrap()
+        );
+
+        let irreversible = vec![ModelTransform::RemoveAttribute {
+            entity_type: "user".into(),
+            name: "tags".into(),
+        }];
+        let err = compose_rollback(&irreversible, &m).unwrap_err();
+        assert!(err.contains("irreversible"), "{err}");
     }
 
     #[test]

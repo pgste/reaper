@@ -42,6 +42,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(plan_migration))
         .routes(routes!(apply_migration))
         .routes(routes!(list_migrations))
+        .routes(routes!(rollback_migration))
         .routes(routes!(get_changes))
         .routes(routes!(list_versions))
         .routes(routes!(get_version))
@@ -807,6 +808,90 @@ async fn list_migrations(
     })))
 }
 
+/// Roll back an applied migration by composing its INVERSE transforms into
+/// a NEW forward migration (ADR-3: append-only history — audit sees the
+/// change and its undo as two events, never a rewritten past). The inverse
+/// chain runs through the same plan+apply pipeline, so it is impact-checked
+/// and fails closed like any other migration. Irreversible transforms
+/// (remove_attribute) are refused: restore record data from the immutable
+/// pre-migration data version instead.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/namespaces/{ns}/datastore/migrations/{version}/rollback",
+    tag = "datastore",
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("ns" = String, Path, description = "Namespace slug"),
+        ("version" = i64, Path, description = "Model version (migration) to roll back")
+    ),
+    responses(
+        (status = 200, description = "Inverse migration applied as a new forward model version"),
+        (status = 404, description = "No such migration"),
+        (status = 409, description = "Migration is irreversible or the inverse plan is blocked")
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn rollback_migration(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((org, ns, version)): Path<(String, String, i64)>,
+) -> ApiResult<Json<Value>> {
+    let resolved = authorize(&state, &user, &org, &ns, true).await?;
+    let store = require_store(&state, &resolved).await?;
+    let repo = DatastoreRepository::new(&state.db);
+
+    let (transforms, model_before) = repo
+        .get_model_version(store.id, version)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("model version {version} not found")))?;
+    let model_before = model_before.ok_or_else(|| {
+        ApiError::Conflict(format!(
+            "model version {version} predates stored model snapshots and cannot be \
+             auto-rolled-back"
+        ))
+    })?;
+
+    let inverse =
+        migration::compose_rollback(&transforms, &model_before).map_err(ApiError::Conflict)?;
+
+    // Same pipeline as a hand-written migration: plan against the CURRENT
+    // store (intermediate migrations may make the inverse invalid — that
+    // surfaces here as a 400/blocker, fail closed), then atomic apply +
+    // publish.
+    let prepared = prepare_migration(&state, &store, &inverse).await?;
+    if !prepared.plan.applyable() {
+        return Err(ApiError::Conflict(
+            serde_json::to_string(&json!({
+                "error": "inverse migration plan is blocked (fail closed)",
+                "blockers": prepared.plan.blockers,
+            }))
+            .unwrap_or_else(|_| "inverse migration plan is blocked".to_string()),
+        ));
+    }
+    let model_version = repo
+        .apply_migration(
+            &store,
+            &prepared.plan,
+            &prepared.dirty,
+            &user.id.to_string(),
+        )
+        .await?;
+    let updated = require_store(&state, &resolved).await?;
+    let published = repo.publish(&updated, &user.id.to_string()).await?;
+    notify_published(&state, &resolved, updated.id, &published).await;
+
+    Ok(Json(json!({
+        "rolled_back": version,
+        "model_version": model_version,
+        "transforms": inverse,
+        "impact": prepared.impact,
+        "published": {
+            "version": published.version,
+            "checksum": published.checksum,
+        },
+    })))
+}
+
 /// Everything a dry-run computes; `apply` persists exactly this state.
 struct PreparedMigration {
     plan: migration::MigrationPlan,
@@ -1080,6 +1165,8 @@ async fn get_version(
     Ok(Json(json!({
         "version": meta.version,
         "checksum": meta.checksum,
+        "change_seq": meta.change_seq,
+        "model_version": meta.model_version,
         "published_at": meta.published_at,
         "document": document,
     })))

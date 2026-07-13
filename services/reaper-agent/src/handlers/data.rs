@@ -411,6 +411,10 @@ pub struct DeployDataVersionRequest {
     pub change_seq: i64,
     /// Published checksum ("sha256:…") — verified before anything loads.
     pub checksum: String,
+    /// Model-shape version the document was materialized under (decision
+    /// provenance, Plan 12); 0 for legacy control planes.
+    #[serde(default)]
+    pub model_version: i64,
     /// The materialized document: `{"entities": [...]}`.
     pub document: Value,
     /// Replace the whole store (default). `false` merges (advanced use).
@@ -529,9 +533,11 @@ pub async fn deploy_data_version(
         )
     })?;
 
-    state
-        .data_sync
-        .record_sync(payload.version, payload.checksum.clone());
+    state.data_sync.record_sync(
+        payload.version,
+        payload.checksum.clone(),
+        payload.model_version,
+    );
     state
         .data_sync
         .applied_seq
@@ -765,6 +771,7 @@ mod deploy_version_tests {
         // Never-synced agent (bootstrap/standalone): no staleness clock.
         let s = DataSyncState {
             version: std::sync::atomic::AtomicI64::new(0),
+            model_version: std::sync::atomic::AtomicI64::new(0),
             checksum: parking_lot::RwLock::new(String::new()),
             last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
             applied_seq: std::sync::atomic::AtomicI64::new(0),
@@ -780,7 +787,7 @@ mod deploy_version_tests {
         );
 
         // Synced long ago with a 10s budget: stale; behavior follows mode.
-        s.record_sync(1, "sha256:abc".into());
+        s.record_sync(1, "sha256:abc".into(), 3);
         s.last_synced_epoch
             .store(1, std::sync::atomic::Ordering::Release); // epoch 1 = 1970
         assert!(s.is_stale());
@@ -810,6 +817,7 @@ mod deploy_version_tests {
         // reason, NOT the staleness reason (fresh pod != stale replica).
         let s = DataSyncState {
             version: std::sync::atomic::AtomicI64::new(0),
+            model_version: std::sync::atomic::AtomicI64::new(0),
             checksum: parking_lot::RwLock::new(String::new()),
             last_synced_epoch: std::sync::atomic::AtomicU64::new(0),
             applied_seq: std::sync::atomic::AtomicI64::new(0),
@@ -830,7 +838,7 @@ mod deploy_version_tests {
         );
 
         // First verified snapshot: gate opens permanently.
-        s.record_sync(1, "sha256:abc".into());
+        s.record_sync(1, "sha256:abc".into(), 3);
         assert!(!s.awaiting_initial_sync());
         assert!(!s.must_deny());
         assert_eq!(s.deny_reason(), None);

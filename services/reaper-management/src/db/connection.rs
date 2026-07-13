@@ -88,6 +88,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "model_migrations",
         include_str!("migrations_pg/0014_model_migrations.sql"),
     ),
+    (
+        15,
+        "model_version_provenance",
+        include_str!("migrations_pg/0015_model_version_provenance.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -388,6 +393,7 @@ impl Database {
             include_str!("migrations/019_change_requests.sql"),
             include_str!("migrations/020_change_request_external_ref.sql"),
             include_str!("migrations/021_model_migrations.sql"),
+            include_str!("migrations/022_model_version_provenance.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

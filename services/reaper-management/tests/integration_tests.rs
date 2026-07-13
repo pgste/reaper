@@ -7377,3 +7377,233 @@ async fn put_model_rejects_vocabulary_breaking_overwrites() {
     assert!(roles.contains(&"editor".to_string()));
     assert!(roles.contains(&"auditor".to_string()));
 }
+
+/// Plan 12 Phase 3: rollback is a FORWARD inverse migration. Rename →
+/// rollback returns model + records + access to the pre-migration state;
+/// history shows two forward rows (never a rewrite); published data
+/// versions carry the model_version they were materialized under; and an
+/// irreversible migration refuses to auto-roll-back.
+#[tokio::test]
+async fn migration_rollback_is_forward_inverse_with_provenance() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "RB Org", "slug": "rb-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/rb-org/namespaces",
+            Some(json!({"slug": "main"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let base = "/orgs/rb-org/namespaces/main/datastore";
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    for (uri, body) in [
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "alice", "entity_type": "user",
+                   "attributes": {"department": "eng"}}),
+        ),
+        (
+            format!("{base}/role-bindings"),
+            json!({"subject": "alice", "role": "editor"}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "doc-1", "relation": "owner", "subject": "alice"}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request("POST", &uri, Some(body), &key))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    // v1: pre-migration snapshot — model_version 0.
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/publish"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/1"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let v1 = parse_body(r).await;
+    assert_eq!(v1["model_version"], 0, "pre-migration data pins model v0");
+    let checksum_v1 = v1["checksum"].as_str().unwrap().to_string();
+
+    // Migration 1: rename chain. Its publish (v2) pins model v1.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(json!({"transforms": [
+                {"op": "rename_role", "from": "editor", "to": "author"},
+                {"op": "rename_relation", "from": "owner", "to": "possessor"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/2"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        parse_body(r).await["model_version"],
+        1,
+        "post-migration data pins model v1 — decisions bucket across the change"
+    );
+
+    // ROLLBACK migration 1 → a NEW forward migration (model v2).
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/1/rollback"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let rb = parse_body(r).await;
+    assert_eq!(rb["rolled_back"], 1);
+    assert_eq!(rb["model_version"], 2, "rollback is a new forward version");
+    assert_eq!(rb["impact"]["decision_neutral"], true);
+    // Inverse order: the relation rename undoes first, then the role.
+    assert_eq!(rb["transforms"][0]["op"], "rename_relation");
+    assert_eq!(rb["transforms"][0]["from"], "possessor");
+    assert_eq!(rb["transforms"][1]["op"], "rename_role");
+    assert_eq!(rb["transforms"][1]["from"], "author");
+
+    // Model, records, and the materialized document are back EXACTLY: the
+    // v3 snapshot's checksum equals the pre-migration v1 checksum.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &format!("{base}/model"), None, &key))
+        .await
+        .unwrap();
+    let roles: Vec<String> = parse_body(r).await["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str().map(String::from))
+        .collect();
+    assert!(roles.contains(&"editor".to_string()) && !roles.contains(&"author".to_string()));
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/versions/3"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let v3 = parse_body(r).await;
+    assert_eq!(
+        v3["checksum"].as_str().unwrap(),
+        checksum_v1,
+        "rollback restores the exact pre-migration materialized document"
+    );
+    assert_eq!(v3["model_version"], 2);
+
+    // History: THREE model states, TWO forward rows — no rewritten past.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/migrations"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    let history = parse_body(r).await;
+    assert_eq!(history["model_version"], 2);
+    assert_eq!(history["migrations"].as_array().unwrap().len(), 2);
+
+    // Irreversible: a remove_attribute migration refuses auto-rollback.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/apply"),
+            Some(json!({"transforms": [
+                {"op": "remove_attribute", "entity_type": "user", "name": "tags"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/3/rollback"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let msg = parse_body(r).await.to_string();
+    assert!(msg.contains("irreversible"), "{msg}");
+}

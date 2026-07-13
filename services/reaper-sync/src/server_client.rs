@@ -78,6 +78,11 @@ pub struct DatastoreVersion {
     pub checksum: String,
     #[serde(default)]
     pub change_seq: i64,
+    /// Model-shape version the document was materialized under (0 on
+    /// pre-Plan-12 servers) — forwarded to the agent for decision
+    /// provenance.
+    #[serde(default)]
+    pub model_version: i64,
     pub document: serde_json::Value,
 }
 
