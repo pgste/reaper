@@ -156,6 +156,10 @@ Decision-log pipeline names and endpoints
   value: /var/log/reaper/decisions.ndjson
 - name: REAPER_DECISION_LOG_SAMPLE_ALLOW_RATE
   value: {{ .Values.decisionLogs.sampleAllowRate | quote }}
+{{- with .Values.decisionLogs.privacy }}
+- name: REAPER_DECISION_LOG_PRIVACY
+  value: {{ . | quote }}
+{{- end }}
 {{- with .Values.decisionLogs.mode }}
 - name: REAPER_DECISION_LOG_MODE
   value: {{ . | quote }}
@@ -166,6 +170,10 @@ Decision-log pipeline names and endpoints
 {{- end }}
 {{- if .Values.decisionLogs.hashPrincipal }}
 - name: REAPER_DECISION_LOG_HASH_PRINCIPAL
+  value: "true"
+{{- end }}
+{{- if .Values.decisionLogs.hashResource }}
+- name: REAPER_DECISION_LOG_HASH_RESOURCE
   value: "true"
 {{- end }}
 {{- with .Values.decisionLogs.maskKeys }}

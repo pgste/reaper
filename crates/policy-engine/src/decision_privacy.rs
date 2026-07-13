@@ -46,8 +46,13 @@ const ENC_ALG: &str = "aes256gcm";
 /// Capture-time data protection, built once from config and applied to every
 /// logged entry. See module docs.
 pub struct DataProtection {
-    /// HMAC key for principal pseudonymization (None = no hashing).
+    /// HMAC key for pseudonymization (None = no hashing configured).
     hash_salt: Option<Vec<u8>>,
+    /// Pseudonymize `principal` (requires `hash_salt`).
+    hash_principal: bool,
+    /// Pseudonymize `resource` too (round-2 A5) — same salt, domain-separated
+    /// so equal principal/resource strings don't correlate across columns.
+    hash_resource: bool,
     /// Lowercased allowlist for context keys (None = keep all).
     context_allowlist: Option<Vec<String>>,
     /// Lowercased keys whose values are replaced with `"***"`.
@@ -62,11 +67,20 @@ impl DataProtection {
     /// combinations: hashing without a salt, or encryption without a valid
     /// 32-byte hex key, is a configuration error — never a silent downgrade.
     pub fn from_config(config: &DecisionLogConfig) -> Result<Option<Self>, String> {
-        let hash_salt = if config.hash_principal {
+        // The pseudonymize profile is a preset over the fine-grained knobs, so
+        // honor it here too — programmatic configs (not just from_env) get the
+        // same semantics.
+        let profile_pseudonymize =
+            config.privacy_profile == Some(crate::decision_log::PrivacyProfile::Pseudonymize);
+        let hash_principal = config.hash_principal || profile_pseudonymize;
+        let hash_resource = config.hash_resource || profile_pseudonymize;
+
+        let hash_salt = if hash_principal || hash_resource {
             match config.hash_salt.as_deref() {
                 Some(salt) if !salt.is_empty() => Some(salt.as_bytes().to_vec()),
                 _ => {
-                    return Err("hash_principal requires a non-empty hash_salt \
+                    return Err("pseudonymization (hash_principal / hash_resource / \
+                         privacy profile `pseudonymize`) requires a non-empty hash_salt \
                          (REAPER_DECISION_LOG_HASH_SALT); refusing unsalted hashing"
                         .to_string())
                 }
@@ -106,6 +120,8 @@ impl DataProtection {
 
         Ok(Some(Self {
             hash_salt,
+            hash_principal,
+            hash_resource,
             context_allowlist,
             mask_keys,
             cipher,
@@ -119,13 +135,26 @@ impl DataProtection {
     /// must NOT log the plaintext (fail closed).
     pub fn apply(&self, entry: &mut DecisionLogEntry) -> Result<(), String> {
         if let Some(ref salt) = self.hash_salt {
-            entry.principal = pseudonymize(salt, &entry.principal);
-            // The replay blob carries its own principal copy: it must show the
-            // SAME pseudonym — pseudonymization is a promise about every sink,
-            // and the join key must stay consistent across views.
-            if let Some(Value::Object(replay)) = entry.replay_input.as_mut() {
-                if let Some(Value::String(p)) = replay.get_mut("principal") {
-                    *p = entry.principal.clone();
+            if self.hash_principal {
+                entry.principal = pseudonymize(salt, &entry.principal);
+                // The replay blob carries its own principal copy: it must show
+                // the SAME pseudonym — pseudonymization is a promise about every
+                // sink, and the join key must stay consistent across views.
+                if let Some(Value::Object(replay)) = entry.replay_input.as_mut() {
+                    if let Some(Value::String(p)) = replay.get_mut("principal") {
+                        *p = entry.principal.clone();
+                    }
+                }
+            }
+            if self.hash_resource {
+                // Domain-separated from principal pseudonyms: HMAC over
+                // "resource\0<value>", so principal "x" and resource "x" never
+                // produce the same token (no cross-column correlation).
+                entry.resource = pseudonymize_domain(salt, "resource", &entry.resource);
+                if let Some(Value::Object(replay)) = entry.replay_input.as_mut() {
+                    if let Some(Value::String(r)) = replay.get_mut("resource") {
+                        *r = entry.resource.clone();
+                    }
                 }
             }
         }
@@ -187,6 +216,19 @@ pub fn pseudonymize(salt: &[u8], value: &str) -> String {
     mac.update(value.as_bytes());
     let digest = mac.finalize().into_bytes();
     // 128 bits is ample for joinability without collisions; keeps lines short.
+    format!("sha256:{}", hex::encode(&digest[..16]))
+}
+
+/// Domain-separated pseudonym: HMAC over `<domain>\0<value>`. Principal keeps
+/// the legacy un-prefixed form (pseudonym stability across versions); other
+/// fields (`resource`) use a domain tag so equal strings in different columns
+/// yield different tokens.
+pub fn pseudonymize_domain(salt: &[u8], domain: &str, value: &str) -> String {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(salt).expect("HMAC accepts any key length");
+    mac.update(domain.as_bytes());
+    mac.update(b"\0");
+    mac.update(value.as_bytes());
+    let digest = mac.finalize().into_bytes();
     format!("sha256:{}", hex::encode(&digest[..16]))
 }
 
@@ -546,6 +588,100 @@ mod tests {
             !replay_principal.contains("alice"),
             "raw identity never leaks"
         );
+    }
+
+    // ---- Resource redaction + privacy profile (round-2 A5, SEC R2-5) ----
+
+    #[test]
+    fn hash_resource_pseudonymizes_resource_and_replay_copy() {
+        let config = DecisionLogConfig {
+            hash_resource: true,
+            hash_salt: Some("tenant-secret".to_string()),
+            ..Default::default()
+        };
+        let p = protection(&config);
+        let mut e = entry_with_replay();
+        p.apply(&mut e).unwrap();
+
+        assert!(e.resource.starts_with("sha256:"), "{}", e.resource);
+        assert!(!e.resource.contains("records"), "raw path must not leak");
+        // Principal untouched — only the resource knob was set.
+        assert_eq!(e.principal, "alice@example.com");
+        // The replay blob's resource copy carries the SAME pseudonym.
+        assert_eq!(
+            e.replay_input.as_ref().unwrap()["resource"]
+                .as_str()
+                .unwrap(),
+            e.resource
+        );
+    }
+
+    #[test]
+    fn resource_pseudonyms_are_domain_separated_from_principal() {
+        // Equal principal and resource strings must NOT produce the same token,
+        // or the two columns become correlatable.
+        let salt = b"tenant-secret";
+        let as_principal = pseudonymize(salt, "same-value");
+        let as_resource = pseudonymize_domain(salt, "resource", "same-value");
+        assert_ne!(as_principal, as_resource);
+        // Stable within its own domain (joinable for investigations).
+        assert_eq!(
+            as_resource,
+            pseudonymize_domain(salt, "resource", "same-value")
+        );
+    }
+
+    #[test]
+    fn pseudonymize_profile_hashes_principal_and_resource() {
+        use crate::decision_log::PrivacyProfile;
+        // The GDPR profile alone (no fine-grained knobs) must redact both
+        // identity columns — programmatic configs included, not just from_env.
+        let config = DecisionLogConfig {
+            privacy_profile: Some(PrivacyProfile::Pseudonymize),
+            hash_salt: Some("tenant-secret".to_string()),
+            ..Default::default()
+        };
+        let p = protection(&config);
+        let mut e = entry_with_replay();
+        p.apply(&mut e).unwrap();
+
+        assert!(e.principal.starts_with("sha256:"));
+        assert!(e.resource.starts_with("sha256:"));
+        let replay = e.replay_input.as_ref().unwrap();
+        assert_eq!(replay["principal"].as_str().unwrap(), e.principal);
+        assert_eq!(replay["resource"].as_str().unwrap(), e.resource);
+    }
+
+    #[test]
+    fn hash_resource_without_salt_fails_closed() {
+        let config = DecisionLogConfig {
+            hash_resource: true,
+            hash_salt: None,
+            ..Default::default()
+        };
+        assert!(DataProtection::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn pseudonymize_profile_without_salt_fails_closed() {
+        use crate::decision_log::PrivacyProfile;
+        let config = DecisionLogConfig {
+            privacy_profile: Some(PrivacyProfile::Pseudonymize),
+            hash_salt: None,
+            ..Default::default()
+        };
+        assert!(DataProtection::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn raw_profile_configures_no_protection() {
+        use crate::decision_log::PrivacyProfile;
+        // Raw is an explicit opt-out: posture chosen, nothing redacted.
+        let config = DecisionLogConfig {
+            privacy_profile: Some(PrivacyProfile::Raw),
+            ..Default::default()
+        };
+        assert!(DataProtection::from_config(&config).unwrap().is_none());
     }
 
     #[test]

@@ -1140,12 +1140,35 @@ pub struct DecisionLogConfig {
     // ---- Data protection (masking / pseudonymization / encryption) ----
     // Applied once at capture, so the query API, file/stdout sinks, and exports
     // all see only protected data.
+    /// Explicit privacy posture, REQUIRED whenever decision logging is enabled
+    /// (round-2 A5, SEC R2-5). Identity data must never flow to the audit sink
+    /// because nobody thought about it:
+    /// - `pseudonymize` — the GDPR-friendly profile: `principal` AND `resource`
+    ///   are HMAC-pseudonymized (implies `hash_principal` + `hash_resource`;
+    ///   requires `hash_salt`).
+    /// - `raw` — an explicit, auditable opt-out: identities logged in clear.
+    ///
+    /// Alternatively, configuring any fine-grained protection knob
+    /// (`hash_principal`/`hash_resource`/`mask_keys`/`context_allowlist`/
+    /// `encrypt_input_data`) also counts as an explicit choice. Enabled with
+    /// NONE of these ⇒ startup error. Env: `REAPER_DECISION_LOG_PRIVACY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_profile: Option<PrivacyProfile>,
+
     /// Pseudonymize `principal` with HMAC-SHA-256 (requires `hash_salt`): the
     /// logged value becomes `sha256:<hex>` — stable across entries (joinable
     /// for investigations) but not reversible and not dictionary-attackable
     /// without the salt.
     #[serde(default)]
     pub hash_principal: bool,
+
+    /// Pseudonymize `resource` the same way (requires `hash_salt`). Resource
+    /// identifiers are PII-bearing in practice (`/patients/jane-doe/records`),
+    /// so they get the same redaction path as `principal`. Domain-separated
+    /// from principal pseudonyms so equal strings don't correlate across
+    /// columns. Env: `REAPER_DECISION_LOG_HASH_RESOURCE`.
+    #[serde(default)]
+    pub hash_resource: bool,
 
     /// Secret HMAC key for `hash_principal`. Never serialized (won't appear in
     /// the `/decisions/stats` config echo or any export).
@@ -1228,6 +1251,31 @@ pub struct DecisionLogConfig {
     pub continuity_path: Option<PathBuf>,
 }
 
+/// Explicit privacy posture for the decision-log stream (round-2 A5).
+/// See [`DecisionLogConfig::privacy_profile`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyProfile {
+    /// GDPR-friendly default profile: pseudonymize `principal` and `resource`
+    /// (HMAC-SHA-256 under `hash_salt`). Context masking/allowlisting and
+    /// `input_data` encryption remain independent knobs on top.
+    Pseudonymize,
+    /// Explicit opt-out: identities are logged in clear. Choosing this is a
+    /// deliberate, auditable decision (it appears in the `/decisions/stats`
+    /// config echo), never an accident of unset defaults.
+    Raw,
+}
+
+impl PrivacyProfile {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().trim() {
+            "pseudonymize" | "pseudonymized" | "pseudo" | "gdpr" => Some(Self::Pseudonymize),
+            "raw" | "clear" | "none" => Some(Self::Raw),
+            _ => None,
+        }
+    }
+}
+
 /// Fail-closed behavior for mandatory audit mode when the durable sink cannot
 /// accept a record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1279,7 +1327,9 @@ impl Default for DecisionLogConfig {
             include_replay_input: false,
             replay_input_denies_only: false,
             capture_shards: 0,
+            privacy_profile: None,
             hash_principal: false,
+            hash_resource: false,
             hash_salt: None,
             context_allowlist: None,
             mask_keys: Vec::new(),
@@ -1346,7 +1396,27 @@ impl DecisionLogConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
+            privacy_profile: std::env::var("REAPER_DECISION_LOG_PRIVACY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| match PrivacyProfile::parse(&v) {
+                    Some(p) => Some(p),
+                    None => {
+                        // Unknown value is NOT silently raw: leaving the profile
+                        // unset makes validate() fail with the actionable message
+                        // unless fine-grained knobs are configured.
+                        tracing::warn!(
+                            value = %v,
+                            "unknown REAPER_DECISION_LOG_PRIVACY (use pseudonymize|raw); ignoring"
+                        );
+                        None
+                    }
+                })
+                .unwrap_or(None),
             hash_principal: std::env::var("REAPER_DECISION_LOG_HASH_PRINCIPAL")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
+            hash_resource: std::env::var("REAPER_DECISION_LOG_HASH_RESOURCE")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
             hash_salt: std::env::var("REAPER_DECISION_LOG_HASH_SALT").ok(),
@@ -1396,7 +1466,26 @@ impl DecisionLogConfig {
         if let Ok(mode) = std::env::var("REAPER_DECISION_LOG_MODE") {
             config.apply_mode(&mode);
         }
+        // The privacy profile is a preset over the fine-grained knobs, same
+        // pattern as MODE: pseudonymize turns on principal+resource hashing.
+        if config.privacy_profile == Some(PrivacyProfile::Pseudonymize) {
+            config.hash_principal = true;
+            config.hash_resource = true;
+        }
         config
+    }
+
+    /// Whether an explicit privacy posture has been chosen for the audit
+    /// stream: a named profile, or any fine-grained protection knob. Enabled
+    /// logging without one fails `validate()` (SEC R2-5 — PII must never reach
+    /// the sink because nobody decided).
+    pub fn privacy_posture_chosen(&self) -> bool {
+        self.privacy_profile.is_some()
+            || self.hash_principal
+            || self.hash_resource
+            || self.context_allowlist.is_some()
+            || !self.mask_keys.is_empty()
+            || self.encrypt_input_data
     }
 
     /// Apply a named capture mode preset (see `from_env`). Unknown modes are
@@ -1439,6 +1528,18 @@ impl DecisionLogConfig {
     /// invariants: no sampling, complete capture, a durable sink, and signed
     /// checkpoints. Returns a human-readable reason on the first violation.
     pub fn validate(&self) -> Result<(), String> {
+        // Round-2 A5 (SEC R2-5): decision logs carry identity data, so enabling
+        // them demands an explicit privacy posture — never PII-by-default.
+        if self.enabled && !self.privacy_posture_chosen() {
+            return Err(
+                "decision logging is enabled but no privacy posture is chosen; set \
+                 REAPER_DECISION_LOG_PRIVACY=pseudonymize (GDPR-friendly: principal and \
+                 resource pseudonymized; requires REAPER_DECISION_LOG_HASH_SALT) or \
+                 REAPER_DECISION_LOG_PRIVACY=raw (explicit opt-out: identities logged \
+                 in clear), or configure the fine-grained protection knobs directly"
+                    .to_string(),
+            );
+        }
         if self.audit_required {
             if !self.enabled {
                 return Err("mandatory audit mode requires decision logging enabled".to_string());
@@ -1723,6 +1824,8 @@ mod tests {
             file_path: Some("/tmp/reaper-decisions-test.ndjson".to_string()),
             checkpoint_every: 100,
             checkpoint_signing_key: Some("07".repeat(32)),
+            // Enabled logging requires an explicit privacy posture (A5).
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         }
     }
@@ -1787,9 +1890,87 @@ mod tests {
         let c = DecisionLogConfig {
             enabled: true,
             sample_allow_rate: 0.1,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
         c.validate().unwrap();
+    }
+
+    // ---- Explicit privacy posture (round-2 A5, SEC R2-5) ----
+
+    #[test]
+    fn test_enabled_without_privacy_posture_fails_validation() {
+        // Enabling decision logging without deciding the privacy posture must
+        // be a startup error — PII never reaches the sink by accident.
+        let c = DecisionLogConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let err = c.validate().unwrap_err();
+        assert!(err.contains("privacy posture"), "{err}");
+        assert!(err.contains("REAPER_DECISION_LOG_PRIVACY"), "{err}");
+
+        // Disabled logging needs no posture — nothing is captured.
+        DecisionLogConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn test_privacy_posture_satisfied_by_profile_or_fine_grained_knobs() {
+        // An explicit profile (raw or pseudonymize) is a posture.
+        for profile in [PrivacyProfile::Raw, PrivacyProfile::Pseudonymize] {
+            let c = DecisionLogConfig {
+                enabled: true,
+                privacy_profile: Some(profile),
+                ..Default::default()
+            };
+            c.validate().unwrap();
+        }
+        // So is any fine-grained protection knob.
+        for c in [
+            DecisionLogConfig {
+                enabled: true,
+                hash_principal: true,
+                ..Default::default()
+            },
+            DecisionLogConfig {
+                enabled: true,
+                hash_resource: true,
+                ..Default::default()
+            },
+            DecisionLogConfig {
+                enabled: true,
+                mask_keys: vec!["ssn".to_string()],
+                ..Default::default()
+            },
+            DecisionLogConfig {
+                enabled: true,
+                context_allowlist: Some(vec!["request_id".to_string()]),
+                ..Default::default()
+            },
+            DecisionLogConfig {
+                enabled: true,
+                encrypt_input_data: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(c.privacy_posture_chosen());
+            c.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_privacy_profile_parse() {
+        assert_eq!(
+            PrivacyProfile::parse("pseudonymize"),
+            Some(PrivacyProfile::Pseudonymize)
+        );
+        assert_eq!(
+            PrivacyProfile::parse("GDPR"),
+            Some(PrivacyProfile::Pseudonymize)
+        );
+        assert_eq!(PrivacyProfile::parse("raw"), Some(PrivacyProfile::Raw));
+        assert_eq!(PrivacyProfile::parse("none"), Some(PrivacyProfile::Raw));
+        assert_eq!(PrivacyProfile::parse("bogus"), None);
     }
 
     #[test]

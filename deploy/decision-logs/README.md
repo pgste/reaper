@@ -66,9 +66,18 @@ attributes. Three independent, composable protection layers are applied **once
 at capture**, so the query API, file/stdout sinks, exports, and the central
 pipeline only ever see protected values:
 
+**A privacy posture is required whenever decision logging is enabled** (round-2
+A5, SEC R2-5): set `REAPER_DECISION_LOG_PRIVACY=pseudonymize` (the GDPR-friendly
+profile — implies `HASH_PRINCIPAL` + `HASH_RESOURCE`, requires `HASH_SALT`) or
+`REAPER_DECISION_LOG_PRIVACY=raw` (explicit opt-out: identities in clear), or
+configure any fine-grained knob below. With none of these the agent refuses to
+start — PII never reaches the sink because nobody decided.
+
 | Env | Effect |
 |-----|--------|
+| `REAPER_DECISION_LOG_PRIVACY=pseudonymize` + `REAPER_DECISION_LOG_HASH_SALT=<secret>` | GDPR-friendly profile: `principal` AND `resource` pseudonymized |
 | `REAPER_DECISION_LOG_HASH_PRINCIPAL=true` + `REAPER_DECISION_LOG_HASH_SALT=<secret>` | `principal` becomes `sha256:<hex>` (HMAC-SHA-256): stable → joinable for investigations, irreversible, dictionary-attack-proof without the salt |
+| `REAPER_DECISION_LOG_HASH_RESOURCE=true` + `REAPER_DECISION_LOG_HASH_SALT=<secret>` | `resource` pseudonymized the same way (domain-separated: equal principal/resource strings don't correlate) |
 | `REAPER_DECISION_LOG_CONTEXT_ALLOWLIST=request_id,ip` | drop all context keys not listed |
 | `REAPER_DECISION_LOG_MASK_KEYS=ssn,password,token` | replace those values with `"***"` in context **and** in explain `input_data` (case-insensitive) |
 | `REAPER_DECISION_LOG_ENCRYPT_INPUT_DATA=true` + `REAPER_DECISION_LOG_ENCRYPTION_KEY=<64-hex>` | seal the explain snapshot with AES-256-GCM; the log store sees only ciphertext, the key holder (control plane, per tenant) decrypts |

@@ -1196,13 +1196,14 @@ mod tests {
     /// so the handler fails closed rather than serving a non-durable allow.
     #[tokio::test]
     async fn test_mandatory_durable_without_durable_sink_forces_fail_closed() {
-        use policy_engine::{DecisionBuffer, DecisionLogConfig, DecisionLogEntry};
+        use policy_engine::{DecisionBuffer, DecisionLogConfig, DecisionLogEntry, PrivacyProfile};
 
         // A mandatory config with no fsync-able file sink (stdout only) cannot
         // support durable-before-serve. Rather than degrade to a per-request 503,
         // it must fail fast at construction so the operator sees a clear config error.
         let stdout_only = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             audit_required: true,
             emit_stdout: true,
             checkpoint_every: 100,
@@ -1224,6 +1225,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             audit_required: true,
             file_path: Some(path.to_string_lossy().into_owned()),
             checkpoint_every: 100,

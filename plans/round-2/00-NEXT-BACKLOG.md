@@ -24,7 +24,7 @@ shipped; this is the next, much smaller set.
 
 ---
 
-## Workstream A — Audit integrity operationalization  *(the dominant theme)*
+## Workstream A — Audit integrity operationalization  *(COMPLETE — A1-A5 landed)*
 
 The chain + signed checkpoints are real and tested; the *operationalization* is
 missing. This is the cluster a regulator's "prove the log is complete and
