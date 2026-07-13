@@ -6,6 +6,18 @@ is derived from the enterprise-readiness review in [`../reviews/`](../reviews/)
 Current state (file:line) · Definition of Done · Critical steps · Dependencies ·
 Testing · Effort · Key decisions (ADR) · Risks*.
 
+> **STATUS: ✅ ROADMAP COMPLETE (2026-07-13)** — all 12 plans shipped across
+> PRs #10–#47. The three P0s are closed, identity is federated (SSO/SCIM),
+> audit is tamper-evident with replay, the API surface is contract-gated,
+> the engine holds its SLA at scale, GitOps/environments/promotion are
+> first-class with regulated change management (incl. optional ServiceNow
+> change records), the control plane has an HA/DR posture with numeric
+> RPO/RTO targets and a rehearsable game-day, and the authorization data
+> model has a typed, dry-runnable, reversible migration engine with
+> decision-level provenance. Remaining open items live in the individual
+> plan files' deferred notes (e.g. Plan 01 Phase D dogfooding, SAML,
+> first DR game-day execution).
+
 **Where we start:** the review's overall verdict is **NOT READY** — three
 independent P0s let an anonymous network attacker control live authorization
 decisions and rewrite policy for any tenant, and there is no SSO/SCIM. Every P0
@@ -30,7 +42,7 @@ is *missing wiring around correct primitives*, so the path back is tractable.
 | 09 | [GitOps / Policy-as-Code](09-gitops-policy-as-code.md) ✅ **shipped** (PRs #35–#37: spawn the sync engine + materialize policies/bundles idempotently, shared SSRF guard on the git path, GitHub App install + minted installation tokens (no PAT-in-URL), signed-commit verification, HMAC-verified webhook push, drift detection + commit-back conflict model) | P1 | →CONDITIONAL/READY | Prod F2/F3; Sec P1-3 | S (wire) + M (reshape) | 01 (git creds behind auth) |
 | 10 | [Environments & Promotion](10-environments-and-promotion.md) ✅ **shipped** (PRs #38–#40: first-class Environment over namespaces (tier ordering, approval policy, freeze windows), governed env→env promotion via change requests (upward-only, N distinct approvers, requester excluded), pinned data version applied to the target env on apply (fail-closed), keyset-paginated change-record trail, always-two-step promotion, per-env require_change_record gate on direct rollouts with audited admin break-glass, apply-time freeze recheck, opt-in ServiceNow change-record reference/validation) | P1 | →READY | Prod F4 | M | 01, 02 (approval actor + verified promote) |
 | 11 | [Control-Plane HA/DR](11-control-plane-ha-dr.md) ✅ **shipped** (PRs #42–#44: HA Postgres posture with numeric RPO/RTO targets (managed HA recommended, CloudNativePG 3-node cluster as the portable path), continuous WAL archiving + nightly base backups + automated nightly restore-check CronJob, failover-aware pool (health-check on acquire, lifetimes, bounded connect retry, optional replica_url read pool), advisory-locked migrations + sweeper leader election under N replicas, zero-gap Helm rollouts (maxUnavailable:0, soft anti-affinity, RWO-PVC warning), fleet-upgrade runbook + quarterly DR game-day script) | P1 | →READY | Prod F5 | M | — |
-| 12 | [Data-Model Migration Engine](12-data-model-migration.md) | P1 | →READY | Prod F6 | L | — |
+| 12 | [Data-Model Migration Engine](12-data-model-migration.md) ✅ **shipped** (PRs #45–#47: closed typed transform set with mechanical inverses (9 ops, lossless-only coercion), pure record-level planner with fail-closed blockers, dry-run plan endpoint with real-engine who-gains/loses impact analysis (renames diffed modulo the rename map — pure rename provably decision-neutral), atomic apply (records+model+history+outbox in one tx) with delta≡rebuild-across-migration proven, blind PUT /model overwrite replaced by a vocabulary guard, interner hygiene O(schema) under mass rename, model_version provenance on every published data version and DecisionLogEntry end-to-end, rollback as an impact-checked forward inverse migration restoring the exact pre-migration checksum) | P1 | →READY | Prod F6 | L | — |
 
 *Effort is relative T-shirt sizing (S≈days, M≈1–3 weeks, L≈1–2 months for a small team), not a commitment — see each plan's §7.*
 
