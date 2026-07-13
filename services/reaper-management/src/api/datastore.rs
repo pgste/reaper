@@ -12,18 +12,19 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Json, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
-    api::error::{ApiError, ApiResult},
+    api::error::{ApiError, ApiResult, ProblemDetails},
     api::idempotency,
     api::pagination::{PageQuery, Paginated},
     auth::{middleware::AuthenticatedUser, middleware::RequireAuth, scopes::Scope},
-    db::repositories::datastore::{DatastoreRecord, PageRow},
+    db::repositories::datastore::{DatastoreRecord, PageRow, PublishedVersion},
     db::repositories::{DatastoreRepository, NamespaceRepository},
     db::DatabaseError,
     domain::datastore::{
@@ -132,11 +133,24 @@ async fn require_store(state: &AppState, resolved: &Resolved) -> ApiResult<Datas
 // Datastore lifecycle
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct ProvisionRequest {
+    /// Starter model: `rbac`, `abac`, `rebac`, or `combined`.
     template: DatastoreTemplate,
 }
 
+/// The freshly provisioned datastore.
+#[derive(Debug, Serialize, ToSchema)]
+struct ProvisionResponse {
+    id: Uuid,
+    /// The template the datastore was provisioned from.
+    template: String,
+    model: ModelDefinition,
+    /// Latest published data-bundle version (0 = never published).
+    current_version: i64,
+}
+
+/// Provision the namespace's datastore from a template (one per namespace).
 #[utoipa::path(
     post,
     path = "/orgs/{org}/namespaces/{ns}/datastore",
@@ -145,7 +159,12 @@ struct ProvisionRequest {
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Datastore provisioned")),
+    request_body = ProvisionRequest,
+    responses(
+        (status = 200, description = "Datastore provisioned", body = ProvisionResponse),
+        (status = 404, description = "Organization or namespace not found", body = ProblemDetails),
+        (status = 409, description = "Datastore already provisioned", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn provision(
@@ -153,7 +172,7 @@ async fn provision(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(req): Json<ProvisionRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ProvisionResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let repo = DatastoreRepository::new(&state.db);
     if repo
@@ -168,14 +187,35 @@ async fn provision(
     let record = repo
         .provision(resolved.org_id, resolved.namespace_id, req.template)
         .await?;
-    Ok(Json(json!({
-        "id": record.id,
-        "template": record.template,
-        "model": record.model,
-        "current_version": record.current_version,
-    })))
+    Ok(Json(ProvisionResponse {
+        id: record.id,
+        template: record.template,
+        model: record.model,
+        current_version: record.current_version,
+    }))
 }
 
+/// Record counts per kind.
+#[derive(Debug, Serialize, ToSchema)]
+struct RecordCounts {
+    entities: i64,
+    role_bindings: i64,
+    tuples: i64,
+}
+
+/// Datastore summary: template, publish state, record counts.
+#[derive(Debug, Serialize, ToSchema)]
+struct DatastoreSummaryResponse {
+    id: Uuid,
+    template: String,
+    /// Latest published data-bundle version (0 = never published).
+    current_version: i64,
+    counts: RecordCounts,
+    created_at: String,
+    updated_at: String,
+}
+
+/// Datastore summary: template, publish state, record counts.
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore",
@@ -184,35 +224,39 @@ async fn provision(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Datastore summary")),
+    responses(
+        (status = 200, description = "Datastore summary", body = DatastoreSummaryResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn get_datastore(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<DatastoreSummaryResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
     let (entities, bindings, tuples) = DatastoreRepository::new(&state.db).counts(store.id).await?;
-    Ok(Json(json!({
-        "id": store.id,
-        "template": store.template,
-        "current_version": store.current_version,
-        "counts": {
-            "entities": entities,
-            "role_bindings": bindings,
-            "tuples": tuples,
+    Ok(Json(DatastoreSummaryResponse {
+        id: store.id,
+        template: store.template,
+        current_version: store.current_version,
+        counts: RecordCounts {
+            entities,
+            role_bindings: bindings,
+            tuples,
         },
-        "created_at": store.created_at,
-        "updated_at": store.updated_at,
-    })))
+        created_at: store.created_at,
+        updated_at: store.updated_at,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------
 
+/// Fetch the datastore's model definition (entity types, roles, relations).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore/model",
@@ -221,7 +265,10 @@ async fn get_datastore(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Datastore model definition")),
+    responses(
+        (status = 200, description = "Datastore model definition", body = ModelDefinition),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn get_model(
@@ -234,6 +281,13 @@ async fn get_model(
     Ok(Json(store.model))
 }
 
+/// Acknowledgement of an additive model overwrite.
+#[derive(Debug, Serialize, ToSchema)]
+struct ModelUpdatedResponse {
+    updated: bool,
+}
+
+/// Overwrite the model (additive edits only; breaking changes need a migration).
 #[utoipa::path(
     put,
     path = "/orgs/{org}/namespaces/{ns}/datastore/model",
@@ -242,7 +296,12 @@ async fn get_model(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Model updated")),
+    request_body = ModelDefinition,
+    responses(
+        (status = 200, description = "Model updated", body = ModelUpdatedResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails),
+        (status = 409, description = "Overwrite would break existing vocabulary — use a migration", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn put_model(
@@ -250,7 +309,7 @@ async fn put_model(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(model): Json<ModelDefinition>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ModelUpdatedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     // A bare overwrite that changes vocabulary would silently strand every
@@ -270,7 +329,7 @@ async fn put_model(
     DatastoreRepository::new(&state.db)
         .update_model(store.id, &model)
         .await?;
-    Ok(Json(json!({"updated": true})))
+    Ok(Json(ModelUpdatedResponse { updated: true }))
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +359,10 @@ struct EntityListParams {
         ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "One page of entities with a next_cursor to resume"),
-        (status = 400, description = "limit out of range or cursor invalid")
+        (status = 200, description = "One page of entities with a next_cursor to resume",
+         body = Paginated<AdmEntity>),
+        (status = 400, description = "limit out of range or cursor invalid", body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -329,6 +390,14 @@ async fn list_entities(
     Ok(Json(Paginated::from_rows(rows, &page, PageRow::key)))
 }
 
+/// Acknowledgement of an entity upsert.
+#[derive(Debug, Serialize, ToSchema)]
+struct EntityUpsertedResponse {
+    entity_id: String,
+    upserted: bool,
+}
+
+/// Create or replace an entity (attributes validated against the model).
 #[utoipa::path(
     post,
     path = "/orgs/{org}/namespaces/{ns}/datastore/entities",
@@ -337,7 +406,12 @@ async fn list_entities(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Entity upserted")),
+    request_body = AdmEntity,
+    responses(
+        (status = 200, description = "Entity upserted", body = EntityUpsertedResponse),
+        (status = 400, description = "Attributes violate the model", body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn upsert_entity(
@@ -345,7 +419,7 @@ async fn upsert_entity(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(entity): Json<AdmEntity>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<EntityUpsertedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     store
@@ -355,11 +429,13 @@ async fn upsert_entity(
     DatastoreRepository::new(&state.db)
         .upsert_entity(store.id, &entity)
         .await?;
-    Ok(Json(
-        json!({"entity_id": entity.entity_id, "upserted": true}),
-    ))
+    Ok(Json(EntityUpsertedResponse {
+        entity_id: entity.entity_id,
+        upserted: true,
+    }))
 }
 
+/// Fetch one entity with its typed attributes.
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}",
@@ -369,7 +445,10 @@ async fn upsert_entity(
         ("ns" = String, Path, description = "Namespace slug"),
         ("entity_id" = String, Path, description = "Entity ID")
     ),
-    responses((status = 200, description = "Entity detail")),
+    responses(
+        (status = 200, description = "Entity detail", body = AdmEntity),
+        (status = 404, description = "Entity (or datastore) not found", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn get_entity(
@@ -386,6 +465,17 @@ async fn get_entity(
     Ok(Json(entity))
 }
 
+/// Result of an entity delete, including the referential cascade.
+#[derive(Debug, Serialize, ToSchema)]
+struct EntityDeletedResponse {
+    /// Whether the entity record existed.
+    deleted: bool,
+    /// Other entity ids whose materialized documents changed because tuples
+    /// or bindings touching the deleted entity died with it.
+    cascaded: Vec<String>,
+}
+
+/// Delete an entity; tuples and bindings touching it cascade.
 #[utoipa::path(
     delete,
     path = "/orgs/{org}/namespaces/{ns}/datastore/entities/{entity_id}",
@@ -395,14 +485,17 @@ async fn get_entity(
         ("ns" = String, Path, description = "Namespace slug"),
         ("entity_id" = String, Path, description = "Entity ID")
     ),
-    responses((status = 200, description = "Entity deleted (with cascade)")),
+    responses(
+        (status = 200, description = "Entity deleted (with cascade)", body = EntityDeletedResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn delete_entity(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns, entity_id)): Path<(String, String, String)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<EntityDeletedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     // Referential cascade (contract pinned by the delta==rebuild
@@ -411,7 +504,17 @@ async fn delete_entity(
     let (deleted, affected) = DatastoreRepository::new(&state.db)
         .delete_entity_cascade(store.id, &entity_id)
         .await?;
-    Ok(Json(json!({"deleted": deleted, "cascaded": affected})))
+    Ok(Json(EntityDeletedResponse {
+        deleted,
+        cascaded: affected,
+    }))
+}
+
+/// Acknowledgement of an attribute replacement.
+#[derive(Debug, Serialize, ToSchema)]
+struct AttributesUpdatedResponse {
+    entity_id: String,
+    updated: bool,
 }
 
 /// Replace an entity's attribute map (typed, validated). PUT semantics keep
@@ -425,7 +528,11 @@ async fn delete_entity(
         ("ns" = String, Path, description = "Namespace slug"),
         ("entity_id" = String, Path, description = "Entity ID")
     ),
-    responses((status = 200, description = "Entity attributes replaced")),
+    responses(
+        (status = 200, description = "Entity attributes replaced", body = AttributesUpdatedResponse),
+        (status = 400, description = "Attributes violate the model", body = ProblemDetails),
+        (status = 404, description = "Entity (or datastore) not found", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn put_attributes(
@@ -433,7 +540,7 @@ async fn put_attributes(
     RequireAuth(user): RequireAuth,
     Path((org, ns, entity_id)): Path<(String, String, String)>,
     Json(attributes): Json<serde_json::Map<String, Value>>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<AttributesUpdatedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let repo = DatastoreRepository::new(&state.db);
@@ -447,7 +554,10 @@ async fn put_attributes(
         .map_err(ApiError::BadRequest)?;
     entity.attributes = attributes;
     repo.upsert_entity(store.id, &entity).await?;
-    Ok(Json(json!({"entity_id": entity_id, "updated": true})))
+    Ok(Json(AttributesUpdatedResponse {
+        entity_id,
+        updated: true,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -476,8 +586,10 @@ struct BindingListParams {
         ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "One page of role bindings with a next_cursor to resume"),
-        (status = 400, description = "limit out of range or cursor invalid")
+        (status = 200, description = "One page of role bindings with a next_cursor to resume",
+         body = Paginated<RoleBinding>),
+        (status = 400, description = "limit out of range or cursor invalid", body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -506,6 +618,13 @@ async fn list_bindings(
     Ok(Json(Paginated::from_rows(rows, &page, PageRow::key)))
 }
 
+/// Acknowledgement of a role-binding grant.
+#[derive(Debug, Serialize, ToSchema)]
+struct BindingAddedResponse {
+    bound: bool,
+}
+
+/// Grant a role to a subject (namespace-wide; the role must exist in the model).
 #[utoipa::path(
     post,
     path = "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
@@ -514,7 +633,12 @@ async fn list_bindings(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Role binding added")),
+    request_body = RoleBinding,
+    responses(
+        (status = 200, description = "Role binding added", body = BindingAddedResponse),
+        (status = 400, description = "Role not defined in the model, or scoped binding (unsupported)", body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn add_binding(
@@ -522,7 +646,7 @@ async fn add_binding(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(binding): Json<RoleBinding>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<BindingAddedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     if store.model.role(&binding.role).is_none() {
@@ -544,9 +668,16 @@ async fn add_binding(
     DatastoreRepository::new(&state.db)
         .add_binding(store.id, &binding)
         .await?;
-    Ok(Json(json!({"bound": true})))
+    Ok(Json(BindingAddedResponse { bound: true }))
 }
 
+/// Result of a record delete (`deleted: false` = the record did not exist).
+#[derive(Debug, Serialize, ToSchema)]
+struct RecordDeletedResponse {
+    deleted: bool,
+}
+
+/// Revoke a role binding (idempotent; `deleted: false` when absent).
 #[utoipa::path(
     delete,
     path = "/orgs/{org}/namespaces/{ns}/datastore/role-bindings",
@@ -555,7 +686,11 @@ async fn add_binding(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Role binding removed")),
+    request_body = RoleBinding,
+    responses(
+        (status = 200, description = "Role binding removed", body = RecordDeletedResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn remove_binding(
@@ -563,13 +698,13 @@ async fn remove_binding(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(binding): Json<RoleBinding>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<RecordDeletedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let deleted = DatastoreRepository::new(&state.db)
         .delete_binding(store.id, &binding)
         .await?;
-    Ok(Json(json!({"deleted": deleted})))
+    Ok(Json(RecordDeletedResponse { deleted }))
 }
 
 // ---------------------------------------------------------------------------
@@ -600,8 +735,10 @@ struct TupleListParams {
         ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "One page of relationship tuples with a next_cursor to resume"),
-        (status = 400, description = "limit out of range or cursor invalid")
+        (status = 200, description = "One page of relationship tuples with a next_cursor to resume",
+         body = Paginated<RelationTuple>),
+        (status = 400, description = "limit out of range or cursor invalid", body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -631,6 +768,13 @@ async fn list_tuples(
     Ok(Json(Paginated::from_rows(rows, &page, PageRow::key)))
 }
 
+/// Acknowledgement of a tuple write.
+#[derive(Debug, Serialize, ToSchema)]
+struct TupleWrittenResponse {
+    written: bool,
+}
+
+/// Write a relationship tuple (the relation must exist in the model).
 #[utoipa::path(
     post,
     path = "/orgs/{org}/namespaces/{ns}/datastore/tuples",
@@ -639,7 +783,12 @@ async fn list_tuples(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Relationship tuple written")),
+    request_body = RelationTuple,
+    responses(
+        (status = 200, description = "Relationship tuple written", body = TupleWrittenResponse),
+        (status = 400, description = "Relation not defined in the model", body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn write_tuple(
@@ -647,7 +796,7 @@ async fn write_tuple(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(tuple): Json<RelationTuple>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<TupleWrittenResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     if store.model.relation(&tuple.relation).is_none() {
@@ -659,9 +808,10 @@ async fn write_tuple(
     DatastoreRepository::new(&state.db)
         .write_tuple(store.id, &tuple)
         .await?;
-    Ok(Json(json!({"written": true})))
+    Ok(Json(TupleWrittenResponse { written: true }))
 }
 
+/// Remove a relationship tuple (idempotent; `deleted: false` when absent).
 #[utoipa::path(
     delete,
     path = "/orgs/{org}/namespaces/{ns}/datastore/tuples",
@@ -670,7 +820,11 @@ async fn write_tuple(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Relationship tuple removed")),
+    request_body = RelationTuple,
+    responses(
+        (status = 200, description = "Relationship tuple removed", body = RecordDeletedResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn remove_tuple(
@@ -678,19 +832,30 @@ async fn remove_tuple(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(tuple): Json<RelationTuple>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<RecordDeletedResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let deleted = DatastoreRepository::new(&state.db)
         .delete_tuple(store.id, &tuple)
         .await?;
-    Ok(Json(json!({"deleted": deleted})))
+    Ok(Json(RecordDeletedResponse { deleted }))
 }
 
 // ---------------------------------------------------------------------------
 // Publish + versions
 // ---------------------------------------------------------------------------
 
+/// The freshly published immutable data-bundle version.
+#[derive(Debug, Serialize, ToSchema)]
+struct PublishResponse {
+    version: i64,
+    /// `sha256:<hex>` over the materialized document.
+    checksum: String,
+    counts: RecordCounts,
+    published_at: String,
+}
+
+/// Cut a new immutable, checksummed data-bundle version and wake the fleet.
 #[utoipa::path(
     post,
     path = "/orgs/{org}/namespaces/{ns}/datastore/publish",
@@ -699,14 +864,18 @@ async fn remove_tuple(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "New immutable data-bundle version published")),
+    responses(
+        (status = 200, description = "New immutable data-bundle version published",
+         body = PublishResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn publish(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<PublishResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let published = DatastoreRepository::new(&state.db)
@@ -714,16 +883,16 @@ async fn publish(
         .await?;
     notify_published(&state, &resolved, store.id, &published).await;
 
-    Ok(Json(json!({
-        "version": published.version,
-        "checksum": published.checksum,
-        "counts": {
-            "entities": published.entity_count,
-            "tuples": published.tuple_count,
-            "role_bindings": published.binding_count,
+    Ok(Json(PublishResponse {
+        version: published.version,
+        checksum: published.checksum.clone(),
+        counts: RecordCounts {
+            entities: published.entity_count,
+            role_bindings: published.binding_count,
+            tuples: published.tuple_count,
         },
-        "published_at": published.published_at,
-    })))
+        published_at: published.published_at.clone(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +902,53 @@ async fn publish(
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct PlanMigrationRequest {
     transforms: Vec<migration::ModelTransform>,
+}
+
+/// Which materialized documents a migration touches (sampled).
+#[derive(Debug, Serialize, ToSchema)]
+struct DocsChangedSummary {
+    /// Total documents that would be re-materialized (upserts + tombstones).
+    total: usize,
+    /// Up to 100 affected entity ids.
+    sample: Vec<String>,
+}
+
+/// The pre-migration side of a plan report.
+#[derive(Debug, Serialize, ToSchema)]
+struct PlanStateBefore {
+    /// `sha256:<hex>` over the materialized document.
+    checksum: String,
+    /// Materialized entity-document count.
+    entities: usize,
+    /// The model version the plan was computed against — `apply` is guarded
+    /// on it (R2-04).
+    model_version: i64,
+}
+
+/// The post-migration side of a plan report.
+#[derive(Debug, Serialize, ToSchema)]
+struct PlanStateAfter {
+    /// `sha256:<hex>` over the materialized document.
+    checksum: String,
+    /// Materialized entity-document count.
+    entities: usize,
+    /// The full model definition the migration produces.
+    model: ModelDefinition,
+}
+
+/// Dry-run migration plan: record-level ops, blockers, and access impact.
+#[derive(Debug, Serialize, ToSchema)]
+struct MigrationPlanResponse {
+    /// False when blockers exist — `apply` will refuse with 409.
+    applyable: bool,
+    record_ops: Vec<migration::RecordOp>,
+    blockers: Vec<migration::PlanBlocker>,
+    /// Access-impact diff; `null` when the plan is blocked (a plan that
+    /// cannot apply has no meaningful "after" state).
+    impact: Option<impact::ImpactReport>,
+    docs_changed: DocsChangedSummary,
+    before: PlanStateBefore,
+    after: PlanStateAfter,
 }
 
 /// Dry-run a model migration: NOTHING is mutated. Returns the record-level
@@ -751,8 +967,11 @@ struct PlanMigrationRequest {
     ),
     request_body = PlanMigrationRequest,
     responses(
-        (status = 200, description = "Dry-run migration plan + impact report (no mutation)"),
-        (status = 400, description = "Invalid transform (unknown source, name collision, bad default)")
+        (status = 200, description = "Dry-run migration plan + impact report (no mutation)",
+         body = MigrationPlanResponse),
+        (status = 400, description = "Invalid transform (unknown source, name collision, bad default)",
+         body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -761,7 +980,7 @@ async fn plan_migration(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Json(req): Json<PlanMigrationRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<MigrationPlanResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let prepared = prepare_migration(&state, &store, &req.transforms).await?;
@@ -805,12 +1024,16 @@ fn model_conflict_to_api(e: DatabaseError) -> ApiError {
     ),
     request_body = PlanMigrationRequest,
     responses(
-        (status = 200, description = "Migration applied atomically + new data version published"),
-        (status = 400, description = "Invalid transform"),
+        (status = 200, description = "Migration applied atomically + new data version published",
+         body = ApplyMigrationResponse),
+        (status = 400, description = "Invalid transform", body = ProblemDetails),
         (status = 409, description = "Plan is blocked (coercion errors / non-empty relation), \
             the model changed concurrently since the plan's model_before (re-plan and retry), \
-            or the original request for this Idempotency-Key is still in flight"),
-        (status = 422, description = "Idempotency-Key was already used for a different request")
+            or the original request for this Idempotency-Key is still in flight",
+         body = ProblemDetails),
+        (status = 422, description = "Idempotency-Key was already used for a different request",
+         body = ProblemDetails),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -837,6 +1060,27 @@ async fn apply_migration(
         || apply_migration_inner(state, user, org, ns, req),
     )
     .await
+}
+
+/// A published version pointer (version + checksum).
+#[derive(Debug, Serialize, ToSchema)]
+struct PublishedRef {
+    version: i64,
+    /// `sha256:<hex>` over the materialized document.
+    checksum: String,
+}
+
+/// Result of an atomically applied migration + the publish it triggered.
+#[derive(Debug, Serialize, ToSchema)]
+struct ApplyMigrationResponse {
+    /// The new model-shape version.
+    model_version: i64,
+    record_ops: Vec<migration::RecordOp>,
+    /// Access-impact diff computed by the server-side re-plan.
+    impact: Option<impact::ImpactReport>,
+    /// Materialized documents re-published (upserts + tombstones).
+    docs_changed: usize,
+    published: PublishedRef,
 }
 
 /// The actual migration side effect; runs at most once per idempotency key.
@@ -883,19 +1127,32 @@ async fn apply_migration_inner(
     let published = repo.publish(&updated, &user.id.to_string()).await?;
     notify_published(&state, &resolved, updated.id, &published).await;
 
-    Ok((
-        StatusCode::OK,
-        json!({
-            "model_version": model_version,
-            "record_ops": prepared.plan.record_ops,
-            "impact": prepared.impact,
-            "docs_changed": prepared.dirty.len(),
-            "published": {
-                "version": published.version,
-                "checksum": published.checksum,
-            },
-        }),
-    ))
+    // Typed for the contract (R2-06); serialized to a Value at the
+    // idempotency boundary, which persists the body for replay.
+    let response = ApplyMigrationResponse {
+        model_version,
+        record_ops: prepared.plan.record_ops,
+        impact: prepared.impact,
+        docs_changed: prepared.dirty.len(),
+        published: PublishedRef {
+            version: published.version,
+            checksum: published.checksum,
+        },
+    };
+    let body = serde_json::to_value(&response)
+        .map_err(|e| ApiError::Internal(format!("serialize migration response: {e}")))?;
+    Ok((StatusCode::OK, body))
+}
+
+/// The append-only migration history for a datastore.
+#[derive(Debug, Serialize, ToSchema)]
+struct MigrationHistoryResponse {
+    /// Current model-shape version (0 = never migrated).
+    model_version: i64,
+    /// Newest first: `{model_version, transforms, author, model_before_hash,
+    /// model_after_hash, created_at}` per applied migration.
+    #[schema(value_type = Vec<Object>)]
+    migrations: Vec<Value>,
 }
 
 /// The append-only migration history (newest first): transforms, author,
@@ -908,23 +1165,40 @@ async fn apply_migration_inner(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Migration history")),
+    responses(
+        (status = 200, description = "Migration history", body = MigrationHistoryResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn list_migrations(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<MigrationHistoryResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
     let history = DatastoreRepository::new(&state.db)
         .list_model_versions(store.id)
         .await?;
-    Ok(Json(json!({
-        "model_version": store.model_version,
-        "migrations": history,
-    })))
+    Ok(Json(MigrationHistoryResponse {
+        model_version: store.model_version,
+        migrations: history,
+    }))
+}
+
+/// Result of rolling back a migration (a NEW forward model version).
+#[derive(Debug, Serialize, ToSchema)]
+struct RollbackMigrationResponse {
+    /// The migration (model version) that was rolled back.
+    rolled_back: i64,
+    /// The new model-shape version the inverse migration produced.
+    model_version: i64,
+    /// The composed inverse transforms that were applied.
+    transforms: Vec<migration::ModelTransform>,
+    /// Access-impact diff of the inverse migration.
+    impact: Option<impact::ImpactReport>,
+    published: PublishedRef,
 }
 
 /// Roll back an applied migration by composing its INVERSE transforms into
@@ -944,10 +1218,12 @@ async fn list_migrations(
         ("version" = i64, Path, description = "Model version (migration) to roll back")
     ),
     responses(
-        (status = 200, description = "Inverse migration applied as a new forward model version"),
-        (status = 404, description = "No such migration"),
+        (status = 200, description = "Inverse migration applied as a new forward model version",
+         body = RollbackMigrationResponse),
+        (status = 404, description = "No such migration", body = ProblemDetails),
         (status = 409, description = "Migration is irreversible, the inverse plan is blocked, \
-            or the model changed concurrently (re-plan and retry)")
+            or the model changed concurrently (re-plan and retry)",
+         body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -955,7 +1231,7 @@ async fn rollback_migration(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns, version)): Path<(String, String, i64)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<RollbackMigrationResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, true).await?;
     let store = require_store(&state, &resolved).await?;
     let repo = DatastoreRepository::new(&state.db);
@@ -1001,16 +1277,16 @@ async fn rollback_migration(
     let published = repo.publish(&updated, &user.id.to_string()).await?;
     notify_published(&state, &resolved, updated.id, &published).await;
 
-    Ok(Json(json!({
-        "rolled_back": version,
-        "model_version": model_version,
-        "transforms": inverse,
-        "impact": prepared.impact,
-        "published": {
-            "version": published.version,
-            "checksum": published.checksum,
+    Ok(Json(RollbackMigrationResponse {
+        rolled_back: version,
+        model_version,
+        transforms: inverse,
+        impact: prepared.impact,
+        published: PublishedRef {
+            version: published.version,
+            checksum: published.checksum,
         },
-    })))
+    }))
 }
 
 /// Everything a dry-run computes; `apply` persists exactly this state.
@@ -1112,7 +1388,7 @@ async fn prepare_migration(
 }
 
 impl PreparedMigration {
-    fn report(&self, store: &DatastoreRecord) -> Value {
+    fn report(&self, store: &DatastoreRecord) -> MigrationPlanResponse {
         let checksum = |doc: &Value| -> String {
             use sha2::{Digest, Sha256};
             format!(
@@ -1121,24 +1397,32 @@ impl PreparedMigration {
             )
         };
         let count = |doc: &Value| doc["entities"].as_array().map(|a| a.len()).unwrap_or(0);
-        let sample: Vec<&String> = self.dirty.iter().take(100).map(|(id, _)| id).collect();
-        json!({
-            "applyable": self.plan.applyable(),
-            "record_ops": self.plan.record_ops,
-            "blockers": self.plan.blockers,
-            "impact": self.impact,
-            "docs_changed": { "total": self.dirty.len(), "sample": sample },
-            "before": {
-                "checksum": checksum(&self.doc_before),
-                "entities": count(&self.doc_before),
-                "model_version": store.model_version,
+        let sample: Vec<String> = self
+            .dirty
+            .iter()
+            .take(100)
+            .map(|(id, _)| id.clone())
+            .collect();
+        MigrationPlanResponse {
+            applyable: self.plan.applyable(),
+            record_ops: self.plan.record_ops.clone(),
+            blockers: self.plan.blockers.clone(),
+            impact: self.impact.clone(),
+            docs_changed: DocsChangedSummary {
+                total: self.dirty.len(),
+                sample,
             },
-            "after": {
-                "checksum": checksum(&self.doc_after),
-                "entities": count(&self.doc_after),
-                "model": self.plan.model_after,
+            before: PlanStateBefore {
+                checksum: checksum(&self.doc_before),
+                entities: count(&self.doc_before),
+                model_version: store.model_version,
             },
-        })
+            after: PlanStateAfter {
+                checksum: checksum(&self.doc_after),
+                entities: count(&self.doc_after),
+                model: self.plan.model_after.clone(),
+            },
+        }
     }
 }
 
@@ -1149,6 +1433,50 @@ struct ChangesParams {
     since: i64,
     /// Max deltas per page (post-dedup entities, not raw log rows).
     limit: Option<i64>,
+}
+
+/// One delta: an upserted materialized document or a tombstone.
+#[derive(Debug, Serialize, ToSchema)]
+struct ChangeDelta {
+    /// `upsert` or `delete`.
+    op: String,
+    entity_id: String,
+    /// The freshly materialized entity document (present on `upsert`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object)]
+    document: Option<Value>,
+}
+
+impl ChangeDelta {
+    fn delete(entity_id: String) -> Self {
+        Self {
+            op: "delete".to_string(),
+            entity_id,
+            document: None,
+        }
+    }
+}
+
+/// The durable delta pull. Either a page of deltas (`snapshot_required:
+/// false`) or a directive to fall back to a full snapshot deploy because
+/// `since` predates the compaction floor.
+#[derive(Debug, Serialize, ToSchema)]
+struct ChangesResponse {
+    /// True when deltas can no longer bridge the gap — reload from the
+    /// current published version instead.
+    snapshot_required: bool,
+    /// Head of the change stream at read time.
+    head_seq: i64,
+    /// Current published version to snapshot from (present when
+    /// `snapshot_required`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_version: Option<i64>,
+    /// Echo of the requested resume point (present on a delta page).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    since: Option<i64>,
+    /// Deduped, latest-state deltas (present on a delta page).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deltas: Option<Vec<ChangeDelta>>,
 }
 
 /// GET …/datastore/changes?since=N — the durable delta pull. Replicas ask
@@ -1166,7 +1494,14 @@ struct ChangesParams {
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "Durable delta pull since a sequence")),
+    params(
+        ("since" = Option<i64>, Query, description = "Last applied sequence (exclusive; default 0)"),
+        ("limit" = Option<i64>, Query, description = "Max deltas per page (default 500, max 2000)")
+    ),
+    responses(
+        (status = 200, description = "Durable delta pull since a sequence", body = ChangesResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn get_changes(
@@ -1174,7 +1509,7 @@ async fn get_changes(
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
     Query(params): Query<ChangesParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ChangesResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
     let repo = DatastoreRepository::new(&state.db);
@@ -1192,17 +1527,19 @@ async fn get_changes(
     let compacted_away = params.since < min_available.saturating_sub(1)
         || (min_available == 0 && head_seq > params.since && marks.is_empty());
     if compacted_away {
-        return Ok(Json(json!({
-            "snapshot_required": true,
-            "head_seq": head_seq,
-            "current_version": store.current_version,
-        })));
+        return Ok(Json(ChangesResponse {
+            snapshot_required: true,
+            head_seq,
+            current_version: Some(store.current_version),
+            since: None,
+            deltas: None,
+        }));
     }
 
     let mut deltas = Vec::with_capacity(marks.len());
     for (entity_id, tombstone) in marks {
         if tombstone {
-            deltas.push(json!({"op": "delete", "entity_id": entity_id}));
+            deltas.push(ChangeDelta::delete(entity_id));
             continue;
         }
         let (entity, bindings, tuples) = repo.entity_view(store.id, &entity_id).await?;
@@ -1213,23 +1550,33 @@ async fn get_changes(
             &bindings,
             &tuples,
         ) {
-            Some(document) => deltas.push(json!({
-                "op": "upsert", "entity_id": entity_id, "document": document,
-            })),
+            Some(document) => deltas.push(ChangeDelta {
+                op: "upsert".to_string(),
+                entity_id,
+                document: Some(document),
+            }),
             // Nothing materializes anymore (e.g. its last tuple went away
             // and it never had a record): tombstone converges the replica.
-            None => deltas.push(json!({"op": "delete", "entity_id": entity_id})),
+            None => deltas.push(ChangeDelta::delete(entity_id)),
         }
     }
 
-    Ok(Json(json!({
-        "snapshot_required": false,
-        "since": params.since,
-        "head_seq": head_seq,
-        "deltas": deltas,
-    })))
+    Ok(Json(ChangesResponse {
+        snapshot_required: false,
+        head_seq,
+        current_version: None,
+        since: Some(params.since),
+        deltas: Some(deltas),
+    }))
 }
 
+/// All published data-bundle versions, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+struct VersionListResponse {
+    versions: Vec<PublishedVersion>,
+}
+
+/// List all published data-bundle versions, newest first.
 #[utoipa::path(
     get,
     path = "/orgs/{org}/namespaces/{ns}/datastore/versions",
@@ -1239,20 +1586,39 @@ async fn get_changes(
         ("org" = String, Path, description = "Organization ID or slug"),
         ("ns" = String, Path, description = "Namespace slug")
     ),
-    responses((status = 200, description = "List of published versions")),
+    responses(
+        (status = 200, description = "List of published versions", body = VersionListResponse),
+        (status = 404, description = "No datastore provisioned for this namespace", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn list_versions(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<VersionListResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
     let versions = DatastoreRepository::new(&state.db)
         .list_versions(store.id)
         .await?;
-    Ok(Json(json!({"versions": versions})))
+    Ok(Json(VersionListResponse { versions }))
+}
+
+/// One published version plus its materialized document.
+#[derive(Debug, Serialize, ToSchema)]
+struct VersionDocumentResponse {
+    version: i64,
+    /// `sha256:<hex>` over the materialized document.
+    checksum: String,
+    /// Change-stream position at publish time (delta resume point).
+    change_seq: i64,
+    /// Model-shape version the document was materialized under.
+    model_version: i64,
+    published_at: String,
+    /// The exact `{"entities": [...]}` payload agents load.
+    #[schema(value_type = Object)]
+    document: Value,
 }
 
 /// Returns the materialized document — the exact payload an agent POSTs to
@@ -1267,14 +1633,17 @@ async fn list_versions(
         ("ns" = String, Path, description = "Namespace slug"),
         ("version" = i64, Path, description = "Version number")
     ),
-    responses((status = 200, description = "Materialized version document")),
+    responses(
+        (status = 200, description = "Materialized version document", body = VersionDocumentResponse),
+        (status = 404, description = "Version (or datastore) not found", body = ProblemDetails)
+    ),
     security(("bearer_jwt" = []))
 )]
 async fn get_version(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, ns, version)): Path<(String, String, i64)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<VersionDocumentResponse>> {
     let resolved = authorize(&state, &user, &org, &ns, false).await?;
     let store = require_store(&state, &resolved).await?;
     let (meta, document) = DatastoreRepository::new(&state.db)
@@ -1283,12 +1652,12 @@ async fn get_version(
         .ok_or_else(|| ApiError::NotFound(format!("version {version} not found")))?;
     let document: Value = serde_json::from_str(&document)
         .map_err(|e| ApiError::Internal(format!("corrupt stored document: {e}")))?;
-    Ok(Json(json!({
-        "version": meta.version,
-        "checksum": meta.checksum,
-        "change_seq": meta.change_seq,
-        "model_version": meta.model_version,
-        "published_at": meta.published_at,
-        "document": document,
-    })))
+    Ok(Json(VersionDocumentResponse {
+        version: meta.version,
+        checksum: meta.checksum,
+        change_seq: meta.change_seq,
+        model_version: meta.model_version,
+        published_at: meta.published_at,
+        document,
+    }))
 }

@@ -26,7 +26,7 @@ pub struct AuditRetention {
 
 /// A legal hold: decisions matching `filter` are exempt from retention purge
 /// until the hold is released.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LegalHold {
     pub id: Uuid,
     pub org_id: Uuid,

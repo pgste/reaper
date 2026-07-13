@@ -85,7 +85,7 @@ pub struct ReplayFilter {
 }
 
 /// One sampled flipped decision: what it was, what it would be.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct FlipSample {
     pub decision_id: String,
     pub timestamp: String,
@@ -101,7 +101,7 @@ pub struct FlipSample {
 }
 
 /// The replay diff summary.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
 pub struct ReplayResult {
     /// Rows the range/filters matched (scan-capped).
     pub scanned: u64,
@@ -136,37 +136,52 @@ pub struct ReplayJob {
     pub outcome: RwLock<Option<Result<ReplayResult, String>>>,
 }
 
+/// Wire status of a replay job — the `GET …/replay/{job_id}` response body.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ReplayStatus {
+    pub job_id: Uuid,
+    pub bundle_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    /// `running` | `completed` | `failed`.
+    pub state: String,
+    /// Rows scanned so far (present while `running`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanned: Option<u64>,
+    /// The replay diff summary (present when `completed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<ReplayResult>,
+    /// Failure message (present when `failed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl ReplayJob {
     /// Render the job for the API.
-    pub fn status_json(&self, job_id: Uuid) -> Value {
-        let base = serde_json::json!({
-            "job_id": job_id,
-            "bundle_id": self.bundle_id,
-            "created_at": self.created_at,
-        });
-        let mut obj = base.as_object().cloned().unwrap_or_default();
+    pub fn status(&self, job_id: Uuid) -> ReplayStatus {
+        let mut status = ReplayStatus {
+            job_id,
+            bundle_id: self.bundle_id,
+            created_at: self.created_at,
+            state: "running".to_string(),
+            scanned: None,
+            result: None,
+            error: None,
+        };
         let outcome = self.outcome.read().expect("replay job lock poisoned");
         match &*outcome {
             None => {
-                obj.insert("state".into(), "running".into());
-                obj.insert(
-                    "scanned".into(),
-                    self.scanned.load(Ordering::Relaxed).into(),
-                );
+                status.scanned = Some(self.scanned.load(Ordering::Relaxed));
             }
             Some(Ok(result)) => {
-                obj.insert("state".into(), "completed".into());
-                obj.insert(
-                    "result".into(),
-                    serde_json::to_value(result).unwrap_or_default(),
-                );
+                status.state = "completed".to_string();
+                status.result = Some(result.clone());
             }
             Some(Err(e)) => {
-                obj.insert("state".into(), "failed".into());
-                obj.insert("error".into(), Value::String(e.clone()));
+                status.state = "failed".to_string();
+                status.error = Some(e.clone());
             }
         }
-        Value::Object(obj)
+        status
     }
 }
 

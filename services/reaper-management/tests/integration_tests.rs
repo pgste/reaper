@@ -8462,3 +8462,79 @@ async fn migration_apply_idempotency_key_replays() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+// ============================================================================
+// RFC 9457 problem responses carry `instance` (round-2 C4, finding R2-08)
+// ============================================================================
+
+/// Every problem+json response must identify the failing request: `instance`
+/// = the request path, alongside the RFC 9457 core members. Exercised through
+/// the real served router (the `problem_instance` middleware stamps the
+/// member — `ApiError::into_response` cannot see the request).
+#[tokio::test]
+async fn test_problem_responses_carry_rfc9457_instance() {
+    let env = setup_test_env().await;
+    let org_id = seed_org(&env, "Problem Org", "problem-org").await;
+
+    // 404 — platform-admin key, nonexistent org.
+    let key = create_test_api_key(&env.db, org_id).await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", "/orgs/nonexistent", None, &key))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/problem+json")
+    );
+    let body = parse_body(response).await;
+    assert_eq!(
+        body["type"].as_str().unwrap(),
+        "https://docs.reaper.dev/problems/not_found"
+    );
+    assert_eq!(body["title"].as_str().unwrap(), "Not Found");
+    assert_eq!(body["status"].as_i64().unwrap(), 404);
+    assert!(!body["detail"].as_str().unwrap().is_empty());
+    assert_eq!(
+        body["instance"].as_str().unwrap(),
+        "/api/v1/orgs/nonexistent",
+        "instance must be the request path (R2-08)"
+    );
+
+    // 403 — a key without org:admin hitting audit governance.
+    let weak_key = create_scoped_api_key(&env.db, org_id, &["agent:read"]).await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/problem-org/audit/retention",
+            None,
+            &weak_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = parse_body(response).await;
+    assert_eq!(body["status"].as_i64().unwrap(), 403);
+    assert_eq!(
+        body["instance"].as_str().unwrap(),
+        "/api/v1/orgs/problem-org/audit/retention"
+    );
+
+    // Success responses stay untouched by the middleware.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", "/orgs/problem-org", None, &key))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_body(response).await;
+    assert!(body.get("instance").is_none());
+}

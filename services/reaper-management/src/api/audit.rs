@@ -13,7 +13,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -21,14 +21,16 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
-    api::error::{ApiError, ApiResult},
+    api::error::{ApiError, ApiResult, ProblemDetails},
     api::orgs::resolve_org,
     audit::{actions, ActorType, AuditEntry, ResourceType},
     auth::middleware::{AuthenticatedUser, RequireAuth},
     auth::scopes::Scope,
-    db::repositories::{AuditGovernanceRepository, OrganizationRepository},
+    db::repositories::{
+        audit_governance::LegalHold, AuditGovernanceRepository, OrganizationRepository,
+    },
     decisions::purge::{default_retention_days, run_org_purge, PurgeError},
-    decisions::HoldFilter,
+    decisions::{HoldFilter, PurgeOutcome},
     state::AppState,
 };
 
@@ -96,6 +98,23 @@ async fn write_audit(
 
 // ---- Retention ----
 
+/// The effective audit retention window for a tenant.
+#[derive(Debug, Serialize, ToSchema)]
+struct RetentionResponse {
+    /// Retention window in days.
+    days: i64,
+    /// `explicit` (tenant-configured) or `default` (deployment default).
+    source: String,
+    /// Who set the explicit window (present only when `source` is
+    /// `explicit`; `null` when unattributed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_by: Option<Option<String>>,
+    /// When the explicit window was set (present only when `source` is
+    /// `explicit`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// GET /orgs/{org}/audit/retention — effective window (explicit or default).
 #[utoipa::path(
     get,
@@ -105,7 +124,9 @@ async fn write_audit(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Effective retention window")
+        (status = 200, description = "Effective retention window", body = RetentionResponse),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -113,20 +134,22 @@ async fn get_retention(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<RetentionResponse>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     let repo = AuditGovernanceRepository::new(&state.db);
     match repo.get_retention(org_id).await? {
-        Some(r) => Ok(Json(json!({
-            "days": r.days,
-            "source": "explicit",
-            "updated_by": r.updated_by,
-            "updated_at": r.updated_at,
-        }))),
-        None => Ok(Json(json!({
-            "days": default_retention_days(),
-            "source": "default",
-        }))),
+        Some(r) => Ok(Json(RetentionResponse {
+            days: r.days,
+            source: "explicit".to_string(),
+            updated_by: Some(r.updated_by),
+            updated_at: Some(r.updated_at),
+        })),
+        None => Ok(Json(RetentionResponse {
+            days: default_retention_days(),
+            source: "default".to_string(),
+            updated_by: None,
+            updated_at: None,
+        })),
     }
 }
 
@@ -145,7 +168,10 @@ struct SetRetentionRequest {
     ),
     request_body = SetRetentionRequest,
     responses(
-        (status = 200, description = "Retention window updated")
+        (status = 200, description = "Retention window updated", body = RetentionResponse),
+        (status = 400, description = "days out of range", body = ProblemDetails),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -154,7 +180,7 @@ async fn set_retention(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(req): Json<SetRetentionRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<RetentionResponse>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     if req.days < 1 || req.days > MAX_RETENTION_DAYS {
         return Err(ApiError::BadRequest(format!(
@@ -177,12 +203,12 @@ async fn set_retention(
     )
     .await;
 
-    Ok(Json(json!({
-        "days": setting.days,
-        "source": "explicit",
-        "updated_by": setting.updated_by,
-        "updated_at": setting.updated_at,
-    })))
+    Ok(Json(RetentionResponse {
+        days: setting.days,
+        source: "explicit".to_string(),
+        updated_by: Some(setting.updated_by),
+        updated_at: Some(setting.updated_at),
+    }))
 }
 
 // ---- Legal holds ----
@@ -205,7 +231,10 @@ struct CreateHoldRequest {
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 201, description = "Legal hold created")
+        (status = 201, description = "Legal hold created", body = LegalHold),
+        (status = 400, description = "Missing hold reason", body = ProblemDetails),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -214,7 +243,7 @@ async fn create_hold(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(req): Json<CreateHoldRequest>,
-) -> ApiResult<(StatusCode, Json<Value>)> {
+) -> ApiResult<(StatusCode, Json<LegalHold>)> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     let reason = req.reason.trim();
     if reason.is_empty() {
@@ -241,9 +270,17 @@ async fn create_hold(
     )
     .await;
 
-    let body = serde_json::to_value(&hold)
-        .map_err(|e| ApiError::Internal(format!("serialize hold: {e}")))?;
-    Ok((StatusCode::CREATED, Json(body)))
+    Ok((StatusCode::CREATED, Json(hold)))
+}
+
+/// Every legal hold the org has placed, with active/total counts.
+#[derive(Debug, Serialize, ToSchema)]
+struct HoldListResponse {
+    /// Total holds (active and released).
+    count: usize,
+    /// Holds still active (not yet released).
+    active: usize,
+    holds: Vec<LegalHold>,
 }
 
 /// GET /orgs/{org}/audit/legal-holds — active and released (the compliance
@@ -256,7 +293,9 @@ async fn create_hold(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Legal holds (active and released)")
+        (status = 200, description = "Legal holds (active and released)", body = HoldListResponse),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -264,17 +303,17 @@ async fn list_holds(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<HoldListResponse>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     let holds = AuditGovernanceRepository::new(&state.db)
         .list_holds(org_id)
         .await?;
     let active = holds.iter().filter(|h| h.is_active()).count();
-    Ok(Json(json!({
-        "count": holds.len(),
-        "active": active,
-        "holds": holds,
-    })))
+    Ok(Json(HoldListResponse {
+        count: holds.len(),
+        active,
+        holds,
+    }))
 }
 
 /// GET /orgs/{org}/audit/legal-holds/{hold_id}
@@ -287,8 +326,9 @@ async fn list_holds(
         ("hold_id" = Uuid, Path, description = "Legal hold ID")
     ),
     responses(
-        (status = 200, description = "Legal hold detail"),
-        (status = 404, description = "Legal hold not found")
+        (status = 200, description = "Legal hold detail", body = LegalHold),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Legal hold not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -296,17 +336,13 @@ async fn get_hold(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, hold_id)): Path<(String, Uuid)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<LegalHold>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     match AuditGovernanceRepository::new(&state.db)
         .get_hold(org_id, hold_id)
         .await?
     {
-        Some(hold) => {
-            Ok(Json(serde_json::to_value(&hold).map_err(|e| {
-                ApiError::Internal(format!("serialize hold: {e}"))
-            })?))
-        }
+        Some(hold) => Ok(Json(hold)),
         None => Err(ApiError::NotFound(format!(
             "Legal hold '{hold_id}' not found"
         ))),
@@ -325,7 +361,8 @@ async fn get_hold(
     ),
     responses(
         (status = 204, description = "Legal hold released"),
-        (status = 404, description = "Legal hold not found or already released")
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Legal hold not found or already released", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -361,6 +398,15 @@ async fn release_hold(
 
 /// POST /orgs/{org}/audit/purge — run the org's retention purge now (the
 /// background sweeper runs the same path on an interval). Audited.
+/// Outcome of a manually triggered retention purge.
+#[derive(Debug, Serialize, ToSchema)]
+struct PurgeResponse {
+    /// The retention window the purge enforced.
+    days: i64,
+    result: PurgeOutcome,
+}
+
+/// Run the org's retention purge now (same path the background sweeper runs).
 #[utoipa::path(
     post,
     path = "/orgs/{org}/audit/purge",
@@ -369,7 +415,11 @@ async fn release_hold(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Retention purge executed")
+        (status = 200, description = "Retention purge executed", body = PurgeResponse),
+        (status = 400, description = "Retention disabled for this org", body = ProblemDetails),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -377,7 +427,7 @@ async fn trigger_purge(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<PurgeResponse>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     let store = state.decision_store.as_deref().ok_or_else(|| {
         ApiError::ServiceUnavailable(
@@ -414,5 +464,8 @@ async fn trigger_purge(
     )
     .await;
 
-    Ok(Json(json!({ "days": days, "result": outcome })))
+    Ok(Json(PurgeResponse {
+        days,
+        result: outcome,
+    }))
 }

@@ -36,14 +36,14 @@ pub struct AttributeDef {
     pub values: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EntityTypeDef {
     pub name: String,
     #[serde(default)]
     pub attributes: Vec<AttributeDef>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RoleDef {
     pub name: String,
     /// Permission strings, e.g. "document:read" or "*:*".
@@ -70,7 +70,7 @@ pub struct RelationDef {
 }
 
 /// The full model definition for a datastore.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct ModelDefinition {
     #[serde(default)]
     pub entity_types: Vec<EntityTypeDef>,
@@ -147,7 +147,7 @@ impl ModelDefinition {
 // Templates
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DatastoreTemplate {
     Rbac,
@@ -262,14 +262,17 @@ impl DatastoreTemplate {
 // Records
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AdmEntity {
     pub entity_id: String,
     pub entity_type: String,
+    /// Typed attribute map, validated against the model's attribute
+    /// definitions (dynamic per entity type).
+    #[schema(value_type = Object)]
     pub attributes: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RoleBinding {
     pub subject: String,
     pub role: String,
@@ -278,7 +281,7 @@ pub struct RoleBinding {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct RelationTuple {
     pub object: String,
     pub relation: String,

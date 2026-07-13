@@ -122,9 +122,13 @@ Propagation-triggering POSTs — **bundle promote/rollback**, **rollout create**
   deployment — use the same envelope and bounds (round-2 hardening, R2-01);
   they previously returned the whole table unbounded.
 - Errors are RFC 9457 **`application/problem+json`**: `type` (stable problem
-  URI), `title`, `status`, `detail`, plus the Reaper `code` extension. Database
-  constraint breaches surface as client errors — unique → **409**,
-  check/reference → **422** — never a 500.
+  URI), `title`, `status`, `detail`, and `instance` (the failing request's
+  path, for correlating a stored problem to the request that produced it),
+  plus the Reaper extensions `code` (machine-readable class) and `request_id`
+  (mirrors the `X-Request-ID` response header when correlation is active).
+  The body shape is published as the `ProblemDetails` schema in
+  `/openapi.json`. Database constraint breaches surface as client errors —
+  unique → **409**, check/reference → **422** — never a 500.
 
 ## 8. Client guidance
 

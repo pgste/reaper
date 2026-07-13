@@ -111,10 +111,21 @@ unaltered" question lands on.
   the endpoint runs under `idempotency::run` scope `datastore.migrate` keyed on
   the transform fingerprint, mirroring `start_rollout` — a retried timeout
   replays the stored response instead of double-applying/double-publishing.*
-- **C4 — Typed DTOs + error model on the contract.** *Closes CODE R2-06, R2-08.*
+- **C4 — Typed DTOs + error model on the contract.** *(landed)* *Closes CODE R2-06, R2-08.*
   Datastore/decisions/replay/audit handlers return untyped `Json<Value>`;
   `ProblemDetails` isn't `ToSchema` and omits `instance`. Add DTOs + schema-lint so
   the published contract is client-codegen-clean. **Effort M.**
+  *Landed: all 32 `Json<Value>` handlers across datastore/decisions/replay/audit
+  now return named `#[derive(Serialize, ToSchema)]` DTOs (wire shapes unchanged —
+  the existing integration tests pin them); `ProblemDetails` is a published
+  component with the RFC 9457 `instance` member (= request path) and a
+  `request_id` extension, stamped by the idempotent `problem_instance` middleware
+  (inside `build_served_router` + outside the auth gateway, so extractor and
+  gateway rejections carry it too); `tests/api_contract.rs` gained
+  `contract_is_publishable` — hard-fails on a missing/incomplete ProblemDetails
+  schema, on untyped 4xx bodies or any documentation regression in the typed
+  groups, and ratchets summary/4xx-coverage/success-body checks over the rest of
+  the surface (baselines 0/129/94 — lower, never raise).*
 
 ---
 
