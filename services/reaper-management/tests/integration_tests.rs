@@ -6669,3 +6669,328 @@ async fn promotion_apply_recheck_blocks_mid_freeze_approval() {
     assert_eq!(applied["status"], "applied");
     assert!(applied["rollout_id"].as_str().is_some());
 }
+
+/// Plan 12 Phase 1: the migration dry-run. A rename chain reports exact
+/// affected-row counts, is decision-neutral in the impact report, and
+/// mutates NOTHING — model, records, and version are untouched afterward.
+#[tokio::test]
+async fn migration_plan_dry_run_is_decision_neutral_and_mutation_free() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Mig Org", "slug": "mig-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/mig-org/namespaces",
+            Some(json!({"slug": "main"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/mig-org/namespaces/main/datastore",
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // Fixture: RBAC (alice=editor, bob=viewer), ReBAC (doc-1 owned by alice;
+    // alice in team-a which is in org-eng — a transitive chain).
+    let base = "/orgs/mig-org/namespaces/main/datastore";
+    for (uri, body) in [
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "alice", "entity_type": "user",
+                   "attributes": {"department": "engineering"}}),
+        ),
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "bob", "entity_type": "user", "attributes": {}}),
+        ),
+        (
+            format!("{base}/role-bindings"),
+            json!({"subject": "alice", "role": "editor"}),
+        ),
+        (
+            format!("{base}/role-bindings"),
+            json!({"subject": "bob", "role": "viewer"}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "doc-1", "relation": "owner", "subject": "alice"}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "team-a", "relation": "member_of", "subject": "alice"}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "org-eng", "relation": "member_of", "subject": "team-a"}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request("POST", &uri, Some(body), &key))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    // Dry-run: rename the role AND the relation in one chain.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/plan"),
+            Some(json!({"transforms": [
+                {"op": "rename_role", "from": "editor", "to": "author"},
+                {"op": "rename_relation", "from": "owner", "to": "possessor"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let plan = parse_body(r).await;
+
+    assert_eq!(plan["applyable"], true);
+    assert_eq!(plan["blockers"].as_array().unwrap().len(), 0);
+    // Exact affected-row counts.
+    let ops = plan["record_ops"].as_array().unwrap();
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0]["kind"], "update_binding_role");
+    assert_eq!(ops[0]["bindings"], 1, "only alice's binding is editor");
+    assert_eq!(ops[1]["kind"], "update_tuple_relation");
+    assert_eq!(ops[1]["tuples"], 1, "only doc-1 uses owner");
+    // The load-bearing claim: a pure rename is decision-neutral.
+    let impact = &plan["impact"];
+    assert_eq!(impact["decision_neutral"], true, "impact: {impact}");
+    assert_eq!(impact["principals_gaining"], 0);
+    assert_eq!(impact["principals_losing"], 0);
+    assert_eq!(impact["edges_added"], 0);
+    assert_eq!(impact["edges_removed"], 0);
+    // The docs still change shape (renamed vocabulary) even though access
+    // is identical — both facts must be reported.
+    assert!(plan["docs_changed"]["total"].as_i64().unwrap() >= 1);
+    assert_ne!(plan["before"]["checksum"], plan["after"]["checksum"]);
+
+    // NOTHING was mutated by the dry-run.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &format!("{base}/model"), None, &key))
+        .await
+        .unwrap();
+    let model = parse_body(r).await;
+    let roles: Vec<&str> = model["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    assert!(
+        roles.contains(&"editor"),
+        "model must be untouched: {roles:?}"
+    );
+    assert!(!roles.contains(&"author"));
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            &format!("{base}/role-bindings?subject=alice"),
+            None,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        parse_body(r).await["role_bindings"][0]["role"],
+        "editor",
+        "records must be untouched"
+    );
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", base, None, &key))
+        .await
+        .unwrap();
+    assert_eq!(
+        parse_body(r).await["current_version"],
+        0,
+        "no version was published"
+    );
+}
+
+/// Plan 12 Phase 1: fail-closed dry-runs. An un-coercible retype blocks the
+/// plan listing the offending records; removing a live relation without the
+/// explicit flag blocks; and an access-CHANGING migration reports exactly
+/// who loses (differential impact correctness).
+#[tokio::test]
+async fn migration_plan_fails_closed_and_reports_access_loss_exactly() {
+    let env = setup_test_env().await;
+    let response = env
+        .app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Mig FC Org", "slug": "migfc-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id = Uuid::parse_str(parse_body(response).await["id"].as_str().unwrap()).unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/migfc-org/namespaces",
+            Some(json!({"slug": "main"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let base = "/orgs/migfc-org/namespaces/main/datastore";
+    env.app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            base,
+            Some(json!({"template": "combined"})),
+            &key,
+        ))
+        .await
+        .unwrap();
+
+    for (uri, body) in [
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "alice", "entity_type": "user",
+                   "attributes": {"department": "42"}}),
+        ),
+        (
+            format!("{base}/entities"),
+            json!({"entity_id": "bob", "entity_type": "user",
+                   "attributes": {"department": "engineering"}}),
+        ),
+        (
+            format!("{base}/tuples"),
+            json!({"object": "team-a", "relation": "member_of", "subject": "alice"}),
+        ),
+    ] {
+        let r = env
+            .app
+            .clone()
+            .oneshot(authed_request("POST", &uri, Some(body), &key))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    // Un-coercible retype: department String→Int; bob's "engineering" can't
+    // coerce → blocked, offender listed, no impact report on a broken plan.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/plan"),
+            Some(json!({"transforms": [
+                {"op": "retype_attribute", "entity_type": "user",
+                 "name": "department", "to": "int"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let plan = parse_body(r).await;
+    assert_eq!(plan["applyable"], false);
+    let blocker = &plan["blockers"][0];
+    assert_eq!(blocker["kind"], "coercion");
+    assert_eq!(blocker["total"], 1);
+    assert_eq!(blocker["entity_ids"][0], "bob");
+    assert!(plan["impact"].is_null(), "no impact on a blocked plan");
+
+    // Removing a relation with live tuples needs the explicit flag.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/plan"),
+            Some(json!({"transforms": [
+                {"op": "remove_relation", "name": "member_of"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let plan = parse_body(r).await;
+    assert_eq!(plan["applyable"], false);
+    assert_eq!(plan["blockers"][0]["kind"], "relation_not_empty");
+
+    // With the flag, the plan is applyable and the impact says EXACTLY who
+    // loses: alice loses her member_of reachability — nobody gains.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/plan"),
+            Some(json!({"transforms": [
+                {"op": "remove_relation", "name": "member_of", "delete_tuples": true}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    let plan = parse_body(r).await;
+    assert_eq!(plan["applyable"], true);
+    let impact = &plan["impact"];
+    assert_eq!(impact["decision_neutral"], false);
+    assert_eq!(impact["principals_gaining"], 0);
+    assert_eq!(impact["principals_losing"], 1);
+    assert_eq!(impact["losing_sample"][0], "alice");
+    assert!(impact["reachability_removed"].as_i64().unwrap() >= 1);
+
+    // A transform against a nonexistent source is a 400, not a plan.
+    let r = env
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            &format!("{base}/migrations/plan"),
+            Some(json!({"transforms": [
+                {"op": "rename_role", "from": "nonexistent", "to": "x"}
+            ]})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
