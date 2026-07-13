@@ -91,16 +91,7 @@ async fn start_rollout_inner(
     bundle_id: Uuid,
     request: RolloutRequest,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot start rollouts for other organizations".to_string(),
-        ));
-    }
+    let organization = super::authorize_deploy(&state, &user, &org, "start rollouts").await?;
 
     let service = DeploymentService::new(state.db.clone());
 
@@ -327,16 +318,8 @@ pub async fn approve_wave(
     RequireAuth(user): RequireAuth,
     Path((org, rollout_id)): Path<(String, Uuid)>,
 ) -> Result<Json<RolloutResponse>, ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot approve rollouts for other organizations".to_string(),
-        ));
-    }
+    let _organization =
+        super::authorize_deploy(&state, &user, &org, "approve rollout waves").await?;
 
     let service = DeploymentService::new(state.db.clone());
     let rollout = service
@@ -374,16 +357,7 @@ pub async fn cancel_rollout(
     Path((org, rollout_id)): Path<(String, Uuid)>,
     Json(request): Json<CancelRequest>,
 ) -> Result<Json<RolloutResponse>, ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot cancel rollouts for other organizations".to_string(),
-        ));
-    }
+    let _organization = super::authorize_deploy(&state, &user, &org, "cancel rollouts").await?;
 
     let service = DeploymentService::new(state.db.clone());
     let rollout = service
@@ -421,16 +395,8 @@ pub async fn rollback_namespace(
     Path((org, namespace)): Path<(String, String)>,
     Json(request): Json<RollbackRequest>,
 ) -> Result<(StatusCode, Json<RolloutStartResponse>), ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot rollback for other organizations".to_string(),
-        ));
-    }
+    let organization =
+        super::authorize_deploy(&state, &user, &org, "roll back deployments").await?;
 
     // Resolve namespace
     let ns_repo = crate::db::repositories::NamespaceRepository::new(&state.db);
@@ -485,16 +451,8 @@ pub async fn rollback_org(
     Path(org): Path<String>,
     Json(request): Json<RollbackRequest>,
 ) -> Result<(StatusCode, Json<RolloutStartResponse>), ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot rollback for other organizations".to_string(),
-        ));
-    }
+    let organization =
+        super::authorize_deploy(&state, &user, &org, "roll back deployments").await?;
 
     let service = DeploymentService::new(state.db.clone());
     let result = service

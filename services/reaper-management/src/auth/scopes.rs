@@ -38,6 +38,13 @@ pub enum Scope {
     #[serde(rename = "bundle:approve")]
     BundleApprove,
 
+    // Deployment permissions (propagation surface: rollout / rollback /
+    // approve-wave / cancel / pin). Held by deploy pipelines and operators;
+    // deliberately NOT implied by mere org membership — a read-only service
+    // token must never be able to roll the fleet (SEC R2-1).
+    #[serde(rename = "deployment:write")]
+    DeploymentWrite,
+
     // Organization permissions
     #[serde(rename = "org:read")]
     OrgRead,
@@ -70,6 +77,7 @@ impl Scope {
             Self::BundleWrite => "bundle:write",
             Self::BundlePromote => "bundle:promote",
             Self::BundleApprove => "bundle:approve",
+            Self::DeploymentWrite => "deployment:write",
             Self::OrgRead => "org:read",
             Self::OrgWrite => "org:write",
             Self::OrgAdmin => "org:admin",
@@ -91,6 +99,7 @@ impl Scope {
             "bundle:write" => Some(Self::BundleWrite),
             "bundle:promote" => Some(Self::BundlePromote),
             "bundle:approve" => Some(Self::BundleApprove),
+            "deployment:write" => Some(Self::DeploymentWrite),
             "org:read" => Some(Self::OrgRead),
             "org:write" => Some(Self::OrgWrite),
             "org:admin" => Some(Self::OrgAdmin),
@@ -113,6 +122,7 @@ impl Scope {
             Self::BundleWrite,
             Self::BundlePromote,
             Self::BundleApprove,
+            Self::DeploymentWrite,
             Self::OrgRead,
             Self::OrgWrite,
             Self::OrgAdmin,
@@ -252,6 +262,25 @@ mod tests {
 
         // A genuine platform admin still covers approval.
         assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::BundleApprove));
+    }
+
+    #[test]
+    fn test_deployment_write_is_a_distinct_deploy_authority() {
+        // SEC R2-1: the propagation surface needs its own scope. It round-trips
+        // and is NOT conferred by read scopes or bundle write.
+        assert_eq!(
+            Scope::parse("deployment:write"),
+            Some(Scope::DeploymentWrite)
+        );
+        assert_eq!(Scope::DeploymentWrite.as_str(), "deployment:write");
+
+        let read_only =
+            Permission::from_scopes(vec![Scope::AgentRead, Scope::PolicyRead, Scope::BundleRead]);
+        assert!(!read_only.has(Scope::DeploymentWrite));
+        assert!(!Permission::from_scopes(vec![Scope::BundleWrite]).has(Scope::DeploymentWrite));
+
+        // Platform admin still covers it.
+        assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::DeploymentWrite));
     }
 
     #[test]

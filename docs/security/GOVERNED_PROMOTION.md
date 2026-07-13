@@ -37,6 +37,7 @@ Three distinct authorities, each independently grantable:
 | `bundle:promote` | **Request** a promotion/rollback (and, under single-control, execute it directly) |
 | `bundle:approve` | **Approve** and execute a pending change request |
 | `bundle:read` | View bundles and change requests |
+| `deployment:write` | **Operate the propagation surface**: start/cancel rollouts, approve waves, roll back, pin/unpin agents, edit deployment strategies and auto-rollback config. Also satisfied by `bundle:promote` (a promote-capable pipeline may roll out what it promoted) or `org:admin`. Org membership alone is NOT enough (SEC R2-1) |
 
 Keeping `bundle:approve` **separate** from `bundle:promote` is what makes true
 separation of duties possible: give the deploy pipeline `bundle:promote` and the

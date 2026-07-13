@@ -556,6 +556,7 @@ pub(crate) fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
             // granting `bundle:approve` to a dedicated IdP group / API key
             // *without* `bundle:promote`, not by relying on the Owner role.
             "bundle:approve".to_string(),
+            "deployment:write".to_string(),
             "apikey:read".to_string(),
             "apikey:write".to_string(),
         ],

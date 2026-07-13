@@ -81,16 +81,8 @@ pub async fn update_rollback_config(
     Path(org): Path<String>,
     Json(request): Json<UpdateRollbackConfig>,
 ) -> Result<Json<RollbackConfigResponse>, ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot update rollback config for other organizations".to_string(),
-        ));
-    }
+    let organization =
+        super::authorize_deploy(&state, &user, &org, "update rollback configuration").await?;
 
     let repo = RollbackConfigRepository::new(&state.db);
 
@@ -200,16 +192,8 @@ pub async fn update_namespace_rollback_config(
     Path((org, namespace)): Path<(String, String)>,
     Json(request): Json<UpdateRollbackConfig>,
 ) -> Result<Json<RollbackConfigResponse>, ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot update rollback config for other organizations".to_string(),
-        ));
-    }
+    let organization =
+        super::authorize_deploy(&state, &user, &org, "update rollback configuration").await?;
 
     let namespace_id = resolve_namespace(&state.db, organization.id, &namespace)
         .await

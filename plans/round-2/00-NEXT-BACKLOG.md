@@ -59,7 +59,7 @@ unaltered" question lands on.
 
 ## Workstream B — Propagation surface safety  *(the strongest pillar's two holes)*
 
-- **B1 — Fine-grained authz on rollout/rollback/approve-wave/cancel/pin.** *Closes
+- **B1 — Fine-grained authz on rollout/rollback/approve-wave/cancel/pin.** *(landed)* *Closes
   SEC R2-1.* These gate only on org-membership/Admin — any token (incl. read-only
   service tokens) can roll the fleet. Require a deploy scope
   (`BundlePromote`/new `DeploymentWrite`) + `OrgAdmin` fallback, mirroring

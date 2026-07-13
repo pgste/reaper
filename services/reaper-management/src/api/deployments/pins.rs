@@ -37,16 +37,7 @@ pub async fn create_pin(
     Path((org, agent_id)): Path<(String, Uuid)>,
     Json(request): Json<CreatePinRequest>,
 ) -> Result<(StatusCode, Json<PinResponse>), ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot create pins for other organizations".to_string(),
-        ));
-    }
+    let _organization = super::authorize_deploy(&state, &user, &org, "create version pins").await?;
 
     let input = CreateVersionPin {
         bundle_id: request.bundle_id,
@@ -132,16 +123,7 @@ pub async fn delete_pin(
     RequireAuth(user): RequireAuth,
     Path((org, agent_id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
-
-    if user.org_id != organization.id
-        && !user.has_any_permission(&[crate::auth::scopes::Scope::Admin])
-    {
-        return Err(ApiError::Forbidden(
-            "Cannot delete pins for other organizations".to_string(),
-        ));
-    }
+    let _organization = super::authorize_deploy(&state, &user, &org, "delete version pins").await?;
 
     let service = DeploymentService::new(state.db.clone());
     service.delete_pin(agent_id).await.map_err(|e| match e {
