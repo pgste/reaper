@@ -32,6 +32,15 @@ on:
 permissions:
   contents: read
 
+# Never download Git-LFS content in this workflow. No perf job reads the
+# benchmarks/reaper-vs-opa/data/100k LFS objects (benchmark.yml regenerates
+# that data with generate-data where it is needed), but git branch/SHA
+# switching re-materializes the working tree and runs the LFS smudge filter,
+# re-downloading ~500 MB the job never uses — burning the repo's LFS
+# bandwidth budget on every run and failing outright once it is exhausted.
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+
 concurrency:
   group: perf-gate-${{ github.ref }}
   cancel-in-progress: true
