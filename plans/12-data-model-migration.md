@@ -1,5 +1,32 @@
 # Data-Model Migration Engine
 
+> **STATUS: ✅ SHIPPED** — landed via PRs #45–#47 (2026-07-13) across phases 1–3.
+> 1: closed typed `ModelTransform` set (9 ops: rename role/relation/attribute/
+> entity-type, add/remove attribute/relation, retype) with `apply_to_model`
+> precondition validation and mechanical inverses (`remove_attribute`
+> declared irreversible); lossless-only coercion (ADR-4); pure record-level
+> planner producing exact affected-row RecordOps and fail-closed
+> PlanBlockers (un-coercible retype lists offenders; remove_relation over
+> live tuples demands `delete_tuples: true`); `POST …/datastore/migrations/
+> plan` dry-run materializes current vs proposed and loads BOTH into a real
+> policy-engine DataStore, diffing grants + edges + traversal reachability —
+> renames compared modulo the rename map, so a pure rename provably reports
+> decision_neutral (mutation-free, proven by test). 2: atomic apply — one
+> transaction covering record transforms, model update, model_version bump,
+> append-only `adm_model_versions` history row, and outbox dirty markers;
+> apply recomputes the plan server-side and publishes the post-migration
+> data version; fleet converges via the EXISTING delta sync (delta ≡ rebuild
+> across a migration proven byte-for-byte); the blind `PUT /model` overwrite
+> replaced by a vocabulary-breaking guard; interner hygiene under a
+> rename-of-500 verified O(schema). 3: `model_version` provenance on every
+> published data version, threaded control plane → reaper-sync → agent →
+> every DecisionLogEntry (Option, absent pre-migration — NDJSON compatible);
+> rollback as an impact-checked FORWARD inverse migration (`POST …/
+> migrations/{v}/rollback`) restoring the exact pre-migration checksum,
+> refusing irreversible transforms with direction to the immutable
+> pre-migration data version. Exotic reshapes stay export→transform→
+> re-import per ADR-2; consistency tokens/zookies remain future work.
+
 **Readiness gate:** Safe evolution of managed authorization data — currently a "botched model change = mass allow/deny incident" exposure with no defined path.
 **Priority:** P1 (Product Architecture F6). Blocking before customers put production authorization data in the data plane at scale.
 **Findings closed:** Product F6 (data fork has no model-migration engine; renaming a role / adding a relation / changing an attribute type has no defined path for existing records). Advances DATA_PLANE_PLAN §6 "temporal versioning & point-in-time restore" from "Later" toward a concrete design; complements the delta-sync (§8) and decision provenance (§7) already shipped.
