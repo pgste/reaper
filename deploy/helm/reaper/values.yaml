@@ -234,6 +234,24 @@ decisionLogs:
       limits: { cpu: 200m, memory: 256Mi }
     bufferMaxBytes: "1073741824"   # 1 GiB disk WAL per pod (emptyDir)
 
+  # --- immutable WORM archive (S3 Object-Lock) — SEC R2-3 anchor ---
+  # The tamper-proof audit anchor: the SAME decisions + checkpoints are written
+  # to an S3 bucket with Object Lock, which even an insider with ClickHouse write
+  # access cannot rewrite or delete before retention expires. This is the copy a
+  # regulator's `reaper-cli audit verify --file` runs ByteExact against for the
+  # authoritative proof; cross-boot genesis linkage makes deleting a whole writer
+  # boot detectable. DEFAULT off — but REGULATED DEPLOYMENTS MUST ENABLE THIS.
+  worm:
+    enabled: false
+    bucket: ""                 # REQUIRED when enabled. The bucket MUST be created
+                               # with Object Lock ENABLED + a default retention in
+                               # COMPLIANCE mode (e.g. SOX 7y / HIPAA 6y).
+    region: us-east-1
+    endpoint: ""               # set for MinIO / S3-compatible stores
+    retentionDays: 2555        # documents the bucket's Object-Lock window (~7y);
+                               # actual enforcement lives on the S3 bucket policy
+    keyPrefix: "decisions/"    # time-partitioned keys are appended (date/hour)
+
   # --- store (ClickHouse) ---
   clickhouse:
     enabled: true              # bundled single-node CH; disable to bring your own

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// A single decision log entry capturing all relevant context
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +220,15 @@ pub struct Checkpoint {
     pub monotonic_end_ns: u64,
     /// Wall-clock (RFC3339) at emission — for human/operational correlation.
     pub wallclock: String,
+    /// Genesis anchor: the chain_id of the PREVIOUS writer boot (set only on this
+    /// boot's FIRST checkpoint; empty otherwise). Links boots so deleting a whole
+    /// boot is detectable via the next boot's dangling reference.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prev_chain_id: String,
+    /// Genesis anchor: the terminal chain head (last_entry_hash) of the previous
+    /// boot.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prev_chain_head: String,
     /// Signing key id (for rotation / pinning). Empty ⇒ unsigned checkpoint.
     #[serde(default)]
     pub key_id: String,
@@ -259,6 +269,8 @@ impl Checkpoint {
             monotonic_start_ns,
             monotonic_end_ns,
             wallclock,
+            prev_chain_id: String::new(),
+            prev_chain_head: String::new(),
             key_id: String::new(),
             algorithm: String::new(),
             signature: String::new(),
@@ -571,6 +583,11 @@ pub struct VerificationReport {
     pub records_covered: usize,
     /// Number of checkpoints that verified against their covered range.
     pub checkpoints_verified: usize,
+    /// Number of verified cross-boot genesis links (round-2 A3.2): a boot whose
+    /// genesis checkpoint correctly references the prior boot's terminal chain
+    /// head. 0 when no genesis anchor is present in the input.
+    #[serde(default)]
+    pub boots_linked: usize,
     /// True iff no violation was found.
     pub ok: bool,
     /// Every violation found (empty when `ok`).
@@ -619,6 +636,9 @@ pub fn verify_records(
     }
 
     let chains_checked = by_chain.len();
+    // Every chain that appears in entries or checkpoints — the set a cross-boot
+    // genesis reference must resolve within (round-2 A3.2).
+    let known_chains: std::collections::BTreeSet<String> = by_chain.keys().cloned().collect();
 
     // Resolve the verifying key for a checkpoint by key_id (falling back to the
     // sole key when the checkpoint's key_id is empty and exactly one is given).
@@ -687,11 +707,72 @@ pub fn verify_records(
         }
     }
 
+    // ---- Cross-boot genesis linkage (round-2 A3.2) ----
+    // A boot's FIRST checkpoint carries prev_chain_id/prev_chain_head pointing at
+    // the previous boot's terminal chain head. Deleting a whole prior boot leaves
+    // the reference dangling (missing_prior_boot); altering its head breaks the
+    // link (boot_linkage_broken). This is linkage-of-hashes, identical under both
+    // VerifyModes, so it runs after the per-chain/per-checkpoint pass regardless
+    // of mode. Only enforced when at least one genesis anchor is present, so
+    // verifying a mid-stream range that carries no anchors doesn't false-positive.
+    let mut boots_linked = 0usize;
+    let has_genesis = checkpoints.iter().any(|c| !c.prev_chain_id.is_empty());
+    if has_genesis {
+        // Terminal chain head per chain: the last_entry_hash of the checkpoint
+        // with the greatest seq_end (the prior boot's attested head).
+        let mut terminal_head: BTreeMap<&str, (u64, &str)> = BTreeMap::new();
+        for cp in checkpoints {
+            let slot = terminal_head
+                .entry(cp.chain_id.as_str())
+                .or_insert((0, cp.last_entry_hash.as_str()));
+            if cp.seq_end >= slot.0 {
+                *slot = (cp.seq_end, cp.last_entry_hash.as_str());
+            }
+        }
+        for cp in checkpoints.iter().filter(|c| !c.prev_chain_id.is_empty()) {
+            let p = cp.prev_chain_id.as_str();
+            if !known_chains.contains(p) {
+                violations.push(VerificationViolation {
+                    chain_id: cp.chain_id.clone(),
+                    seq: Some(cp.seq_start),
+                    kind: "missing_prior_boot".to_string(),
+                    detail: format!(
+                        "genesis references prior boot chain_id={p:?} which is absent from the \
+                         verified set (the whole prior boot may have been deleted)"
+                    ),
+                });
+                continue;
+            }
+            match terminal_head.get(p) {
+                Some((_, head)) if *head == cp.prev_chain_head => boots_linked += 1,
+                Some((_, head)) => violations.push(VerificationViolation {
+                    chain_id: cp.chain_id.clone(),
+                    seq: Some(cp.seq_start),
+                    kind: "boot_linkage_broken".to_string(),
+                    detail: format!(
+                        "genesis prev_chain_head {:?} does not match prior boot {p:?} terminal \
+                         head {head:?}",
+                        cp.prev_chain_head
+                    ),
+                }),
+                None => violations.push(VerificationViolation {
+                    chain_id: cp.chain_id.clone(),
+                    seq: Some(cp.seq_start),
+                    kind: "boot_linkage_broken".to_string(),
+                    detail: format!(
+                        "prior boot {p:?} has no checkpoint to confirm its terminal head"
+                    ),
+                }),
+            }
+        }
+    }
+
     VerificationReport {
         mode: mode.as_str(),
         chains_checked,
         records_covered,
         checkpoints_verified,
+        boots_linked,
         ok: violations.is_empty(),
         violations,
     }
@@ -1136,6 +1217,15 @@ pub struct DecisionLogConfig {
     /// block the log call for backpressure. Ignored unless `audit_required`.
     #[serde(default)]
     pub on_audit_unavailable: OnAuditUnavailable,
+
+    // ---- Cross-boot continuity (round-2 A3.2) ----
+    /// Durable path where the writer persists `{chain_id, last_head, last_seq}`
+    /// as checkpoints emit, so the NEXT boot links its genesis checkpoint to this
+    /// boot's terminal chain head — making a whole-boot deletion detectable.
+    /// `None` disables cross-boot linkage (each boot is an unlinked root).
+    /// Env: `REAPER_DECISION_LOG_CONTINUITY_FILE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuity_path: Option<PathBuf>,
 }
 
 /// Fail-closed behavior for mandatory audit mode when the durable sink cannot
@@ -1202,6 +1292,7 @@ impl Default for DecisionLogConfig {
             checkpoint_algorithm: default_checkpoint_algorithm(),
             audit_required: false,
             on_audit_unavailable: OnAuditUnavailable::default(),
+            continuity_path: None,
         }
     }
 }
@@ -1288,6 +1379,10 @@ impl DecisionLogConfig {
                 .ok()
                 .and_then(|v| OnAuditUnavailable::parse(&v))
                 .unwrap_or_default(),
+            continuity_path: std::env::var("REAPER_DECISION_LOG_CONTINUITY_FILE")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .map(PathBuf::from),
         };
 
         // REAPER_DECISION_LOG_MODE: a one-word intent knob applied on top of
@@ -2083,6 +2178,119 @@ mod tests {
             VerifyMode::Linkage,
         );
         assert!(!caught.ok, "linkage must catch a deletion");
+    }
+
+    // ---- Cross-boot genesis linkage (round-2 A3.2) ----
+
+    /// A signed checkpoint over a whole chained run that ALSO carries a genesis
+    /// anchor pointing at the prior boot (`prev_chain_id`/`prev_chain_head`).
+    fn genesis_checkpoint_for(
+        chain_id: &str,
+        prev_chain_id: &str,
+        prev_chain_head: &str,
+        entries: &[DecisionLogEntry],
+        key: &reaper_core::bundle_signing::SigningKey,
+        key_id: &str,
+    ) -> Checkpoint {
+        let mut cp = Checkpoint::new(
+            chain_id.to_string(),
+            entries.first().unwrap().seq,
+            entries.last().unwrap().seq,
+            entries.len() as u64,
+            entries.first().unwrap().prev_hash.clone(),
+            entries.last().unwrap().entry_hash.clone(),
+            0,
+            1_000,
+            "2026-01-01T00:00:00+00:00".to_string(),
+        );
+        cp.prev_chain_id = prev_chain_id.to_string();
+        cp.prev_chain_head = prev_chain_head.to_string();
+        cp.sign(key, key_id);
+        cp
+    }
+
+    #[test]
+    fn test_cross_boot_linkage_ok() {
+        // (a) Boot B's genesis correctly references boot A's terminal head.
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let a = chained_run_for("boot-a", 0, 6);
+        let cp_a = signed_checkpoint_for("boot-a", &a, &key, "k1");
+        let a_head = a.last().unwrap().entry_hash.clone();
+
+        let b = chained_run_for("boot-b", 0, 5);
+        let cp_b = genesis_checkpoint_for("boot-b", "boot-a", &a_head, &b, &key, "k1");
+
+        let mut all = a.clone();
+        all.extend(b.clone());
+        let report = verify_records(
+            all,
+            &[cp_a, cp_b],
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(report.ok, "violations: {:?}", report.violations);
+        assert_eq!(report.boots_linked, 1);
+    }
+
+    #[test]
+    fn test_cross_boot_missing_prior_boot() {
+        // (b) Boot A (records + checkpoints) deleted entirely; boot B's genesis
+        // still references it → the dangling reference is caught.
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let a = chained_run_for("boot-a", 0, 6);
+        let a_head = a.last().unwrap().entry_hash.clone();
+        let b = chained_run_for("boot-b", 0, 5);
+        let cp_b = genesis_checkpoint_for("boot-b", "boot-a", &a_head, &b, &key, "k1");
+
+        // Only boot B survives in the archive.
+        let report = verify_records(b, &[cp_b], &[("k1".to_string(), vk)], VerifyMode::Linkage);
+        assert!(!report.ok);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.kind == "missing_prior_boot" && v.detail.contains("boot-a")));
+        assert_eq!(report.boots_linked, 0);
+    }
+
+    #[test]
+    fn test_cross_boot_linkage_broken() {
+        // (c) Boot A present, but boot B's genesis head does not match A's actual
+        // terminal head (A's head was tampered / B linked to a wrong value).
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let a = chained_run_for("boot-a", 0, 6);
+        let cp_a = signed_checkpoint_for("boot-a", &a, &key, "k1");
+        let b = chained_run_for("boot-b", 0, 5);
+        let cp_b = genesis_checkpoint_for("boot-b", "boot-a", &"de".repeat(32), &b, &key, "k1");
+
+        let mut all = a.clone();
+        all.extend(b.clone());
+        let report = verify_records(
+            all,
+            &[cp_a, cp_b],
+            &[("k1".to_string(), vk)],
+            VerifyMode::ByteExact,
+        );
+        assert!(!report.ok);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.kind == "boot_linkage_broken"));
+    }
+
+    #[test]
+    fn test_cross_boot_root_chain_ok() {
+        // (d) A single-boot root chain (no genesis anchor) still verifies, and no
+        // cross-boot check is enforced.
+        let key = test_signing_key();
+        let vk = verifying_of(&key);
+        let a = chained_run_for("boot-a", 0, 4);
+        let cp = signed_checkpoint_for("boot-a", &a, &key, "k1");
+        let report = verify_records(a, &[cp], &[("k1".to_string(), vk)], VerifyMode::ByteExact);
+        assert!(report.ok, "violations: {:?}", report.violations);
+        assert_eq!(report.boots_linked, 0);
     }
 
     #[test]

@@ -114,7 +114,16 @@ a columnar store:
   Vector inserts direct.
 - **Compliance archive: S3 with Object Lock (WORM)**, written in parallel — complete and
   **unsampled**, retention = strictest applicable (HIPAA 6yr dominates). Parquet/Iceberg for
-  cheap forensic scans (DuckDB/Athena/Trino).
+  cheap forensic scans (DuckDB/Athena/Trino). This is the **immutable audit anchor** (SEC
+  R2-3): a ClickHouse insider can rewrite queryable rows, but not Object-Lock objects. It
+  receives **both** decisions and checkpoints, and is the byte-identical source
+  `reaper-cli audit verify --file` runs **ByteExact** against for the authoritative crypto
+  proof (recompute every `entry_hash` + verify checkpoint signatures) — vs the store endpoint's
+  sound-but-weaker **Linkage** pass over reprojected columns. **Cross-boot genesis linkage:**
+  each writer boot's first signed checkpoint carries `prev_chain_id`/`prev_chain_head` (from the
+  agent's continuity file, `REAPER_DECISION_LOG_CONTINUITY_FILE`) pinning the prior boot's
+  terminal head, so deleting a whole boot from the archive surfaces as `missing_prior_boot` /
+  `boot_linkage_broken`, not silence.
 - **Management plane** gets a decision **query/analytics API + UI** over ClickHouse (filter by
   principal/resource/decision/policy/time, aggregates from rollup MVs, export), tenant-scoped —
   NOT an ingest bottleneck in the firehose.
@@ -346,15 +355,19 @@ buffer.max_size = 5_000_000_000
 buffer.when_full = "block"          # at-least-once; "drop_newest" for best-effort
 acknowledgements.enabled = true     # release only after CH confirms
 
-[sinks.s3_worm]                      # parallel, complete, immutable compliance copy
+[sinks.s3_worm]                      # parallel, complete, immutable audit anchor (SEC R2-3)
 type = "aws_s3"
-inputs = ["decisions"]
-bucket = "reaper-audit-worm"         # bucket has Object Lock (COMPLIANCE) enabled
-key_prefix = "decisions/date=%Y-%m-%d/"
-compression = "zstd"
+inputs = ["decisions_fmt", "checkpoints_fmt"]   # BOTH decisions and checkpoints
+bucket = "reaper-audit-worm"         # bucket has Object Lock (COMPLIANCE) + default retention
+key_prefix = "decisions/date=%Y-%m-%d/hour=%H/" # NDJSON, gzip, time-partitioned keys
+compression = "gzip"
 encoding.codec = "ndjson"
 buffer.type = "disk"
+acknowledgements.enabled = true      # nothing lost before it lands in WORM
 ```
+
+`reaper-cli audit verify --file` pulls these raw NDJSON objects and runs ByteExact against them
+— the authoritative tamper-evidence proof the mutable ClickHouse copy cannot provide.
 
 ## Reaper-specific decisions
 

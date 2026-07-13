@@ -69,10 +69,46 @@ via `--file`/WORM, sound structural monitoring via the store endpoint.
 
 ---
 
-## A3 — immutable checkpoint anchor + cross-boot linkage  *(pending)*
-Enable the S3/WORM checkpoint sink by default; sign a genesis linking each boot's
-`chain_id` to the prior, so an insider can't delete a boot's decisions +
-checkpoints together undetectably. **Closes SEC R2-3.**
+## A3 — immutable checkpoint anchor + cross-boot linkage  *(in progress)*
+
+Closes SEC R2-3: today checkpoints land in the *same mutable* ClickHouse as
+decisions (WORM sink commented out) and each writer boot mints a fresh random
+`chain_id` with **no linkage to the prior boot** — so an insider with store write
+access can delete a whole boot's decisions *and* its checkpoints and leave no
+evidence the boot ever existed. Two fixes:
+
+### A3.1 — immutable WORM sink (deploy + docs)
+Enable the S3 **Object-Lock (WORM)** sink for the checkpoint stream (and,
+recommended, decisions) in `deploy/decision-logs/vector.toml`; add
+`decisionLogs.worm.*` helm values and document the compliance-mode bucket setup.
+The WORM copy is the independent anchor a ClickHouse insider cannot rewrite; the
+`reaper-cli audit verify --file` ByteExact path runs against it for the
+authoritative proof.
+
+### A3.2 — cross-boot genesis linkage (code)
+- `Checkpoint` gains optional `prev_chain_id` + `prev_chain_head` (serde default,
+  skip-if-empty; bound into the signature), set only on a boot's **first**
+  checkpoint — a signed genesis anchor pointing at the previous boot's terminal
+  chain head.
+- The agent keeps a small **continuity file** (`{chain_id, last_head, last_seq}`)
+  updated as checkpoints emit; on restart it reads the prior boot's values and
+  threads them into the new `Checkpointer` so its first checkpoint carries the
+  linkage.
+- `verify_records` gains a **cross-boot check** (both modes): the genesis
+  `prev_chain_id`/`prev_chain_head` must match a prior chain's terminal
+  checkpoint. A boot whose genesis names an absent prior chain
+  (`missing_prior_boot`) or a mismatched head (`boot_linkage_broken`) is a
+  violation — so deleting an entire boot from the archive is detectable via the
+  next boot's dangling reference.
+
+This upgrades A1+A2's residual (a whole-boot deletion, previously invisible) to
+detectable, and — with the WORM anchor — the in-place-content-edit residual too
+(caught by a ByteExact pass over the immutable copy).
+
+*(Control-plane chain registry — an even-more-independent anchor where the agent
+registers each `chain_id`+`prev_chain_id` with the management plane at startup —
+is a possible future refinement; the WORM archive + continuity linkage close
+R2-3's core without coupling agent startup to the control plane.)*
 
 ## A4 — durable-before-serve for mandatory-audit mode  *(pending)*
 Move the durable hand-off off the reactor; no served-allow loss window and no
