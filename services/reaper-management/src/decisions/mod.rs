@@ -89,7 +89,7 @@ pub struct DecisionQuery {
 /// [`DecisionQuery`] filters, all optional and ANDed together. An **empty**
 /// filter is a *blanket hold* — it protects every decision the org has, and
 /// suspends the org's retention purge entirely while active.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HoldFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
@@ -126,7 +126,7 @@ impl HoldFilter {
 }
 
 /// Outcome of a retention purge request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "outcome")]
 pub enum PurgeOutcome {
     /// The DELETE mutation was submitted to ClickHouse (mutations apply
@@ -141,7 +141,7 @@ pub enum PurgeOutcome {
 
 /// One decision row as returned to API clients (matches the agent's
 /// DecisionLogEntry fields plus ingest metadata).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DecisionRow {
     pub timestamp: String,
     pub decision_id: String,
@@ -164,22 +164,25 @@ pub struct DecisionRow {
     pub agent_id: String,
     /// Raw JSON string in ClickHouse; surfaced as parsed JSON when possible.
     #[serde(default, skip_serializing_if = "Value::is_null")]
+    #[schema(value_type = Object)]
     pub context: Value,
     /// Explain snapshot (possibly an encryption envelope). Parsed JSON when
     /// present; the control plane can decrypt per tenant with
     /// `policy_engine::decrypt_input_data`.
     #[serde(default, skip_serializing_if = "Value::is_null")]
+    #[schema(value_type = Object)]
     pub input_data: Value,
     /// Replayable-capture snapshot (Plan 04 step 7): the full resolved request
     /// (`{"principal","action","resource","context"}`), possibly an encryption
     /// envelope. Null when the tier was off at capture — such rows are NOT
     /// replayable.
     #[serde(default, skip_serializing_if = "Value::is_null")]
+    #[schema(value_type = Object)]
     pub replay_input: Value,
 }
 
 /// Aggregate stats for a tenant + time range.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DecisionStats {
     pub total: u64,
     pub allows: u64,
@@ -187,6 +190,7 @@ pub struct DecisionStats {
     pub agents: u64,
     pub avg_evaluation_time_ns: f64,
     /// Top denied (policy_name, count) pairs.
+    #[schema(value_type = Vec<Object>)]
     pub top_denied_policies: Vec<(String, u64)>,
 }
 
@@ -619,7 +623,7 @@ fn build_verify_checkpoints_sql(
 }
 
 /// One bucket of the decision time series.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TimeseriesPoint {
     /// Bucket start (ClickHouse DateTime string, UTC).
     pub bucket: String,

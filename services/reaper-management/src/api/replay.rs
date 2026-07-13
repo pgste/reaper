@@ -10,19 +10,21 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::json;
 use std::sync::Arc;
+use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
-    api::error::{ApiError, ApiResult},
+    api::error::{ApiError, ApiResult, ProblemDetails},
     api::orgs::resolve_org,
     audit::{actions, ActorType, AuditEntry, ResourceType},
     auth::middleware::{AuthenticatedUser, RequireAuth},
     auth::scopes::Scope,
     db::repositories::OrganizationRepository,
-    replay::{start_job, ReplayRequest},
+    replay::{start_job, ReplayRequest, ReplayStatus},
     state::AppState,
 };
 
@@ -61,6 +63,15 @@ fn actor_type_of(user: &AuthenticatedUser) -> ActorType {
     }
 }
 
+/// A freshly started replay job: poll `GET …/replay/{job_id}` for progress.
+#[derive(Debug, Serialize, ToSchema)]
+struct StartReplayResponse {
+    /// The job to poll.
+    job_id: Uuid,
+    /// Always `running` at start time.
+    state: String,
+}
+
 /// POST /orgs/{org}/replay — start a counterfactual replay job.
 #[utoipa::path(
     post,
@@ -70,7 +81,11 @@ fn actor_type_of(user: &AuthenticatedUser) -> ActorType {
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 202, description = "Replay job started")
+        (status = 202, description = "Replay job started", body = StartReplayResponse),
+        (status = 400, description = "Invalid replay request", body = ProblemDetails),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -79,7 +94,7 @@ async fn start_replay(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Json(request): Json<ReplayRequest>,
-) -> ApiResult<(StatusCode, Json<Value>)> {
+) -> ApiResult<(StatusCode, Json<StartReplayResponse>)> {
     let org_id = authorize_admin(&state, &user, &org).await?;
 
     // Audit BEFORE the run (the analysis request itself is the sensitive act;
@@ -108,7 +123,10 @@ async fn start_replay(
 
     Ok((
         StatusCode::ACCEPTED,
-        Json(json!({ "job_id": job_id, "state": "running" })),
+        Json(StartReplayResponse {
+            job_id,
+            state: "running".to_string(),
+        }),
     ))
 }
 
@@ -122,8 +140,9 @@ async fn start_replay(
         ("job_id" = Uuid, Path, description = "Replay job ID")
     ),
     responses(
-        (status = 200, description = "Replay job status"),
-        (status = 404, description = "Replay job not found")
+        (status = 200, description = "Replay job status", body = ReplayStatus),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Replay job not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -131,7 +150,7 @@ async fn get_replay(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, job_id)): Path<(String, Uuid)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ReplayStatus>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     let job = state
         .replay_jobs
@@ -139,7 +158,7 @@ async fn get_replay(
         .filter(|j| j.org_id == org_id)
         .map(|j| j.value().clone())
         .ok_or_else(|| ApiError::NotFound(format!("replay job '{job_id}' not found")))?;
-    Ok(Json(job.status_json(job_id)))
+    Ok(Json(job.status(job_id)))
 }
 
 /// Map a start failure onto the API vocabulary: configuration problems are the

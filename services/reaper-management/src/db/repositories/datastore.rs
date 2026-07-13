@@ -30,7 +30,7 @@ pub struct DatastoreRecord {
 }
 
 /// A published, immutable data-bundle version.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct PublishedVersion {
     pub version: i64,
     pub checksum: String,

@@ -10,17 +10,18 @@ use axum::{
     extract::{Path, Query, State},
     response::Json,
 };
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
+use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    api::error::{ApiError, ApiResult},
+    api::error::{ApiError, ApiResult, ProblemDetails},
     api::orgs::resolve_org,
     auth::{middleware::RequireAuth, scopes::Scope},
     db::repositories::OrganizationRepository,
-    decisions::{DecisionQuery, DecisionStoreError},
+    decisions::{DecisionQuery, DecisionRow, DecisionStats, DecisionStoreError, TimeseriesPoint},
     state::AppState,
 };
 
@@ -104,6 +105,15 @@ fn store_or_unavailable(state: &AppState) -> ApiResult<&crate::decisions::Decisi
         .ok_or_else(|| map_store_error(DecisionStoreError::NotConfigured))
 }
 
+/// One page of decisions; pass `next_cursor` back as `?cursor=` to resume.
+/// `next_cursor` is `null` on the last page.
+#[derive(Debug, Serialize, ToSchema)]
+struct DecisionListResponse {
+    items: Vec<DecisionRow>,
+    /// Opaque resume cursor; `null` when this is the last page.
+    next_cursor: Option<String>,
+}
+
 /// GET /api/v1/orgs/{org}/decisions — full-history, cross-agent, tenant-scoped.
 /// Keyset-paginated (Plan 07 Phase E): pass back `next_cursor` as `?cursor=` to
 /// resume; `offset` remains accepted (deprecated) when no cursor is given.
@@ -117,8 +127,12 @@ fn store_or_unavailable(state: &AppState) -> ApiResult<&crate::decisions::Decisi
         ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "One page of decisions with a next_cursor to resume"),
-        (status = 400, description = "cursor invalid")
+        (status = 200, description = "One page of decisions with a next_cursor to resume",
+         body = DecisionListResponse),
+        (status = 400, description = "cursor invalid", body = ProblemDetails),
+        (status = 403, description = "Caller lacks decision-read access on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -127,7 +141,7 @@ async fn list_decisions(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(query): Query<DecisionQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<DecisionListResponse>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
 
@@ -152,10 +166,10 @@ async fn list_decisions(
         None
     };
 
-    Ok(Json(json!({
-        "items": decisions,
-        "next_cursor": next_cursor,
-    })))
+    Ok(Json(DecisionListResponse {
+        items: decisions,
+        next_cursor,
+    }))
 }
 
 /// GET /api/v1/orgs/{org}/decisions/stats
@@ -167,7 +181,11 @@ async fn list_decisions(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Decision statistics for the organization")
+        (status = 200, description = "Decision statistics for the organization",
+         body = DecisionStats),
+        (status = 403, description = "Caller lacks decision-read access on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -176,14 +194,22 @@ async fn decision_stats(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(params): Query<StatsParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<DecisionStats>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
     let stats = store
         .stats(&tenant, params.from.as_deref(), params.to.as_deref())
         .await
         .map_err(map_store_error)?;
-    Ok(Json(serde_json::to_value(stats).unwrap_or_default()))
+    Ok(Json(stats))
+}
+
+/// Bucketed decision counts for charts.
+#[derive(Debug, Serialize, ToSchema)]
+struct TimeseriesResponse {
+    /// Bucket size in seconds.
+    interval_secs: u32,
+    points: Vec<TimeseriesPoint>,
 }
 
 /// GET /api/v1/orgs/{org}/decisions/timeseries — bucketed counts for charts.
@@ -195,7 +221,11 @@ async fn decision_stats(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Bucketed decision counts for charts")
+        (status = 200, description = "Bucketed decision counts for charts",
+         body = TimeseriesResponse),
+        (status = 403, description = "Caller lacks decision-read access on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -204,7 +234,7 @@ async fn decision_timeseries(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(params): Query<TimeseriesParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<TimeseriesResponse>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
     let bucket_secs = crate::decisions::parse_interval_secs(params.interval.as_deref());
@@ -217,10 +247,19 @@ async fn decision_timeseries(
         )
         .await
         .map_err(map_store_error)?;
-    Ok(Json(json!({
-        "interval_secs": bucket_secs,
-        "points": points,
-    })))
+    Ok(Json(TimeseriesResponse {
+        interval_secs: bucket_secs,
+        points,
+    }))
+}
+
+/// Distinct filter values with counts for UI dropdowns.
+#[derive(Debug, Serialize, ToSchema)]
+struct FacetsResponse {
+    /// Facet name → `[value, count]` pairs (dimensions are store-defined,
+    /// so the leaf stays dynamic).
+    #[schema(value_type = Object)]
+    facets: Value,
 }
 
 /// GET /api/v1/orgs/{org}/decisions/facets — distinct filter values with
@@ -233,7 +272,11 @@ async fn decision_timeseries(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Distinct filter values with counts")
+        (status = 200, description = "Distinct filter values with counts",
+         body = FacetsResponse),
+        (status = 403, description = "Caller lacks decision-read access on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -242,14 +285,30 @@ async fn decision_facets(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(params): Query<StatsParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<FacetsResponse>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
     let facets = store
         .facets(&tenant, params.from.as_deref(), params.to.as_deref())
         .await
         .map_err(map_store_error)?;
-    Ok(Json(json!({ "facets": facets })))
+    Ok(Json(FacetsResponse { facets }))
+}
+
+/// Hash-chain verification report (`policy_engine::decision_log::VerifyReport`
+/// shape, flattened) plus an optional explanatory note.
+#[derive(Debug, Serialize, ToSchema)]
+struct VerifyDecisionsResponse {
+    /// The `verify_records` report: chains checked, entries verified,
+    /// checkpoint signature results, and any breaks found (engine-defined
+    /// shape; see `policy_engine::decision_log::VerifyReport`).
+    #[serde(flatten)]
+    #[schema(value_type = Object)]
+    report: Value,
+    /// Present when checkpoint signatures were skipped (no verifying key
+    /// configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 /// GET /api/v1/orgs/{org}/decisions/verify — verify the tamper-evident hash
@@ -270,7 +329,11 @@ async fn decision_facets(
         ("to" = Option<u64>, Query, description = "Inclusive upper seq bound")
     ),
     responses(
-        (status = 200, description = "Verification report over the store-backed hash chain")
+        (status = 200, description = "Verification report over the store-backed hash chain",
+         body = VerifyDecisionsResponse),
+        (status = 403, description = "Caller lacks decision-read access on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -279,7 +342,7 @@ async fn verify_decisions(
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
     Query(params): Query<VerifyParams>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<VerifyDecisionsResponse>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
 
@@ -334,11 +397,15 @@ async fn verify_decisions(
         policy_engine::decision_log::VerifyMode::Linkage,
     );
 
-    let mut body = serde_json::to_value(&report).unwrap_or_default();
-    if let (Some(obj), Some(note)) = (body.as_object_mut(), note) {
-        obj.insert("note".to_string(), Value::String(note));
-    }
-    Ok(Json(body))
+    let report = serde_json::to_value(&report)
+        .map_err(|e| ApiError::Internal(format!("serialize verify report: {e}")))?;
+    Ok(Json(VerifyDecisionsResponse { report, note }))
+}
+
+/// Explain view for one decision.
+#[derive(Debug, Serialize, ToSchema)]
+struct DecisionDetailResponse {
+    decision: DecisionRow,
 }
 
 /// GET /api/v1/orgs/{org}/decisions/{decision_id} — explain view for one
@@ -353,8 +420,11 @@ async fn verify_decisions(
         ("decision_id" = String, Path, description = "Decision ID")
     ),
     responses(
-        (status = 200, description = "Explain view for one decision"),
-        (status = 404, description = "Decision not found")
+        (status = 200, description = "Explain view for one decision",
+         body = DecisionDetailResponse),
+        (status = 403, description = "Caller lacks decision-read access on this org", body = ProblemDetails),
+        (status = 404, description = "Decision not found", body = ProblemDetails),
+        (status = 503, description = "Decision store not configured", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -362,7 +432,7 @@ async fn get_decision(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, decision_id)): Path<(String, String)>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<DecisionDetailResponse>> {
     let tenant = authorize(&state, &user, &org).await?;
     let store = store_or_unavailable(&state)?;
     match store
@@ -370,7 +440,7 @@ async fn get_decision(
         .await
         .map_err(map_store_error)?
     {
-        Some(decision) => Ok(Json(json!({ "decision": decision }))),
+        Some(decision) => Ok(Json(DecisionDetailResponse { decision })),
         None => Err(ApiError::NotFound(format!(
             "Decision '{decision_id}' not found"
         ))),

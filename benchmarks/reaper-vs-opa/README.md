@@ -17,7 +17,7 @@ benchmarks/reaper-vs-opa/
 │   │   ├── abac.json
 │   │   ├── rebac.json
 │   │   └── multilayer.json
-│   └── 100k/              # 100K entity datasets
+│   └── 100k/              # 100K entity datasets (generated, not committed)
 │       └── (same structure)
 ├── policies/
 │   ├── reaper/            # Reaper policies
@@ -170,7 +170,7 @@ ps aux | grep opa
 ```bash
 # Verify data files exist
 ls -lh data/10k/
-ls -lh data/100k/
+ls -lh data/100k/   # generate first: ./data/generate_all_data.sh
 ```
 
 ### Benchmark fails

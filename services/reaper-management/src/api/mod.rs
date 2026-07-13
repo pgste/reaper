@@ -101,6 +101,10 @@ pub fn build_served_router() -> Router<Arc<AppState>> {
     Router::new()
         .nest("/api/v1", build_api_router())
         .merge(probe_routes())
+        // Stamp the RFC 9457 `instance` member onto every problem+json
+        // response (R2-08). Applied here — over the full versioned surface —
+        // so the member carries the real `/api/v1/...` request path.
+        .layer(axum::middleware::from_fn(error::problem_instance))
 }
 
 /// Unversioned probes + contract discovery served at the root. `/health`,

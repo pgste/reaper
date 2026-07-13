@@ -33,6 +33,7 @@ use utoipa::{Modify, OpenApi};
         (url = "/api/v1", description = "Versioned control-plane surface")
     ),
     modifiers(&SecurityAddon),
+    components(schemas(super::error::ProblemDetails)),
     tags(
         (name = "health", description = "Health, readiness and metrics probes (public)"),
         (name = "orgs", description = "Organization lifecycle"),

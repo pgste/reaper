@@ -206,6 +206,7 @@ pub async fn create_user(
     Ok((StatusCode::CREATED, Json(user_to_scim(&fresh))).into_response())
 }
 
+/// Fetch one SCIM user resource by id.
 #[utoipa::path(
     get,
     path = "/scim/v2/Users/{id}",

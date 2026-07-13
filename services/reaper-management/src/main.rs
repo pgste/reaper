@@ -308,6 +308,12 @@ fn build_router(
         auth::gateway::require_authentication,
     ));
 
+    // Gateway rejections (401/403 before the inner router runs) bypass the
+    // `problem_instance` layer inside `build_served_router`; stamp them here.
+    // The middleware is idempotent, so handler errors — already stamped by the
+    // inner layer — pass through unchanged (R2-08).
+    let api_router = api_router.layer(middleware::from_fn(api::error::problem_instance));
+
     // Build the router with middleware
     // Middleware is applied in reverse order (last added runs first)
     let router = api_router

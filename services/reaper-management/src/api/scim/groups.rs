@@ -26,6 +26,7 @@ const ROLES: [OrgRole; 4] = [
     OrgRole::Viewer,
 ];
 
+/// List SCIM groups (the fixed org-role set) as a SCIM ListResponse.
 #[utoipa::path(
     get,
     path = "/scim/v2/Groups",
@@ -47,6 +48,7 @@ pub async fn list_groups(
     Ok(Json(list_response(resources)).into_response())
 }
 
+/// Fetch one SCIM group (org role) with its current members.
 #[utoipa::path(
     get,
     path = "/scim/v2/Groups/{id}",
