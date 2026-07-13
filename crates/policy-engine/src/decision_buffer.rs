@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 
 /// Global seed source so each thread's sampling PRNG starts distinct without an
 /// RNG syscall or a time source on the hot path.
@@ -98,8 +99,33 @@ const MAX_AUTO_SHARDS: usize = 64;
 
 /// Message to the background decision-log writer.
 enum WriterMsg {
+    /// Best-effort fire-and-forget entry (no acknowledgement).
     Entry(Arc<DecisionLogEntry>),
+    /// Mandatory-audit entry that must be made durable (flush + fsync) before
+    /// the decision is served. The writer replies `true` on the oneshot iff
+    /// serialize + write + flush + fsync all succeeded, else `false`.
+    EntryAck(Arc<DecisionLogEntry>, oneshot::Sender<bool>),
     Flush,
+}
+
+/// How long `log_durable` waits for the writer's durability acknowledgement
+/// before treating the decision as durable-unavailable (fail closed). Bounds the
+/// worst-case eval tail added by mandatory-audit mode.
+const DURABLE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Outcome of the shared capture preamble used by both `log` (best-effort) and
+/// `log_durable` (mandatory). By the time it returns, filters, protection, seq
+/// assignment, allow/deny counters, and the ring push have all been applied —
+/// the caller only decides how to hand the `Arc` to the writer thread.
+enum Prepared {
+    /// Nothing to persist (logging disabled or filtered out by should-log). A
+    /// durable caller treats this as success — there is nothing to make durable.
+    Skipped,
+    /// Data protection failed and the entry was discarded (fail closed). A
+    /// durable caller must NOT serve the decision.
+    Discarded,
+    /// Entry captured into the ring; hand this `Arc` to the writer thread.
+    Ready(Arc<DecisionLogEntry>),
 }
 
 /// Cross-boot continuity record (round-2 A3.2). The writer persists this as
@@ -725,8 +751,51 @@ impl DecisionBuffer {
                     cp.on_entry(record.seq, &record.entry_hash, sinks);
                 }
             }
+            WriterMsg::EntryAck(entry, ack) => {
+                // Identical to Entry, but the record is made DURABLE (flush +
+                // fsync of the file sink) and the outcome is acknowledged, so a
+                // mandatory-audit decision is only served after it is on disk.
+                let mut record = (*entry).clone();
+                chain.stamp(&mut record);
+                let durable = match record.to_ndjson() {
+                    Ok(json) => Self::write_and_sync(sinks, &json),
+                    Err(_) => false,
+                };
+                if !durable {
+                    audit.note_loss();
+                }
+                // Ignore send errors: the receiver may have timed out and gone.
+                let _ = ack.send(durable);
+                // Fold into the checkpoint window exactly like Entry.
+                if let Some(cp) = checkpointer.as_mut() {
+                    cp.on_entry(record.seq, &record.entry_hash, sinks);
+                }
+            }
             WriterMsg::Flush => sinks.flush_all(),
         }
+    }
+
+    /// Write one NDJSON line to all configured sinks and make the FILE sink
+    /// durable (flush its buffer, then `fsync`/`sync_data`). Returns `true` iff a
+    /// file sink is present and the write + flush + fsync all succeeded — the
+    /// basis for a durable-before-serve acknowledgement. stdout is mirrored
+    /// best-effort but cannot be fsynced (a pipe/console), so it never
+    /// contributes to the durability verdict; with no file sink configured,
+    /// durability cannot be guaranteed and this returns `false`.
+    fn write_and_sync(sinks: &mut WriterSinks, json: &str) -> bool {
+        let file_ok = if let Some(w) = sinks.file.as_mut() {
+            writeln!(w, "{}", json)
+                .and_then(|_| w.flush())
+                .and_then(|_| w.get_ref().sync_data())
+                .is_ok()
+        } else {
+            // No durable file/WAL sink → durability cannot be guaranteed.
+            false
+        };
+        if let Some(w) = sinks.stdout.as_mut() {
+            let _ = writeln!(w, "{}", json).and_then(|_| w.flush());
+        }
+        file_ok
     }
 
     /// Create a new buffer with default configuration
@@ -742,18 +811,115 @@ impl DecisionBuffer {
     /// since threads map to disjoint shards. If the shard is full the oldest
     /// entry is dropped (counted), same-thread, so allocation and free stay on
     /// the same malloc arena.
-    pub fn log(&self, mut entry: DecisionLogEntry) {
+    pub fn log(&self, entry: DecisionLogEntry) {
+        let arc = match self.prepare_entry(entry) {
+            Prepared::Ready(arc) => arc,
+            // Nothing to persist, or protection discarded it (already logged).
+            Prepared::Skipped | Prepared::Discarded => return,
+        };
+
+        // Best-effort fire-and-forget hand-off to the background writer thread —
+        // no JSON serialization and no write syscall on the request path. On a
+        // saturated writer queue, drop-and-count (never block the reactor); in
+        // mandatory `fail_closed` mode that latches the agent audit-compromised
+        // so eval fails closed instead of silently losing the record.
+        //
+        // The `Block` branch is retained for the legacy `on_audit_unavailable =
+        // block` policy, but it is NO LONGER reached from the async eval hot path:
+        // mandatory-audit mode now uses `log_durable` (try_send + async ack), so
+        // the reactor is never blocked by a synchronous `send` here.
+        if let Some(ref tx) = self.writer_tx {
+            let block = self.config.audit_required
+                && self.config.on_audit_unavailable == OnAuditUnavailable::Block;
+            if block {
+                // A send error only happens if the writer thread is gone; that
+                // is itself a durable loss.
+                if tx.send(WriterMsg::Entry(arc)).is_err() {
+                    self.audit.note_loss();
+                }
+            } else if tx.try_send(WriterMsg::Entry(arc)).is_err() {
+                self.audit.note_loss();
+            }
+        }
+    }
+
+    /// Mandatory-audit capture: make the decision **durable before it is served**
+    /// without blocking the async reactor. Returns `true` iff the record is on
+    /// disk (or there was nothing to persist); `false` means durability could not
+    /// be guaranteed and the caller MUST fail the decision closed.
+    ///
+    /// Non-blocking by construction: the entry is handed to the writer thread via
+    /// `try_send` (never a blocking `send`), and the writer's fsync outcome is
+    /// awaited on a `oneshot` under a bounded [`DURABLE_ACK_TIMEOUT`]. A full
+    /// writer queue, a dropped writer, or a timeout are all durable-unavailable →
+    /// `note_loss` + `false`.
+    pub async fn log_durable(&self, entry: DecisionLogEntry) -> bool {
+        let arc = match self.prepare_entry(entry) {
+            Prepared::Ready(arc) => arc,
+            // Disabled or filtered out — nothing to persist, so durability holds.
+            Prepared::Skipped => return true,
+            // Protection failed and the entry was discarded — fail closed.
+            Prepared::Discarded => return false,
+        };
+
+        // No writer/durable sink configured → durability cannot be guaranteed.
+        let Some(ref tx) = self.writer_tx else {
+            self.audit.note_loss();
+            return false;
+        };
+
+        let (ack_tx, ack_rx) = oneshot::channel::<bool>();
+        // try_send ONLY — never block the reactor. A saturated bounded queue is a
+        // durable-unavailable condition, not something to backpressure the worker.
+        if tx.try_send(WriterMsg::EntryAck(arc, ack_tx)).is_err() {
+            self.audit.note_loss();
+            return false;
+        }
+
+        // Await the writer's durability verdict without blocking the reactor.
+        match tokio::time::timeout(DURABLE_ACK_TIMEOUT, ack_rx).await {
+            // Durable: on disk and fsynced.
+            Ok(Ok(true)) => true,
+            // Writer already called note_loss on the durable failure.
+            Ok(Ok(false)) => false,
+            // Receiver error (writer dropped the sender) or timeout: fail closed.
+            Ok(Err(_)) | Err(_) => {
+                self.audit.note_loss();
+                false
+            }
+        }
+    }
+
+    /// Whether mandatory durable-before-serve is in effect. When true the eval
+    /// path must use [`log_durable`](Self::log_durable) and fail closed on a
+    /// non-durable result; when false the default best-effort
+    /// [`log`](Self::log) fire-and-forget path is used (zero added latency).
+    /// Independent of the `FailClosed`/`Block` policy — both mean "no silent
+    /// loss", so both want durability before serving.
+    #[inline]
+    pub fn mandatory_durable(&self) -> bool {
+        self.config.enabled && self.config.audit_required
+    }
+
+    /// Shared capture preamble for [`log`](Self::log) and
+    /// [`log_durable`](Self::log_durable): apply the decision-type filter,
+    /// context stripping, and data protection (fail closed on error), then assign
+    /// the monotonic seq, bump allow/deny counters, and push the entry into this
+    /// thread's ring shard. Returns the shared `Arc` so the caller can hand it to
+    /// the writer thread. Keeping this single-sourced stops the best-effort and
+    /// durable paths from drifting.
+    fn prepare_entry(&self, mut entry: DecisionLogEntry) -> Prepared {
         if !self.config.enabled {
-            return;
+            return Prepared::Skipped;
         }
 
         // Check if we should log this decision type
         let is_allow = entry.decision == "allow";
         if is_allow && !self.config.log_allows {
-            return;
+            return Prepared::Skipped;
         }
         if !is_allow && !self.config.log_denies {
-            return;
+            return Prepared::Skipped;
         }
 
         // Strip context if configured
@@ -768,7 +934,7 @@ impl DecisionBuffer {
         if let Some(ref protection) = self.protection {
             if let Err(e) = protection.apply(&mut entry) {
                 tracing::error!(error = %e, "decision-log protection failed; entry discarded");
-                return;
+                return Prepared::Discarded;
             }
         }
 
@@ -787,30 +953,6 @@ impl DecisionBuffer {
 
         let arc = Arc::new(entry);
 
-        // Hand durable persistence to the background writer thread — no JSON
-        // serialization and no write syscall on the request path. The writer
-        // shares the Arc (no deep clone).
-        //
-        // On a saturated writer queue the behavior depends on the audit policy:
-        //   - Block: backpressure the hand-off (blocking `send`) so a record is
-        //     never dropped — used with mandatory audit's `block` policy.
-        //   - otherwise: drop-and-count (never block the request), and in
-        //     mandatory `fail_closed` mode latch the agent audit-compromised so
-        //     eval fails closed instead of silently losing the record.
-        if let Some(ref tx) = self.writer_tx {
-            let block = self.config.audit_required
-                && self.config.on_audit_unavailable == OnAuditUnavailable::Block;
-            if block {
-                // A send error only happens if the writer thread is gone; that
-                // is itself a durable loss.
-                if tx.send(WriterMsg::Entry(arc.clone())).is_err() {
-                    self.audit.note_loss();
-                }
-            } else if tx.try_send(WriterMsg::Entry(arc.clone())).is_err() {
-                self.audit.note_loss();
-            }
-        }
-
         // Push into this thread's shard (uncontended under concurrency). Ring
         // eviction is in-memory query-history loss (not a durable-audit loss —
         // the writer already has the record); count it and alarm once.
@@ -825,7 +967,8 @@ impl DecisionBuffer {
                 );
             }
         }
-        ring.push_back((seq, arc));
+        ring.push_back((seq, arc.clone()));
+        Prepared::Ready(arc)
     }
 
     /// Whether the durable audit trail is intact. In mandatory-audit mode a
@@ -1774,12 +1917,21 @@ mod tests {
         assert!(DecisionBuffer::new(config).is_err());
     }
 
-    /// A fully valid mandatory-audit config (stdout sink + signed checkpoints).
+    /// A fully valid mandatory-audit config (fsync-able file sink + signed
+    /// checkpoints). Mandatory mode requires a file sink for durable-before-serve,
+    /// so each call gets a unique temp path to avoid cross-test interference.
     fn mandatory_config() -> DecisionLogConfig {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "reaper_mandatory_cfg_{}_{}.ndjson",
+            std::process::id(),
+            n
+        ));
         DecisionLogConfig {
             enabled: true,
             audit_required: true,
-            emit_stdout: true,
+            file_path: Some(path.to_string_lossy().into_owned()),
             checkpoint_every: 100,
             checkpoint_signing_key: Some("07".repeat(32)),
             checkpoint_key_id: Some("k1".to_string()),
@@ -1841,6 +1993,104 @@ mod tests {
         assert!(buffer.is_audit_healthy(), "non-mandatory stays healthy");
         assert_eq!(buffer.stats().writer_dropped, 1);
         assert!(!buffer.stats().audit_compromised);
+    }
+
+    #[test]
+    fn test_mandatory_durable_reflects_config() {
+        // Disabled (default) → not mandatory-durable.
+        let buffer = DecisionBuffer::new(DecisionLogConfig::default()).unwrap();
+        assert!(!buffer.mandatory_durable());
+
+        // Enabled but audit not required → best-effort, not durable-before-serve.
+        let config = DecisionLogConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(!buffer.mandatory_durable());
+
+        // Enabled + audit_required → durable-before-serve.
+        let buffer = DecisionBuffer::new(mandatory_config()).unwrap();
+        assert!(buffer.mandatory_durable());
+    }
+
+    #[tokio::test]
+    async fn test_log_durable_persists_and_acks_with_file_sink() {
+        // With a writable file sink, log_durable writes + fsyncs the record and
+        // only THEN acks true — so the record is on disk the instant it returns.
+        let path = std::env::temp_dir().join(format!(
+            "reaper_declog_durable_ok_{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let config = DecisionLogConfig {
+            enabled: true,
+            file_path: Some(path.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+
+        let mut entry = test_entry("allow");
+        entry.principal = "durable-alice".to_string();
+        let durable = buffer.log_durable(entry).await;
+        assert!(
+            durable,
+            "log_durable must ack true when the file sink fsyncs"
+        );
+
+        // The fsync completed before the ack, so no polling is needed.
+        let contents = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            contents.contains("durable-alice"),
+            "record must be durably on disk before the ack: {contents:?}"
+        );
+        assert_eq!(buffer.stats().writer_dropped, 0);
+        assert!(buffer.is_audit_healthy());
+    }
+
+    #[tokio::test]
+    async fn test_log_durable_without_file_sink_fails_closed() {
+        // A stdout-only sink cannot be fsynced, so durability can't be
+        // guaranteed: log_durable must return false and count a durable loss.
+        let config = DecisionLogConfig {
+            enabled: true,
+            emit_stdout: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(
+            !buffer.log_durable(test_entry("deny")).await,
+            "no file sink → not durable"
+        );
+        assert_eq!(buffer.stats().writer_dropped, 1);
+    }
+
+    #[tokio::test]
+    async fn test_log_durable_no_writer_fails_closed() {
+        // No sink at all → no writer thread → durability impossible → false.
+        let config = DecisionLogConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(!buffer.log_durable(test_entry("deny")).await);
+        assert_eq!(buffer.stats().writer_dropped, 1);
+    }
+
+    #[tokio::test]
+    async fn test_log_durable_disabled_returns_true_and_writes_nothing() {
+        // Disabled logging has nothing to persist → durability trivially holds.
+        let config = DecisionLogConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(buffer.log_durable(test_entry("allow")).await);
+        let stats = buffer.stats();
+        assert_eq!(stats.total_entries, 0);
+        assert_eq!(stats.writer_dropped, 0);
     }
 
     #[test]

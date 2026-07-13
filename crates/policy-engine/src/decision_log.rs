@@ -1457,10 +1457,19 @@ impl DecisionLogConfig {
                         .to_string(),
                 );
             }
-            if self.file_path.is_none() && !self.emit_stdout {
-                return Err("mandatory audit mode requires a durable sink (set \
-                     REAPER_DECISION_LOG_FILE or REAPER_DECISION_LOG_STDOUT)"
-                    .to_string());
+            // Durable-before-serve fsyncs the entry before the allow is served,
+            // and only a file sink can be fsynced (stdout cannot). A stdout-only
+            // mandatory config would therefore fail closed on every request, so
+            // reject it at startup rather than degrading to a per-request outage.
+            // Container deployments that ship logs via stdout->Vector must mount a
+            // file path (e.g. an emptyDir) and tail it instead.
+            if self.file_path.is_none() {
+                return Err(
+                    "mandatory audit mode requires a durable file sink so entries can \
+                     be fsynced before the decision is served (set REAPER_DECISION_LOG_FILE); \
+                     stdout cannot be fsynced and is not sufficient in mandatory mode"
+                        .to_string(),
+                );
             }
             if self.checkpoint_every == 0 && self.checkpoint_interval_secs == 0 {
                 return Err("mandatory audit mode requires signed checkpoints (set \
@@ -1710,7 +1719,8 @@ mod tests {
         DecisionLogConfig {
             enabled: true,
             audit_required: true,
-            emit_stdout: true,
+            // Mandatory mode requires an fsync-able file sink for durable-before-serve.
+            file_path: Some("/tmp/reaper-decisions-test.ndjson".to_string()),
             checkpoint_every: 100,
             checkpoint_signing_key: Some("07".repeat(32)),
             ..Default::default()
@@ -1746,11 +1756,18 @@ mod tests {
 
     #[test]
     fn test_mandatory_validate_requires_sink_and_signed_checkpoints() {
-        // No durable sink.
+        // No durable sink at all.
         let mut c = valid_mandatory();
         c.emit_stdout = false;
         c.file_path = None;
-        assert!(c.validate().unwrap_err().contains("durable sink"));
+        assert!(c.validate().unwrap_err().contains("file sink"));
+
+        // Stdout-only is insufficient in mandatory mode: stdout cannot be fsynced,
+        // so durable-before-serve would fail closed on every request. Reject at boot.
+        let mut c = valid_mandatory();
+        c.file_path = None;
+        c.emit_stdout = true;
+        assert!(c.validate().unwrap_err().contains("file sink"));
 
         // No checkpoint trigger.
         let mut c = valid_mandatory();

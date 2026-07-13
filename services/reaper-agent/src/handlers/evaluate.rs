@@ -539,7 +539,23 @@ pub async fn evaluate_policy(
             // Use the same decision_id across response, logs, and audit trail
             entry.decision_id = decision_id.to_string();
 
-            buffer.log(entry);
+            // Mandatory-audit mode: the decision must be DURABLE (written +
+            // fsynced) before it is served — otherwise a crash could lose the
+            // record of a decision we already answered "allow" on. log_durable
+            // awaits the writer's fsync ack without blocking the reactor; if
+            // durability cannot be guaranteed we fail closed exactly like the
+            // audit_gate (503), never serving a non-durable decision. Best-effort
+            // mode (the default) stays fire-and-forget with zero added latency.
+            if buffer.mandatory_durable() {
+                if !buffer.log_durable(entry).await {
+                    ERRORS_TOTAL
+                        .with_label_values(&["audit_persist_unavailable"])
+                        .inc();
+                    return Err(StatusCode::SERVICE_UNAVAILABLE);
+                }
+            } else {
+                buffer.log(entry);
+            }
         }
     }
 
@@ -867,7 +883,19 @@ pub async fn fast_evaluate_policy(
                 }));
             }
             entry.decision_id = decision_id.to_string();
-            buffer.log(entry);
+            // Mandatory-audit mode: durable-before-serve (see the standard
+            // handler above). Fail closed on a non-durable result; best-effort
+            // stays fire-and-forget.
+            if buffer.mandatory_durable() {
+                if !buffer.log_durable(entry).await {
+                    ERRORS_TOTAL
+                        .with_label_values(&["audit_persist_unavailable"])
+                        .inc();
+                    return Err(StatusCode::SERVICE_UNAVAILABLE);
+                }
+            } else {
+                buffer.log(entry);
+            }
         }
     }
 
@@ -1158,5 +1186,65 @@ mod tests {
         assert_eq!(json["decision"], "allow");
         assert_eq!(json["policy_id"], "test-id");
         assert_eq!(json["cache_hit"], false);
+    }
+
+    /// The eval hot path branches on `buffer.mandatory_durable()` and, when
+    /// `log_durable` cannot guarantee persistence, returns 503 instead of
+    /// serving the computed decision. This exercises that exact predicate: a
+    /// mandatory-audit buffer whose only sink is stdout (which can't be fsynced)
+    /// reports `mandatory_durable() == true` yet `log_durable(...) == false`,
+    /// so the handler fails closed rather than serving a non-durable allow.
+    #[tokio::test]
+    async fn test_mandatory_durable_without_durable_sink_forces_fail_closed() {
+        use policy_engine::{DecisionBuffer, DecisionLogConfig, DecisionLogEntry};
+
+        // A mandatory config with no fsync-able file sink (stdout only) cannot
+        // support durable-before-serve. Rather than degrade to a per-request 503,
+        // it must fail fast at construction so the operator sees a clear config error.
+        let stdout_only = DecisionLogConfig {
+            enabled: true,
+            audit_required: true,
+            emit_stdout: true,
+            checkpoint_every: 100,
+            checkpoint_signing_key: Some("07".repeat(32)),
+            checkpoint_key_id: Some("k1".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            DecisionBuffer::new(stdout_only).is_err(),
+            "stdout-only mandatory config must be rejected at startup, not per request"
+        );
+
+        // With a real file sink the buffer starts, and durable-before-serve acks
+        // only after the entry is fsynced to disk.
+        let path = std::env::temp_dir().join(format!(
+            "reaper_agent_durable_{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let config = DecisionLogConfig {
+            enabled: true,
+            audit_required: true,
+            file_path: Some(path.to_string_lossy().into_owned()),
+            checkpoint_every: 100,
+            checkpoint_signing_key: Some("07".repeat(32)),
+            checkpoint_key_id: Some("k1".to_string()),
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new(config).unwrap();
+        assert!(buffer.mandatory_durable());
+
+        let entry = DecisionLogEntry::new(
+            "alice".to_string(),
+            "read".to_string(),
+            "/x".to_string(),
+            "allow".to_string(),
+            "pid".to_string(),
+            "pname".to_string(),
+        );
+        // A durable file sink → the entry is persisted and the handler serves the allow.
+        assert!(buffer.log_durable(entry).await);
+        assert!(buffer.is_audit_healthy());
+        let _ = std::fs::remove_file(&path);
     }
 }

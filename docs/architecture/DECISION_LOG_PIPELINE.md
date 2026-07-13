@@ -190,10 +190,20 @@ By default a dropped audit record is a best-effort loss. **Mandatory-audit mode*
 deployments where an un-audited decision must never be served:
 
 - **Startup validation (fail closed).** Mandatory mode requires complete capture (no allow
-  sampling, `log_allows` and `log_denies` both on), a durable sink, and **signed checkpoints** (a
-  checkpoint trigger + a signing key). Any conflicting setting aborts startup rather than being
-  silently overridden — so an operator's wrong mental model surfaces immediately. A buffer-creation
-  failure in this mode is fatal (the agent refuses to run un-audited).
+  sampling, `log_allows` and `log_denies` both on), an **fsync-able file sink**
+  (`REAPER_DECISION_LOG_FILE`), and **signed checkpoints** (a checkpoint trigger + a signing key).
+  A file sink is required specifically because durable-before-serve fsyncs each entry before the
+  allow is served, and **stdout cannot be fsynced** — a stdout-only mandatory config would degrade
+  to a per-request `503`, so it is rejected at boot instead. Container deployments that ship logs
+  via `stdout`→Vector must mount a file path (e.g. an `emptyDir`) and tail it. Any conflicting
+  setting aborts startup rather than being silently overridden — so an operator's wrong mental model
+  surfaces immediately. A buffer-creation failure in this mode is fatal (the agent refuses to run
+  un-audited).
+- **Durable-before-serve.** In mandatory mode the eval handler calls `log_durable(entry).await`,
+  which writes + fsyncs the record to the file sink and only **then** acks — so a served `allow` is
+  always already on disk. If persistence can't be guaranteed the handler returns **`503`** before
+  the decision is served (never a serve-then-lose window). Best-effort mode is unchanged: a
+  fire-and-forget `log()` with zero added latency.
 - **Runtime fail-closed.** If the durable sink can't accept a record (writer queue saturated or a
   sink write error), the agent does **not** silently drop it. Per `REAPER_DECISION_LOG_ON_AUDIT_UNAVAILABLE`:
   - `fail_closed` (default): latch audit-compromised → `/ready` flips `not_ready`
