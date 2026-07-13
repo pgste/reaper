@@ -97,9 +97,10 @@ pub mod decision_privacy;
 pub use decision_buffer::{
     create_shared_buffer, DecisionBuffer, DecisionBufferStats, DecisionFilter, SharedDecisionBuffer,
 };
-pub use decision_log::{DecisionLogConfig, DecisionLogEntry};
+pub use decision_log::{DecisionLogConfig, DecisionLogEntry, PrivacyProfile};
 pub use decision_privacy::{
-    decrypt_input_data, generate_encryption_key_hex, pseudonymize, DataProtection,
+    decrypt_input_data, generate_encryption_key_hex, pseudonymize, pseudonymize_domain,
+    DataProtection,
 };
 pub use reap::{CheckResult, Violation};
 

@@ -7,7 +7,7 @@
 //!
 //! Run: `cargo run --release -p policy-engine --example decision_capture_bench [threads] [per_thread]`
 
-use policy_engine::decision_log::{DecisionLogConfig, DecisionLogEntry};
+use policy_engine::decision_log::{DecisionLogConfig, DecisionLogEntry, PrivacyProfile};
 use policy_engine::DecisionBuffer;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +31,7 @@ fn entry(i: usize, t: usize) -> DecisionLogEntry {
 fn run(shards: usize, threads: usize, per_thread: usize) {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100_000,
         capture_shards: shards,
         ..Default::default()

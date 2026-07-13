@@ -182,6 +182,12 @@ services:
       - REAPER_DECISION_LOG_MODE=${DECISION_LOG_MODE:-full}
       - REAPER_DECISION_LOG_CAPACITY=${DECISION_LOG_CAPACITY:-10000}
       - REAPER_DECISION_LOG_FILE=/var/log/reaper/decisions.ndjson
+      # Privacy posture is REQUIRED when decision logging is enabled (no
+      # PII-by-default): pseudonymize (GDPR-friendly; also set
+      # DECISION_LOG_HASH_SALT) or raw (explicit opt-out, identities in clear).
+      # Left unset, the agent refuses to start with an actionable error.
+      - REAPER_DECISION_LOG_PRIVACY=${DECISION_LOG_PRIVACY:-}
+      - REAPER_DECISION_LOG_HASH_SALT=${DECISION_LOG_HASH_SALT:-}
       # OpenTelemetry (enabled when observability profile is used)
       - OTEL_ENABLED=${OTEL_ENABLED:-false}
       - OTEL_ENDPOINT=http://tempo:4317

@@ -19,8 +19,9 @@ use std::hint::black_box;
 use uuid::Uuid;
 
 use policy_engine::{
-    cache_config::CacheConfig, create_shared_buffer, decision_log::DecisionLogConfig, DataLoader,
-    DataStore, EnhancedPolicy, PolicyEngine, PolicyLanguage, ReaperPolicy, SharedDecisionBuffer,
+    cache_config::CacheConfig, create_shared_buffer, decision_log::DecisionLogConfig,
+    decision_log::PrivacyProfile, DataLoader, DataStore, EnhancedPolicy, PolicyEngine,
+    PolicyLanguage, ReaperPolicy, SharedDecisionBuffer,
 };
 use reaper_agent::handlers::fast_evaluate_policy;
 use reaper_agent::state::{AgentState, AgentStats};
@@ -114,6 +115,7 @@ fn bench_fast_evaluate(c: &mut Criterion) {
     // ring so eviction churn doesn't dominate.
     let log_config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100_000,
         ..Default::default()
     };

@@ -7,7 +7,7 @@
 //! - Log configuration
 
 use policy_engine::decision_buffer::{DecisionBuffer, DecisionFilter};
-use policy_engine::decision_log::{DecisionLogConfig, DecisionLogEntry};
+use policy_engine::decision_log::{DecisionLogConfig, DecisionLogEntry, PrivacyProfile};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -187,6 +187,7 @@ fn test_optional_fields_excluded() {
 fn test_buffer_basic_logging() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         ..Default::default()
     };
@@ -215,6 +216,7 @@ fn test_buffer_basic_logging() {
 fn test_buffer_capacity_limits() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 10, // Small capacity
         ..Default::default()
     };
@@ -249,6 +251,7 @@ fn test_buffer_filtering_by_decision() {
     // Config that only logs denies
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         log_allows: false,
         log_denies: true,
@@ -324,6 +327,7 @@ fn test_buffer_disabled() {
 fn test_buffer_get_recent() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         ..Default::default()
     };
@@ -355,6 +359,7 @@ fn test_buffer_get_recent() {
 fn test_buffer_filter_by_principal() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         ..Default::default()
     };
@@ -389,6 +394,7 @@ fn test_buffer_filter_by_principal() {
 fn test_buffer_filter_by_decision() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         ..Default::default()
     };
@@ -509,6 +515,7 @@ fn test_unique_decision_ids() {
 fn test_timestamp_ordering() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         ..Default::default()
     };
@@ -567,6 +574,7 @@ fn test_default_config() {
 fn test_config_strip_context() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 100,
         include_context: false, // Strip context
         ..Default::default()
@@ -606,6 +614,7 @@ fn test_config_strip_context() {
 fn test_high_throughput_logging() {
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 10000,
         ..Default::default()
     };
@@ -657,6 +666,7 @@ fn test_concurrent_logging() {
 
     let config = DecisionLogConfig {
         enabled: true,
+        privacy_profile: Some(PrivacyProfile::Raw),
         buffer_capacity: 10000,
         ..Default::default()
     };

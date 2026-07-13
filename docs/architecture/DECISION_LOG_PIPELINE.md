@@ -63,12 +63,18 @@ got a full deep clone of each entry. Implemented now:
   `u32` ids instead of a built entry. The shard push already removed the contention and the
   deep clone; the entry build (a few short `String`s) only happens for decisions that pass
   sampling, so this is a marginal follow-up, not a gap.
-- **Data protection at capture** (`decision_privacy.rs`): HMAC-SHA-256 principal
-  pseudonymization, context allowlist + key masking (context and explain `input_data`), and
-  AES-256-GCM encryption of the explain snapshot — applied once in `log()` so every
-  downstream view (ring, sinks, exports, central store) sees only protected data. Fail-closed
-  on missing secrets; secrets are excluded from config serialization; `reaper-cli decisions
-  keygen|decrypt` for operators. ✅
+- **Data protection at capture** (`decision_privacy.rs`): HMAC-SHA-256 principal **and
+  resource** pseudonymization (domain-separated), context allowlist + key masking (context and
+  explain `input_data`), and AES-256-GCM encryption of the explain snapshot — applied once in
+  `log()` so every downstream view (ring, sinks, exports, central store) sees only protected
+  data. Fail-closed on missing secrets; secrets are excluded from config serialization;
+  `reaper-cli decisions keygen|decrypt` for operators. ✅
+- **Explicit privacy posture, required at enable time** (round-2 A5, SEC R2-5): enabling
+  decision logging demands `REAPER_DECISION_LOG_PRIVACY=pseudonymize` (GDPR-friendly profile —
+  principal + resource pseudonymized, needs `HASH_SALT`) or `=raw` (explicit, auditable
+  opt-out), or any fine-grained protection knob. With none, `validate()` fails startup —
+  identity data never flows to the audit sink because nobody thought about it. The chosen
+  profile echoes (non-secret) in `/api/v1/decisions/stats`. ✅
 
 ### Layer 2 — Local emit (agent, cold path): pluggable sink, minimal
 

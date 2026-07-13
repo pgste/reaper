@@ -1281,6 +1281,7 @@ pub fn create_shared_buffer(config: DecisionLogConfig) -> std::io::Result<Shared
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decision_log::PrivacyProfile;
 
     fn test_entry(decision: &str) -> DecisionLogEntry {
         DecisionLogEntry::new(
@@ -1367,6 +1368,7 @@ mod tests {
         // Keep 0% of allows, but denies must always pass.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             sample_allow_rate: 0.0,
             ..Default::default()
         };
@@ -1383,6 +1385,7 @@ mod tests {
     fn test_should_log_full_rate_keeps_all() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             sample_allow_rate: 1.0,
             ..Default::default()
         };
@@ -1397,6 +1400,7 @@ mod tests {
     fn test_should_log_partial_sampling_is_approximate() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             sample_allow_rate: 0.25,
             ..Default::default()
         };
@@ -1415,6 +1419,7 @@ mod tests {
     fn test_buffer_basic_operations() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 100,
             ..Default::default()
         };
@@ -1437,6 +1442,7 @@ mod tests {
     fn test_buffer_capacity_limit() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 5,
             capture_shards: 1, // single shard → exact global eviction order
             ..Default::default()
@@ -1482,6 +1488,7 @@ mod tests {
     fn test_buffer_filter_allows_only() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             log_allows: true,
             log_denies: false,
             ..Default::default()
@@ -1500,6 +1507,7 @@ mod tests {
     fn test_buffer_query() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
 
@@ -1539,6 +1547,7 @@ mod tests {
 
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 100,
             file_path: Some(path.to_string_lossy().to_string()),
             ..Default::default()
@@ -1572,6 +1581,7 @@ mod tests {
     fn test_buffer_ndjson_export() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
 
@@ -1593,6 +1603,7 @@ mod tests {
         // exact global ordering in queries.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 100_000,
             capture_shards: 8,
             ..Default::default()
@@ -1642,6 +1653,7 @@ mod tests {
         // ordering key and hash-chain position.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 10_000,
             capture_shards: 4,
             ..Default::default()
@@ -1682,6 +1694,7 @@ mod tests {
     fn test_find_by_decision_id_across_shards() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             capture_shards: 4,
             ..Default::default()
         };
@@ -1714,6 +1727,7 @@ mod tests {
 
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 100,
             file_path: Some(path.to_string_lossy().to_string()),
             // A checkpoint every 5 durable records, signed.
@@ -1804,6 +1818,7 @@ mod tests {
 
         let make_config = || DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 100,
             file_path: Some(archive.to_string_lossy().to_string()),
             continuity_path: Some(continuity.clone()),
@@ -1909,6 +1924,7 @@ mod tests {
         // emit unsigned/garbage.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             emit_stdout: true,
             checkpoint_every: 5,
             checkpoint_signing_key: Some("nothex".to_string()),
@@ -1930,6 +1946,7 @@ mod tests {
         ));
         DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             audit_required: true,
             file_path: Some(path.to_string_lossy().into_owned()),
             checkpoint_every: 100,
@@ -1985,6 +2002,7 @@ mod tests {
         // not fail eval closed (best-effort observability tier).
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             emit_stdout: true,
             ..Default::default()
         };
@@ -2004,6 +2022,7 @@ mod tests {
         // Enabled but audit not required → best-effort, not durable-before-serve.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
         let buffer = DecisionBuffer::new(config).unwrap();
@@ -2026,6 +2045,7 @@ mod tests {
 
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             file_path: Some(path.to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -2056,6 +2076,7 @@ mod tests {
         // guaranteed: log_durable must return false and count a durable loss.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             emit_stdout: true,
             ..Default::default()
         };
@@ -2072,6 +2093,7 @@ mod tests {
         // No sink at all → no writer thread → durability impossible → false.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
         let buffer = DecisionBuffer::new(config).unwrap();
@@ -2099,6 +2121,7 @@ mod tests {
         // durable-audit loss: it must not flip audit health.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             buffer_capacity: 3,
             capture_shards: 1,
             ..Default::default()
@@ -2119,6 +2142,7 @@ mod tests {
     fn test_replay_gate_off_by_default() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
         let buffer = DecisionBuffer::new(config).unwrap();
@@ -2133,6 +2157,7 @@ mod tests {
         // allow→deny flip.
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             include_replay_input: true,
             ..Default::default()
         };
@@ -2142,6 +2167,7 @@ mod tests {
 
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             include_replay_input: true,
             replay_input_denies_only: true,
             ..Default::default()
@@ -2209,6 +2235,7 @@ mod tests {
     fn test_replay_tier_off_stores_no_field() {
         let config = DecisionLogConfig {
             enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
             ..Default::default()
         };
         let buffer = DecisionBuffer::new(config).unwrap();

@@ -560,6 +560,16 @@ async fn run(
     // Initialize decision logging buffer from environment config
     let decision_log_config = DecisionLogConfig::from_env();
     let audit_required = decision_log_config.audit_required;
+    // CONFIG errors are always fatal when logging is enabled — an operator who
+    // asked for an audit trail must not get a silently-disabled one (and the
+    // A5 privacy-posture requirement must actually stop the deployment, not
+    // demote to a warning). Runtime sink failures below keep the graceful
+    // degrade path in non-mandatory mode.
+    if decision_log_config.enabled {
+        if let Err(e) = decision_log_config.validate() {
+            anyhow::bail!("invalid decision-log configuration: {e}");
+        }
+    }
     let decision_buffer = if decision_log_config.enabled {
         match create_shared_buffer(decision_log_config) {
             Ok(buffer) => {

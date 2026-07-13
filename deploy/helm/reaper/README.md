@@ -62,10 +62,14 @@ acks) into a bundled single-node ClickHouse, and the management query API
 your own ClickHouse/ClickHouse Cloud set `decisionLogs.clickhouse.enabled=false`
 and `decisionLogs.clickhouse.url` (+ credentials via
 `decisionLogs.clickhouse.existingSecret`). Multi-tenant: set
-`decisionLogs.tenantId` to the org UUID the agents serve. Data protection
-(masking/pseudonymization/encryption) via `decisionLogs.hashPrincipal`,
-`maskKeys`, `encryptInputData` + `protectionExistingSecret` (generate secrets
-with `reaper-cli decisions keygen`).
+`decisionLogs.tenantId` to the org UUID the agents serve. A **privacy posture
+is required** when decision logging is enabled (the agent refuses to start
+otherwise): `decisionLogs.privacy=pseudonymize` (GDPR-friendly — principal and
+resource pseudonymized; needs `REAPER_DECISION_LOG_HASH_SALT` in
+`protectionExistingSecret`) or `privacy=raw` (explicit opt-out). Fine-grained
+data protection (masking/pseudonymization/encryption) via
+`decisionLogs.hashPrincipal`, `hashResource`, `maskKeys`, `encryptInputData` +
+`protectionExistingSecret` (generate secrets with `reaper-cli decisions keygen`).
 
 ```bash
 # Consumer: drop-in enforcement agent

@@ -47,6 +47,11 @@ decisionLogs:
   mode: full               # complete audit: every decision (allows included)
                            # ships to ClickHouse. Use mode: sampled +
                            # sampleAllowRate (e.g. "0.05") on high-volume fleets.
+  # DEMO CHOICE — identities logged in clear. A privacy posture is mandatory
+  # when decision logging is on; for production/GDPR switch to
+  # privacy: pseudonymize + REAPER_DECISION_LOG_HASH_SALT in
+  # decisionLogs.protectionExistingSecret (see values.yaml).
+  privacy: raw
   clickhouse:
     enabled: true
     retentionDays: 90

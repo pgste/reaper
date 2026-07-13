@@ -217,11 +217,21 @@ decisionLogs:
   # leave "" for single-tenant self-host + REAPER_CLICKHOUSE_TENANT_FILTER=false
   # on the management server.
   tenantId: ""
+  # Privacy posture — REQUIRED when decision logging is enabled (SEC R2-5: no
+  # PII-by-default). One of:
+  #   pseudonymize -> GDPR-friendly profile: principal AND resource are
+  #                   HMAC-pseudonymized (requires REAPER_DECISION_LOG_HASH_SALT
+  #                   in protectionExistingSecret)
+  #   raw          -> explicit opt-out: identities logged in clear
+  # Left "" with no fine-grained knobs below, the agent REFUSES TO START with
+  # an actionable config error.
+  privacy: ""
   # Data protection (masking/pseudonymization/encryption; see
   # deploy/decision-logs/README.md). Secrets come from an existing Secret with
   # keys REAPER_DECISION_LOG_HASH_SALT and/or REAPER_DECISION_LOG_ENCRYPTION_KEY
   # (generate with: reaper-cli decisions keygen).
   hashPrincipal: false
+  hashResource: false        # pseudonymize `resource` too (same salt, domain-separated)
   maskKeys: ""               # e.g. "ssn,password,token"
   encryptInputData: false
   protectionExistingSecret: ""

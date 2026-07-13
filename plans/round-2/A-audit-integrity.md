@@ -132,6 +132,29 @@ Move the durable hand-off off the reactor; no served-allow loss window and no
   at startup** with a clear config error. Container `stdout`→Vector deployments
   mount a file path and tail it. Doc updated in `DECISION_LOG_PIPELINE.md`.
 
-## A5 — redaction-on-by-default + redactable `resource`  *(pending)*
+## A5 — redaction-on-by-default + redactable `resource`  *(landed)*
 Explicit redaction posture at enable time; allow `resource` redaction; ship a
 GDPR-compliant default profile. **Closes SEC R2-5.**
+
+**Design (landed).**
+- **Explicit posture, enforced at boot:** `REAPER_DECISION_LOG_PRIVACY` =
+  `pseudonymize` (the GDPR-friendly profile: implies `hash_principal` +
+  `hash_resource`, requires `HASH_SALT`) or `raw` (an explicit, auditable
+  opt-out — it echoes in `/decisions/stats`). Enabling decision logging with
+  neither a profile nor any fine-grained protection knob fails `validate()`
+  with an actionable error. PII-by-default is structurally impossible.
+- **`resource` is redactable:** new `hash_resource` knob
+  (`REAPER_DECISION_LOG_HASH_RESOURCE`) pseudonymizes `resource` with the same
+  HMAC salt, **domain-separated** (`HMAC(salt, "resource\0" || value)`) so equal
+  principal/resource strings never produce correlatable tokens; the replay
+  blob's resource copy carries the same pseudonym (join-key consistency across
+  views). Principal keeps the legacy un-prefixed form so existing pseudonyms
+  stay stable across versions.
+- Profile semantics live in BOTH `from_env` (preset expansion) and
+  `DataProtection::from_config` (so programmatic configs get identical
+  behavior). Unknown `PRIVACY` values are ignored with a warning, which leaves
+  the posture unchosen → startup error (never silently raw).
+- Deploy surfaces updated: compose exposes `DECISION_LOG_PRIVACY`/`_HASH_SALT`
+  (no default — the operator must choose); Helm adds `decisionLogs.privacy` +
+  `hashResource`; the demo `full.yaml` profile makes its choice explicit
+  (`privacy: raw` with a production-switch comment).
