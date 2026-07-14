@@ -10,6 +10,43 @@ This doc is updated as each slice lands.
 
 ---
 
+## STATUS (2026-07-14) — slice 1 landed; three follow-ups remain
+
+**Decisions locked (with the maintainer):**
+1. Decision-log strategy = **redact-in-place** (option B below).
+2. Authority = a dedicated **`audit:erase`** scope (not conferred by `org:admin`).
+
+**Landed** (PR #61 — merged into `main` before the next session):
+- `audit:erase` scope — `auth/scopes.rs`, separation-of-duties test.
+- `DecisionStore::erase_subject` — redact-in-place `ALTER…UPDATE` over the
+  PII columns, hold-honoring, chain-preserving (`decisions/mod.rs`), SQL-builder
+  unit tests.
+- `POST /orgs/{org}/audit/erasure` — `api/audit.rs`: `audit:erase`-gated,
+  `idempotency::run`, fetches active holds → `erase_subject`, hard-deletes the
+  subject's entity across every org DataStore (`datastore_ids_for_org` +
+  `delete_entity_cascade`), writes an `audit.subject_erasure` receipt to the
+  audit trail. Typed DTOs + ProblemDetails → api_contract gate passes.
+
+**Remaining — the three follow-up pieces (next session):**
+1. **Pseudonymisation salt.** Under `PrivacyProfile::Pseudonymize`, decision-log
+   `principal`/`resource` are `sha256:<hmac>` of the plaintext with a per-tenant
+   `hash_salt` held agent-side (`decision_log.rs:~1175`, `skip_serializing`). The
+   endpoint currently matches plaintext columns only, so it silently misses a
+   pseudonymised tenant's rows. Give the control plane a way to hash the input
+   subject with the tenant salt (delegated hashing path, or salt escrow) and
+   match the hashed columns. **The correctness gap that most matters.**
+2. **Immutable archive + published DataStore versions.** The WORM/NDJSON archive
+   (`VerifyMode::ByteExact` source) and immutable published data-bundle versions
+   (`get_version_document`) are append-only and NOT rewritten by erasure today.
+   Either an archive-rewrite path or a documented, receipted exemption — and
+   document the store's verification posture as `Linkage`-based post-erasure.
+3. **Dedicated erasure-receipt table (optional).** Today the audit-trail entry is
+   the proof of erasure. If queryable erasure history is wanted, add
+   `audit_erasure_requests` (migrations `025_`/`0018_`) + repo, and persist the
+   receipt alongside the audit write.
+
+---
+
 ## What already exists (reuse, don't rebuild)
 
 The compliance substrate from Plan 04 + round-2 A1/A2 is directly reusable:
