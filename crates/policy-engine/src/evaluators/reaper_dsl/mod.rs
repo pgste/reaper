@@ -1776,12 +1776,10 @@ impl ReaperDSLEvaluator {
             .iter()
             .chain(self.compiled_allow_rules.iter())
         {
-            match Self::condition_resource_constraint(&rule.condition, interner) {
-                Some(set) => terms.extend(set),
-                // Any rule that can match an unbounded resource set makes the
-                // whole policy a candidate for every request.
-                None => return None,
-            }
+            // Any rule that can match an unbounded resource set makes the whole
+            // policy a candidate for every request — `?` propagates that `None`.
+            let set = Self::condition_resource_constraint(&rule.condition, interner)?;
+            terms.extend(set);
         }
         terms.sort();
         terms.dedup();
@@ -1830,13 +1828,12 @@ impl ReaperDSLEvaluator {
                 acc
             }
             CompiledCondition::Or(children) => {
-                // Union over children; a single unbounded child is unbounded.
+                // Union over children; a single unbounded child (`?` → None)
+                // makes the whole disjunction unbounded.
                 let mut union = Vec::new();
                 for child in children {
-                    match Self::condition_resource_constraint(child, interner) {
-                        Some(set) => union.extend(set),
-                        None => return None,
-                    }
+                    let set = Self::condition_resource_constraint(child, interner)?;
+                    union.extend(set);
                 }
                 Some(union)
             }
