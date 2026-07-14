@@ -32,7 +32,7 @@ use crate::{
         OrganizationRepository,
     },
     decisions::purge::{default_retention_days, run_org_purge, PurgeError},
-    decisions::{EraseOutcome, HoldFilter, PurgeOutcome},
+    decisions::{EraseOutcome, HoldFilter, PurgeOutcome, SubjectPseudonyms},
     state::AppState,
 };
 
@@ -509,6 +509,15 @@ struct EraseSubjectRequest {
     /// decision-log trail.
     #[serde(default)]
     erase_datastore: Option<bool>,
+    /// The tenant's decision-log pseudonymisation salt
+    /// (`REAPER_DECISION_LOG_HASH_SALT`). Supply it when the tenant runs the
+    /// `pseudonymize` privacy profile: the decision-log `principal`/`resource`
+    /// columns then hold `sha256:<hmac>` tokens, and without the salt the
+    /// control plane cannot match — and would silently miss — those rows. The
+    /// salt is used only to derive the match tokens for this request; it is
+    /// never persisted, echoed in the receipt, or written to the audit trail.
+    #[serde(default)]
+    pseudonym_salt: Option<String>,
 }
 
 /// What happened to the decision-log trail for the subject.
@@ -516,8 +525,13 @@ struct EraseSubjectRequest {
 #[serde(rename_all = "snake_case", tag = "status")]
 enum DecisionLogEraseResult {
     /// Redact-in-place UPDATE submitted; `holds_honored` active holds were
-    /// excluded from the redaction.
-    Submitted { holds_honored: usize },
+    /// excluded from the redaction. `matched_pseudonyms` is true when a tenant
+    /// salt was supplied and the redaction also targeted the `sha256:<hmac>`
+    /// principal/resource columns of a `pseudonymize`-profile tenant.
+    Submitted {
+        holds_honored: usize,
+        matched_pseudonyms: bool,
+    },
     /// An active blanket legal hold preserves the whole tenant — a lawful basis
     /// to retain, so the decision-log redaction was deferred, not applied.
     DeferredBlanketHold,
@@ -591,11 +605,34 @@ async fn erase_subject(
     let erase_datastore = req.erase_datastore.unwrap_or(true);
     let org_str = org_id.to_string();
 
+    // Derive the subject's pseudonymised match tokens from the tenant salt (if
+    // supplied). This lets one erasure reach a `pseudonymize`-profile tenant,
+    // whose decision-log columns store `sha256:<hmac>` rather than plaintext.
+    let pseudonyms = req
+        .pseudonym_salt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|salt| SubjectPseudonyms {
+            principal: policy_engine::pseudonymize(salt.as_bytes(), &subject),
+            resource: policy_engine::pseudonymize_domain(salt.as_bytes(), "resource", &subject),
+        });
+
+    // Fingerprint the request identity so a retried Idempotency-Key that
+    // materially changes the operation (adding pseudonym matching, toggling the
+    // datastore erasure) is rejected as a different request rather than replaying
+    // a stale, narrower result. The salt itself is a secret and never enters the
+    // fingerprint — only the *fact* that pseudonym matching was requested.
     let fp = idempotency::fingerprint(&[
         actions::AUDIT_SUBJECT_ERASURE,
         &org_str,
         &subject,
         if erase_datastore { "ds" } else { "nods" },
+        if pseudonyms.is_some() {
+            "pseudo"
+        } else {
+            "plain"
+        },
     ]);
 
     idempotency::run(
@@ -615,14 +652,17 @@ async fn erase_subject(
                         .map(|h| h.filter)
                         .collect();
                     let outcome = store
-                        .erase_subject(&org_str, &subject, &holds)
+                        .erase_subject(&org_str, &subject, pseudonyms.as_ref(), &holds)
                         .await
                         .map_err(|e| {
                             ApiError::ServiceUnavailable(format!("decision store: {e}"))
                         })?;
                     match outcome {
                         EraseOutcome::Submitted { holds_honored } => {
-                            DecisionLogEraseResult::Submitted { holds_honored }
+                            DecisionLogEraseResult::Submitted {
+                                holds_honored,
+                                matched_pseudonyms: pseudonyms.is_some(),
+                            }
                         }
                         EraseOutcome::DeferredBlanketHold => {
                             DecisionLogEraseResult::DeferredBlanketHold
