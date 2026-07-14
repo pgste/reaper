@@ -364,3 +364,43 @@ fn test_ridx_soundness_differential() {
         }
     }
 }
+
+/// D2 fallback safety: a DSL policy the COMPILER REJECTS runs on the
+/// `ReapAstEvaluator` fallback (via `ReaperPolicy::build_preferred`), and that
+/// fallback reports `resource_index_terms() == None` — i.e. it is UNPRUNABLE.
+/// An unprunable policy is always a candidate for every resource, so the
+/// pruning index can never drop it. This is the safe default for constructs the
+/// compiler does not yet handle.
+///
+/// The chosen fallback construct is `input.*` document access: it parses and
+/// evaluates on the AST interpreter, but the compiler rejects it (see
+/// `reap/compiler/comparison/entity.rs`: "`input` document access is not
+/// compiled yet; policy runs on the AST evaluator"). So `build_preferred`
+/// returns a LIVE fallback evaluator here — asserted via `evaluator_type()` —
+/// not the compiled path, making this a real compile-fallback policy rather
+/// than a direct default-None assertion.
+#[test]
+fn test_ast_fallback_policy_is_unprunable() {
+    let store = Arc::new(DataStore::new());
+    let content = "policy p {\n    default: deny,\n    rule r {\n        allow if input.tenant == \"acme\"\n    }\n}";
+    let policy: crate::reap::ReaperPolicy = content
+        .parse()
+        .expect("policy with `input` access should parse");
+    let evaluator = policy
+        .build_preferred(store)
+        .expect("build_preferred falls back to the AST evaluator for `input` access");
+
+    // Confirm we exercised the real fallback, not a compiled evaluator.
+    assert_eq!(
+        evaluator.evaluator_type(),
+        "ReapAstEvaluator",
+        "compiler must reject `input` access and fall back to the AST evaluator"
+    );
+
+    // The fallback is UNPRUNABLE: no resource-index terms -> always a candidate.
+    assert_eq!(
+        evaluator.resource_index_terms(),
+        None,
+        "an AST-fallback DSL policy must be unprunable so pruning can never drop it"
+    );
+}

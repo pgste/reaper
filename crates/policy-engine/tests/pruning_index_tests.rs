@@ -15,10 +15,13 @@
 //! Plus hot-swap safety: the index stays consistent across deploy / redeploy /
 //! remove / full replace.
 
+use policy_engine::data::entity::EntityBuilder;
 use policy_engine::{
-    EnhancedPolicy, PolicyAction, PolicyEngine, PolicyLanguage, PolicyRequest, PolicyRule,
+    DataStore, EnhancedPolicy, PolicyAction, PolicyEngine, PolicyLanguage, PolicyRequest,
+    PolicyRule,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 fn simple_policy(name: &str, rules: Vec<(PolicyAction, &str)>) -> EnhancedPolicy {
@@ -293,6 +296,180 @@ fn differential_pruned_vs_linear_over_corpus() {
             linear.decision, pruned.decision
         );
     }
+}
+
+/// A shared `DataStore` holding a single `User` entity `alice`. The compiled
+/// DSL evaluator resolves the request principal against its baked-in store and
+/// fails closed ("User entity not found") if the principal is absent — so EVERY
+/// DSL policy below must be built against this store and EVERY request must
+/// carry `principal=alice`, or evaluation would error instead of deciding.
+/// Pattern mirrors `examples/d2_pruning_impact.rs`.
+fn dsl_store_with_alice() -> Arc<DataStore> {
+    let store = Arc::new(DataStore::new());
+    let interner = store.interner();
+    let id = interner.intern_counted("alice");
+    let etype = interner.intern("User");
+    store.insert(EntityBuilder::new(id, etype).build());
+    store
+}
+
+/// Build a compiled DSL policy whose evaluator is bound to `store` (so the
+/// principal resolves at eval time). `deploy_policy` does NOT rebuild the
+/// evaluator, so the store sticks for the life of the deployment.
+fn dsl_policy_with_store(name: &str, rule_body: &str, store: &Arc<DataStore>) -> EnhancedPolicy {
+    let content = format!(
+        "policy {name} {{\n    default: deny,\n    rule r {{\n        {rule_body}\n    }}\n}}"
+    );
+    let mut p = EnhancedPolicy::new_with_language(
+        name.to_string(),
+        String::new(),
+        PolicyLanguage::ReaperDsl,
+        content,
+    )
+    .expect("DSL policy should compile");
+    p.build_evaluator_with_data(Some(store.clone()))
+        .expect("DSL evaluator should build against the populated store");
+    p
+}
+
+/// A request carrying `principal=alice` (required for the compiled DSL
+/// evaluator to resolve the principal) plus the given action.
+fn dsl_request(resource: &str, action: &str) -> PolicyRequest {
+    let mut context = HashMap::new();
+    context.insert("principal".to_string(), "alice".to_string());
+    PolicyRequest {
+        resource: resource.to_string(),
+        action: action.to_string(),
+        context,
+    }
+}
+
+/// DoD (DSL): differential correctness for the mandated language — the pruned
+/// candidate set produces the identical decision as the full linear scan for
+/// every request in a mixed corpus of DSL policies. This is the merge-gate
+/// guard that D2 resource-literal pruning never changes a DSL authorization
+/// outcome. Mirrors `differential_pruned_vs_linear_over_corpus` (Simple) but
+/// exercises compiled DSL policies built against a populated store.
+#[test]
+fn dsl_differential_pruned_vs_linear_over_corpus() {
+    let engine = PolicyEngine::new();
+    let store = dsl_store_with_alice();
+
+    // A deliberately mixed set:
+    //  - deny-override on the SAME resource (/a): both must decide Deny.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "allow_a",
+            "allow if resource == \"/a\"",
+            &store,
+        ))
+        .unwrap();
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "deny_a",
+            "deny if resource == \"/a\"",
+            &store,
+        ))
+        .unwrap();
+    //  - a single-literal allow (/b).
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "allow_b",
+            "allow if resource == \"/b\"",
+            &store,
+        ))
+        .unwrap();
+    //  - an OR-of-literals: prunable, buckets both /c and /d.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "allow_c_or_d",
+            "allow if resource == \"/c\" || resource == \"/d\"",
+            &store,
+        ))
+        .unwrap();
+    //  - an UNPRUNABLE policy: constrains the action, not the resource, so it
+    //    has no resource-index terms and is always a candidate. It reads
+    //    `action` from the request (no resource entity), so it evaluates
+    //    cleanly across the whole corpus without erroring.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "allow_admin_action",
+            "allow if action == \"admin\"",
+            &store,
+        ))
+        .unwrap();
+    //  - noise: 200 unrelated single-literal DSL policies that must be pruned
+    //    away for every request that does not name them.
+    for i in 0..200 {
+        engine
+            .deploy_policy(dsl_policy_with_store(
+                &format!("noise{i}"),
+                &format!("allow if resource == \"/noise/{i}\""),
+                &store,
+            ))
+            .unwrap();
+    }
+
+    // Sanity: exactly one unprunable policy (the action predicate); everything
+    // else is bucketed by resource literal.
+    assert_eq!(
+        engine.get_index_stats().unprunable_policies,
+        1,
+        "only the action-predicate DSL policy is unprunable"
+    );
+
+    let all_ids: Vec<Uuid> = engine.list_policies().into_iter().map(|p| p.id).collect();
+
+    // (resource, action) corpus exercising every required case:
+    //  /a (read)      deny-override -> Deny
+    //  /b,/c,/d(read) single + or-of-literals -> Allow
+    //  /admin (admin) resource only the unprunable action policy can act on -> Allow
+    //  /noise/*(read) a named noise policy -> Allow
+    //  /unrelated,"" (read) nothing matches -> set-level default Deny
+    let corpus = [
+        ("/a", "read"),
+        ("/b", "read"),
+        ("/c", "read"),
+        ("/d", "read"),
+        ("/admin", "admin"),
+        ("/noise/7", "read"),
+        ("/noise/199", "read"),
+        ("/unrelated", "read"),
+        ("", "read"),
+    ];
+
+    for (res, action) in corpus {
+        let req = dsl_request(res, action);
+        let linear = engine.evaluate_set(&all_ids, &req);
+        let pruned = engine.evaluate_set(&engine.candidate_policy_ids(res), &req);
+        // No corpus request may error during evaluation (a stray Err short-
+        // circuits evaluate_set to Deny and would falsely pass/fail the
+        // differential). The linear scan touches every policy, so a clean
+        // `error == None` here proves NO policy errored on this request.
+        assert!(
+            linear.error.is_none(),
+            "linear scan errored for {res:?}/{action:?}: {:?}",
+            linear.error
+        );
+        assert!(
+            pruned.error.is_none(),
+            "pruned scan errored for {res:?}/{action:?}: {:?}",
+            pruned.error
+        );
+        assert_eq!(
+            linear.decision, pruned.decision,
+            "decision diverged for {res:?}/{action:?}: linear={:?} pruned={:?}",
+            linear.decision, pruned.decision
+        );
+    }
+
+    // Pin the intended decisions so a future regression that makes both paths
+    // agree on the WRONG answer is still caught.
+    let expect = |res: &str, action: &str| engine.evaluate_set(&all_ids, &dsl_request(res, action));
+    assert_eq!(expect("/a", "read").decision, PolicyAction::Deny); // deny override
+    assert_eq!(expect("/c", "read").decision, PolicyAction::Allow); // or-of-literals
+    assert_eq!(expect("/admin", "admin").decision, PolicyAction::Allow); // unprunable only
+    assert_eq!(expect("/unrelated", "read").decision, PolicyAction::Deny); // default deny
 }
 
 /// The index survives redeploy (terms change), removal, and a full replace —
