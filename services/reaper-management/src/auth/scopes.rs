@@ -59,6 +59,14 @@ pub enum Scope {
     #[serde(rename = "apikey:write")]
     ApiKeyWrite,
 
+    /// Erase a data subject's personal data (GDPR Art. 17 / DPA-2018 DSAR).
+    /// Kept **separate** from `org:admin` under separation-of-duties: erasure is
+    /// irreversible and destroys evidence, so the authority to *run* an erasure
+    /// can be granted to a dedicated privacy/DPO role distinct from the operators
+    /// who hold general org administration. (`admin` still covers it.)
+    #[serde(rename = "audit:erase")]
+    AuditErase,
+
     // Full admin access
     #[serde(rename = "admin")]
     Admin,
@@ -83,6 +91,7 @@ impl Scope {
             Self::OrgAdmin => "org:admin",
             Self::ApiKeyRead => "apikey:read",
             Self::ApiKeyWrite => "apikey:write",
+            Self::AuditErase => "audit:erase",
             Self::Admin => "admin",
         }
     }
@@ -105,6 +114,7 @@ impl Scope {
             "org:admin" => Some(Self::OrgAdmin),
             "apikey:read" => Some(Self::ApiKeyRead),
             "apikey:write" => Some(Self::ApiKeyWrite),
+            "audit:erase" => Some(Self::AuditErase),
             "admin" => Some(Self::Admin),
             _ => None,
         }
@@ -128,6 +138,7 @@ impl Scope {
             Self::OrgAdmin,
             Self::ApiKeyRead,
             Self::ApiKeyWrite,
+            Self::AuditErase,
             Self::Admin,
         ]
     }
@@ -281,6 +292,24 @@ mod tests {
 
         // Platform admin still covers it.
         assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::DeploymentWrite));
+    }
+
+    #[test]
+    fn test_audit_erase_is_separate_from_org_admin() {
+        // Separation of duties: erasure is irreversible + destroys evidence, so
+        // it is a distinct authority. It round-trips and is NOT conferred by
+        // org:admin (a general operator must not be able to erase a subject).
+        assert_eq!(Scope::parse("audit:erase"), Some(Scope::AuditErase));
+        assert_eq!(Scope::AuditErase.as_str(), "audit:erase");
+
+        let org_admin = Permission::from_scopes(vec![Scope::OrgAdmin]);
+        assert!(!org_admin.has(Scope::AuditErase));
+
+        let eraser = Permission::from_scopes(vec![Scope::AuditErase]);
+        assert!(!eraser.has(Scope::OrgAdmin));
+
+        // The global platform admin still covers erasure.
+        assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::AuditErase));
     }
 
     #[test]
