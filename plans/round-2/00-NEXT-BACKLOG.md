@@ -163,11 +163,20 @@ unaltered" question lands on.
   starts before the first possible return. Engine-slice series untouched.
   Test: `sla_histogram_deny_paths_tests.rs` (exact sample-count deltas per
   path + success-path label sanity).*
-- **D4 — Reconcile or delete the parallel engines / dead arena.** *Closes PERF
-  R2-P3-1/2/3.* `arena.rs`, `indexed_engine.rs`, `optimized_engine.rs` are
-  bench-only; `SmallVec` on the targeted single-policy path was claimed but not
-  shipped. Wire partial-eval (feeds D2) or delete the trio; stop carrying three
-  engines. **Effort S–M.** Pairs naturally with D2.
+- **D4 — Reconcile or delete the parallel engines / dead arena.** *(landed)*
+  *Closes PERF R2-P3-1/2/3.* Deleted the three unwired experiments —
+  `arena.rs` (its `with_arena`/`ArenaString` API was never called by any
+  evaluator), `indexed_engine.rs` (self-documented as 6–8× **slower** than the
+  linear baseline — DashMap overhead), and `optimized_engine.rs` (wrapped the
+  two) — plus their bench (`optimization_phases_bench`) and three comparison
+  examples. `partial_evaluation.rs` was **kept**: the review listed it in the
+  trio, but its `Condition` enum + `PartialEvaluator` are live on the served
+  compiled path (`compiled_evaluator.rs`), so it is not dead. Shipped
+  `SmallVec<[Uuid; 1]>` on the targeted single-policy path (the id no longer
+  heap-allocates; evaluate-all still spills to heap via `.into()`, unchanged).
+  The *served* pruning index (`engine::candidate_policy_ids`, resource buckets)
+  is a separate, wired, working structure — not one of the deleted engines; its
+  DSL gap is D2's job. **Effort S.** Done before D2.
 
 ---
 

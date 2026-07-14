@@ -16,6 +16,7 @@ use opentelemetry::{trace::TraceContextExt, KeyValue};
 use policy_engine::{DecisionLogEntry, PolicyAction, PolicyRequest};
 use serde::Serialize;
 use serde_json::{json, Value};
+use smallvec::{smallvec, SmallVec};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -195,17 +196,17 @@ pub async fn evaluate_policy(
 
     // Determine which policy/policies to evaluate
     // Can specify: UUID, policy name, or nothing (evaluate all)
-    let policy_ids: Vec<Uuid> = if let Some(id_str) = payload.policy_id.take() {
+    let policy_ids: SmallVec<[Uuid; 1]> = if let Some(id_str) = payload.policy_id.take() {
         // Try to parse as UUID first
         match Uuid::from_str(&id_str) {
-            Ok(id) => vec![id],
+            Ok(id) => smallvec![id],
             Err(_) => {
                 // Not a valid UUID - treat as policy name
                 match state.policy_engine.get_policy_by_name(&id_str) {
                     Some(policy) => {
                         state.stats.record_cache_hit();
                         CACHE_HITS.with_label_values(&["policy"]).inc();
-                        vec![policy.id]
+                        smallvec![policy.id]
                     }
                     None => {
                         // Policy not found - DENY by default for security
@@ -234,7 +235,7 @@ pub async fn evaluate_policy(
             Some(policy) => {
                 state.stats.record_cache_hit();
                 CACHE_HITS.with_label_values(&["policy"]).inc();
-                vec![policy.id]
+                smallvec![policy.id]
             }
             None => {
                 // Policy not found - DENY by default for security
@@ -335,7 +336,7 @@ pub async fn evaluate_policy(
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
-        candidate_ids
+        candidate_ids.into()
     };
 
     // Create policy request — take ownership from payload, avoid cloning.
@@ -719,9 +720,9 @@ pub async fn fast_evaluate_policy(
 
     // Determine policy to evaluate — capture name at lookup time
     let mut policy_name_resolved = String::new();
-    let policy_ids: Vec<Uuid> = if let Some(id_str) = policy_id_opt {
+    let policy_ids: SmallVec<[Uuid; 1]> = if let Some(id_str) = policy_id_opt {
         match Uuid::from_str(id_str) {
-            Ok(id) => vec![id],
+            Ok(id) => smallvec![id],
             Err(_) => {
                 // Try as policy name
                 match state.policy_engine.get_policy_by_name(id_str) {
@@ -729,7 +730,7 @@ pub async fn fast_evaluate_policy(
                         state.stats.record_cache_hit();
                         CACHE_HITS.with_label_values(&["policy"]).inc();
                         policy_name_resolved.clone_from(&policy.name);
-                        vec![policy.id]
+                        smallvec![policy.id]
                     }
                     None => {
                         ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
@@ -750,7 +751,7 @@ pub async fn fast_evaluate_policy(
                 state.stats.record_cache_hit();
                 CACHE_HITS.with_label_values(&["policy"]).inc();
                 policy_name_resolved.clone_from(&policy.name);
-                vec![policy.id]
+                smallvec![policy.id]
             }
             None => {
                 ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
@@ -816,7 +817,7 @@ pub async fn fast_evaluate_policy(
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
-        candidate_ids
+        candidate_ids.into()
     };
 
     // Build request
