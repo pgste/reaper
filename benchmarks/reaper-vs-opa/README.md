@@ -160,6 +160,43 @@ MEMORY
 Peak Memory:        108 MB          97 MB            1.11x
 ```
 
+### TCP vs UDS (measured in CI)
+
+From the `uds-comparison` job (100k entities, 10k requests, concurrency 50) —
+each scenario benchmarked back-to-back over TCP then UDS on the **same process
+and runner**, so the only variable is the wire transport. Both transports pass
+validation and cross-engine decision parity (2000-sample) on every scenario.
+
+**Reaper — same engine, TCP vs UDS:**
+
+| Scenario | TCP RPS | UDS RPS | Δ throughput | TCP p99 | UDS p99 | Δ p99 |
+|----------|---------|---------|--------------|---------|---------|-------|
+| rbac | 35,245 | 62,802 | **+78%** | 4,475µs | 2,587µs | **−42%** |
+| abac | 56,789 | 93,363 | **+64%** | 2,843µs | 1,413µs | **−50%** |
+| multilayer | 42,127 | 72,120 | **+71%** | 3,353µs | 1,649µs | **−51%** |
+| mega | 30,208 | 54,707 | **+81%** | 5,275µs | 2,451µs | **−53%** |
+
+Bypassing the TCP/IP stack buys Reaper **+64–81% throughput** and **~42–53%
+lower p99** on a same-host socket.
+
+**Reaper vs OPA, over UDS:**
+
+| Scenario | Reaper UDS RPS | OPA UDS RPS | Speedup |
+|----------|----------------|-------------|---------|
+| abac | 93,363 | 32,696 | **2.86x** |
+| multilayer | 72,120 | 24,319 | **2.97x** |
+| rbac | 62,802 | 24,669 | **2.55x** |
+| mega | 54,707 | 23,116 | **2.37x** |
+
+Reaper's lead over OPA is *wider* on UDS (~2.4–3.0x) than on TCP (~1.6–2.4x):
+OPA gains from UDS too, but Reaper's smaller per-request cost benefits
+proportionally more from removing the loopback stack.
+
+> These absolute p99s include client-side queueing (10k tasks at concurrency
+> 50) and are **not** comparable to the `slo-harness` service-latency figures
+> below. They are valid as a TCP-vs-UDS and Reaper-vs-OPA comparison because the
+> client and load are identical on both sides.
+
 ## SLO Harness
 
 `slo-harness` (in this crate) measures the **served-path SLO table** from
