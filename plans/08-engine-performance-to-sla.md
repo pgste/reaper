@@ -74,6 +74,15 @@ Make the *served* agent path meet a stated, measured latency SLO at realistic po
 
 (Engine-slice-only p99 for a matched compiled DSL policy stays < 1 µs — reported as a *separate* series, not the SLA.)
 
+> **Update (D2, R2-P2-1 closed):** the "Evaluate-all via pruning index" row now
+> applies to the **Reaper DSL**, not just the deprecated Simple language.
+> Compiled DSL policies whose rules constrain the request resource to concrete
+> literals (`resource == "…"`, incl. `And`/`Or` compositions) are bucketed by
+> resource via `PolicyEvaluator::resource_index_terms`, so a request evaluates
+> only its candidate DSL policies plus the unprunable set — the same bounded
+> fan-out the row assumes. DSL policies with attribute/dynamic resource
+> predicates remain conservatively unprunable (always candidates).
+
 - [ ] Served evaluate-all no longer calls `list_policies()`; it queries a pruning index and evaluates only candidate policies. Benchmark at N=10k with 3 matching policies shows evaluator invocations ≈ 3, not 10,000 (assert via `get_index_stats` / a counter).
 - [ ] No per-request `Vec<Arc<EnhancedPolicy>>` full-set clone on the served path (verified by an allocation-count test or `dhat` on the eval path; alloc/request bounded by candidate count, not N).
 - [ ] Policy-less "evaluate-all" is either rejected by default (config `allow_evaluate_all=false`) or hard-capped at `max_candidate_policies` after pruning; exceeding the cap returns a typed error, not an N-eval fan-out. Test: a request matching >cap candidates returns the cap error.

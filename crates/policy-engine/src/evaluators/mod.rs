@@ -88,6 +88,21 @@ pub trait PolicyEvaluator: Send + Sync + Debug {
     fn metadata(&self) -> Option<EvaluatorMetadata> {
         None
     }
+
+    /// The finite set of resource strings this policy can match, or `None` if
+    /// its match set is unbounded (wildcards, attribute/prefix/negation/dynamic
+    /// resource predicates). `Some(v)` is a PROMISE: the evaluator matches NO
+    /// resource outside `v`, so the pruning index may safely drop this policy
+    /// for any resource not in `v`. Default `None` = always a candidate (safe).
+    ///
+    /// Soundness lives *here*, per evaluator, because each evaluator alone knows
+    /// its own match semantics: the resource pruning index
+    /// ([`crate::PolicyEngine::candidate_policy_ids`]) trusts this promise, so a
+    /// false `Some` is an authorization bug (fail-open pruning) while a false
+    /// `None` is only a missed optimization. When in doubt, return `None`.
+    fn resource_index_terms(&self) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// Metadata about a policy evaluator for monitoring and debugging

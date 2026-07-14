@@ -120,17 +120,24 @@ jobs:
             if ! "$HARNESS" --scenario "$SCENARIO" \
                 --requests "$REQUESTS" --concurrency 4 \
                 --assert-slo slo.yaml --slo-multiplier "$SLO_MULTIPLIER" \
-                --save "$RUNNER_TEMP/slo-results/$SCENARIO.json" "$@"; then
+                --save "$RUNNER_TEMP/slo-results/${RESULT_LABEL:-$SCENARIO}.json" "$@"; then
               FAILED=1
             fi
             stop_agent
             echo "::endgroup::"
           }
 
-          # evaluate-all: needs the arm switch AND a prunable (Simple) set —
-          # the pruning index does not prune DSL yet (R2-P2-1).
+          # evaluate-all needs the arm switch. Run it against BOTH policy sets:
+          #  - Simple (always prunable) as the baseline, and
+          #  - DSL, which round-2 D2 made prunable via compiled resource-literal
+          #    extraction — this is the fleet-scale proof that DSL evaluate-all
+          #    is pruned (candidates ≈ matches, not N), not just an engine unit
+          #    test. Distinct RESULT_LABELs keep both HDR artifacts.
           run_scenario slo-evaluate-all "REAPER_ALLOW_EVALUATE_ALL=true" \
             --evaluate-all-policy-set "$RUNNER_TEMP/slo-simple-10k.json"
+          RESULT_LABEL=slo-evaluate-all-dsl \
+            run_scenario slo-evaluate-all "REAPER_ALLOW_EVALUATE_ALL=true" \
+            --evaluate-all-policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
           run_scenario slo-targeted "" \
             --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
           run_scenario slo-batch "" \

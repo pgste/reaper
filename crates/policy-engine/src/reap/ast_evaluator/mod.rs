@@ -322,6 +322,12 @@ impl crate::evaluators::PolicyEvaluator for ReapAstEvaluator {
         "ReapAstEvaluator"
     }
 
+    // D2 secondary: AST-side resource extraction is a follow-up. AST-fallback
+    // policies are the uncommon case (constructs the compiler doesn't yet
+    // support), so we keep the trait default `resource_index_terms() -> None`
+    // (unprunable = always a candidate = safe) rather than duplicating the
+    // literal-extraction analysis against the AST condition tree.
+
     fn metadata(&self) -> Option<crate::evaluators::EvaluatorMetadata> {
         let mut extra = std::collections::HashMap::new();
         extra.insert("features".to_string(), "comprehensions,variable_assignments,function_calls,time_functions,regex_caching,simd_aggregates".to_string());

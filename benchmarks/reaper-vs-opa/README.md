@@ -87,6 +87,35 @@ EXAMPLES:
   ./bin/benchmark.sh --scenario all --scale both
 ```
 
+### Comparing over a Unix domain socket (UDS)
+
+Both engines serve the **same** HTTP API over a Unix socket as over TCP, so the
+`benchmark` binary can measure either transport. Pass a `unix:<path>` endpoint
+instead of an `http://` URL and it dials the socket (via a hyper Unix connector)
+with no other change — an apples-to-apples TCP-vs-UDS comparison.
+
+```bash
+# Start each engine bound to BOTH transports at once:
+#   Reaper: TCP (8080) always + a socket when UDS is enabled
+REAPER_UDS_ENABLED=1 REAPER_UDS_PATH=/tmp/reaper-bench/agent.sock \
+  ./target/release/reaper-agent &
+#   OPA accepts multiple --addr, so it binds TCP and a socket together
+mkdir -p /tmp/opa-bench
+opa run --server --addr localhost:8181 --addr unix:///tmp/opa-bench/opa.sock &
+
+# Deploy over TCP (state is shared across both listeners), then benchmark over UDS:
+./bin/deploy-reaper.sh rbac 100k
+./bin/deploy-opa.sh rbac 100k
+./bin/benchmark --scenario rbac --requests 10000 --concurrency 50 \
+  --reaper-url unix:/tmp/reaper-bench/agent.sock \
+  --opa-url unix:/tmp/opa-bench/opa.sock
+```
+
+UDS bypasses the TCP/IP stack, so on the same host it typically trims tail
+latency vs TCP. The `uds-comparison` CI job runs each scenario back-to-back over
+TCP then UDS on one runner and reports the per-transport throughput and the
+Reaper UDS-vs-TCP p99 reduction.
+
 ## What It Tests
 
 ### Scenarios
@@ -131,6 +160,43 @@ MEMORY
 Peak Memory:        108 MB          97 MB            1.11x
 ```
 
+### TCP vs UDS (measured in CI)
+
+From the `uds-comparison` job (100k entities, 10k requests, concurrency 50) —
+each scenario benchmarked back-to-back over TCP then UDS on the **same process
+and runner**, so the only variable is the wire transport. Both transports pass
+validation and cross-engine decision parity (2000-sample) on every scenario.
+
+**Reaper — same engine, TCP vs UDS:**
+
+| Scenario | TCP RPS | UDS RPS | Δ throughput | TCP p99 | UDS p99 | Δ p99 |
+|----------|---------|---------|--------------|---------|---------|-------|
+| rbac | 35,245 | 62,802 | **+78%** | 4,475µs | 2,587µs | **−42%** |
+| abac | 56,789 | 93,363 | **+64%** | 2,843µs | 1,413µs | **−50%** |
+| multilayer | 42,127 | 72,120 | **+71%** | 3,353µs | 1,649µs | **−51%** |
+| mega | 30,208 | 54,707 | **+81%** | 5,275µs | 2,451µs | **−53%** |
+
+Bypassing the TCP/IP stack buys Reaper **+64–81% throughput** and **~42–53%
+lower p99** on a same-host socket.
+
+**Reaper vs OPA, over UDS:**
+
+| Scenario | Reaper UDS RPS | OPA UDS RPS | Speedup |
+|----------|----------------|-------------|---------|
+| abac | 93,363 | 32,696 | **2.86x** |
+| multilayer | 72,120 | 24,319 | **2.97x** |
+| rbac | 62,802 | 24,669 | **2.55x** |
+| mega | 54,707 | 23,116 | **2.37x** |
+
+Reaper's lead over OPA is *wider* on UDS (~2.4–3.0x) than on TCP (~1.6–2.4x):
+OPA gains from UDS too, but Reaper's smaller per-request cost benefits
+proportionally more from removing the loopback stack.
+
+> These absolute p99s include client-side queueing (10k tasks at concurrency
+> 50) and are **not** comparable to the `slo-harness` service-latency figures
+> below. They are valid as a TCP-vs-UDS and Reaper-vs-OPA comparison because the
+> client and load are identical on both sides.
+
 ## SLO Harness
 
 `slo-harness` (in this crate) measures the **served-path SLO table** from
@@ -165,10 +231,18 @@ REAPER_ALLOW_EVALUATE_ALL=true ../../target/release/reaper-agent &
 #    (REAPER_USE_PRUNING_INDEX defaults to true; leave it on.)
 
 # 3. Run scenarios. Ordering matters for `all`: evaluate-all runs FIRST,
-#    because it requires a PRUNABLE policy set — the engine's pruning index
-#    only extracts resource terms from Simple-language policies today
-#    (review finding R2-P2-1); once the unprunable 10k DSL set is deployed,
-#    a policy-less request exceeds the candidate cap and is denied.
+#    because it requires a PRUNABLE policy set.
+#
+#    As of D2 (review finding R2-P2-1 closed) the pruning index extracts
+#    resource literals from compiled DSL policies too — a DSL policy whose rule
+#    is `allow if resource == "…"` is now bucketed by resource, so the DSL set
+#    generated with a distinct `resource == …` per policy is prunable and can be
+#    used for slo-evaluate-all. The Simple set below still works and is kept as
+#    the low-variance default; pass the DSL set to --evaluate-all-policy-set
+#    instead to exercise the mandated language end to end. (DSL policies with
+#    attribute/dynamic-resource predicates remain unprunable and, past the
+#    candidate cap, would still deny — so the evaluate-all set must be one whose
+#    rules bind the resource to a literal.)
 ./target/release/slo-harness --scenario all \
     --evaluate-all-policy-set /tmp/slo-simple-10k.json \
     --policy-set /tmp/slo-dsl-10k.json \

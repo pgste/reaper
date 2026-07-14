@@ -22,10 +22,11 @@
 //! Agent prerequisites per scenario (see README):
 //! - `slo-evaluate-all` needs `REAPER_ALLOW_EVALUATE_ALL=true` (and the
 //!   default `REAPER_USE_PRUNING_INDEX=true`), and the loaded set must be
-//!   PRUNABLE — i.e. the `simple`-language policy set, because the pruning
-//!   index does not extract resource terms from DSL policies yet (R2-P2-1).
-//!   When running `--scenario all`, evaluate-all therefore runs FIRST, before
-//!   the unprunable DSL set is deployed.
+//!   PRUNABLE. Both the `simple` and the `dsl` policy sets qualify: round-2 D2
+//!   made DSL literal-resource policies prunable (compiled resource-literal
+//!   extraction), so a DSL set buckets in the pruning index just like Simple.
+//!   When running `--scenario all`, evaluate-all runs FIRST against a fresh
+//!   agent so its set is the only one deployed.
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -57,9 +58,8 @@ struct Args {
     #[arg(long)]
     policy_set: Option<String>,
 
-    /// Simple policy-set file (from `generate-data policy-set --language
-    /// simple`); required for slo-evaluate-all (the pruning index only prunes
-    /// Simple policies today — R2-P2-1).
+    /// Policy-set file for slo-evaluate-all (from `generate-data policy-set
+    /// --language simple|dsl`). Both languages are prunable since round-2 D2.
     #[arg(long)]
     evaluate_all_policy_set: Option<String>,
 
@@ -538,23 +538,41 @@ async fn run_evaluate_all(args: &Args, client: &reqwest::Client) -> Result<SloRe
         "--evaluate-all-policy-set <simple policy-set file> is required for slo-evaluate-all",
     )?;
     let set = load_policy_set(path)?;
-    if set.language != "simple" {
-        bail!(
-            "--evaluate-all-policy-set {} has language '{}', expected 'simple' — the pruning \
-             index only prunes Simple policies today (R2-P2-1), a DSL set would blanket-deny \
-             with candidate_cap_exceeded",
+    // Both Simple and DSL sets are valid for evaluate-all. DSL became prunable
+    // in round-2 D2 (compiled resource-literal extraction), so a DSL set of
+    // literal-resource policies now buckets in the pruning index exactly like
+    // Simple — candidates ≈ matches, not N. The probe below is the end-to-end
+    // guard: if pruning did NOT engage for this set, evaluate-all returns
+    // `candidate_cap_exceeded` and the run fails loudly.
+    match set.language.as_str() {
+        "simple" | "dsl" => {}
+        other => bail!(
+            "--evaluate-all-policy-set {} has language '{}', expected 'simple' or 'dsl'",
             path,
-            set.language
-        );
+            other
+        ),
     }
     if !args.skip_setup {
-        deploy_simple_policies(
-            client,
-            &args.reaper_url,
-            &set.policies,
-            args.deploy_concurrency,
-        )
-        .await?;
+        if set.language == "dsl" {
+            // The compiled DSL evaluator resolves the principal as a loaded
+            // entity, so the request principals must exist in the DataStore.
+            load_principal_entities(client, &args.reaper_url, PRINCIPAL_POOL).await?;
+            deploy_dsl_policies(
+                client,
+                &args.reaper_url,
+                &set.policies,
+                args.deploy_concurrency,
+            )
+            .await?;
+        } else {
+            deploy_simple_policies(
+                client,
+                &args.reaper_url,
+                &set.policies,
+                args.deploy_concurrency,
+            )
+            .await?;
+        }
     }
 
     let n = set.policies.len();
@@ -589,8 +607,9 @@ async fn run_evaluate_all(args: &Args, client: &reqwest::Client) -> Result<SloRe
         bail!(
             "slo-evaluate-all probe denied with '{matched}'. The agent under test needs \
              REAPER_ALLOW_EVALUATE_ALL=true (and the default REAPER_USE_PRUNING_INDEX=true); \
-             'candidate_cap_exceeded' means unprunable (e.g. DSL) policies are loaded — run \
-             this scenario against an agent with only the Simple SLO set deployed."
+             'candidate_cap_exceeded' means the loaded policies did NOT prune down to the \
+             matching candidates — for a DSL set that indicates the resource-literal \
+             extraction (D2) failed to bucket them, which is a real regression."
         );
     }
     if probe.get("decision").and_then(|d| d.as_str()) != Some("allow") {

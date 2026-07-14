@@ -134,31 +134,26 @@ impl PolicyEngine {
         }
     }
 
-    /// Static resource terms for the pruning index (Plan 08 Phase A).
+    /// Static resource terms for the pruning index (Plan 08 Phase A; D2).
     ///
     /// Returns `Some(resources)` — the concrete resource strings this policy is
     /// bucketed under — when the policy's match set can be narrowed to specific
     /// resources, or `None` when it must be treated as **unprunable** (always a
-    /// candidate). Only `Simple` policies are prunable, and only when none of
-    /// their rules use the `*` wildcard: the Simple evaluator matches a rule iff
-    /// `rule.resource == "*" || rule.resource == request.resource`, so a
-    /// non-wildcard Simple policy can only fire for one of its literal
-    /// resources. Every other language (DSL, Cedar) is conservatively
-    /// unprunable — pruning can never drop a policy that could have matched.
+    /// candidate). The answer is delegated to the policy's own evaluator via
+    /// [`PolicyEvaluator::resource_index_terms`], so each language decides its
+    /// own soundness next to its match semantics:
+    /// - `Simple` — exact resource literals, unprunable on any `*` rule.
+    /// - `ReaperDsl` (compiled, PRIMARY) — literal `resource == "…"` constraints
+    ///   extracted from the compiled conditions (D2); unbounded predicates
+    ///   (attributes, wildcards, dynamic ids) make the policy unprunable.
+    /// - AST-fallback DSL and Cedar — default `None` (conservatively unprunable).
+    ///
+    /// A policy whose evaluator is somehow not built is treated as unprunable
+    /// (`None`) — safe: pruning can never drop a policy that could have matched.
+    ///
+    /// [`PolicyEvaluator::resource_index_terms`]: crate::evaluators::PolicyEvaluator::resource_index_terms
     fn index_terms(policy: &EnhancedPolicy) -> Option<Vec<String>> {
-        if policy.language != PolicyLanguage::Simple {
-            return None;
-        }
-        let mut terms = Vec::with_capacity(policy.rules.len());
-        for rule in &policy.rules {
-            if rule.resource == "*" {
-                return None; // wildcard matches every resource -> unprunable
-            }
-            terms.push(rule.resource.clone());
-        }
-        terms.sort();
-        terms.dedup();
-        Some(terms)
+        policy.get_evaluator().ok()?.resource_index_terms()
     }
 
     /// Add `policy_id` to `set`'s pruning index per `policy`'s terms.

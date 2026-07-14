@@ -209,6 +209,26 @@ impl PolicyEvaluator for SimplePolicyEvaluator {
         "simple"
     }
 
+    /// D2: Simple policies are prunable by exact resource literal. `matches_rule`
+    /// fires iff `rule.resource == "*" || rule.resource == request.resource`, so a
+    /// policy with no `*` rule can only match one of its literal rule resources;
+    /// a `*` rule matches every resource, making the whole policy unprunable.
+    /// (This is the exact-match logic that previously lived in
+    /// `PolicyEngine::index_terms`, now unified in the trait so soundness sits
+    /// next to the evaluator's own match semantics.)
+    fn resource_index_terms(&self) -> Option<Vec<String>> {
+        let mut terms = Vec::with_capacity(self.rules.len());
+        for rule in &self.rules {
+            if rule.resource == "*" {
+                return None; // wildcard matches every resource -> unprunable
+            }
+            terms.push(rule.resource.clone());
+        }
+        terms.sort();
+        terms.dedup();
+        Some(terms)
+    }
+
     fn metadata(&self) -> Option<EvaluatorMetadata> {
         let mut extra = std::collections::HashMap::new();
         extra.insert("rules".to_string(), self.rules.len().to_string());

@@ -1716,6 +1716,12 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         "reaper_dsl"
     }
 
+    /// D2: DSL policies are prunable when every rule constrains the request
+    /// resource to concrete literals. Delegates to the compiled-condition walk.
+    fn resource_index_terms(&self) -> Option<Vec<String>> {
+        self.compiled_resource_index_terms()
+    }
+
     fn metadata(&self) -> Option<EvaluatorMetadata> {
         let mut extra = std::collections::HashMap::new();
         extra.insert(
@@ -1728,5 +1734,112 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
             complexity: 50, // Medium complexity
             extra,
         })
+    }
+}
+
+impl ReaperDSLEvaluator {
+    /// D2 (PRIMARY path): the finite set of request-resource strings this
+    /// compiled policy can match, or `None` (unprunable) when its match set is
+    /// unbounded. Walks the COMPILED conditions, not the AST.
+    ///
+    /// ## Soundness rule
+    /// The ONLY compiled leaf that ties the *request resource identity* to a
+    /// concrete string is [`CompiledCondition::ResourceIdEquals`], which is true
+    /// iff `request.resource == value` (see `evaluate_compiled_condition`). Every
+    /// other leaf — attribute compares (`resource.type == …`), action/time/rebac/
+    /// string/variable predicates — says nothing about the request resource
+    /// identity and is therefore treated as unbounded. From that single bounded
+    /// leaf we compose:
+    /// - `ResourceIdEquals(L)` → bounded to `{L}`.
+    /// - `And(children)`: true only if all children true, so if ANY child bounds
+    ///   the resource the `And` is bounded to the **intersection** of the bounded
+    ///   children (unbounded only if no child bounds it).
+    /// - `Or(children)`: true if any child true, so bounded to the **union** iff
+    ///   EVERY child is bounded; a single unbounded child makes the `Or`
+    ///   unbounded.
+    /// - `Not(Always)` (i.e. `false`) → bounded to `{}` (never matches);
+    ///   any other `Not(_)` → unbounded (conservative).
+    /// - `Always` → unbounded (matches every resource).
+    ///
+    /// The policy's terms are the UNION over every rule (deny + allow); if ANY
+    /// rule is unbounded the whole policy is `None`. Because each returned set is
+    /// a *superset* of the resources for which its rule can fire, the union is a
+    /// superset of every resource the policy can decide — so a resource absent
+    /// from the union provably makes every rule non-matching (the set combiner
+    /// treats that as non-decisive), and pruning it is safe. It can never fail
+    /// open: an unrecognized shape yields `None`, never a spurious `Some`.
+    fn compiled_resource_index_terms(&self) -> Option<Vec<String>> {
+        let interner = self.store.interner();
+        let mut terms: Vec<String> = Vec::new();
+        for rule in self
+            .compiled_deny_rules
+            .iter()
+            .chain(self.compiled_allow_rules.iter())
+        {
+            // Any rule that can match an unbounded resource set makes the whole
+            // policy a candidate for every request — `?` propagates that `None`.
+            let set = Self::condition_resource_constraint(&rule.condition, interner)?;
+            terms.extend(set);
+        }
+        terms.sort();
+        terms.dedup();
+        Some(terms)
+    }
+
+    /// Resource-literal constraint of one compiled condition. `None` = unbounded
+    /// (may be true for an unrestricted set of resources); `Some(set)` = a
+    /// SUPERSET of the resources for which this condition can be true (it is
+    /// provably false for every resource outside `set`). See
+    /// [`Self::compiled_resource_index_terms`] for the composition rules.
+    fn condition_resource_constraint(
+        cond: &CompiledCondition,
+        interner: &StringInterner,
+    ) -> Option<Vec<String>> {
+        match cond {
+            // `resource == "literal"`: true iff request.resource == value.
+            CompiledCondition::ResourceIdEquals { value } => {
+                // A literal that cannot be resolved back to a string is treated
+                // as unbounded (fail safe, never fail open).
+                interner.resolve(*value).map(|s| vec![s.to_string()])
+            }
+            // Always-true rule matches every resource.
+            CompiledCondition::Always => None,
+            // `false` compiles to Not(Always) and matches nothing; any other
+            // negation is treated conservatively as unbounded.
+            CompiledCondition::Not(inner) => {
+                if matches!(**inner, CompiledCondition::Always) {
+                    Some(Vec::new())
+                } else {
+                    None
+                }
+            }
+            CompiledCondition::And(children) => {
+                // Intersection over the bounded children; unbounded only if no
+                // child constrains the resource.
+                let mut acc: Option<Vec<String>> = None;
+                for child in children {
+                    if let Some(set) = Self::condition_resource_constraint(child, interner) {
+                        acc = Some(match acc {
+                            None => set,
+                            Some(prev) => prev.into_iter().filter(|x| set.contains(x)).collect(),
+                        });
+                    }
+                }
+                acc
+            }
+            CompiledCondition::Or(children) => {
+                // Union over children; a single unbounded child (`?` → None)
+                // makes the whole disjunction unbounded.
+                let mut union = Vec::new();
+                for child in children {
+                    let set = Self::condition_resource_constraint(child, interner)?;
+                    union.extend(set);
+                }
+                Some(union)
+            }
+            // Every other leaf constrains action/attributes/relationships/etc.,
+            // never the request resource identity -> unbounded.
+            _ => None,
+        }
     }
 }
