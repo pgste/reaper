@@ -10,7 +10,7 @@ This doc is updated as each slice lands.
 
 ---
 
-## STATUS (2026-07-14) — slice 1 + follow-up 1 landed; two follow-ups remain
+## STATUS (2026-07-14) — slice 1 + follow-ups 1 & 2 landed; one follow-up remains
 
 **Decisions locked (with the maintainer):**
 1. Decision-log strategy = **redact-in-place** (option B below).
@@ -43,11 +43,21 @@ This doc is updated as each slice lands.
    to the audit trail, and it is excluded from the idempotency fingerprint (only
    the `pseudo`/`plain` marker enters it, so a retry that adds the salt is treated
    as a materially different request rather than replaying a narrower result).
-2. **Immutable archive + published DataStore versions.** The WORM/NDJSON archive
-   (`VerifyMode::ByteExact` source) and immutable published data-bundle versions
-   (`get_version_document`) are append-only and NOT rewritten by erasure today.
-   Either an archive-rewrite path or a documented, receipted exemption — and
-   document the store's verification posture as `Linkage`-based post-erasure.
+2. **Immutable archive + published DataStore versions.** *(LANDED — follow-up
+   #2.)* The WORM/NDJSON archive (`VerifyMode::ByteExact` source) and immutable
+   published data-bundle versions (`get_version_document`) are append-only and NOT
+   rewritten by erasure. Resolved as a **documented, receipted exemption** (the
+   only sound option: the WORM sink is S3 Object-Lock in COMPLIANCE mode —
+   un-rewritable even by root, *by design* — and published versions are
+   checksum-sealed snapshots agents may still run, so rewriting either defeats the
+   guarantee it exists for). The receipt now carries `verification_posture:
+   "linkage"` and an `exemptions[]` list (`immutable_exemptions`, pure + unit
+   tested): a `decision_log_worm_archive` exemption whenever the decision-log
+   redaction was submitted, and a `published_datastore_versions` exemption whenever
+   the org has authoring DataStores — each with its lawful basis and disposition
+   (ages out with retention / superseded by next publish; crypto-shred the tenant
+   key to render the archived `input_data` irrecoverable pre-expiry). Full posture
+   + verification guidance: `docs/security/SUBJECT_ERASURE.md`.
 3. **Dedicated erasure-receipt table (optional).** Today the audit-trail entry is
    the proof of erasure. If queryable erasure history is wanted, add
    `audit_erasure_requests` (migrations `025_`/`0018_`) + repo, and persist the
