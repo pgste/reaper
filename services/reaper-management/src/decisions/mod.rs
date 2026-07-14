@@ -1403,7 +1403,10 @@ mod tests {
         // The tamper-evidence columns must NOT be mutated, or Linkage verification
         // and checkpoint completeness would break.
         for chain_col in ["seq =", "chain_id =", "prev_hash =", "entry_hash ="] {
-            assert!(!sql.contains(chain_col), "must not mutate {chain_col}: {sql}");
+            assert!(
+                !sql.contains(chain_col),
+                "must not mutate {chain_col}: {sql}"
+            );
         }
         // Subject bound as a parameter (both actor and exact-resource match), never spliced.
         assert!(sql.contains("(principal = {subject:String} OR resource = {subject:String})"));
@@ -1432,8 +1435,14 @@ mod tests {
 
         // A held row is never redacted: one NOT (...) exclusion per hold.
         assert_eq!(sql.matches("NOT (").count(), 2, "{sql}");
-        assert!(sql.contains("NOT (decision = {h0_decision:String})"), "{sql}");
-        assert!(sql.contains("NOT (policy_name = {h1_policy_name:String})"), "{sql}");
+        assert!(
+            sql.contains("NOT (decision = {h0_decision:String})"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("NOT (policy_name = {h1_policy_name:String})"),
+            "{sql}"
+        );
         // Subject selector still present alongside the exclusions.
         assert!(sql.contains("principal = {subject:String}"));
         let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
