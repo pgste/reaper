@@ -1316,11 +1316,15 @@ name = "reaper-vs-opa-benchmark"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "colored",
  "criterion",
  "hdrhistogram",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "indicatif",
  "rand",
  "reqwest",
@@ -1329,6 +1333,7 @@ dependencies = [
  "serde_yaml",
  "tabled",
  "tokio",
+ "tower",
  "uuid",
 ]
 

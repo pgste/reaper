@@ -289,6 +289,149 @@ jobs:
         kill ${{ env.REAPER_PID }} || true
         kill ${{ env.OPA_PID }} || true
 
+  # Transport comparison: TCP vs Unix domain socket, same process, same runner.
+  # Reaper and OPA each bind BOTH transports at once; every scenario is benchmarked
+  # back-to-back over TCP then UDS so the ONLY variable is the wire transport. This
+  # isolates UDS's same-host latency win (no TCP/IP stack) without cross-runner noise.
+  uds-comparison:
+    name: UDS vs TCP - ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+    needs: [build-agent, build-benchmark]
+
+    strategy:
+      matrix:
+        scenario: [rbac, abac, multilayer, mega]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download Reaper Agent
+      uses: actions/download-artifact@v4
+      with:
+        name: reaper-agent
+        path: bin/
+
+    - name: Download Benchmark Tools
+      uses: actions/download-artifact@v4
+      with:
+        name: benchmark-tools
+        path: benchmarks/reaper-vs-opa/bin/
+
+    - name: Make binaries executable
+      run: |
+        chmod +x bin/reaper-agent
+        chmod +x benchmarks/reaper-vs-opa/bin/benchmark
+        chmod +x benchmarks/reaper-vs-opa/bin/generate-data
+
+    - name: Install Enterprise OPA
+      run: |
+        IMG=ghcr.io/open-policy-agent/eopa:latest
+        docker pull "$IMG"
+        BIN=$(docker inspect --format '{{if .Config.Entrypoint}}{{index .Config.Entrypoint 0}}{{else}}{{index .Config.Cmd 0}}{{end}}' "$IMG")
+        CID=$(docker create "$IMG")
+        docker cp "$CID:$BIN" ./eopa
+        docker rm "$CID" >/dev/null
+        chmod +x eopa
+        sudo mv eopa /usr/local/bin/opa
+        opa version
+
+    - name: Generate Test Data
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        DATA_FILE="data/100k/${{ matrix.scenario }}.json"
+        mkdir -p data/100k
+        ./bin/generate-data --count 100000 --output "$DATA_FILE" ${{ matrix.scenario }}
+        echo "✓ Generated $(jq '.entities | length' "$DATA_FILE") entities"
+
+    - name: Start Services (TCP + UDS)
+      run: |
+        mkdir -p /tmp/opa-bench
+        # Reaper binds TCP (8080) always, plus a UDS socket when enabled.
+        REAPER_UDS_ENABLED=1 REAPER_UDS_PATH=/tmp/reaper-bench/agent.sock \
+          ./bin/reaper-agent &
+        echo "REAPER_PID=$!" >> $GITHUB_ENV
+
+        # OPA accepts multiple --addr: bind TCP and a Unix socket simultaneously.
+        opa run --server \
+          --addr=0.0.0.0:8181 \
+          --addr=unix:///tmp/opa-bench/opa.sock \
+          --log-level=error &
+        echo "OPA_PID=$!" >> $GITHUB_ENV
+
+        # Wait for all four listeners (TCP + UDS on each engine).
+        for i in $(seq 1 30); do
+          curl -fs http://localhost:8080/health >/dev/null 2>&1 \
+            && curl -fs http://localhost:8181/health >/dev/null 2>&1 \
+            && curl -fs --unix-socket /tmp/reaper-bench/agent.sock http://localhost/health >/dev/null 2>&1 \
+            && curl -fs --unix-socket /tmp/opa-bench/opa.sock http://localhost/health >/dev/null 2>&1 \
+            && break
+          sleep 1
+        done
+        curl -f http://localhost:8080/health
+        curl -f --unix-socket /tmp/reaper-bench/agent.sock http://localhost/health
+        curl -f --unix-socket /tmp/opa-bench/opa.sock http://localhost/health
+
+    - name: Run TCP vs UDS Benchmark
+      id: benchmark
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        REQUESTS=${{ github.event.inputs.requests || '10000' }}
+        CONCURRENCY=${{ github.event.inputs.concurrency || '50' }}
+
+        # Deploy once over TCP; both transports serve the same in-memory state.
+        ./bin/deploy-reaper.sh ${{ matrix.scenario }} 100k
+        ./bin/deploy-opa.sh ${{ matrix.scenario }} 100k
+
+        # Same binary, same load, only the transport differs.
+        ./bin/benchmark --scenario ${{ matrix.scenario }} \
+          --requests $REQUESTS --concurrency $CONCURRENCY \
+          --output json > tcp.json
+
+        ./bin/benchmark --scenario ${{ matrix.scenario }} \
+          --requests $REQUESTS --concurrency $CONCURRENCY \
+          --reaper-url unix:/tmp/reaper-bench/agent.sock \
+          --opa-url unix:/tmp/opa-bench/opa.sock \
+          --output json > uds.json
+
+        R_TCP_RPS=$(jq -r '.[0].throughput_rps | floor' tcp.json)
+        R_TCP_P99=$(jq -r '.[0].latency_p99_us | floor' tcp.json)
+        O_TCP_RPS=$(jq -r '.[1].throughput_rps | floor' tcp.json)
+        R_UDS_RPS=$(jq -r '.[0].throughput_rps | floor' uds.json)
+        R_UDS_P99=$(jq -r '.[0].latency_p99_us | floor' uds.json)
+        O_UDS_RPS=$(jq -r '.[1].throughput_rps | floor' uds.json)
+
+        # Reaper UDS-vs-TCP deltas (same process, back-to-back).
+        RPS_GAIN=$(echo "scale=1; ($R_UDS_RPS - $R_TCP_RPS) * 100 / $R_TCP_RPS" | bc)
+        P99_DROP=$(echo "scale=1; ($R_TCP_P99 - $R_UDS_P99) * 100 / $R_TCP_P99" | bc)
+
+        {
+          echo "## 🔌 UDS vs TCP — ${{ matrix.scenario }} @ 100k"
+          echo ""
+          echo "| Engine | Transport | Throughput | p99 (µs) |"
+          echo "|--------|-----------|------------|----------|"
+          echo "| **Reaper** | TCP | ${R_TCP_RPS} req/s | ${R_TCP_P99} |"
+          echo "| **Reaper** | UDS | ${R_UDS_RPS} req/s | ${R_UDS_P99} |"
+          echo "| OPA | TCP | ${O_TCP_RPS} req/s | — |"
+          echo "| OPA | UDS | ${O_UDS_RPS} req/s | — |"
+          echo ""
+          echo "**Reaper UDS vs TCP:** throughput ${RPS_GAIN}%, p99 latency ${P99_DROP}% lower."
+        } >> $GITHUB_STEP_SUMMARY
+
+    - name: Upload Transport Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: uds-comparison-${{ matrix.scenario }}
+        path: |
+          benchmarks/reaper-vs-opa/tcp.json
+          benchmarks/reaper-vs-opa/uds.json
+
+    - name: Stop Services
+      if: always()
+      run: |
+        kill ${{ env.REAPER_PID }} || true
+        kill ${{ env.OPA_PID }} || true
+
   # Generate and publish Allure Report
   allure-report:
     needs: benchmark

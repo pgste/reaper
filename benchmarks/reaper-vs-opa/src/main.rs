@@ -3,6 +3,8 @@
 //! Comprehensive performance comparison between Reaper and Open Policy Agent (OPA).
 //! Measures latency, throughput, and provides detailed statistical analysis.
 
+mod transport;
+
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
@@ -11,9 +13,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tabled::{Table, Tabled};
 use tokio::sync::Semaphore;
+use transport::Transport;
 
 #[derive(Parser)]
 #[command(name = "reaper-vs-opa-benchmark")]
@@ -27,11 +30,13 @@ struct Args {
     #[arg(short, long, default_value = "50")]
     concurrency: usize,
 
-    /// Reaper endpoint
+    /// Reaper endpoint. `http://host:port` for TCP, or `unix:/path/to.sock` to
+    /// benchmark over a Unix domain socket (agent started with REAPER_UDS_ENABLED=1).
     #[arg(long, default_value = "http://localhost:8080")]
     reaper_url: String,
 
-    /// OPA endpoint
+    /// OPA endpoint. `http://host:port` for TCP, or `unix:/path/to.sock` to
+    /// benchmark over a Unix domain socket (`opa run --addr unix://…`).
     #[arg(long, default_value = "http://localhost:8181")]
     opa_url: String,
 
@@ -189,20 +194,33 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let json_output = args.output == "json";
 
+    // Build a transport per engine. The endpoint scheme (`http://` vs `unix:`)
+    // selects TCP or Unix-domain-socket; everything downstream is transport-agnostic.
+    let reaper = Arc::new(Transport::new(&args.reaper_url)?);
+    let opa = Arc::new(Transport::new(&args.opa_url)?);
+
     // Use eprintln for progress messages so JSON output stays clean on stdout
     eprintln!("{}", "\n🚀 Reaper vs OPA Benchmark".bold().cyan());
     eprintln!("{}", "=".repeat(80).dimmed());
     eprintln!("  Requests:     {}", args.requests.to_string().yellow());
     eprintln!("  Concurrency:  {}", args.concurrency.to_string().yellow());
     eprintln!("  Scenario:     {}", args.scenario.yellow());
-    eprintln!("  Reaper URL:   {}", args.reaper_url.dimmed());
-    eprintln!("  OPA URL:      {}", args.opa_url.dimmed());
+    eprintln!(
+        "  Reaper:       {} ({})",
+        reaper.endpoint().dimmed(),
+        reaper.kind().yellow()
+    );
+    eprintln!(
+        "  OPA:          {} ({})",
+        opa.endpoint().dimmed(),
+        opa.kind().yellow()
+    );
     eprintln!("{}\n", "=".repeat(80).dimmed());
 
     // Test connectivity
     eprintln!("{}", "🔍 Testing connectivity...".bold());
-    test_connectivity(&args.reaper_url, "Reaper").await?;
-    test_connectivity(&args.opa_url, "OPA").await?;
+    test_connectivity(&reaper, "Reaper").await?;
+    test_connectivity(&opa, "OPA").await?;
     eprintln!();
 
     // Validate policy logic with known test cases
@@ -214,8 +232,8 @@ async fn main() -> Result<()> {
     };
 
     for scenario in &scenarios {
-        validate_policy_logic(&args.reaper_url, "Reaper", scenario).await?;
-        validate_policy_logic(&args.opa_url, "OPA", scenario).await?;
+        validate_policy_logic(&reaper, "Reaper", scenario).await?;
+        validate_policy_logic(&opa, "OPA", scenario).await?;
     }
     eprintln!("{}", "  ✓ All validation tests passed!".green());
     eprintln!();
@@ -227,7 +245,7 @@ async fn main() -> Result<()> {
     eprintln!("{}", "⚖️  Enforcing cross-engine decision parity...".bold());
     let parity_sample = args.requests.clamp(200, 2000);
     for scenario in &scenarios {
-        enforce_decision_parity(&args.reaper_url, &args.opa_url, scenario, parity_sample).await?;
+        enforce_decision_parity(&reaper, &opa, scenario, parity_sample).await?;
     }
     eprintln!();
 
@@ -242,7 +260,7 @@ async fn main() -> Result<()> {
         // Benchmark Reaper
         let reaper_result = run_benchmark(
             "Reaper",
-            &args.reaper_url,
+            Arc::clone(&reaper),
             scenario,
             args.requests,
             args.concurrency,
@@ -253,7 +271,7 @@ async fn main() -> Result<()> {
         // Benchmark OPA
         let opa_result = run_benchmark(
             "OPA",
-            &args.opa_url,
+            Arc::clone(&opa),
             scenario,
             args.requests,
             args.concurrency,
@@ -281,9 +299,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn validate_policy_logic(url: &str, engine: &str, scenario: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-
+async fn validate_policy_logic(transport: &Transport, engine: &str, scenario: &str) -> Result<()> {
     // Define test cases with expected outcomes
     let test_cases = match scenario {
         "rbac" => vec![
@@ -368,9 +384,9 @@ async fn validate_policy_logic(url: &str, engine: &str, scenario: &str) -> Resul
     for (test_case, description) in test_cases {
         let expected = test_case.expected_decision.clone().unwrap();
         let result = if engine == "Reaper" {
-            send_reaper_request(&client, url, scenario, test_case).await?
+            send_reaper_request(transport, scenario, test_case).await?
         } else {
-            send_opa_request(&client, url, scenario, test_case).await?
+            send_opa_request(transport, scenario, test_case).await?
         };
 
         let decision_str = match result.decision {
@@ -407,34 +423,40 @@ async fn validate_policy_logic(url: &str, engine: &str, scenario: &str) -> Resul
     Ok(())
 }
 
-async fn test_connectivity(url: &str, name: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-    let health_url = format!("{}/health", url);
-
-    match client.get(&health_url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            eprintln!("  {} {} is reachable", "✓".green(), name);
+async fn test_connectivity(transport: &Transport, name: &str) -> Result<()> {
+    match transport.get_status("/health").await {
+        Ok(status) if (200..300).contains(&status) => {
+            eprintln!(
+                "  {} {} is reachable ({})",
+                "✓".green(),
+                name,
+                transport.kind()
+            );
             Ok(())
         }
-        Ok(resp) => {
-            anyhow::bail!("{} returned HTTP {}", name, resp.status())
+        Ok(status) => {
+            anyhow::bail!("{} returned HTTP {}", name, status)
         }
         Err(e) => {
-            anyhow::bail!("Cannot reach {}: {}", name, e)
+            anyhow::bail!("Cannot reach {} at {}: {}", name, transport.endpoint(), e)
         }
     }
 }
 
 async fn run_benchmark(
     engine: &str,
-    url: &str,
+    transport: Arc<Transport>,
     scenario: &str,
     total_requests: usize,
     concurrency: usize,
 ) -> Result<BenchmarkResult> {
-    eprintln!("  {} {}...", "Testing".dimmed(), engine.bold());
+    eprintln!(
+        "  {} {} ({})...",
+        "Testing".dimmed(),
+        engine.bold(),
+        transport.kind()
+    );
 
-    let client = Arc::new(reqwest::Client::new());
     let semaphore = Arc::new(Semaphore::new(concurrency));
     let mut histogram = Histogram::<u64>::new(3).expect("Failed to create histogram");
 
@@ -455,9 +477,8 @@ async fn run_benchmark(
     let mut validation_errors = 0;
 
     for i in 0..total_requests {
-        let client = Arc::clone(&client);
+        let transport = Arc::clone(&transport);
         let semaphore = Arc::clone(&semaphore);
-        let url = url.to_string();
         let scenario = scenario.to_string();
         let engine = engine.to_string();
         let pb = pb.clone();
@@ -469,9 +490,9 @@ async fn run_benchmark(
             let req_start = Instant::now();
 
             let result = if engine == "Reaper" {
-                send_reaper_request(&client, &url, &scenario, request).await
+                send_reaper_request(&transport, &scenario, request).await
             } else {
-                send_opa_request(&client, &url, &scenario, request).await
+                send_opa_request(&transport, &scenario, request).await
             };
 
             let latency = req_start.elapsed();
@@ -977,8 +998,7 @@ fn generate_request(scenario: &str, index: usize) -> PolicyRequest {
 }
 
 async fn send_reaper_request(
-    client: &reqwest::Client,
-    url: &str,
+    transport: &Transport,
     scenario: &str,
     request: PolicyRequest,
 ) -> Result<DecisionResult> {
@@ -993,18 +1013,10 @@ async fn send_reaper_request(
         "context": {}
     });
 
-    let resp = client
-        .post(format!("{}/api/v1/messages", url))
-        .json(&payload)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?;
-
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
+    let (status, body) = transport.post_json("/api/v1/messages", &payload).await?;
 
     // Parse decision from response
-    let decision = if status.is_success() {
+    let decision = if (200..300).contains(&status) {
         // Check if response contains "allow" decision
         if let Some(decision_val) = body.get("decision") {
             if decision_val.as_str() == Some("allow") {
@@ -1034,12 +1046,11 @@ async fn send_reaper_request(
 /// error (aborting the benchmark) on any divergence: a speedup measured over
 /// requests where the engines disagree is not a valid comparison.
 async fn enforce_decision_parity(
-    reaper_url: &str,
-    opa_url: &str,
+    reaper_transport: &Transport,
+    opa_transport: &Transport,
     scenario: &str,
     sample_size: usize,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
     let mut mismatches: Vec<String> = Vec::new();
     let mut checked = 0usize;
 
@@ -1049,8 +1060,8 @@ async fn enforce_decision_parity(
         let action = request.action.clone();
         let resource = request.resource.clone();
 
-        let reaper = send_reaper_request(&client, reaper_url, scenario, request.clone()).await?;
-        let opa = send_opa_request(&client, opa_url, scenario, request).await?;
+        let reaper = send_reaper_request(reaper_transport, scenario, request.clone()).await?;
+        let opa = send_opa_request(opa_transport, scenario, request).await?;
         checked += 1;
 
         if reaper.decision != opa.decision && mismatches.len() < 10 {
@@ -1087,8 +1098,7 @@ async fn enforce_decision_parity(
 }
 
 async fn send_opa_request(
-    client: &reqwest::Client,
-    url: &str,
+    transport: &Transport,
     scenario: &str,
     request: PolicyRequest,
 ) -> Result<DecisionResult> {
@@ -1105,20 +1115,12 @@ async fn send_opa_request(
         }
     });
 
-    let policy_path = format!("reaper/{}/allow", scenario);
+    let policy_path = format!("/v1/data/reaper/{}/allow", scenario);
 
-    let resp = client
-        .post(format!("{}/v1/data/{}", url, policy_path))
-        .json(&payload)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?;
-
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
+    let (status, body) = transport.post_json(&policy_path, &payload).await?;
 
     // Parse decision from OPA response
-    let decision = if status.is_success() {
+    let decision = if (200..300).contains(&status) {
         // OPA returns {"result": true/false} for allow rules
         if let Some(result) = body.get("result") {
             if result.as_bool().unwrap_or(false) {

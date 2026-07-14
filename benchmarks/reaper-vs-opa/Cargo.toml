@@ -30,6 +30,15 @@ hdrhistogram = "7.5"
 indicatif = "0.17"
 colored = "2.1"
 tabled = "0.16"
+# Unix-domain-socket transport for the benchmark harness. Both Reaper (axum over
+# UnixListener) and OPA (`--addr unix://…`) serve the *same* HTTP/1.1 API over a
+# socket, so a hyper client with a Unix connector benchmarks either engine over
+# UDS with no protocol change. reqwest has no UDS transport, hence raw hyper here.
+hyper = { version = "1.8", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
+http-body-util = "0.1"
+tower = "0.5"
+bytes = "1"
 
 [dev-dependencies]
 criterion = "0.5"

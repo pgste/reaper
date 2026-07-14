@@ -87,6 +87,35 @@ EXAMPLES:
   ./bin/benchmark.sh --scenario all --scale both
 ```
 
+### Comparing over a Unix domain socket (UDS)
+
+Both engines serve the **same** HTTP API over a Unix socket as over TCP, so the
+`benchmark` binary can measure either transport. Pass a `unix:<path>` endpoint
+instead of an `http://` URL and it dials the socket (via a hyper Unix connector)
+with no other change — an apples-to-apples TCP-vs-UDS comparison.
+
+```bash
+# Start each engine bound to BOTH transports at once:
+#   Reaper: TCP (8080) always + a socket when UDS is enabled
+REAPER_UDS_ENABLED=1 REAPER_UDS_PATH=/tmp/reaper-bench/agent.sock \
+  ./target/release/reaper-agent &
+#   OPA accepts multiple --addr, so it binds TCP and a socket together
+mkdir -p /tmp/opa-bench
+opa run --server --addr localhost:8181 --addr unix:///tmp/opa-bench/opa.sock &
+
+# Deploy over TCP (state is shared across both listeners), then benchmark over UDS:
+./bin/deploy-reaper.sh rbac 100k
+./bin/deploy-opa.sh rbac 100k
+./bin/benchmark --scenario rbac --requests 10000 --concurrency 50 \
+  --reaper-url unix:/tmp/reaper-bench/agent.sock \
+  --opa-url unix:/tmp/opa-bench/opa.sock
+```
+
+UDS bypasses the TCP/IP stack, so on the same host it typically trims tail
+latency vs TCP. The `uds-comparison` CI job runs each scenario back-to-back over
+TCP then UDS on one runner and reports the per-transport throughput and the
+Reaper UDS-vs-TCP p99 reduction.
+
 ## What It Tests
 
 ### Scenarios
