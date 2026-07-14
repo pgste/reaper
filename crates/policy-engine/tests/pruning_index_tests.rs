@@ -15,7 +15,9 @@
 //! Plus hot-swap safety: the index stays consistent across deploy / redeploy /
 //! remove / full replace.
 
-use policy_engine::{EnhancedPolicy, PolicyAction, PolicyEngine, PolicyRequest, PolicyRule};
+use policy_engine::{
+    EnhancedPolicy, PolicyAction, PolicyEngine, PolicyLanguage, PolicyRequest, PolicyRule,
+};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -90,6 +92,107 @@ fn candidate_set_is_bounded_by_matches_not_total() {
 
     // A resource nobody references yields zero candidates (default deny, no evals).
     assert_eq!(engine.candidate_policy_ids("/nobody/here").len(), 0);
+}
+
+/// Build a compiled Reaper-DSL policy with a single rule body.
+fn dsl_policy(name: &str, rule_body: &str) -> EnhancedPolicy {
+    let content = format!(
+        "policy {name} {{\n    default: deny,\n    rule r {{\n        {rule_body}\n    }}\n}}"
+    );
+    EnhancedPolicy::new_with_language(
+        name.to_string(),
+        String::new(),
+        PolicyLanguage::ReaperDsl,
+        content,
+    )
+    .expect("DSL policy should compile")
+}
+
+/// D2: compiled DSL policies whose rule constrains the request resource to a
+/// literal are now PRUNABLE — bucketed by resource, not forced into the
+/// always-candidate `unprunable` set. Attribute-predicate DSL policies remain
+/// unprunable. This is the core of R2-P2-1's closure for the mandated language.
+#[test]
+fn dsl_policies_are_prunable_by_resource_literal() {
+    let engine = PolicyEngine::new();
+
+    const N: usize = 50;
+    // N DSL policies over distinct resources — each prunable, each in its own
+    // bucket.
+    for i in 0..N {
+        engine
+            .deploy_policy(dsl_policy(
+                &format!("d{i}"),
+                &format!("allow if resource == \"/res/{i}\""),
+            ))
+            .unwrap();
+    }
+
+    // Three DSL policies all bound to the SAME target resource.
+    let target = "/hot/resource";
+    for i in 0..3 {
+        engine
+            .deploy_policy(dsl_policy(
+                &format!("hot{i}"),
+                &format!("allow if resource == \"{target}\""),
+            ))
+            .unwrap();
+    }
+
+    // Two DSL policies whose rules constrain an attribute / the user, not the
+    // request resource identity — these must be unprunable.
+    engine
+        .deploy_policy(dsl_policy("attr", "allow if resource.type == \"invoice\""))
+        .unwrap();
+    engine
+        .deploy_policy(dsl_policy("blocked", "deny if user.role == \"blocked\""))
+        .unwrap();
+
+    let stats = engine.get_index_stats();
+    assert_eq!(stats.total_policies, N + 3 + 2);
+    assert_eq!(
+        stats.unprunable_policies, 2,
+        "only the attribute/user-predicate DSL policies are unprunable"
+    );
+    assert_eq!(
+        stats.resource_buckets,
+        N + 1,
+        "N distinct resources + the shared target bucket"
+    );
+
+    // The served path evaluates only the 3 literal matches + the 2 unprunable —
+    // not all N+5.
+    let candidates = engine.candidate_policy_ids(target);
+    assert_eq!(
+        candidates.len(),
+        3 + 2,
+        "candidate set must be 3 literal matches + 2 unprunable, not all {}",
+        N + 5
+    );
+
+    // A resource nobody references literally: only the 2 unprunable are candidates.
+    assert_eq!(engine.candidate_policy_ids("/nobody/here").len(), 2);
+
+    // candidate_policy_ids stays sorted + deduped.
+    let mut sorted = candidates.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(candidates, sorted, "candidates must be sorted and deduped");
+}
+
+/// A DSL policy whose rule binds the resource to a literal via an `Or` of
+/// literals lands in BOTH buckets and no unprunable slot.
+#[test]
+fn dsl_or_of_literals_buckets_both() {
+    let engine = PolicyEngine::new();
+    let p = dsl_policy("multi", "allow if resource == \"/x\" || resource == \"/y\"");
+    let id = p.id;
+    engine.deploy_policy(p).unwrap();
+
+    assert_eq!(engine.get_index_stats().unprunable_policies, 0);
+    assert_eq!(engine.candidate_policy_ids("/x"), vec![id]);
+    assert_eq!(engine.candidate_policy_ids("/y"), vec![id]);
+    assert!(engine.candidate_policy_ids("/z").is_empty());
 }
 
 /// Wildcard (and, by extension, DSL/Cedar) policies are unprunable — always
@@ -204,7 +307,14 @@ fn index_consistent_across_mutations() {
     assert_eq!(engine.candidate_policy_ids("/old"), vec![id]);
 
     // Redeploy the SAME id pointing at a new resource — old bucket must clear.
-    p.rules[0].resource = "/new".to_string();
+    // `update_rules` rebuilds the evaluator (the match authority the index now
+    // reads via `resource_index_terms`); mutating `p.rules` alone would leave a
+    // stale evaluator still matching "/old".
+    p.update_rules(vec![PolicyRule {
+        action: PolicyAction::Allow,
+        resource: "/new".to_string(),
+        conditions: vec![],
+    }]);
     engine.deploy_policy(p.clone()).unwrap();
     assert!(
         engine.candidate_policy_ids("/old").is_empty(),

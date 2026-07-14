@@ -165,10 +165,18 @@ REAPER_ALLOW_EVALUATE_ALL=true ../../target/release/reaper-agent &
 #    (REAPER_USE_PRUNING_INDEX defaults to true; leave it on.)
 
 # 3. Run scenarios. Ordering matters for `all`: evaluate-all runs FIRST,
-#    because it requires a PRUNABLE policy set — the engine's pruning index
-#    only extracts resource terms from Simple-language policies today
-#    (review finding R2-P2-1); once the unprunable 10k DSL set is deployed,
-#    a policy-less request exceeds the candidate cap and is denied.
+#    because it requires a PRUNABLE policy set.
+#
+#    As of D2 (review finding R2-P2-1 closed) the pruning index extracts
+#    resource literals from compiled DSL policies too — a DSL policy whose rule
+#    is `allow if resource == "…"` is now bucketed by resource, so the DSL set
+#    generated with a distinct `resource == …` per policy is prunable and can be
+#    used for slo-evaluate-all. The Simple set below still works and is kept as
+#    the low-variance default; pass the DSL set to --evaluate-all-policy-set
+#    instead to exercise the mandated language end to end. (DSL policies with
+#    attribute/dynamic-resource predicates remain unprunable and, past the
+#    candidate cap, would still deny — so the evaluate-all set must be one whose
+#    rules bind the resource to a literal.)
 ./target/release/slo-harness --scenario all \
     --evaluate-all-policy-set /tmp/slo-simple-10k.json \
     --policy-set /tmp/slo-dsl-10k.json \

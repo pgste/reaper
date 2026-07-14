@@ -148,10 +148,35 @@ unaltered" question lands on.
   PR-blocking paired A/B HTTP job (`http-slo-ab` in `perf-gate.yml`) comparing
   merge-base vs head request-total p99 via `perf_ab_gate.py --http-ab`
   (median-ratio 1.25x + disjoint-samples rule, self-tested).*
-- **D2 — Make the DSL prunable (wire partial evaluation).** *Closes PERF R2-P2-1.*
-  The pruning index only prunes the *deprecated* Simple language; DSL evaluate-all
-  mass-denies past 256 policies or degrades to O(N log N)/req. `partial_evaluation.rs`
-  — the exact fix — is in-tree but dead. **Effort M.**
+- **D2 — Make the DSL prunable (wire resource-literal extraction).** *(landed)*
+  *Closes PERF R2-P2-1.* The pruning index previously pruned only the *deprecated*
+  Simple language; DSL evaluate-all mass-denied past 256 policies or degraded to
+  O(N log N)/req. **Effort M.**
+  *Landed: added a `PolicyEvaluator::resource_index_terms() -> Option<Vec<String>>`
+  trait method (default `None` = unprunable = always a candidate) so match-set
+  soundness lives next to each evaluator's own semantics — closing the review's
+  "latent trap" where index correctness was coupled to Simple's exact-match in a
+  separate `engine::index_terms` function. The compiled `ReaperDSLEvaluator`
+  (PRIMARY path) overrides it: it walks each compiled rule's `CompiledCondition`
+  and extracts request-resource literals from `ResourceIdEquals` leaves
+  (`resource == "lit"`), composing `And` (intersection of bounded children),
+  `Or` (union iff every child bounded), `Not(Always)`→∅, `Always`→unbounded;
+  ANY unbounded rule ⇒ whole policy `None`. Attribute/action/rebac/time/string/
+  variable predicates and dynamic resource ids are all unbounded (`None`), so it
+  can never fail open. `SimplePolicyEvaluator` moved its exact-match logic into
+  the same trait method; the `ReapAstEvaluator` fallback and Cedar keep the safe
+  default `None`. `engine::index_terms` now delegates to
+  `policy.get_evaluator().ok()?.resource_index_terms()` — same downstream
+  indexing (`index_policy`/`candidate_policy_ids`/`unprunable`, sort+dedup).
+  Deviation from the original plan: implemented as a compiled-condition walk in
+  the evaluator (the mandated compiled-first path) rather than by wiring
+  `partial_evaluation.rs`. Tests: 12 unit tests on
+  `ReaperDSLEvaluator::resource_index_terms` incl. the REQUIRED soundness
+  differential (`test_ridx_soundness_differential`: every resource outside the
+  reported terms is verified non-decisive under real `evaluate_matched`), plus
+  engine-level `dsl_policies_are_prunable_by_resource_literal` /
+  `dsl_or_of_literals_buckets_both` in `pruning_index_tests.rs`. AST-side
+  extraction is a documented follow-up.*
 - **D3 — Observe request-total latency on every return path.** *(landed)* *Closes PERF
   R2-P2-3.* Denies (stale-data, policy-not-found, cap-exceeded) skip the SLA
   histogram, so denial storms go invisible on the dashboard. **Effort S.**
