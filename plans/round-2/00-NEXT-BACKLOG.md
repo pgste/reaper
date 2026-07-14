@@ -131,18 +131,38 @@ unaltered" question lands on.
 
 ## Workstream D — Measured SLO + eval finishing
 
-- **D1 — Build the deferred load harness and gate the request-total SLO.** *Closes
+- **D1 — Build the deferred load harness and gate the request-total SLO.** *(landed)* *Closes
   PERF R2-P1-1.* The headline sub-µs SLA is never measured on the real HTTP path;
   the perf gate benches only 2 in-process micro-suites. Extend the reaper-vs-opa
   HDR harness to the N×M points, assert request-total p99/p999 in CI. **Effort M.**
   Without this, "READY" rests on unmeasured assumptions.
+  *Landed: `benchmarks/reaper-vs-opa` gained `slo-harness` (four §3 scenarios —
+  slo-targeted / slo-evaluate-all / slo-rebac / slo-batch — HDR request-total
+  p50/p99/p999 over HTTP against a real agent, with per-scenario decision
+  probes), `generate-data policy-set --language dsl|simple` (10k-distinct-policy
+  sets; the evaluate-all row uses Simple because the pruning index doesn't
+  prune DSL yet — see D2), and a checked-in `slo.yaml` encoding the §3 table
+  with `--slo-multiplier` semantics (1.0 = the real SLA on dedicated hardware).
+  CI: nightly absolute assertion in `slo-harness.yml` (multiplier 250 on shared
+  runners, documented as an observed starting point; artifacts uploaded), and a
+  PR-blocking paired A/B HTTP job (`http-slo-ab` in `perf-gate.yml`) comparing
+  merge-base vs head request-total p99 via `perf_ab_gate.py --http-ab`
+  (median-ratio 1.25x + disjoint-samples rule, self-tested).*
 - **D2 — Make the DSL prunable (wire partial evaluation).** *Closes PERF R2-P2-1.*
   The pruning index only prunes the *deprecated* Simple language; DSL evaluate-all
   mass-denies past 256 policies or degrades to O(N log N)/req. `partial_evaluation.rs`
   — the exact fix — is in-tree but dead. **Effort M.**
-- **D3 — Observe request-total latency on every return path.** *Closes PERF
+- **D3 — Observe request-total latency on every return path.** *(landed)* *Closes PERF
   R2-P2-3.* Denies (stale-data, policy-not-found, cap-exceeded) skip the SLA
   histogram, so denial storms go invisible on the dashboard. **Effort S.**
+  *Landed: both `/api/v1/messages` and `/api/v1/fast-messages` observe
+  request-total into `reaper_decision_duration_seconds` on every early-return
+  deny (data_stale, policy_not_found, evaluate_all_disabled, no_policies_loaded,
+  candidate_cap_exceeded, fast-path parse_error) under the constant
+  `early_deny` label, plus the audit-gate and audit-persist 503s; the timer now
+  starts before the first possible return. Engine-slice series untouched.
+  Test: `sla_histogram_deny_paths_tests.rs` (exact sample-count deltas per
+  path + success-path label sanity).*
 - **D4 — Reconcile or delete the parallel engines / dead arena.** *Closes PERF
   R2-P3-1/2/3.* `arena.rs`, `indexed_engine.rs`, `optimized_engine.rs` are
   bench-only; `SmallVec` on the targeted single-policy path was claimed but not

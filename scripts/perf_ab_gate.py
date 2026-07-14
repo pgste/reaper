@@ -18,6 +18,17 @@ Exit code 1 if any benchmark regresses; the offending rows are listed.
 `--self-test` builds synthetic baseline trees and asserts the gate's verdicts
 (including that a clean +15% regression on the tight set FAILS) — CI runs it
 before the real comparison, so the gate's sensitivity is proven on every run.
+
+HTTP A/B mode (`--http-ab`): compares externally-produced latency samples
+instead of criterion baselines — used by the served-path SLO A/B gate
+(slo-harness runs interleaved base/head against real agents on the same
+runner). Each of --base-json/--head-json is a JSON array, either of numbers
+or of objects carrying --metric (default `p99_us`, the slo-harness result
+field). A regression requires BOTH:
+  1. median(head) > median(base) * threshold (default 1.25 — HTTP loopback
+     jitters more than criterion's in-process benches), AND
+  2. min(head) > max(base) — every head run is slower than every base run,
+     the sample-based analog of non-overlapping confidence intervals.
 """
 
 import argparse
@@ -114,6 +125,70 @@ def report(rows, regressions, base_count, head_count):
 
 
 # ---------------------------------------------------------------------------
+# HTTP A/B mode — externally-produced latency samples (slo-harness runs).
+# ---------------------------------------------------------------------------
+
+def _load_samples(path, metric):
+    """Load a JSON array of numbers, or of objects carrying `metric`."""
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, list) or not data:
+        raise ValueError(f"{path}: expected a non-empty JSON array")
+    samples = []
+    for item in data:
+        if isinstance(item, (int, float)):
+            samples.append(float(item))
+        elif isinstance(item, dict) and metric in item:
+            samples.append(float(item[metric]))
+        else:
+            raise ValueError(f"{path}: entry {item!r} has no metric '{metric}'")
+    return samples
+
+
+def _median(xs):
+    s = sorted(xs)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def compare_http_samples(base, head, threshold):
+    """Return (report_lines, regressed) for two lists of latency samples.
+
+    Regression requires BOTH median(head) > median(base) * threshold AND
+    min(head) > max(base) (all head runs slower than all base runs) — a
+    sample-based analog of the criterion CI-overlap rule, so run-to-run HTTP
+    jitter cannot fail the gate on its own.
+    """
+    b_med, h_med = _median(base), _median(head)
+    ratio = h_med / b_med if b_med > 0 else float("inf")
+    outside_noise = min(head) > max(base)
+    regressed = ratio > threshold and outside_noise
+    lines = [
+        f"base runs: {sorted(base)} (median {b_med:.1f})",
+        f"head runs: {sorted(head)} (median {h_med:.1f})",
+        f"ratio: {ratio:.3f} (gate {threshold:.2f}x), "
+        f"outside noise: {outside_noise} (min(head) {min(head):.1f} "
+        f"{'>' if outside_noise else '<='} max(base) {max(base):.1f})",
+    ]
+    return lines, regressed
+
+
+def http_ab(base_path, head_path, metric, threshold):
+    base = _load_samples(base_path, metric)
+    head = _load_samples(head_path, metric)
+    lines, regressed = compare_http_samples(base, head, threshold)
+    print(f"HTTP A/B gate on '{metric}':")
+    for line in lines:
+        print(f"  {line}")
+    if regressed:
+        print(f"\nFAIL: served-path {metric} regressed beyond {threshold:.2f}x "
+              "with all head runs slower than all base runs.")
+        return 1
+    print(f"\nOK: served-path {metric} within gate.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Self-test: synthetic baselines proving the gate's verdicts, run in CI
 # before every real comparison.
 # ---------------------------------------------------------------------------
@@ -167,8 +242,23 @@ def self_test():
         # An empty comparison must be an error, never a vacuous pass.
         assert report([], [], 0, 0) == 1
 
+    # HTTP A/B mode verdicts (served-path SLO gate).
+    # Clean +50% with disjoint samples: regression.
+    _, regressed = compare_http_samples([100, 102, 98], [150, 155, 148], 1.25)
+    assert regressed, "clean +50% disjoint HTTP regression must fail"
+    # +50% median but overlapping samples (one head run as fast as base): noise.
+    _, regressed = compare_http_samples([100, 102, 98], [99, 150, 155], 1.25)
+    assert not regressed, "overlapping HTTP samples must not fail the gate"
+    # +10% is under the 1.25x gate even when disjoint.
+    _, regressed = compare_http_samples([100, 102, 98], [110, 112, 108], 1.25)
+    assert not regressed, "+10% under the HTTP gate threshold must pass"
+    # An improvement passes.
+    _, regressed = compare_http_samples([100, 102, 98], [80, 82, 78], 1.25)
+    assert not regressed, "an HTTP improvement must pass"
+
     print("self-test ok: +15% tight regression fails, noise/small/loose-30% pass, "
-          "empty comparison is an error")
+          "empty comparison is an error; http-ab: disjoint +50% fails, "
+          "overlap/under-threshold/improvement pass")
     return 0
 
 
@@ -181,10 +271,26 @@ def main():
     p.add_argument("--tight-threshold", type=float, default=DEFAULT_TIGHT_THRESHOLD)
     p.add_argument("--loose-threshold", type=float, default=DEFAULT_LOOSE_THRESHOLD)
     p.add_argument("--self-test", action="store_true")
+    p.add_argument("--http-ab", action="store_true",
+                   help="compare externally-produced latency samples "
+                        "(slo-harness runs) instead of criterion baselines")
+    p.add_argument("--base-json", help="http-ab: JSON array of base-side runs")
+    p.add_argument("--head-json", help="http-ab: JSON array of head-side runs")
+    p.add_argument("--metric", default="p99_us",
+                   help="http-ab: object key holding the latency value")
+    p.add_argument("--http-threshold", type=float, default=1.25,
+                   help="http-ab: median-ratio gate (looser than criterion's "
+                        "10%% because HTTP loopback jitters more)")
     args = p.parse_args()
 
     if args.self_test:
         return self_test()
+
+    if args.http_ab:
+        if not args.base_json or not args.head_json:
+            p.error("--http-ab requires --base-json and --head-json")
+        return http_ab(args.base_json, args.head_json, args.metric,
+                       args.http_threshold)
 
     tight_re = re.compile(args.tight_pattern)
     base_count = len(collect_baseline(args.criterion_dir, args.base))

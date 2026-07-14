@@ -131,6 +131,99 @@ MEMORY
 Peak Memory:        108 MB          97 MB            1.11x
 ```
 
+## SLO Harness
+
+`slo-harness` (in this crate) measures the **served-path SLO table** from
+`plans/08-engine-performance-to-sla.md` §3 against a real reaper-agent over
+HTTP — request-total latency (client-observed send→response, an upper bound on
+the server-side request-total incl. deser+serialize), recorded in an HDR
+histogram at nanosecond resolution and reported as p50/p99/p999. It needs no
+OPA; it is Reaper-only.
+
+### Scenarios (one per §3 row)
+
+| Scenario | Path | §3 row (p50/p99/p999) |
+|----------|------|-----------------------|
+| `slo-targeted` | `POST /api/v1/messages` with `policy_id`, 10k DSL policies | ≤2µs / ≤10µs / ≤50µs |
+| `slo-evaluate-all` | `POST /api/v1/messages`, no policy, pruning index | ≤5µs / ≤25µs / ≤100µs |
+| `slo-rebac` | `POST /api/v1/messages`, rebac policy + 10k-entity data | ≤15µs / ≤75µs / ≤300µs |
+| `slo-batch` | `POST /api/v1/batch-messages`, 100 requests/call (per-call limits) | ≤200µs / ≤1ms / ≤5ms |
+
+### Running locally
+
+```bash
+cargo build --release   # builds benchmark, generate-data, slo-harness
+
+# 1. Generate the policy sets (10k distinct policies each):
+./target/release/generate-data --count 10000 --output /tmp/slo-simple-10k.json \
+    policy-set --language simple --resource-prefix /slo/eval
+./target/release/generate-data --count 10000 --output /tmp/slo-dsl-10k.json \
+    policy-set --language dsl --resource-prefix /slo/targeted
+
+# 2. Start a RELEASE agent. slo-evaluate-all additionally needs:
+REAPER_ALLOW_EVALUATE_ALL=true ../../target/release/reaper-agent &
+#    (REAPER_USE_PRUNING_INDEX defaults to true; leave it on.)
+
+# 3. Run scenarios. Ordering matters for `all`: evaluate-all runs FIRST,
+#    because it requires a PRUNABLE policy set — the engine's pruning index
+#    only extracts resource terms from Simple-language policies today
+#    (review finding R2-P2-1); once the unprunable 10k DSL set is deployed,
+#    a policy-less request exceeds the candidate cap and is denied.
+./target/release/slo-harness --scenario all \
+    --evaluate-all-policy-set /tmp/slo-simple-10k.json \
+    --policy-set /tmp/slo-dsl-10k.json \
+    --requests 20000 --concurrency 4 --save slo-results.json
+```
+
+The harness deploys everything it needs (policies via
+`/api/v1/policies/compile` / `/api/v1/policies/deploy`, principal entities and
+the rebac dataset via `/api/v1/data/stream`) and probes each scenario for a
+correct decision before measuring, so a mis-deployed set fails loudly instead
+of benchmarking a deny storm.
+
+### Asserting the SLO (`slo.yaml` + multiplier)
+
+```bash
+./target/release/slo-harness --scenario all ... \
+    --assert-slo slo.yaml --slo-multiplier 250   # or env SLO_MULTIPLIER
+```
+
+`slo.yaml` (checked in next to this README) is the single source of truth for
+the §3 table. Every threshold is scaled by the multiplier; any violated cell
+is listed and the process exits non-zero.
+
+- **Multiplier 1.0 = the real SLA.** Only meaningful on dedicated, isolated
+  hardware: the µs-scale rows are below the TCP-loopback floor (~100-190µs
+  observed for a full HTTP round trip), so 1.0 will fail on any ordinary box —
+  by design, the file carries the true SLA numbers.
+- **Shared CI runners use a documented larger multiplier** (the nightly
+  `slo-harness.yml` workflow uses 250 — an observed starting point: the local
+  worst-cell ratio was ~100x, targeted p50 ≈ 200µs vs the 2µs cell at
+  concurrency 4, so 250 leaves ~2.5x headroom for slower runners) to catch
+  order-of-magnitude regressions while absorbing loopback + runner variance.
+- **True-SLA measurement** requires dedicated hardware, a pinned agent, and
+  ideally a kernel-bypass or UDS transport; run with `--concurrency 1..4` and
+  `--slo-multiplier 1.0` there.
+
+Concurrency note: request-total latency includes client-side queueing at high
+`--concurrency`; use low concurrency (1-4) to approximate service latency, and
+higher values to measure under load. The achieved rps is reported alongside —
+the table's 5k rps load column is a target for dedicated hardware, not a
+harness parameter.
+
+### CI wiring
+
+- **Nightly absolute run** — `.github/workflows/slo-harness.yml` builds a
+  release agent, generates both policy sets, runs all four scenarios against a
+  fresh agent each, asserts `slo.yaml × SLO_MULTIPLIER` (default 250), and
+  uploads the HDR JSON as an artifact. Schedule/dispatch-only; never blocks PRs.
+- **Paired A/B on PRs** — the `http-slo-ab` job in
+  `.github/workflows/perf-gate.yml` runs `slo-targeted` at 1k policies against
+  a merge-base agent AND a PR-head agent, interleaved on the same runner, and
+  gates request-total p99 via `scripts/perf_ab_gate.py --http-ab` (median
+  ratio > 1.25x AND disjoint samples). This is what actually catches served-path
+  regressions (deser/serialize/cache/audit-capture) in PR CI.
+
 ## Fair Comparison
 
 Both systems are tested identically:

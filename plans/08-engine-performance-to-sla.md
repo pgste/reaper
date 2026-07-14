@@ -13,8 +13,15 @@
 > thread-local scratch under a per-evaluation traversal budget. F: a blocking
 > paired A/B perf gate benchmarks merge-base vs head on the same runner, so a
 > ≤10% statistical regression fails CI (self-test proves a synthetic +15%
-> fails). The SLO load-harness (validating the §3 SLO table end-to-end) is the
-> one deferred follow-up; the enforcement gate that guards it is in place.
+> fails). The deferred SLO load-harness now exists (round-2 D1, closes PERF
+> R2-P1-1): `benchmarks/reaper-vs-opa/slo-harness` drives the four §3 rows
+> against a real agent over HTTP with HDR request-total p50/p99/p999 and
+> asserts the checked-in `slo.yaml` table (× `SLO_MULTIPLIER`; 1.0 = the real
+> SLA on dedicated hardware). Nightly absolute run: `slo-harness.yml`
+> (multiplier 250 on shared runners, documented); PR-blocking served-path
+> regression protection: the paired A/B HTTP job in `perf-gate.yml`
+> (`perf_ab_gate.py --http-ab`). Request-total is also now observed on every
+> early-return deny path (round-2 D3, closes PERF R2-P2-3).
 
 **Readiness gate:** Blocks CONDITIONAL → READY for at-scale/regulated deployments. The sub-µs headline is real only for a 1-rule policy in isolation; the *served* path does not hold it at policy scale, and a policy-less request is a DoS amplifier.
 **Priority:** P1 (P1-1 served-engine linear scan + P1-2 batch runtime blocking are the two that break the SLA; P2/P3 are throughput/tail refinements).

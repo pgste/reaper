@@ -48,10 +48,45 @@ enum Commands {
     Json,
     /// Generate mega policy data (all patterns)
     Mega,
+    /// Generate an SLO policy SET: `--count` DISTINCT policies (not entities),
+    /// one per resource, for the slo-harness scenarios (Plan 08 §3).
+    PolicySet {
+        /// Policy language: "dsl" (Reaper DSL — targeted/batch SLO rows) or
+        /// "simple" (Simple rules with literal resources — the only language
+        /// the pruning index prunes today, required for the evaluate-all row).
+        #[arg(long, default_value = "dsl")]
+        language: String,
+        /// Resource prefix; policy i guards "{prefix}/{i}".
+        #[arg(long, default_value = "/slo")]
+        resource_prefix: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Policy-set generation writes its own document shape and returns early —
+    // it produces POLICIES, not entities.
+    if let Commands::PolicySet {
+        language,
+        resource_prefix,
+    } = &cli.command
+    {
+        let policies = generate_policy_set(cli.count, language, resource_prefix)?;
+        let output = json!({
+            "language": language,
+            "resource_prefix": resource_prefix,
+            "policies": policies,
+        });
+        let mut file = File::create(&cli.output)?;
+        serde_json::to_writer(&mut file, &output)?;
+        file.write_all(b"\n")?;
+        println!(
+            "✓ Generated {} {} policies to {}",
+            cli.count, language, cli.output
+        );
+        return Ok(());
+    }
 
     println!("Generating {} entities...", cli.count);
 
@@ -67,6 +102,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Comprehension => generate_comprehension_data(cli.count),
         Commands::Json => generate_json_data(cli.count),
         Commands::Mega => generate_mega_data(cli.count),
+        Commands::PolicySet { .. } => unreachable!("handled above"),
     };
 
     let output = json!({
@@ -80,6 +116,51 @@ fn main() -> anyhow::Result<()> {
     println!("✓ Generated {} entities to {}", cli.count, cli.output);
 
     Ok(())
+}
+
+/// Generate `count` DISTINCT policies for the SLO harness (Plan 08 §3 rows).
+///
+/// Every policy guards its own literal resource `{prefix}/{i}` and allows only
+/// `action == "read"`, so:
+/// - targeted requests (policy_id given) exercise the O(1) lookup + one eval;
+/// - evaluate-all requests prune to ~1 candidate per resource — but ONLY for
+///   `language=simple`, because the engine's pruning index does not extract
+///   resource terms from DSL policies yet (PERF R2-P2-1). Use `simple` for the
+///   evaluate-all SLO row and `dsl` for the targeted/batch rows.
+fn generate_policy_set(
+    count: usize,
+    language: &str,
+    resource_prefix: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let mut policies = Vec::with_capacity(count);
+    for i in 0..count {
+        let resource = format!("{}/{}", resource_prefix.trim_end_matches('/'), i);
+        match language {
+            "dsl" => {
+                let name = format!("slo-dsl-{i:05}");
+                // Compiled Reaper DSL policy — the mandated policy language.
+                let content = format!(
+                    "policy slo_dsl_{i} {{\n    version: \"1.0.0\",\n    description: \"SLO harness targeted policy {i}\",\n    default: deny,\n\n    rule allow_read {{\n        allow if {{\n            resource == \"{resource}\" &&\n            action == \"read\"\n        }}\n    }}\n}}\n"
+                );
+                policies.push(json!({
+                    "name": name,
+                    "policy_id": uuid::Uuid::new_v4().to_string(),
+                    "resource": resource,
+                    "content": content,
+                }));
+            }
+            "simple" => {
+                let name = format!("slo-simple-{i:05}");
+                policies.push(json!({
+                    "name": name,
+                    "policy_id": uuid::Uuid::new_v4().to_string(),
+                    "resource": resource,
+                }));
+            }
+            other => anyhow::bail!("unknown policy-set language '{other}' (dsl|simple)"),
+        }
+    }
+    Ok(policies)
 }
 
 fn generate_rbac_data(count: usize) -> Vec<Value> {
@@ -174,10 +255,10 @@ fn generate_multilayer_data(count: usize) -> Vec<Value> {
     let regions = ["us", "eu", "apac"];
 
     for i in 0..count {
-        let role_perms: Vec<&str> = match roles.choose(&mut rng).unwrap() {
-            &"admin" => vec!["read", "write", "delete", "admin"],
-            &"manager" => vec!["read", "write", "delete"],
-            &"developer" => vec!["read", "write"],
+        let role_perms: Vec<&str> = match *roles.choose(&mut rng).unwrap() {
+            "admin" => vec!["read", "write", "delete", "admin"],
+            "manager" => vec!["read", "write", "delete"],
+            "developer" => vec!["read", "write"],
             _ => vec!["read"],
         };
 

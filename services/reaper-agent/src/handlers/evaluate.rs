@@ -116,6 +116,27 @@ fn audit_gate(state: &AgentState) -> Result<(), StatusCode> {
     Ok(())
 }
 
+/// Observe request-total latency for an early-return response (deny or 503)
+/// into the SLA histogram (`reaper_decision_duration_seconds`).
+///
+/// Early-return denies — `data_stale`, `policy_not_found`,
+/// `evaluate_all_disabled`, `no_policies_loaded`, `candidate_cap_exceeded`,
+/// fast-path `parse_error`, and the audit-gate 503 — are SERVED requests. If
+/// they skip the histogram, a denial storm (stale-data gate tripped,
+/// misconfig, attack) leaves the request-total latency series silent while the
+/// agent answers at line rate, hiding the incident from the SLA dashboard
+/// (PERF R2-P2-3). The reason is already counted by `ERRORS_TOTAL`; here a
+/// single constant policy label keeps the histogram's cardinality bounded (the
+/// same pattern as the "cached" label on the cache-hit path).
+#[inline]
+fn observe_early_return(state: &AgentState, start_time: std::time::Instant) {
+    state
+        .decision_metrics
+        .for_policy("early_deny")
+        .duration
+        .observe(start_time.elapsed().as_secs_f64());
+}
+
 #[utoipa::path(
     post,
     path = "/api/v1/messages",
@@ -129,14 +150,19 @@ pub async fn evaluate_policy(
     State(state): State<Arc<AgentState>>,
     Json(mut payload): Json<EvaluateRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    audit_gate(&state)?;
+    // Start the request-total clock before the FIRST possible return so every
+    // served response — success, deny, or fail-closed 503 — is observed.
+    let start_time = std::time::Instant::now();
+
+    if let Err(status) = audit_gate(&state) {
+        observe_early_return(&state, start_time);
+        return Err(status);
+    }
     // Track concurrent evaluations
     CONCURRENT_EVALUATIONS.inc();
     let _guard = scopeguard::guard((), |_| {
         CONCURRENT_EVALUATIONS.dec();
     });
-
-    let start_time = std::time::Instant::now();
 
     // Generate decision ID with zero-alloc stack buffer (saves ~300-700ns vs .to_string())
     let uuid = Uuid::new_v4();
@@ -163,6 +189,7 @@ pub async fn evaluate_policy(
             cache_hit: false,
         })
         .unwrap_or_default();
+        observe_early_return(&state, start_time);
         return Ok(([(header::CONTENT_TYPE, "application/json")], body));
     }
 
@@ -195,6 +222,7 @@ pub async fn evaluate_policy(
                             cache_hit: false,
                         })
                         .unwrap_or_default();
+                        observe_early_return(&state, start_time);
                         return Ok(([(header::CONTENT_TYPE, "application/json")], body));
                     }
                 }
@@ -225,6 +253,7 @@ pub async fn evaluate_policy(
                     cache_hit: false,
                 })
                 .unwrap_or_default();
+                observe_early_return(&state, start_time);
                 return Ok(([(header::CONTENT_TYPE, "application/json")], body));
             }
         }
@@ -250,6 +279,7 @@ pub async fn evaluate_policy(
                 cache_hit: false,
             })
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
@@ -280,6 +310,7 @@ pub async fn evaluate_policy(
                 cache_hit: false,
             })
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
@@ -300,6 +331,7 @@ pub async fn evaluate_policy(
                 cache_hit: false,
             })
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
@@ -551,6 +583,9 @@ pub async fn evaluate_policy(
                     ERRORS_TOTAL
                         .with_label_values(&["audit_persist_unavailable"])
                         .inc();
+                    // Fail-closed 503s are served responses too — keep the
+                    // request-total SLA series honest under audit-sink pressure.
+                    metrics.duration.observe(start_time.elapsed().as_secs_f64());
                     return Err(StatusCode::SERVICE_UNAVAILABLE);
                 }
             } else {
@@ -618,14 +653,19 @@ pub async fn fast_evaluate_policy(
 ) -> Result<impl IntoResponse, StatusCode> {
     use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
-    audit_gate(&state)?;
+    // Start the request-total clock before the FIRST possible return (see the
+    // standard endpoint): every served response feeds the SLA histogram.
+    let start_time = std::time::Instant::now();
+
+    if let Err(status) = audit_gate(&state) {
+        observe_early_return(&state, start_time);
+        return Err(status);
+    }
     // Track concurrent evaluations
     CONCURRENT_EVALUATIONS.inc();
     let _guard = scopeguard::guard((), |_| {
         CONCURRENT_EVALUATIONS.dec();
     });
-
-    let start_time = std::time::Instant::now();
 
     // Generate decision ID with zero-alloc stack buffer
     let uuid = Uuid::new_v4();
@@ -642,6 +682,7 @@ pub async fn fast_evaluate_policy(
                 "decision": "deny"
             }))
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
     };
@@ -697,6 +738,7 @@ pub async fn fast_evaluate_policy(
                             "error": "policy_not_found"
                         }))
                         .unwrap_or_default();
+                        observe_early_return(&state, start_time);
                         return Ok(([(header::CONTENT_TYPE, "application/json")], body));
                     }
                 }
@@ -717,6 +759,7 @@ pub async fn fast_evaluate_policy(
                     "error": "policy_not_found"
                 }))
                 .unwrap_or_default();
+                observe_early_return(&state, start_time);
                 return Ok(([(header::CONTENT_TYPE, "application/json")], body));
             }
         }
@@ -734,6 +777,7 @@ pub async fn fast_evaluate_policy(
                 "error": "evaluate_all_disabled"
             }))
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
@@ -755,6 +799,7 @@ pub async fn fast_evaluate_policy(
                 "error": "no_policies_loaded"
             }))
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
@@ -767,6 +812,7 @@ pub async fn fast_evaluate_policy(
                 "error": "candidate_cap_exceeded"
             }))
             .unwrap_or_default();
+            observe_early_return(&state, start_time);
             return Ok(([(header::CONTENT_TYPE, "application/json")], body));
         }
 
@@ -891,6 +937,9 @@ pub async fn fast_evaluate_policy(
                     ERRORS_TOTAL
                         .with_label_values(&["audit_persist_unavailable"])
                         .inc();
+                    // Fail-closed 503s are served responses too — keep the
+                    // request-total SLA series honest under audit-sink pressure.
+                    metrics.duration.observe(start_time.elapsed().as_secs_f64());
                     return Err(StatusCode::SERVICE_UNAVAILABLE);
                 }
             } else {

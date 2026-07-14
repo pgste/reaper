@@ -1,0 +1,45 @@
+# Plan 08 §3 served-path SLO table (plans/08-engine-performance-to-sla.md).
+#
+# Request-total latency for POST /api/v1/messages (and /batch-messages for the
+# batch row), INCLUDING deserialization and response serialization, measured by
+# the slo-harness as client-observed send→response over HTTP loopback — an
+# upper bound on the server-side request-total the SLA is defined on.
+#
+# MULTIPLIER SEMANTICS
+#   slo-harness --assert-slo slo.yaml --slo-multiplier <f> (env SLO_MULTIPLIER)
+#   scales EVERY threshold below by <f>.
+#     * 1.0  = the REAL SLA. Only meaningful on dedicated hardware with a
+#              pinned, isolated agent (the §3 targets are single-digit µs; a
+#              bare TCP-loopback round trip already costs tens of µs, so 1.0
+#              is aspirational for an HTTP harness — it exists so the same
+#              file is the single source of truth for the SLA numbers).
+#     * CI   = shared runners use a documented larger multiplier (see
+#              .github/workflows/slo-harness.yml) to absorb loopback + runner
+#              variance while still catching order-of-magnitude regressions.
+#
+# The table's load column (5k/2k rps at N=10k policies) is a target for
+# dedicated hardware; the harness drives whatever the runner sustains at the
+# configured concurrency and reports the achieved rps alongside percentiles.
+scenarios:
+  # Targeted (policy_id given), simple DSL — N=10,000 policies, 5,000 rps.
+  slo-targeted:
+    p50_us: 2
+    p99_us: 10
+    p999_us: 50
+  # Evaluate-all via pruning index (few candidates match) — N=10,000, 5,000 rps.
+  # NOTE: prunable only for Simple-language policies until R2-P2-1 (DSL
+  # partial-evaluation pruning) lands; the harness enforces a Simple set.
+  slo-evaluate-all:
+    p50_us: 5
+    p99_us: 25
+    p999_us: 100
+  # ABAC/ReBAC (bounded traversal) — N=10,000, 2,000 rps.
+  slo-rebac:
+    p50_us: 15
+    p99_us: 75
+    p999_us: 300
+  # Batch (100 reqs/call, spawn_blocking+rayon) — 500 calls/s; limits are per CALL.
+  slo-batch:
+    p50_us: 200
+    p99_us: 1000
+    p999_us: 5000
