@@ -205,16 +205,18 @@ unaltered" question lands on.
 
 ---
 
-## Workstream E — Enterprise / compliance finishing  *(IN PROGRESS — E1 scoped (`plans/round-2/E1-siem-connectors.md`, not started); E2 slice 1 LANDED (endpoint live) with 3 follow-ups remaining — see `plans/round-2/E2-subject-erasure.md` STATUS)*
+## Workstream E — Enterprise / compliance finishing  *(IN PROGRESS — E1 scoped (`plans/round-2/E1-siem-connectors.md`, not started); E2 COMPLETE — slice 1 + all three follow-ups landed, see `plans/round-2/E2-subject-erasure.md` STATUS)*
 
 - **E1 — Native SIEM export connectors.** *Closes PROD R2-2.* NDJSON/JSON only;
   no Kafka/Splunk-HEC/CEF/OCSF. Ship Vector sink configs + an OCSF field mapping +
   a push export API. **Effort M.** Bank SOC onboarding blocker.
-- **E2 — GDPR subject-erasure endpoint.** *(slice 1 LANDED — endpoint
-  `POST /orgs/{org}/audit/erasure` live; 3 follow-ups remain, see
-  `E2-subject-erasure.md` STATUS)* *Closes PROD R2-3.* No erase-by-subject
-  anywhere. Build erase over ClickHouse + DataStore with a legal-hold guard.
-  **Effort M.** UK DPA-2018 DSAR gap.
+- **E2 — GDPR subject-erasure endpoint.** *(COMPLETE — `POST /orgs/{org}/audit/erasure`
+  live + all three follow-ups landed; see `E2-subject-erasure.md` STATUS)*
+  *Closes PROD R2-3.* Erase-by-subject over ClickHouse (redact-in-place,
+  hold-honoring, chain-preserving; pseudonymised-column matching via
+  request-supplied salt) + DataStore cascade, with immutable-surface exemptions
+  disclosed on a receipt and a queryable `audit_erasure_requests` history
+  (`GET …/audit/erasures`). **Effort M.** UK DPA-2018 DSAR gap.
 - **E3 — Signed air-gap export/import.** *Closes PROD R2-4, SEC (air-gap half of
   R2-10 round-1).* `compile` doesn't sign; CLI deploy sends no signature. Add
   `bundle export --sign` / `import --verify` + agent checksum report. **Effort M.**

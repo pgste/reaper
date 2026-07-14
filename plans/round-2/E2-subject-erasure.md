@@ -10,7 +10,7 @@ This doc is updated as each slice lands.
 
 ---
 
-## STATUS (2026-07-14) — slice 1 + follow-ups 1 & 2 landed; one follow-up remains
+## STATUS (2026-07-14) — slice 1 + all three follow-ups landed; E2 complete
 
 **Decisions locked (with the maintainer):**
 1. Decision-log strategy = **redact-in-place** (option B below).
@@ -58,10 +58,23 @@ This doc is updated as each slice lands.
    (ages out with retention / superseded by next publish; crypto-shred the tenant
    key to render the archived `input_data` irrecoverable pre-expiry). Full posture
    + verification guidance: `docs/security/SUBJECT_ERASURE.md`.
-3. **Dedicated erasure-receipt table (optional).** Today the audit-trail entry is
-   the proof of erasure. If queryable erasure history is wanted, add
-   `audit_erasure_requests` (migrations `025_`/`0018_`) + repo, and persist the
-   receipt alongside the audit write.
+3. **Dedicated erasure-receipt table.** *(LANDED — follow-up #3.)* Added
+   `audit_erasure_requests` (migrations `025_subject_erasure.sql` /
+   `0018_subject_erasure.sql`, registered in `connection.rs`) + the
+   `AuditErasureRepository` (`record` / `list_for_org`, borrowed
+   `NewErasureRecord` input, `ErasureRecord` output). The endpoint persists one
+   row per completed erasure best-effort *inside* the idempotency-guarded op
+   (so a history hiccup never fails an irreversible erasure, and a key replay
+   never double-inserts): the full `ErasureReceipt` JSON verbatim in `receipt`,
+   with `decision_log_status`/`holds_honored`/`matched_pseudonyms`/
+   `datastore_status`/`datastores_scanned`/`entities_deleted`/
+   `verification_posture` decomposed for querying. New read path
+   `GET /orgs/{org}/audit/erasures` (org-admin-gated — reading *who was erased*
+   is a compliance read like holds/retention, distinct from the `audit:erase`
+   write scope), newest-first, `?limit` default 100 / hard cap 500. Typed DTOs +
+   ProblemDetails → api_contract gate passes; integration test
+   `subject_erasure_history_records_and_lists` covers record + list ordering +
+   tenant scoping.
 
 ---
 

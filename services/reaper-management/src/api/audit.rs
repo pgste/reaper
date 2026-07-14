@@ -9,7 +9,7 @@
 //! surface, not operational decision data.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Json, Response},
 };
@@ -28,8 +28,8 @@ use crate::{
     auth::middleware::{AuthenticatedUser, RequireAuth},
     auth::scopes::Scope,
     db::repositories::{
-        audit_governance::LegalHold, AuditGovernanceRepository, DatastoreRepository,
-        OrganizationRepository,
+        audit_governance::LegalHold, AuditErasureRepository, AuditGovernanceRepository,
+        DatastoreRepository, ErasureRecord, NewErasureRecord, OrganizationRepository,
     },
     decisions::purge::{default_retention_days, run_org_purge, PurgeError},
     decisions::{EraseOutcome, HoldFilter, PurgeOutcome, SubjectPseudonyms},
@@ -48,6 +48,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(get_hold, release_hold))
         .routes(routes!(trigger_purge))
         .routes(routes!(erase_subject))
+        .routes(routes!(list_erasures))
 }
 
 /// Authorize audit-governance access on `org` and return the org id.
@@ -793,10 +794,107 @@ async fn erase_subject(
             )
             .await;
 
+            // Persist a queryable erasure-history record (E2 follow-up #3),
+            // best-effort like the audit write: the trail is the primary proof,
+            // this table is the DSAR convenience. Never fail an already-completed
+            // (irreversible) erasure on a history hiccup.
+            let (dl_status, holds_honored, matched_pseudonyms) = match &receipt.decision_log {
+                DecisionLogEraseResult::Submitted {
+                    holds_honored,
+                    matched_pseudonyms,
+                } => (
+                    "submitted",
+                    Some(*holds_honored as i64),
+                    *matched_pseudonyms,
+                ),
+                DecisionLogEraseResult::DeferredBlanketHold => {
+                    ("deferred_blanket_hold", None, false)
+                }
+                DecisionLogEraseResult::StoreNotConfigured => ("store_not_configured", None, false),
+            };
+            let (ds_status, scanned, deleted) = match &receipt.datastore {
+                DatastoreEraseResult::Erased {
+                    datastores_scanned,
+                    entities_deleted,
+                } => (
+                    "erased",
+                    *datastores_scanned as i64,
+                    *entities_deleted as i64,
+                ),
+                DatastoreEraseResult::Skipped => ("skipped", 0, 0),
+            };
+            if let Err(e) = AuditErasureRepository::new(&state.db)
+                .record(NewErasureRecord {
+                    org_id,
+                    subject: &subject,
+                    requested_by: Some(user.id.as_str()),
+                    decision_log_status: dl_status,
+                    holds_honored,
+                    matched_pseudonyms,
+                    datastore_status: ds_status,
+                    datastores_scanned: scanned,
+                    entities_deleted: deleted,
+                    verification_posture: &receipt.verification_posture,
+                    receipt: &body,
+                })
+                .await
+            {
+                tracing::error!(error = %e, "failed to persist subject-erasure receipt");
+            }
+
             Ok((StatusCode::OK, body))
         },
     )
     .await
+}
+
+#[derive(Debug, Deserialize)]
+struct ErasureHistoryQuery {
+    /// Max records to return, newest first (default 100, hard cap 500).
+    limit: Option<i64>,
+}
+
+/// A tenant's subject-erasure history.
+#[derive(Debug, Serialize, ToSchema)]
+struct ErasureHistoryResponse {
+    /// Number of records returned (bounded by `limit`).
+    count: usize,
+    records: Vec<ErasureRecord>,
+}
+
+/// GET /orgs/{org}/audit/erasures — the tenant's subject-erasure history
+/// (E2 follow-up #3), newest first. Org-admin-gated: reading *who was erased* is
+/// a compliance-record read, like legal holds and retention — distinct from the
+/// `audit:erase` scope that authorizes performing an erasure.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/audit/erasures",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("limit" = Option<i64>, Query, description = "Max records, newest first (default 100, max 500)")
+    ),
+    responses(
+        (status = 200, description = "Subject-erasure history", body = ErasureHistoryResponse),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails)
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn list_erasures(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(org): Path<String>,
+    Query(query): Query<ErasureHistoryQuery>,
+) -> ApiResult<Json<ErasureHistoryResponse>> {
+    let org_id = authorize_admin(&state, &user, &org).await?;
+    let records = AuditErasureRepository::new(&state.db)
+        .list_for_org(org_id, query.limit)
+        .await?;
+    Ok(Json(ErasureHistoryResponse {
+        count: records.len(),
+        records,
+    }))
 }
 
 #[cfg(test)]

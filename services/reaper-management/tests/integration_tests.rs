@@ -8538,3 +8538,84 @@ async fn test_problem_responses_carry_rfc9457_instance() {
     let body = parse_body(response).await;
     assert!(body.get("instance").is_none());
 }
+
+/// E2 follow-up #3: the erasure-receipt table records completed erasures and the
+/// history reads them back newest-first with the decomposed columns intact.
+#[tokio::test]
+async fn subject_erasure_history_records_and_lists() {
+    use reaper_management::db::repositories::{AuditErasureRepository, NewErasureRecord};
+
+    let env = setup_test_env().await;
+    let org = OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "Erasure Org".to_string(),
+            slug: "erasure-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let repo = AuditErasureRepository::new(&env.db);
+    let receipt_a = json!({"subject": "alice", "verification_posture": "linkage"});
+    let first = repo
+        .record(NewErasureRecord {
+            org_id: org.id,
+            subject: "alice",
+            requested_by: Some("dpo-1"),
+            decision_log_status: "submitted",
+            holds_honored: Some(2),
+            matched_pseudonyms: true,
+            datastore_status: "erased",
+            datastores_scanned: 3,
+            entities_deleted: 1,
+            verification_posture: "linkage",
+            receipt: &receipt_a,
+        })
+        .await
+        .unwrap();
+    assert_eq!(first.subject, "alice");
+    assert!(first.matched_pseudonyms);
+    assert_eq!(first.holds_honored, Some(2));
+
+    // A second erasure, so ordering is observable.
+    repo.record(NewErasureRecord {
+        org_id: org.id,
+        subject: "bob",
+        requested_by: Some("dpo-2"),
+        decision_log_status: "store_not_configured",
+        holds_honored: None,
+        matched_pseudonyms: false,
+        datastore_status: "skipped",
+        datastores_scanned: 0,
+        entities_deleted: 0,
+        verification_posture: "linkage",
+        receipt: &json!({"subject": "bob"}),
+    })
+    .await
+    .unwrap();
+
+    let history = repo.list_for_org(org.id, None).await.unwrap();
+    assert_eq!(history.len(), 2);
+    // Newest first: bob was recorded after alice.
+    assert_eq!(history[0].subject, "bob");
+    assert_eq!(history[0].decision_log_status, "store_not_configured");
+    assert_eq!(history[0].holds_honored, None);
+    assert_eq!(history[1].subject, "alice");
+    assert_eq!(history[1].datastores_scanned, 3);
+    assert_eq!(history[1].receipt["verification_posture"], "linkage");
+
+    // Another org sees none of it (tenant scoping).
+    let other = OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "Other Org".to_string(),
+            slug: "other-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: json!({}),
+        })
+        .await
+        .unwrap();
+    assert!(repo.list_for_org(other.id, None).await.unwrap().is_empty());
+}
