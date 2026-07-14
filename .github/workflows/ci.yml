@@ -309,6 +309,16 @@ jobs:
           cargo test -p policy-engine --test context_interner_leak_tests 2>&1 | tee ctx-leak-results.txt
           echo "CTX_LEAK_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run pruning-index correctness suite
+        run: |
+          # Served evaluate-all pruning (Plan 08 Phase A + round-2 D2): the
+          # candidate set is bounded by matches not N, and — the merge gate —
+          # the pruned candidate set yields the IDENTICAL decision as the full
+          # linear scan for Simple AND DSL corpora (guard against fail-open
+          # pruning). Integration target; not covered by --lib.
+          cargo test -p policy-engine --test pruning_index_tests 2>&1 | tee pruning-index-results.txt
+          echo "PRUNING_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
       - name: Generate unit test summary
         if: always()
         run: |
@@ -338,7 +348,7 @@ jobs:
       - name: Fail if any unit/integration/equivalence tests failed
         if: always()
         run: |
-          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} ))
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} ))
           exit $rc
 
   # Stage 2b: Management tests against REAL PostgreSQL (BLOCKS pipeline).
