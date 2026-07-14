@@ -84,6 +84,25 @@ impl<'a> DatastoreRepository<'a> {
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))
     }
 
+    /// Every datastore id an org owns (one per namespace). Used by subject
+    /// erasure (E2) to reach the subject's entity across all the org's
+    /// namespaces, not just one.
+    pub async fn datastore_ids_for_org(&self, org_id: Uuid) -> Result<Vec<Uuid>, DatabaseError> {
+        let pool = self.pool()?;
+        let rows = sqlx::query("SELECT id FROM datastores WHERE org_id = $1")
+            .bind(org_id.to_string())
+            .fetch_all(pool)
+            .await?;
+        let mut ids = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            if let Ok(uuid) = Uuid::parse_str(&id) {
+                ids.push(uuid);
+            }
+        }
+        Ok(ids)
+    }
+
     // ------------------------------------------------------------------
     // Datastore lifecycle
     // ------------------------------------------------------------------
