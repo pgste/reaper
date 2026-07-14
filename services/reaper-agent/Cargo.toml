@@ -23,6 +23,7 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+smallvec = { workspace = true }  # Inline the targeted single-policy id (no heap alloc on the hot path)
 clap = { version = "4.0", features = ["derive"] }
 sonic-rs = "0.5"  # SIMD-accelerated JSON parsing
 mimalloc = { version = "0.1", default-features = false }  # fast allocator for the hot path

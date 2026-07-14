@@ -83,10 +83,6 @@ name = "e2e_bench"
 harness = false
 
 [[bench]]
-name = "optimization_phases_bench"
-harness = false
-
-[[bench]]
 name = "complex_policy_bench"
 harness = false
 
