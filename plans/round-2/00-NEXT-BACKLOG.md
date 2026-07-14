@@ -57,7 +57,7 @@ unaltered" question lands on.
 
 ---
 
-## Workstream B — Propagation surface safety  *(the strongest pillar's two holes)*
+## Workstream B — Propagation surface safety  *(COMPLETE — B1-B2 landed)*
 
 - **B1 — Fine-grained authz on rollout/rollback/approve-wave/cancel/pin.** *(landed)* *Closes
   SEC R2-1.* These gate only on org-membership/Admin — any token (incl. read-only
@@ -81,7 +81,7 @@ unaltered" question lands on.
 
 ---
 
-## Workstream C — Data-plane API hardening
+## Workstream C — Data-plane API hardening  *(COMPLETE — C1-C4 landed)*
 
 - **C1 — Paginate the ABAC/ReBAC list endpoints.** *(landed)* *Closes CODE R2-01.* Entity /
   role-binding / tuple lists return everything with no `LIMIT` — the biggest
@@ -129,7 +129,7 @@ unaltered" question lands on.
 
 ---
 
-## Workstream D — Measured SLO + eval finishing
+## Workstream D — Measured SLO + eval finishing  *(COMPLETE — D1-D4 landed; forward perf follow-ups parked, see "Parked / deferred" below)*
 
 - **D1 — Build the deferred load harness and gate the request-total SLO.** *(landed)* *Closes
   PERF R2-P1-1.* The headline sub-µs SLA is never measured on the real HTTP path;
@@ -205,7 +205,7 @@ unaltered" question lands on.
 
 ---
 
-## Workstream E — Enterprise / compliance finishing
+## Workstream E — Enterprise / compliance finishing  *(IN PROGRESS — E1/E2 scoped: `plans/round-2/E1-siem-connectors.md`, `plans/round-2/E2-subject-erasure.md`; E2 slice 1 in flight)*
 
 - **E1 — Native SIEM export connectors.** *Closes PROD R2-2.* NDJSON/JSON only;
   no Kafka/Splunk-HEC/CEF/OCSF. Ship Vector sink configs + an OCSF field mapping +
@@ -238,6 +238,34 @@ unclaimed. Only pursue if the tactical P1s above are funded first.
 - **F2 — Wasm eval build target.** The source tree is ~80% ready; unlocks
   edge/browser/multi-language embedding and rides the OPA→wasm / Cedar→wasm trend.
   **Effort L.** Enables F1's distribution.
+
+---
+
+## Parked / deferred — forward perf follow-ups (saving for later)
+
+Not on the committed path. These are optional eval-engine refinements, gated on a
+profile that actually shows the engine slice (not the HTTP/loopback floor)
+mattering — today the served DSL path is ~1µs while the wire floor is ~150µs, so
+none of these move the needle yet. Captured here so the intent isn't lost as
+orphan code.
+
+- **P-1 — Wire partial evaluation into the served compiled DSL path.**
+  `crates/policy-engine/src/partial_evaluation.rs` exists but is unwired: its
+  `Condition` primitives are reached only through `CompiledPolicyEvaluator::compile`
+  (`compiled_evaluator.rs`), which **no served path calls** (the DSL serve path is
+  `ReaperPolicy::build_preferred` → `ReaperDSLEvaluator`, not `build_compiled`), and
+  its DSL/Cedar `partial_evaluate` is a TODO no-op. To make it real: constant-fold
+  static `principal.*`/`resource.*` conditions at *deploy* time in the compiled
+  DSL v2 evaluator, and add it to the perf A/B gate. **Only worth it if profiling
+  shows compiled-condition evaluation dominates — it currently does not.** Effort M.
+- **P-2 — AST-side resource-index extraction (D2 follow-up).** D2 made the
+  *compiled* `ReaperDSLEvaluator` prunable via `resource_index_terms()`; the
+  `ReapAstEvaluator` fallback still returns `None` (always a candidate). Extend the
+  same soundness-preserving extraction to the AST evaluator so AST-tier DSL policies
+  also prune. Compiled is the primary path, so this is strictly secondary. Effort S.
+
+Sibling work (both eval-perf); if either is picked up, do it as a "D5" slice with a
+profiling justification, not as remediation.
 
 ---
 
