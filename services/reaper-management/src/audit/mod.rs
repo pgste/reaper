@@ -240,6 +240,8 @@ pub mod actions {
     pub const AUDIT_LEGAL_HOLD_CREATE: &str = "audit.legal_hold_create";
     pub const AUDIT_LEGAL_HOLD_RELEASE: &str = "audit.legal_hold_release";
     pub const AUDIT_PURGE: &str = "audit.purge";
+    /// GDPR Art. 17 subject erasure (E2): the durable proof-of-erasure record.
+    pub const AUDIT_SUBJECT_ERASURE: &str = "audit.subject_erasure";
     pub const AUDIT_REPLAY: &str = "audit.replay";
 }
 

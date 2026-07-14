@@ -139,6 +139,20 @@ pub enum PurgeOutcome {
     SkippedBlanketHold,
 }
 
+/// Outcome of a subject-erasure request over the decision store (E2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case", tag = "outcome")]
+pub enum EraseOutcome {
+    /// The redact-in-place UPDATE was submitted to ClickHouse (mutations apply
+    /// asynchronously). `holds_honored` non-held rows carrying the subject were
+    /// scheduled for redaction.
+    Submitted { holds_honored: usize },
+    /// An active blanket hold preserves the whole tenant for litigation — a
+    /// lawful basis to retain, so no decision rows were redacted. The caller
+    /// records the erasure request as deferred, not completed.
+    DeferredBlanketHold,
+}
+
 /// One decision row as returned to API clients (matches the agent's
 /// DecisionLogEntry fields plus ingest metadata).
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -458,6 +472,28 @@ impl DecisionStore {
         self.run(&sql, &params).await?;
         Ok(PurgeOutcome::Submitted {
             cutoff: cutoff.to_string(),
+            holds_honored: holds.len(),
+        })
+    }
+
+    /// Redact a data subject's PII from the decision store in place (E2, GDPR
+    /// Art. 17). Overwrites `principal`/`resource`/`context`/`input_data`/
+    /// `replay_input` with tombstones on every non-held row carrying the subject,
+    /// leaving the hash-chain fields intact so the store still verifies under
+    /// `VerifyMode::Linkage`. A blanket hold is a lawful basis to retain, so it
+    /// defers the erasure rather than breaching the hold.
+    pub async fn erase_subject(
+        &self,
+        tenant_id: &str,
+        subject: &str,
+        holds: &[HoldFilter],
+    ) -> Result<EraseOutcome, DecisionStoreError> {
+        if holds.iter().any(HoldFilter::is_blanket) {
+            return Ok(EraseOutcome::DeferredBlanketHold);
+        }
+        let (sql, params) = build_erase_subject_sql(&self.config, tenant_id, subject, holds);
+        self.run(&sql, &params).await?;
+        Ok(EraseOutcome::Submitted {
             holds_honored: holds.len(),
         })
     }
@@ -899,6 +935,48 @@ fn build_facets_sql(
 /// exclusion per active hold. Every user value is bound as a server-side
 /// parameter (`param_hN_field`) — never spliced into the SQL text. Blanket
 /// holds are handled by the caller (purge is skipped entirely).
+/// Append one active hold's exclusion clause to a mutation's `WHERE`.
+///
+/// A hold protects the rows its filter matches, so a purge/erasure must skip
+/// them: this emits `NOT (<hold conjunction>)`, binding each dimension as a
+/// server-side parameter (`h{i}_*`). Shared by [`build_purge_sql`] (retention
+/// delete) and [`build_erase_subject_sql`] (subject redaction) so both honor
+/// holds identically. Blanket holds never reach here (callers skip the whole
+/// mutation); an empty conjunction fails SAFE — `"0"` matches no rows, so a
+/// malformed hold protects everything rather than nothing.
+fn push_hold_exclusion(
+    hold: &HoldFilter,
+    i: usize,
+    conds: &mut Vec<String>,
+    params: &mut Vec<(String, String)>,
+) {
+    let mut hold_conds: Vec<String> = Vec::new();
+    let mut bind = |col_expr: &str, name_suffix: &str, value: &Option<String>| {
+        if let Some(v) = value {
+            let name = format!("h{i}_{name_suffix}");
+            hold_conds.push(col_expr.replace("{p}", &format!("{{{name}:String}}")));
+            params.push((name, v.clone()));
+        }
+    };
+    bind("principal = {p}", "principal", &hold.principal);
+    bind("action = {p}", "action", &hold.action);
+    bind("resource = {p}", "resource", &hold.resource);
+    bind("decision = {p}", "decision", &hold.decision);
+    bind("policy_name = {p}", "policy_name", &hold.policy_name);
+    bind("agent_id = {p}", "agent_id", &hold.agent_id);
+    bind(
+        "timestamp >= parseDateTime64BestEffort({p})",
+        "from",
+        &hold.from,
+    );
+    bind("timestamp < parseDateTime64BestEffort({p})", "to", &hold.to);
+    if hold_conds.is_empty() {
+        conds.push("0".to_string()); // matches no rows: mutate nothing
+    } else {
+        conds.push(format!("NOT ({})", hold_conds.join(" AND ")));
+    }
+}
+
 fn build_purge_sql(
     config: &DecisionStoreConfig,
     tenant_id: &str,
@@ -916,38 +994,57 @@ fn build_purge_sql(
     params.push(("cutoff".to_string(), cutoff.to_string()));
 
     for (i, hold) in holds.iter().enumerate() {
-        let mut hold_conds: Vec<String> = Vec::new();
-        let mut bind = |col_expr: &str, name_suffix: &str, value: &Option<String>| {
-            if let Some(v) = value {
-                let name = format!("h{i}_{name_suffix}");
-                hold_conds.push(col_expr.replace("{p}", &format!("{{{name}:String}}")));
-                params.push((name, v.clone()));
-            }
-        };
-        bind("principal = {p}", "principal", &hold.principal);
-        bind("action = {p}", "action", &hold.action);
-        bind("resource = {p}", "resource", &hold.resource);
-        bind("decision = {p}", "decision", &hold.decision);
-        bind("policy_name = {p}", "policy_name", &hold.policy_name);
-        bind("agent_id = {p}", "agent_id", &hold.agent_id);
-        bind(
-            "timestamp >= parseDateTime64BestEffort({p})",
-            "from",
-            &hold.from,
-        );
-        bind("timestamp < parseDateTime64BestEffort({p})", "to", &hold.to);
-        // Blanket holds never reach here (caller skips the purge), but guard
-        // anyway: an empty conjunction would be `NOT (TRUE)` = delete nothing
-        // matched — fail SAFE by excluding everything.
-        if hold_conds.is_empty() {
-            conds.push("0".to_string()); // matches no rows: purge nothing
-        } else {
-            conds.push(format!("NOT ({})", hold_conds.join(" AND ")));
-        }
+        push_hold_exclusion(hold, i, &mut conds, &mut params);
     }
 
     (
         format!("ALTER TABLE decisions DELETE WHERE {}", conds.join(" AND ")),
+        params,
+    )
+}
+
+/// Tombstone written into redacted PII columns by subject erasure (E2). A fixed
+/// sentinel so erased rows are self-describing and re-erasure is idempotent.
+const ERASURE_TOMBSTONE: &str = "<erased>";
+
+/// Build the redact-in-place mutation for subject erasure (E2).
+///
+/// Overwrites the PII-bearing columns (`principal`, `resource`, `context`,
+/// `input_data`, `replay_input`) with tombstones on every row where the subject
+/// appears as the actor *or* as the exact resource — while leaving
+/// `seq`/`chain_id`/`prev_hash`/`entry_hash` untouched, so the tamper-evident
+/// chain still verifies under `VerifyMode::Linkage` and checkpoint completeness
+/// (`count`, `[seq_start, seq_end]`) is preserved. Active legal holds are
+/// honored exactly as in a purge: a held row is never redacted.
+fn build_erase_subject_sql(
+    config: &DecisionStoreConfig,
+    tenant_id: &str,
+    subject: &str,
+    holds: &[HoldFilter],
+) -> (String, Vec<(String, String)>) {
+    let mut params = Vec::new();
+    let mut conds: Vec<String> = Vec::new();
+
+    if config.tenant_filter {
+        conds.push("tenant_id = {tenant:String}".to_string());
+        params.push(("tenant".to_string(), tenant_id.to_string()));
+    }
+    conds.push("(principal = {subject:String} OR resource = {subject:String})".to_string());
+    params.push(("subject".to_string(), subject.to_string()));
+
+    for (i, hold) in holds.iter().enumerate() {
+        push_hold_exclusion(hold, i, &mut conds, &mut params);
+    }
+
+    params.push(("tomb".to_string(), ERASURE_TOMBSTONE.to_string()));
+    (
+        format!(
+            "ALTER TABLE decisions UPDATE \
+             principal = {{tomb:String}}, resource = {{tomb:String}}, \
+             context = '', input_data = '', replay_input = '' \
+             WHERE {}",
+            conds.join(" AND ")
+        ),
         params,
     )
 }
@@ -1284,6 +1381,72 @@ mod tests {
             &[HoldFilter::default()],
         );
         assert!(sql.ends_with("AND 0"), "{sql}");
+    }
+
+    #[test]
+    fn erase_sql_redacts_pii_and_preserves_chain_columns() {
+        let (sql, params) = build_erase_subject_sql(
+            &config(true),
+            "org-1",
+            "alice'; DROP TABLE decisions;--",
+            &[],
+        );
+
+        // Redact-in-place, not delete: rows (and their hash-chain fields) survive.
+        assert!(sql.starts_with("ALTER TABLE decisions UPDATE"), "{sql}");
+        // Every PII-bearing column is tombstoned.
+        assert!(sql.contains("principal = {tomb:String}"), "{sql}");
+        assert!(sql.contains("resource = {tomb:String}"), "{sql}");
+        assert!(sql.contains("context = ''"), "{sql}");
+        assert!(sql.contains("input_data = ''"), "{sql}");
+        assert!(sql.contains("replay_input = ''"), "{sql}");
+        // The tamper-evidence columns must NOT be mutated, or Linkage verification
+        // and checkpoint completeness would break.
+        for chain_col in ["seq =", "chain_id =", "prev_hash =", "entry_hash ="] {
+            assert!(
+                !sql.contains(chain_col),
+                "must not mutate {chain_col}: {sql}"
+            );
+        }
+        // Subject bound as a parameter (both actor and exact-resource match), never spliced.
+        assert!(sql.contains("(principal = {subject:String} OR resource = {subject:String})"));
+        assert!(!sql.contains("DROP TABLE"), "{sql}");
+        assert!(sql.contains("tenant_id = {tenant:String}"));
+
+        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("tenant"), Some("org-1"));
+        assert_eq!(get("subject"), Some("alice'; DROP TABLE decisions;--"));
+        assert_eq!(get("tomb"), Some(ERASURE_TOMBSTONE));
+    }
+
+    #[test]
+    fn erase_sql_honors_holds_like_purge() {
+        let holds = vec![
+            HoldFilter {
+                decision: Some("deny".to_string()),
+                ..Default::default()
+            },
+            HoldFilter {
+                policy_name: Some("pci-policy".to_string()),
+                ..Default::default()
+            },
+        ];
+        let (sql, params) = build_erase_subject_sql(&config(true), "org-1", "bob", &holds);
+
+        // A held row is never redacted: one NOT (...) exclusion per hold.
+        assert_eq!(sql.matches("NOT (").count(), 2, "{sql}");
+        assert!(
+            sql.contains("NOT (decision = {h0_decision:String})"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("NOT (policy_name = {h1_policy_name:String})"),
+            "{sql}"
+        );
+        // Subject selector still present alongside the exclusions.
+        assert!(sql.contains("principal = {subject:String}"));
+        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("subject"), Some("bob"));
     }
 
     #[test]

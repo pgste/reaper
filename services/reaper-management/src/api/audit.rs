@@ -10,8 +10,8 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::Json,
+    http::{HeaderMap, StatusCode},
+    response::{Json, Response},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -22,15 +22,17 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult, ProblemDetails},
+    api::idempotency,
     api::orgs::resolve_org,
     audit::{actions, ActorType, AuditEntry, ResourceType},
     auth::middleware::{AuthenticatedUser, RequireAuth},
     auth::scopes::Scope,
     db::repositories::{
-        audit_governance::LegalHold, AuditGovernanceRepository, OrganizationRepository,
+        audit_governance::LegalHold, AuditGovernanceRepository, DatastoreRepository,
+        OrganizationRepository,
     },
     decisions::purge::{default_retention_days, run_org_purge, PurgeError},
-    decisions::{HoldFilter, PurgeOutcome},
+    decisions::{EraseOutcome, HoldFilter, PurgeOutcome},
     state::AppState,
 };
 
@@ -45,6 +47,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(list_holds, create_hold))
         .routes(routes!(get_hold, release_hold))
         .routes(routes!(trigger_purge))
+        .routes(routes!(erase_subject))
 }
 
 /// Authorize audit-governance access on `org` and return the org id.
@@ -64,6 +67,30 @@ async fn authorize_admin(
     if user.org_id != organization.id && !user.has_permission(Scope::Admin) {
         return Err(ApiError::Forbidden(
             "Cannot manage audit governance for other organizations".to_string(),
+        ));
+    }
+    Ok(organization.id)
+}
+
+/// Authorize a subject-erasure on `org` and return the org id. Requires the
+/// dedicated `audit:erase` scope (separation of duties — erasure is irreversible
+/// and destroys evidence, so it is not conferred by `org:admin`); the global
+/// `admin` scope still covers it and the platform-operator cross-org escape.
+async fn authorize_erase(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    org_ref: &str,
+) -> ApiResult<Uuid> {
+    if !user.has_permission(Scope::AuditErase) && !user.has_permission(Scope::Admin) {
+        return Err(ApiError::Forbidden(
+            "Subject erasure requires the audit:erase scope".to_string(),
+        ));
+    }
+    let org_repo = OrganizationRepository::new(&state.db);
+    let organization = resolve_org(&org_repo, org_ref).await?;
+    if user.org_id != organization.id && !user.has_permission(Scope::Admin) {
+        return Err(ApiError::Forbidden(
+            "Cannot erase subjects for other organizations".to_string(),
         ));
     }
     Ok(organization.id)
@@ -468,4 +495,183 @@ async fn trigger_purge(
         days,
         result: outcome,
     }))
+}
+
+// ---- Subject erasure (E2, GDPR Art. 17) ----
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct EraseSubjectRequest {
+    /// The data subject's identifier — matched against decision-log
+    /// `principal`/`resource` and DataStore `entity_id`.
+    subject: String,
+    /// Also erase the subject's entity (and its tuples/bindings) from the org's
+    /// authoring DataStores. Default `true`; set `false` to erase only the
+    /// decision-log trail.
+    #[serde(default)]
+    erase_datastore: Option<bool>,
+}
+
+/// What happened to the decision-log trail for the subject.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum DecisionLogEraseResult {
+    /// Redact-in-place UPDATE submitted; `holds_honored` active holds were
+    /// excluded from the redaction.
+    Submitted { holds_honored: usize },
+    /// An active blanket legal hold preserves the whole tenant — a lawful basis
+    /// to retain, so the decision-log redaction was deferred, not applied.
+    DeferredBlanketHold,
+    /// No decision store is configured (`REAPER_CLICKHOUSE_URL` unset), so there
+    /// is no decision-log trail to erase.
+    StoreNotConfigured,
+}
+
+/// What happened to the subject's authoring-DataStore records.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum DatastoreEraseResult {
+    /// Hard-deleted the subject's entity (cascading its tuples + bindings) from
+    /// `entities_deleted` of the `datastores_scanned` DataStores it appeared in.
+    Erased {
+        datastores_scanned: usize,
+        entities_deleted: usize,
+    },
+    /// DataStore erasure was not requested (`erase_datastore = false`).
+    Skipped,
+}
+
+/// Proof-of-erasure receipt (also written to the audit trail).
+#[derive(Debug, Serialize, ToSchema)]
+struct ErasureReceipt {
+    subject: String,
+    decision_log: DecisionLogEraseResult,
+    datastore: DatastoreEraseResult,
+    /// The principal who requested the erasure.
+    requested_by: String,
+}
+
+/// POST /orgs/{org}/audit/erasure — erase a data subject (GDPR Art. 17).
+///
+/// Redacts the subject in place across the decision-log store (preserving the
+/// tamper-evident chain) and hard-deletes their entity from the org's authoring
+/// DataStores. Idempotent via `Idempotency-Key`; the receipt is also recorded on
+/// the audit trail as durable proof of erasure.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/audit/erasure",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID")
+    ),
+    request_body = EraseSubjectRequest,
+    responses(
+        (status = 200, description = "Erasure applied (see receipt)", body = ErasureReceipt),
+        (status = 400, description = "Missing subject identifier", body = ProblemDetails),
+        (status = 403, description = "Caller lacks audit:erase on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails),
+        (status = 409, description = "An erasure with this Idempotency-Key is in flight", body = ProblemDetails),
+        (status = 503, description = "Decision store configured but unreachable", body = ProblemDetails)
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn erase_subject(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(org): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<EraseSubjectRequest>,
+) -> ApiResult<Response> {
+    let org_id = authorize_erase(&state, &user, &org).await?;
+    let subject = req.subject.trim().to_string();
+    if subject.is_empty() {
+        return Err(ApiError::BadRequest(
+            "erasure requires a non-empty subject identifier".to_string(),
+        ));
+    }
+    let erase_datastore = req.erase_datastore.unwrap_or(true);
+    let org_str = org_id.to_string();
+
+    let fp = idempotency::fingerprint(&[
+        actions::AUDIT_SUBJECT_ERASURE,
+        &org_str,
+        &subject,
+        if erase_datastore { "ds" } else { "nods" },
+    ]);
+
+    idempotency::run(
+        &state.db,
+        &headers,
+        actions::AUDIT_SUBJECT_ERASURE,
+        &org_str,
+        &fp,
+        || async {
+            // 1. Decision-log redaction (only if a store is configured).
+            let decision_log = match state.decision_store.as_deref() {
+                Some(store) => {
+                    let holds: Vec<HoldFilter> = AuditGovernanceRepository::new(&state.db)
+                        .active_holds(org_id)
+                        .await?
+                        .into_iter()
+                        .map(|h| h.filter)
+                        .collect();
+                    let outcome = store
+                        .erase_subject(&org_str, &subject, &holds)
+                        .await
+                        .map_err(|e| {
+                            ApiError::ServiceUnavailable(format!("decision store: {e}"))
+                        })?;
+                    match outcome {
+                        EraseOutcome::Submitted { holds_honored } => {
+                            DecisionLogEraseResult::Submitted { holds_honored }
+                        }
+                        EraseOutcome::DeferredBlanketHold => {
+                            DecisionLogEraseResult::DeferredBlanketHold
+                        }
+                    }
+                }
+                None => DecisionLogEraseResult::StoreNotConfigured,
+            };
+
+            // 2. Authoring-DataStore erasure across every namespace the org owns.
+            let datastore = if erase_datastore {
+                let repo = DatastoreRepository::new(&state.db);
+                let ids = repo.datastore_ids_for_org(org_id).await?;
+                let mut entities_deleted = 0usize;
+                for ds in &ids {
+                    let (deleted, _affected) = repo.delete_entity_cascade(*ds, &subject).await?;
+                    if deleted {
+                        entities_deleted += 1;
+                    }
+                }
+                DatastoreEraseResult::Erased {
+                    datastores_scanned: ids.len(),
+                    entities_deleted,
+                }
+            } else {
+                DatastoreEraseResult::Skipped
+            };
+
+            let receipt = ErasureReceipt {
+                subject: subject.clone(),
+                decision_log,
+                datastore,
+                requested_by: user.id.clone(),
+            };
+            let body = serde_json::to_value(&receipt).unwrap_or(Value::Null);
+
+            // The audit entry is the durable proof of erasure.
+            write_audit(
+                &state,
+                &user,
+                org_id,
+                actions::AUDIT_SUBJECT_ERASURE,
+                (ResourceType::Org, org_str.clone()),
+                body.clone(),
+            )
+            .await;
+
+            Ok((StatusCode::OK, body))
+        },
+    )
+    .await
 }
