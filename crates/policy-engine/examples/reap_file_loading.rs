@@ -119,6 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();
@@ -138,6 +140,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();
@@ -154,6 +158,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "doc2".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();
@@ -201,6 +207,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();
@@ -217,6 +225,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "doc2".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();
@@ -246,6 +256,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();

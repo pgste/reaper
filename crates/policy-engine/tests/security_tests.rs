@@ -109,6 +109,8 @@ policy null_byte_test {
         resource: "resource\0with\0nulls".to_string(),
         action: "read\0action".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Should evaluate without crashing - result doesn't matter, safety does
@@ -156,6 +158,8 @@ policy unicode_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Should evaluate without crashing
@@ -199,6 +203,8 @@ policy injection_test {
                 resource: "test".to_string(),
                 action: "read".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             // Should deny (default), not allow from "injected" rule
@@ -257,6 +263,8 @@ policy attr_injection_test {
             resource: "test".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         // Should deny - the injected attribute name shouldn't match "role"
@@ -323,6 +331,8 @@ policy regex_dos_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Should complete in reasonable time (< 1 second)
@@ -373,6 +383,8 @@ policy long_regex_test {{
                 resource: "test".to_string(),
                 action: "read".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             let start = Instant::now();
@@ -435,6 +447,8 @@ policy nested_quantifier_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let start = Instant::now();
@@ -500,6 +514,8 @@ policy large_array_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let start = Instant::now();
@@ -569,6 +585,8 @@ policy many_entities_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let start = Instant::now();
@@ -631,6 +649,8 @@ policy integer_boundary_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
     let result = evaluator.evaluate(&request);
     assert!(result.is_ok());
@@ -643,6 +663,8 @@ policy integer_boundary_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
     let result = evaluator.evaluate(&request);
     assert!(result.is_ok());
@@ -655,6 +677,8 @@ policy integer_boundary_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
     let result = evaluator.evaluate(&request);
     assert!(result.is_ok());
@@ -700,6 +724,8 @@ policy empty_string_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
     let result = evaluator.evaluate(&request);
     assert!(result.is_ok());
@@ -712,6 +738,8 @@ policy empty_string_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
     let result = evaluator.evaluate(&request);
     assert!(result.is_ok());
@@ -750,6 +778,8 @@ policy missing_entity_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Should not crash - may return error or deny (both are acceptable)
@@ -834,6 +864,8 @@ policy type_mismatch_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Should not crash, should deny (type mismatch fails condition)

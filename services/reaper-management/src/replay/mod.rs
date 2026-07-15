@@ -467,6 +467,8 @@ fn replay_row(
         resource: resource.clone(),
         action: action.clone(),
         context,
+
+        ..Default::default()
     };
     let outcome = engine.evaluate_set(policy_ids, &policy_request);
     result.replayed += 1;
@@ -602,6 +604,8 @@ mod tests {
                     resource: "/api".to_string(),
                     action: "read".to_string(),
                     context,
+
+                    ..Default::default()
                 },
             )
         };

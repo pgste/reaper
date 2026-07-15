@@ -349,6 +349,8 @@ pub async fn evaluate_policy(
         resource: payload.resource.clone(),
         action: payload.action.clone(),
         context,
+
+        ..Default::default()
     };
 
     // Scope the cache to the exact policy set being evaluated so decisions for
@@ -825,6 +827,8 @@ pub async fn fast_evaluate_policy(
         resource: resource.to_string(),
         action: action.to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Evaluate policies with the shared fail-closed core (default deny,
@@ -1064,6 +1068,8 @@ pub async fn batch_evaluate_policy(
                 resource: r.resource.clone(),
                 action: r.action.clone(),
                 context,
+
+                ..Default::default()
             }
         })
         .collect();

@@ -97,6 +97,8 @@ impl TestContext {
             resource: resource.clone(),
             action: action.clone(),
             context,
+
+            ..Default::default()
         };
 
         let start = std::time::Instant::now();

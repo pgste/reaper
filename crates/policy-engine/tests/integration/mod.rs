@@ -182,6 +182,8 @@ fn run_test_case(evaluators: &[Box<dyn PolicyEvaluator>], case: &TestCase) -> Te
         resource: case.resource.clone(),
         action: case.action.clone(),
         context,
+
+        ..Default::default()
     };
 
     // Evaluate against all policies - default deny, any allow wins

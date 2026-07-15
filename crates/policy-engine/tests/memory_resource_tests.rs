@@ -225,6 +225,8 @@ policy regex_cache_test {
             resource: "test".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let _ = evaluator.evaluate(&request);
@@ -241,6 +243,8 @@ policy regex_cache_test {
             resource: "test".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let _ = evaluator.evaluate(&request);
@@ -426,6 +430,8 @@ policy eval_stability_test {
             resource: "test".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let _ = evaluator.evaluate(&request);

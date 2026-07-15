@@ -260,6 +260,8 @@ fn run_test(
         resource: format!("doc_{}", entity_count / 4),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     for _ in 0..1000 {
@@ -283,6 +285,8 @@ fn run_test(
             resource: doc_id,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let start = Instant::now();

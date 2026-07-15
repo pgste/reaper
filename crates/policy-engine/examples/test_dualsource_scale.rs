@@ -348,6 +348,8 @@ policy multi_source_access {
             resource,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         match evaluator.evaluate(&request) {
@@ -410,6 +412,8 @@ policy multi_source_access {
             resource,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let start = Instant::now();

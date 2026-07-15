@@ -382,6 +382,8 @@ mod tests {
             action: action.to_string(),
             resource: resource.to_string(),
             context,
+
+            ..Default::default()
         }
     }
 
@@ -522,11 +524,15 @@ mod tests {
             action: "read".to_string(),
             resource: "doc1".to_string(),
             context: ctx_a,
+
+            ..Default::default()
         };
         let r_b = PolicyRequest {
             action: "read".to_string(),
             resource: "doc1".to_string(),
             context: ctx_b,
+
+            ..Default::default()
         };
 
         assert_eq!(fingerprint(&r_a, 7), fingerprint(&r_b, 7));
@@ -538,6 +544,8 @@ mod tests {
             action: "read".to_string(),
             resource: "doc1".to_string(),
             context: ctx_c,
+
+            ..Default::default()
         };
         assert_ne!(fingerprint(&r_a, 7), fingerprint(&r_c, 7));
     }

@@ -186,6 +186,8 @@ impl ReaperEngine {
             resource: resource.to_string(),
             action: action.to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
         let result = ast
             .check_with_input(&request, Some(&doc))
@@ -379,5 +381,7 @@ fn build_request(
         resource: resource.to_string(),
         action: action.to_string(),
         context,
+
+        ..Default::default()
     })
 }

@@ -768,6 +768,8 @@ fn handle_eval(
         resource: resource.to_string(),
         action: action.to_string(),
         context,
+
+        ..Default::default()
     };
 
     let eval_start = Instant::now();
@@ -1280,6 +1282,8 @@ fn handle_check(
         resource: resource.unwrap_or(input_path).to_string(),
         action: action.to_string(),
         context,
+
+        ..Default::default()
     };
 
     let evaluator = policy.build_ast_evaluator(store);
@@ -1503,6 +1507,8 @@ fn handle_test(
         resource: resource.to_string(),
         action: action.to_string(),
         context,
+
+        ..Default::default()
     };
 
     let eval_start = Instant::now();

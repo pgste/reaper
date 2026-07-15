@@ -307,6 +307,8 @@ proptest! {
             resource: "plan.json".to_string(),
             action: "check".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let result = ast

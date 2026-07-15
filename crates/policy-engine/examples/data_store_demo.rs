@@ -232,6 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "admin/dashboard".to_string(),
         action: "read".to_string(),
         context,
+        ..Default::default()
     };
 
     let decision = engine.evaluate(&policy.id, &request)?;

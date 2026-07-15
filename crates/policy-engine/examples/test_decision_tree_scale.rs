@@ -190,6 +190,8 @@ fn generate_requests(count: usize, rule_count: usize) -> Vec<PolicyRequest> {
             resource: format!("resource_{}", resource_id),
             action: if i % 2 == 0 { "read" } else { "write" }.to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         });
     }
 

@@ -50,6 +50,8 @@ fn run(evaluator: &dyn PolicyEvaluator, iterations: usize) -> (Vec<u128>, usize)
             resource: format!("resource_{}", i % 2000),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
         let start = Instant::now();
         let decision = evaluator.evaluate(&request).expect("evaluate");

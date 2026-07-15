@@ -88,6 +88,8 @@ fn run_policy_test(
             resource: resource.to_string(),
             action: action.to_string(),
             context,
+
+            ..Default::default()
         };
 
         let result = evaluator.evaluate(&request);
@@ -183,6 +185,8 @@ fn test_string_email_contains() {
         resource: "str_docs".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     let ast_result = ast_evaluator.evaluate(&request);

@@ -2,7 +2,27 @@
 
 Strategic bet (`reviews/round-2/06-future-architecture.md` §"AI / LLM-era
 authorization", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
-remediation. **Status: SCOPING — no implementation committed yet.**
+remediation. **Status: F1-s1 LANDED (capability core); s2–s5 pending.**
+
+## STATUS (2026-07-15) — F1-s1 capability core
+
+`reaper_core::capability`: signed, expiring, attenuable capabilities on the
+existing SigningKey/VerifyingKey machinery (Ed25519 + ECDSA-P256, zero new
+dependencies). `Capability { id, key_id, subject, actor, grants[(action,
+resource) patterns], not_before/expires_at, ancestry, signature }` over a
+domain-separated, length-prefixed canonical message (no delimiter ambiguity
+with attacker-chosen strings). `issue` / `attenuate` (issuer-side
+re-issuance: grant-subset + window-nesting ENFORCED, subject lineage
+inherited, ancestry recorded) / `verify_at(vk, key_id, now, revoked_ids)` —
+pure, clock-explicit, wasm-safe (reaper-core builds for
+wasm32-unknown-unknown with it) / `authorizes(action, resource)` with a
+deliberately narrow pattern language (literal | `*` | trailing-`*` prefix).
+Revoking any ancestor kills the whole derivation chain. 13 adversarial
+tests: tamper-every-claim, wrong key, key-id pin, algorithm confusion,
+expired/not-yet-valid, widened grants/windows (incl. wildcard-escape
+attempts), leaf + ancestor revocation, malformed sig, empty grants, P-256
+round-trip. Signed-list revocation transport + issuance endpoint are s3
+scope; actor/taint request shape is s2.
 
 ## Goal (restated)
 

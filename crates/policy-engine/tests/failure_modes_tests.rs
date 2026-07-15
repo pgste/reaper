@@ -21,6 +21,8 @@ fn request() -> PolicyRequest {
             c.insert("principal".to_string(), "alice".to_string());
             c
         },
+
+        ..Default::default()
     }
 }
 

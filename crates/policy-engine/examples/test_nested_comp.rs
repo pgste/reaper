@@ -72,6 +72,8 @@ policy test_nested {
                 resource: "hierarchy_map".to_string(),
                 action: "build".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             match compiled.evaluate(&request) {
@@ -95,6 +97,8 @@ policy test_nested {
         resource: "hierarchy_map".to_string(),
         action: "build".to_string(),
         context,
+
+        ..Default::default()
     };
 
     match ast_eval.evaluate(&request) {

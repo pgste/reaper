@@ -87,6 +87,8 @@ async fn test_policy_evaluation() {
         resource: "test-resource".to_string(),
         action: "read".to_string(),
         context: std::collections::HashMap::new(),
+
+        ..Default::default()
     };
 
     let decision = engine.evaluate(&policy_id, &request).unwrap();
@@ -143,6 +145,8 @@ async fn test_tree_optimization() {
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context: std::collections::HashMap::new(),
+
+        ..Default::default()
     };
 
     let decision = engine.evaluate(&policy_id, &request).unwrap();
@@ -192,6 +196,8 @@ async fn test_tree_optimization_scale() {
         resource: "resource_50".to_string(),
         action: "read".to_string(),
         context: std::collections::HashMap::new(),
+
+        ..Default::default()
     };
 
     let tree_decision = engine.evaluate(&tree_id, &request).unwrap();
@@ -741,11 +747,13 @@ policy restart_test {
         resource: "/doc".to_string(),
         action: "read".to_string(),
         context: ctx.clone(),
+        ..Default::default()
     };
     let deny_req = crate::PolicyRequest {
         resource: "/doc".to_string(),
         action: "write".to_string(),
         context: ctx,
+        ..Default::default()
     };
 
     assert_eq!(
@@ -844,6 +852,7 @@ fn test_evaluate_set_production_semantics() {
         resource: resource.to_string(),
         action: "read".to_string(),
         context: Default::default(),
+        ..Default::default()
     };
 
     // Allow-only set: first allow wins, attribution carried.

@@ -141,6 +141,8 @@ async fn handle_evaluate(
         resource: req.resource,
         action: req.action,
         context,
+
+        ..Default::default()
     };
 
     // Evaluate
@@ -193,6 +195,8 @@ async fn handle_batch_evaluate(
             resource: req.resource,
             action: req.action,
             context,
+
+            ..Default::default()
         };
 
         // Evaluate
@@ -316,6 +320,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 resource: req.resource,
                 action: req.action,
                 context,
+
+                ..Default::default()
             };
 
             let decision = match state.evaluator.evaluate(&policy_req) {

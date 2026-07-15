@@ -82,6 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "/api/resource_5".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     for i in 0..iterations {

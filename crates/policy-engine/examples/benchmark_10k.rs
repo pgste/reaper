@@ -107,6 +107,8 @@ fn benchmark_scenario(name: &str, policy_path: &str, data_path: &str, iterations
                 resource: resource_id.to_string(),
                 action: actions[action_idx].to_string(),
                 context: ctx,
+
+                ..Default::default()
             }
         })
         .collect();

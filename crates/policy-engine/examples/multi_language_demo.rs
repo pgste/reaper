@@ -57,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "api/users/123".to_string(),
         action: "read".to_string(),
         context: HashMap::new(),
+        ..Default::default()
     };
 
     let decision = engine.evaluate(&simple_policy.id, &request)?;
@@ -123,6 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         resource: "document-123".to_string(),
         action: "read".to_string(),
         context: cedar_context,
+        ..Default::default()
     };
 
     let cedar_decision = engine.evaluate(&cedar_policy.id, &cedar_request)?;

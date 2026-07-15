@@ -45,6 +45,8 @@ policy test {
         resource: "/api/test".to_string(),
         action: "write".to_string(),
         context,
+
+        ..Default::default()
     };
 
     match evaluator.evaluate(&request) {

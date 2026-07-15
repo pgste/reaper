@@ -110,6 +110,8 @@ fn every_library_scenario_meets_its_manifest() {
                     resource: input_file.clone(),
                     action: case.action.clone().unwrap_or_else(|| "check".to_string()),
                     context: HashMap::new(),
+
+                    ..Default::default()
                 };
                 let result = ast
                     .check_with_input(&request, Some(&doc))
@@ -143,6 +145,8 @@ fn every_library_scenario_meets_its_manifest() {
                     resource: case.resource.clone().expect("authz case needs resource"),
                     action: case.action.clone().expect("authz case needs action"),
                     context,
+
+                    ..Default::default()
                 };
 
                 let decision = format!(

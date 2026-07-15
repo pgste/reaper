@@ -398,6 +398,8 @@ policy enterprise_access {
             resource,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let lat_start = Instant::now();

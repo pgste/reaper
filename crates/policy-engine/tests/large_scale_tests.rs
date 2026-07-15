@@ -83,6 +83,8 @@ policy large_scale_test {
             resource: "test".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let result = evaluator.evaluate(&request);
@@ -240,6 +242,8 @@ policy throughput_test {
             resource: "doc_0".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
         let _ = evaluator.evaluate(&request);
     }
@@ -259,6 +263,8 @@ policy throughput_test {
             resource: format!("doc_{}", doc_idx),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let _ = evaluator.evaluate(&request);
@@ -347,6 +353,8 @@ policy latency_test {
             resource: format!("doc_{}", doc_idx),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let start = Instant::now();
@@ -441,6 +449,8 @@ policy concurrent_test {
                         resource: "test".to_string(),
                         action: "read".to_string(),
                         context,
+
+                        ..Default::default()
                     };
 
                     match evaluator.evaluate(&request) {
@@ -529,6 +539,8 @@ policy sustained_test {
                 resource: "test".to_string(),
                 action: "read".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             let _ = evaluator.evaluate(&request);
@@ -682,6 +694,8 @@ policy complex_large_test {
             resource: format!("resource_{}", resource_idx),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         match evaluator.evaluate(&request) {

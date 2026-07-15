@@ -85,6 +85,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resource: resource.clone(),
             action: action.clone(),
             context: context.clone(),
+
+            ..Default::default()
         };
 
         let start = Instant::now();

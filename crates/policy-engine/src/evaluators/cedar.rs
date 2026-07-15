@@ -289,6 +289,8 @@ mod tests {
             resource: "document1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -310,6 +312,8 @@ mod tests {
             resource: "document1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();

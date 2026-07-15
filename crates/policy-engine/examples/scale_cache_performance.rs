@@ -39,6 +39,8 @@ fn benchmark_pattern(
             resource: resource_id,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let start = Instant::now();

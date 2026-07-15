@@ -93,6 +93,8 @@ pub fn parse_policy_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError> 
         resource,
         action,
         context,
+
+        ..Default::default()
     })
 }
 
@@ -171,6 +173,8 @@ pub fn parse_evaluate_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError
         resource,
         action,
         context,
+
+        ..Default::default()
     })
 }
 
@@ -200,6 +204,8 @@ pub fn parse_evaluate_request(bytes: &[u8]) -> Result<PolicyRequest, ReaperError
         resource: req.resource,
         action: req.action,
         context,
+
+        ..Default::default()
     })
 }
 
@@ -259,6 +265,8 @@ pub fn parse_batch_requests(bytes: &[u8]) -> Result<Vec<PolicyRequest>, ReaperEr
                 resource: req.resource,
                 action: req.action,
                 context,
+
+                ..Default::default()
             }
         })
         .collect())

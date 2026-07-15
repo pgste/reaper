@@ -33,6 +33,8 @@ fn test_cedar_basic_permit() {
         resource: "document".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -60,6 +62,8 @@ fn test_cedar_basic_forbid() {
         resource: "document".to_string(),
         action: "delete".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -87,6 +91,8 @@ fn test_cedar_default_deny() {
         resource: "document".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -122,6 +128,8 @@ fn test_cedar_when_string_condition() {
         resource: "code".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -137,6 +145,8 @@ fn test_cedar_when_string_condition() {
         resource: "code".to_string(),
         action: "read".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2);
@@ -168,6 +178,8 @@ fn test_cedar_when_numeric_condition() {
         resource: "item".to_string(),
         action: "purchase".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -199,6 +211,8 @@ fn test_cedar_unless_clause() {
         resource: "document".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -214,6 +228,8 @@ fn test_cedar_unless_clause() {
         resource: "document".to_string(),
         action: "read".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2);
@@ -252,6 +268,8 @@ fn test_cedar_multiple_permits() {
         resource: "document".to_string(),
         action: "delete".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -266,6 +284,8 @@ fn test_cedar_multiple_permits() {
         resource: "document".to_string(),
         action: "read".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2);
@@ -300,6 +320,8 @@ fn test_cedar_forbid_overrides_permit() {
         resource: "normal".to_string(),
         action: "delete".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -314,6 +336,8 @@ fn test_cedar_forbid_overrides_permit() {
         resource: "protected".to_string(),
         action: "delete".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2);
@@ -390,6 +414,8 @@ fn test_cedar_entity_type_matching() {
         resource: "secret-doc".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -404,6 +430,8 @@ fn test_cedar_entity_type_matching() {
         resource: "secret-doc".to_string(),
         action: "read".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2);
@@ -437,6 +465,8 @@ fn test_cedar_policy_annotations() {
         resource: "document".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -489,6 +519,8 @@ fn test_cedar_evaluation_performance() {
         resource: "doc".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Measure evaluation time
@@ -547,6 +579,8 @@ fn test_cedar_abac_multi_attribute() {
         resource: "classified".to_string(),
         action: "access".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -563,6 +597,8 @@ fn test_cedar_abac_multi_attribute() {
         resource: "classified".to_string(),
         action: "access".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2);

@@ -588,6 +588,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -649,6 +651,8 @@ policy test_expr {
             resource: "res1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).expect("Evaluation failed");
@@ -702,6 +706,8 @@ policy test_context {
             resource: "res1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).expect("Evaluation failed");
@@ -720,6 +726,8 @@ policy test_context {
             resource: "res1".to_string(),
             action: "read".to_string(),
             context: context2,
+
+            ..Default::default()
         };
 
         let decision2 = evaluator.evaluate(&request2).expect("Evaluation failed");
@@ -793,6 +801,8 @@ policy test_comp {
             resource: "res1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).expect("Evaluation failed");

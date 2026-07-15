@@ -114,6 +114,8 @@ policy test_comprehension {
                 resource: "object_result".to_string(),
                 action: "transform".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             match compiled.evaluate(&request) {
@@ -137,6 +139,8 @@ policy test_comprehension {
         resource: "object_result".to_string(),
         action: "transform".to_string(),
         context,
+
+        ..Default::default()
     };
 
     match ast_eval.evaluate(&request) {

@@ -23,7 +23,7 @@ pub use engine::{
     AllPoliciesEvaluationResult, DenyInfo, EnhancedPolicy, PackageEvaluationResult, PackageInfo,
     PolicyAction, PolicyDecision, PolicyEngine, PolicyEngineStats, PolicyLanguage, PolicyRequest,
     PolicyRule, PolicySource, PolicySourceMetadata, PruningIndexStats, SetEvalOutcome,
-    SimpleAction, SimpleRule, StagedPackage,
+    SimpleAction, SimpleRule, StagedPackage, TrustLevel,
 };
 
 #[cfg(feature = "cedar")]

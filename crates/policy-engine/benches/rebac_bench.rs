@@ -100,6 +100,8 @@ fn request(principal: &str, resource: &str) -> PolicyRequest {
         resource: resource.to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     }
 }
 

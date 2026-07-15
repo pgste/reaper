@@ -181,6 +181,8 @@ fn benchmark_userspace_baseline() -> anyhow::Result<()> {
         resource: "/api/users".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     println!("Running {} userspace evaluations...", iterations);

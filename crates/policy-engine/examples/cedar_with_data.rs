@@ -284,6 +284,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 resource: resource.to_string(),
                 action: action.to_string(),
                 context,
+
+                ..Default::default()
             };
 
             // Evaluate

@@ -211,6 +211,8 @@ fn decisions(store: Arc<DataStore>) -> Vec<String> {
                     resource: doc.to_string(),
                     action: action.to_string(),
                     context: HashMap::from([("principal".to_string(), user.to_string())]),
+
+                    ..Default::default()
                 };
                 out.push(match evaluator.evaluate(&request) {
                     Ok(d) => format!("{user}/{doc}/{action}={d:?}"),
