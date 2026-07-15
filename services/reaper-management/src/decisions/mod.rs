@@ -153,6 +153,25 @@ pub enum EraseOutcome {
     DeferredBlanketHold,
 }
 
+/// Pseudonymised forms of an erasure subject, for tenants running
+/// `PrivacyProfile::Pseudonymize` — where the decision-log `principal`/`resource`
+/// columns hold `sha256:<hmac>` tokens, not the plaintext identifier. Computed
+/// control-plane-side from the tenant's decision-log salt (which lives agent-side
+/// and is never persisted here); see `api::audit`. Matching these alongside the
+/// plaintext subject lets one erasure cover both a plaintext tenant and a
+/// pseudonymised one without the caller having to know which profile is in force:
+/// an HMAC token can never collide with a plaintext principal/resource, so the
+/// extra match terms only ever hit the subject's own hashed rows.
+#[derive(Debug, Clone)]
+pub struct SubjectPseudonyms {
+    /// `pseudonymize(salt, subject)` — the token stored in the `principal`
+    /// column when `hash_principal` (or the `pseudonymize` profile) is on.
+    pub principal: String,
+    /// `pseudonymize_domain(salt, "resource", subject)` — the domain-separated
+    /// token stored in the `resource` column when `hash_resource` is on.
+    pub resource: String,
+}
+
 /// One decision row as returned to API clients (matches the agent's
 /// DecisionLogEntry fields plus ingest metadata).
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -482,16 +501,23 @@ impl DecisionStore {
     /// leaving the hash-chain fields intact so the store still verifies under
     /// `VerifyMode::Linkage`. A blanket hold is a lawful basis to retain, so it
     /// defers the erasure rather than breaching the hold.
+    ///
+    /// `pseudonyms`, when supplied, extends the match to a tenant running the
+    /// `pseudonymize` privacy profile: its `principal`/`resource` columns hold
+    /// `sha256:<hmac>` tokens, not plaintext, so plaintext matching alone would
+    /// silently miss every one of the subject's rows.
     pub async fn erase_subject(
         &self,
         tenant_id: &str,
         subject: &str,
+        pseudonyms: Option<&SubjectPseudonyms>,
         holds: &[HoldFilter],
     ) -> Result<EraseOutcome, DecisionStoreError> {
         if holds.iter().any(HoldFilter::is_blanket) {
             return Ok(EraseOutcome::DeferredBlanketHold);
         }
-        let (sql, params) = build_erase_subject_sql(&self.config, tenant_id, subject, holds);
+        let (sql, params) =
+            build_erase_subject_sql(&self.config, tenant_id, subject, pseudonyms, holds);
         self.run(&sql, &params).await?;
         Ok(EraseOutcome::Submitted {
             holds_honored: holds.len(),
@@ -1016,10 +1042,16 @@ const ERASURE_TOMBSTONE: &str = "<erased>";
 /// chain still verifies under `VerifyMode::Linkage` and checkpoint completeness
 /// (`count`, `[seq_start, seq_end]`) is preserved. Active legal holds are
 /// honored exactly as in a purge: a held row is never redacted.
+///
+/// When `pseudonyms` is supplied the selector also matches the tenant's
+/// `sha256:<hmac>` principal/resource tokens, so a `pseudonymize`-profile tenant's
+/// rows are reached too. The plaintext terms stay in place: a token can never
+/// equal a plaintext identifier, so the union is exact for either profile.
 fn build_erase_subject_sql(
     config: &DecisionStoreConfig,
     tenant_id: &str,
     subject: &str,
+    pseudonyms: Option<&SubjectPseudonyms>,
     holds: &[HoldFilter],
 ) -> (String, Vec<(String, String)>) {
     let mut params = Vec::new();
@@ -1029,8 +1061,21 @@ fn build_erase_subject_sql(
         conds.push("tenant_id = {tenant:String}".to_string());
         params.push(("tenant".to_string(), tenant_id.to_string()));
     }
-    conds.push("(principal = {subject:String} OR resource = {subject:String})".to_string());
+    // Subject selector: plaintext principal/resource, plus the pseudonymised
+    // tokens when the tenant hashes those columns. Each value is bound as a
+    // server-side parameter, never spliced into the SQL text.
+    let mut selector = vec![
+        "principal = {subject:String}".to_string(),
+        "resource = {subject:String}".to_string(),
+    ];
     params.push(("subject".to_string(), subject.to_string()));
+    if let Some(ps) = pseudonyms {
+        selector.push("principal = {subject_hp:String}".to_string());
+        selector.push("resource = {subject_hr:String}".to_string());
+        params.push(("subject_hp".to_string(), ps.principal.clone()));
+        params.push(("subject_hr".to_string(), ps.resource.clone()));
+    }
+    conds.push(format!("({})", selector.join(" OR ")));
 
     for (i, hold) in holds.iter().enumerate() {
         push_hold_exclusion(hold, i, &mut conds, &mut params);
@@ -1389,6 +1434,7 @@ mod tests {
             &config(true),
             "org-1",
             "alice'; DROP TABLE decisions;--",
+            None,
             &[],
         );
 
@@ -1431,7 +1477,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let (sql, params) = build_erase_subject_sql(&config(true), "org-1", "bob", &holds);
+        let (sql, params) = build_erase_subject_sql(&config(true), "org-1", "bob", None, &holds);
 
         // A held row is never redacted: one NOT (...) exclusion per hold.
         assert_eq!(sql.matches("NOT (").count(), 2, "{sql}");
@@ -1447,6 +1493,66 @@ mod tests {
         assert!(sql.contains("principal = {subject:String}"));
         let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
         assert_eq!(get("subject"), Some("bob"));
+    }
+
+    #[test]
+    fn erase_sql_without_pseudonyms_matches_plaintext_only() {
+        let (sql, params) = build_erase_subject_sql(&config(true), "org-1", "alice", None, &[]);
+        // Only the two plaintext terms — no hashed-column match when the tenant
+        // is not pseudonymised.
+        assert!(sql.contains("(principal = {subject:String} OR resource = {subject:String})"));
+        assert!(!sql.contains("subject_hp"), "{sql}");
+        assert!(!sql.contains("subject_hr"), "{sql}");
+        assert!(!params.iter().any(|(n, _)| n == "subject_hp"));
+    }
+
+    #[test]
+    fn erase_sql_matches_pseudonymized_columns_when_salt_given() {
+        // A `pseudonymize`-profile tenant stores sha256:<hmac> tokens in
+        // principal/resource. The control plane computes the tokens from the
+        // tenant salt and the erasure must match them *as well as* any plaintext
+        // rows — so one call covers a tenant regardless of profile.
+        let salt = b"tenant-secret";
+        let pseudonyms = SubjectPseudonyms {
+            principal: policy_engine::pseudonymize(salt, "alice"),
+            resource: policy_engine::pseudonymize_domain(salt, "resource", "alice"),
+        };
+        let (sql, params) =
+            build_erase_subject_sql(&config(true), "org-1", "alice", Some(&pseudonyms), &[]);
+
+        // Redact-in-place is unchanged; the selector gains the hashed terms.
+        assert!(sql.starts_with("ALTER TABLE decisions UPDATE"), "{sql}");
+        assert!(sql.contains("principal = {subject:String}"), "{sql}");
+        assert!(sql.contains("resource = {subject:String}"), "{sql}");
+        assert!(sql.contains("principal = {subject_hp:String}"), "{sql}");
+        assert!(sql.contains("resource = {subject_hr:String}"), "{sql}");
+
+        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("subject"), Some("alice"));
+        // Principal token is the un-domain-separated HMAC; resource token is
+        // domain-separated — the two are distinct and matched against their own
+        // columns (no cross-column correlation).
+        assert_eq!(get("subject_hp"), Some(pseudonyms.principal.as_str()));
+        assert_eq!(get("subject_hr"), Some(pseudonyms.resource.as_str()));
+        assert_ne!(pseudonyms.principal, pseudonyms.resource);
+        assert!(pseudonyms.principal.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn erase_sql_pseudonyms_honor_holds_too() {
+        let holds = vec![HoldFilter {
+            decision: Some("deny".to_string()),
+            ..Default::default()
+        }];
+        let pseudonyms = SubjectPseudonyms {
+            principal: "sha256:aa".to_string(),
+            resource: "sha256:bb".to_string(),
+        };
+        let (sql, _) =
+            build_erase_subject_sql(&config(true), "org-1", "bob", Some(&pseudonyms), &holds);
+        // Hold exclusion applies to the whole (plaintext OR hashed) selector.
+        assert_eq!(sql.matches("NOT (").count(), 1, "{sql}");
+        assert!(sql.contains("principal = {subject_hp:String}"), "{sql}");
     }
 
     #[test]

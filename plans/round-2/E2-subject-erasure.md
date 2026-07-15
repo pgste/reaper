@@ -10,7 +10,7 @@ This doc is updated as each slice lands.
 
 ---
 
-## STATUS (2026-07-14) — slice 1 landed; three follow-ups remain
+## STATUS (2026-07-14) — slice 1 + all three follow-ups landed; E2 complete
 
 **Decisions locked (with the maintainer):**
 1. Decision-log strategy = **redact-in-place** (option B below).
@@ -27,23 +27,54 @@ This doc is updated as each slice lands.
   `delete_entity_cascade`), writes an `audit.subject_erasure` receipt to the
   audit trail. Typed DTOs + ProblemDetails → api_contract gate passes.
 
-**Remaining — the three follow-up pieces (next session):**
-1. **Pseudonymisation salt.** Under `PrivacyProfile::Pseudonymize`, decision-log
-   `principal`/`resource` are `sha256:<hmac>` of the plaintext with a per-tenant
-   `hash_salt` held agent-side (`decision_log.rs:~1175`, `skip_serializing`). The
-   endpoint currently matches plaintext columns only, so it silently misses a
-   pseudonymised tenant's rows. Give the control plane a way to hash the input
-   subject with the tenant salt (delegated hashing path, or salt escrow) and
-   match the hashed columns. **The correctness gap that most matters.**
-2. **Immutable archive + published DataStore versions.** The WORM/NDJSON archive
-   (`VerifyMode::ByteExact` source) and immutable published data-bundle versions
-   (`get_version_document`) are append-only and NOT rewritten by erasure today.
-   Either an archive-rewrite path or a documented, receipted exemption — and
-   document the store's verification posture as `Linkage`-based post-erasure.
-3. **Dedicated erasure-receipt table (optional).** Today the audit-trail entry is
-   the proof of erasure. If queryable erasure history is wanted, add
-   `audit_erasure_requests` (migrations `025_`/`0018_`) + repo, and persist the
-   receipt alongside the audit write.
+**Remaining — the follow-up pieces:**
+1. **Pseudonymisation salt.** *(LANDED — follow-up #1.)* Under
+   `PrivacyProfile::Pseudonymize`, decision-log `principal`/`resource` are
+   `sha256:<hmac>` of the plaintext with a per-tenant `hash_salt` held agent-side.
+   The erasure endpoint now accepts an optional `pseudonym_salt` in the request
+   body (the tenant's `REAPER_DECISION_LOG_HASH_SALT`); when supplied it derives
+   the subject's principal token (`policy_engine::pseudonymize`) and resource token
+   (`pseudonymize_domain(_, "resource", _)`) and passes them as
+   `decisions::SubjectPseudonyms` to `erase_subject`. `build_erase_subject_sql`
+   unions the hashed-column terms with the plaintext selector — one call covers a
+   plaintext *or* a pseudonymised tenant (a token can never equal a plaintext id,
+   so the union is exact). The salt is used only to derive the match tokens: it is
+   never persisted, echoed in the receipt (`matched_pseudonyms: bool`), or written
+   to the audit trail, and it is excluded from the idempotency fingerprint (only
+   the `pseudo`/`plain` marker enters it, so a retry that adds the salt is treated
+   as a materially different request rather than replaying a narrower result).
+2. **Immutable archive + published DataStore versions.** *(LANDED — follow-up
+   #2.)* The WORM/NDJSON archive (`VerifyMode::ByteExact` source) and immutable
+   published data-bundle versions (`get_version_document`) are append-only and NOT
+   rewritten by erasure. Resolved as a **documented, receipted exemption** (the
+   only sound option: the WORM sink is S3 Object-Lock in COMPLIANCE mode —
+   un-rewritable even by root, *by design* — and published versions are
+   checksum-sealed snapshots agents may still run, so rewriting either defeats the
+   guarantee it exists for). The receipt now carries `verification_posture:
+   "linkage"` and an `exemptions[]` list (`immutable_exemptions`, pure + unit
+   tested): a `decision_log_worm_archive` exemption whenever the decision-log
+   redaction was submitted, and a `published_datastore_versions` exemption whenever
+   the org has authoring DataStores — each with its lawful basis and disposition
+   (ages out with retention / superseded by next publish; crypto-shred the tenant
+   key to render the archived `input_data` irrecoverable pre-expiry). Full posture
+   + verification guidance: `docs/security/SUBJECT_ERASURE.md`.
+3. **Dedicated erasure-receipt table.** *(LANDED — follow-up #3.)* Added
+   `audit_erasure_requests` (migrations `025_subject_erasure.sql` /
+   `0018_subject_erasure.sql`, registered in `connection.rs`) + the
+   `AuditErasureRepository` (`record` / `list_for_org`, borrowed
+   `NewErasureRecord` input, `ErasureRecord` output). The endpoint persists one
+   row per completed erasure best-effort *inside* the idempotency-guarded op
+   (so a history hiccup never fails an irreversible erasure, and a key replay
+   never double-inserts): the full `ErasureReceipt` JSON verbatim in `receipt`,
+   with `decision_log_status`/`holds_honored`/`matched_pseudonyms`/
+   `datastore_status`/`datastores_scanned`/`entities_deleted`/
+   `verification_posture` decomposed for querying. New read path
+   `GET /orgs/{org}/audit/erasures` (org-admin-gated — reading *who was erased*
+   is a compliance read like holds/retention, distinct from the `audit:erase`
+   write scope), newest-first, `?limit` default 100 / hard cap 500. Typed DTOs +
+   ProblemDetails → api_contract gate passes; integration test
+   `subject_erasure_history_records_and_lists` covers record + list ordering +
+   tenant scoping.
 
 ---
 
@@ -96,14 +127,18 @@ only as an explicit, hold-checked escape hatch for tenants who accept
 completeness gaps. **This is the one product/compliance decision to confirm
 before slice 2.**
 
-### The pseudonymisation-salt wrinkle
+### The pseudonymisation-salt wrinkle *(resolved — follow-up #1)*
 Under `PrivacyProfile::Pseudonymize`, stored `principal`/`resource` are
 HMAC-SHA-256 of the plaintext with a per-tenant `hash_salt` that is
 `skip_serializing` and lives **agent-side** (`decision_log.rs:1175`). To match a
 subject in that tenant's rows, the control plane must hash the input subject with
-the same salt — so erasure needs access to (or a delegated hashing path for) that
-salt. Tracked as an open question; the datastore path (entity ids are plaintext)
-is unaffected.
+the same salt. **Resolved via salt-in-request:** the erasure caller (who already
+holds the privileged `audit:erase` scope) supplies the salt as `pseudonym_salt`;
+the endpoint derives the tokens and matches the hashed columns alongside the
+plaintext ones. This avoids a persistent salt escrow (a second copy of the secret
+in the control-plane DB) and a synchronous agent round-trip; the trade-off is the
+salt transits the (TLS-protected) request for that one call and is never stored.
+The datastore path (entity ids are plaintext) is unaffected.
 
 ## Subject model
 

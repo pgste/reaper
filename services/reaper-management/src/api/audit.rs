@@ -9,7 +9,7 @@
 //! surface, not operational decision data.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Json, Response},
 };
@@ -28,11 +28,11 @@ use crate::{
     auth::middleware::{AuthenticatedUser, RequireAuth},
     auth::scopes::Scope,
     db::repositories::{
-        audit_governance::LegalHold, AuditGovernanceRepository, DatastoreRepository,
-        OrganizationRepository,
+        audit_governance::LegalHold, AuditErasureRepository, AuditGovernanceRepository,
+        DatastoreRepository, ErasureRecord, NewErasureRecord, OrganizationRepository,
     },
     decisions::purge::{default_retention_days, run_org_purge, PurgeError},
-    decisions::{EraseOutcome, HoldFilter, PurgeOutcome},
+    decisions::{EraseOutcome, HoldFilter, PurgeOutcome, SubjectPseudonyms},
     state::AppState,
 };
 
@@ -48,6 +48,7 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(get_hold, release_hold))
         .routes(routes!(trigger_purge))
         .routes(routes!(erase_subject))
+        .routes(routes!(list_erasures))
 }
 
 /// Authorize audit-governance access on `org` and return the org id.
@@ -509,6 +510,15 @@ struct EraseSubjectRequest {
     /// decision-log trail.
     #[serde(default)]
     erase_datastore: Option<bool>,
+    /// The tenant's decision-log pseudonymisation salt
+    /// (`REAPER_DECISION_LOG_HASH_SALT`). Supply it when the tenant runs the
+    /// `pseudonymize` privacy profile: the decision-log `principal`/`resource`
+    /// columns then hold `sha256:<hmac>` tokens, and without the salt the
+    /// control plane cannot match — and would silently miss — those rows. The
+    /// salt is used only to derive the match tokens for this request; it is
+    /// never persisted, echoed in the receipt, or written to the audit trail.
+    #[serde(default)]
+    pseudonym_salt: Option<String>,
 }
 
 /// What happened to the decision-log trail for the subject.
@@ -516,8 +526,13 @@ struct EraseSubjectRequest {
 #[serde(rename_all = "snake_case", tag = "status")]
 enum DecisionLogEraseResult {
     /// Redact-in-place UPDATE submitted; `holds_honored` active holds were
-    /// excluded from the redaction.
-    Submitted { holds_honored: usize },
+    /// excluded from the redaction. `matched_pseudonyms` is true when a tenant
+    /// salt was supplied and the redaction also targeted the `sha256:<hmac>`
+    /// principal/resource columns of a `pseudonymize`-profile tenant.
+    Submitted {
+        holds_honored: usize,
+        matched_pseudonyms: bool,
+    },
     /// An active blanket legal hold preserves the whole tenant — a lawful basis
     /// to retain, so the decision-log redaction was deferred, not applied.
     DeferredBlanketHold,
@@ -540,12 +555,92 @@ enum DatastoreEraseResult {
     Skipped,
 }
 
+/// An immutable, append-only surface that subject-erasure does NOT rewrite in
+/// place, disclosed on the receipt with the lawful basis for its retention and
+/// how the subject's data ultimately leaves it. This is the "documented,
+/// receipted exemption" posture (E2 follow-up #2): the WORM archive is
+/// un-rewritable *by design* (S3 Object-Lock, COMPLIANCE mode) and published
+/// data-bundle versions are checksum-sealed snapshots agents may still be
+/// running — so both are retained under a documented audit/technical basis
+/// rather than rewritten. See `docs/security/SUBJECT_ERASURE.md`.
+#[derive(Debug, Serialize, ToSchema)]
+struct ErasureExemption {
+    /// Stable identifier of the exempt surface
+    /// (`decision_log_worm_archive` | `published_datastore_versions`).
+    surface: String,
+    /// Why the surface is not rewritten in place.
+    reason: String,
+    /// How the subject's data ultimately leaves the surface (e.g. ages out with
+    /// the retention window, superseded by the next publish).
+    disposition: String,
+}
+
+/// Immutable surfaces this erasure did not rewrite, given what the live-store
+/// steps did. Kept a pure function of the two outcomes so the disclosure is
+/// unit-testable without a live store or DB. A WORM-archive exemption is
+/// disclosed whenever the decision-log redaction was submitted (the archive
+/// still holds the pre-redaction bytes); a published-versions exemption is
+/// disclosed whenever the org has authoring DataStores (their immutable
+/// published versions are never rewritten, even when the subject had no live
+/// entity to cascade-delete).
+fn immutable_exemptions(
+    decision_log: &DecisionLogEraseResult,
+    datastore: &DatastoreEraseResult,
+) -> Vec<ErasureExemption> {
+    let mut out = Vec::new();
+    if matches!(decision_log, DecisionLogEraseResult::Submitted { .. }) {
+        out.push(ErasureExemption {
+            surface: "decision_log_worm_archive".to_string(),
+            reason: "the queryable store is redacted in place, but the S3 Object-Lock \
+                     (COMPLIANCE-mode) WORM archive and any NDJSON archive are append-only \
+                     and cannot be rewritten by design — they are the tamper-evident audit \
+                     anchor a regulator verifies ByteExact against"
+                .to_string(),
+            disposition: "retained under the audit-retention lawful basis (GDPR Art. 17(3)(b)); \
+                          ages out when the Object-Lock retention window expires. Under the \
+                          pseudonymize profile the archive already holds only HMAC tokens and \
+                          AES-GCM ciphertext, so the plaintext is irrecoverable there"
+                .to_string(),
+        });
+    }
+    if let DatastoreEraseResult::Erased {
+        datastores_scanned, ..
+    } = datastore
+    {
+        if *datastores_scanned > 0 {
+            out.push(ErasureExemption {
+                surface: "published_datastore_versions".to_string(),
+                reason: "the live entity is hard-deleted (cascade), but published data-bundle \
+                         versions (adm_versions) are immutable, checksum-sealed snapshots that \
+                         deployed agents may still be running; rewriting one would break its \
+                         checksum and the version-immutability contract"
+                    .to_string(),
+                disposition: "superseded by the next publish; historical versions age out under \
+                              data-bundle version retention"
+                    .to_string(),
+            });
+        }
+    }
+    out
+}
+
 /// Proof-of-erasure receipt (also written to the audit trail).
 #[derive(Debug, Serialize, ToSchema)]
 struct ErasureReceipt {
     subject: String,
     decision_log: DecisionLogEraseResult,
     datastore: DatastoreEraseResult,
+    /// Post-erasure verification posture of the decision store. Always
+    /// `"linkage"`: redact-in-place preserves the stored hash-chain (completeness
+    /// and ordering stay provable via `VerifyMode::Linkage`), but content
+    /// re-hashing (`ByteExact`) over the redacted queryable store no longer
+    /// matches — ByteExact remains the WORM archive's job. See
+    /// `docs/security/SUBJECT_ERASURE.md`.
+    verification_posture: String,
+    /// Immutable, append-only surfaces NOT rewritten by this erasure, each with
+    /// the lawful basis for retention and how the subject's data ultimately
+    /// leaves. Empty when no immutable surface was touched.
+    exemptions: Vec<ErasureExemption>,
     /// The principal who requested the erasure.
     requested_by: String,
 }
@@ -591,11 +686,34 @@ async fn erase_subject(
     let erase_datastore = req.erase_datastore.unwrap_or(true);
     let org_str = org_id.to_string();
 
+    // Derive the subject's pseudonymised match tokens from the tenant salt (if
+    // supplied). This lets one erasure reach a `pseudonymize`-profile tenant,
+    // whose decision-log columns store `sha256:<hmac>` rather than plaintext.
+    let pseudonyms = req
+        .pseudonym_salt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|salt| SubjectPseudonyms {
+            principal: policy_engine::pseudonymize(salt.as_bytes(), &subject),
+            resource: policy_engine::pseudonymize_domain(salt.as_bytes(), "resource", &subject),
+        });
+
+    // Fingerprint the request identity so a retried Idempotency-Key that
+    // materially changes the operation (adding pseudonym matching, toggling the
+    // datastore erasure) is rejected as a different request rather than replaying
+    // a stale, narrower result. The salt itself is a secret and never enters the
+    // fingerprint — only the *fact* that pseudonym matching was requested.
     let fp = idempotency::fingerprint(&[
         actions::AUDIT_SUBJECT_ERASURE,
         &org_str,
         &subject,
         if erase_datastore { "ds" } else { "nods" },
+        if pseudonyms.is_some() {
+            "pseudo"
+        } else {
+            "plain"
+        },
     ]);
 
     idempotency::run(
@@ -615,14 +733,17 @@ async fn erase_subject(
                         .map(|h| h.filter)
                         .collect();
                     let outcome = store
-                        .erase_subject(&org_str, &subject, &holds)
+                        .erase_subject(&org_str, &subject, pseudonyms.as_ref(), &holds)
                         .await
                         .map_err(|e| {
                             ApiError::ServiceUnavailable(format!("decision store: {e}"))
                         })?;
                     match outcome {
                         EraseOutcome::Submitted { holds_honored } => {
-                            DecisionLogEraseResult::Submitted { holds_honored }
+                            DecisionLogEraseResult::Submitted {
+                                holds_honored,
+                                matched_pseudonyms: pseudonyms.is_some(),
+                            }
                         }
                         EraseOutcome::DeferredBlanketHold => {
                             DecisionLogEraseResult::DeferredBlanketHold
@@ -651,10 +772,13 @@ async fn erase_subject(
                 DatastoreEraseResult::Skipped
             };
 
+            let exemptions = immutable_exemptions(&decision_log, &datastore);
             let receipt = ErasureReceipt {
                 subject: subject.clone(),
                 decision_log,
                 datastore,
+                verification_posture: "linkage".to_string(),
+                exemptions,
                 requested_by: user.id.clone(),
             };
             let body = serde_json::to_value(&receipt).unwrap_or(Value::Null);
@@ -670,8 +794,181 @@ async fn erase_subject(
             )
             .await;
 
+            // Persist a queryable erasure-history record (E2 follow-up #3),
+            // best-effort like the audit write: the trail is the primary proof,
+            // this table is the DSAR convenience. Never fail an already-completed
+            // (irreversible) erasure on a history hiccup.
+            let (dl_status, holds_honored, matched_pseudonyms) = match &receipt.decision_log {
+                DecisionLogEraseResult::Submitted {
+                    holds_honored,
+                    matched_pseudonyms,
+                } => (
+                    "submitted",
+                    Some(*holds_honored as i64),
+                    *matched_pseudonyms,
+                ),
+                DecisionLogEraseResult::DeferredBlanketHold => {
+                    ("deferred_blanket_hold", None, false)
+                }
+                DecisionLogEraseResult::StoreNotConfigured => ("store_not_configured", None, false),
+            };
+            let (ds_status, scanned, deleted) = match &receipt.datastore {
+                DatastoreEraseResult::Erased {
+                    datastores_scanned,
+                    entities_deleted,
+                } => (
+                    "erased",
+                    *datastores_scanned as i64,
+                    *entities_deleted as i64,
+                ),
+                DatastoreEraseResult::Skipped => ("skipped", 0, 0),
+            };
+            if let Err(e) = AuditErasureRepository::new(&state.db)
+                .record(NewErasureRecord {
+                    org_id,
+                    subject: &subject,
+                    requested_by: Some(user.id.as_str()),
+                    decision_log_status: dl_status,
+                    holds_honored,
+                    matched_pseudonyms,
+                    datastore_status: ds_status,
+                    datastores_scanned: scanned,
+                    entities_deleted: deleted,
+                    verification_posture: &receipt.verification_posture,
+                    receipt: &body,
+                })
+                .await
+            {
+                tracing::error!(error = %e, "failed to persist subject-erasure receipt");
+            }
+
             Ok((StatusCode::OK, body))
         },
     )
     .await
+}
+
+#[derive(Debug, Deserialize)]
+struct ErasureHistoryQuery {
+    /// Max records to return, newest first (default 100, hard cap 500).
+    limit: Option<i64>,
+}
+
+/// A tenant's subject-erasure history.
+#[derive(Debug, Serialize, ToSchema)]
+struct ErasureHistoryResponse {
+    /// Number of records returned (bounded by `limit`).
+    count: usize,
+    records: Vec<ErasureRecord>,
+}
+
+/// GET /orgs/{org}/audit/erasures — the tenant's subject-erasure history
+/// (E2 follow-up #3), newest first. Org-admin-gated: reading *who was erased* is
+/// a compliance-record read, like legal holds and retention — distinct from the
+/// `audit:erase` scope that authorizes performing an erasure.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/audit/erasures",
+    tag = "audit",
+    params(
+        ("org" = String, Path, description = "Organization ID"),
+        ("limit" = Option<i64>, Query, description = "Max records, newest first (default 100, max 500)")
+    ),
+    responses(
+        (status = 200, description = "Subject-erasure history", body = ErasureHistoryResponse),
+        (status = 403, description = "Caller lacks org:admin on this org", body = ProblemDetails),
+        (status = 404, description = "Organization not found", body = ProblemDetails)
+    ),
+    security(("bearer_jwt" = []))
+)]
+async fn list_erasures(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(org): Path<String>,
+    Query(query): Query<ErasureHistoryQuery>,
+) -> ApiResult<Json<ErasureHistoryResponse>> {
+    let org_id = authorize_admin(&state, &user, &org).await?;
+    let records = AuditErasureRepository::new(&state.db)
+        .list_for_org(org_id, query.limit)
+        .await?;
+    Ok(Json(ErasureHistoryResponse {
+        count: records.len(),
+        records,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exemptions_disclose_worm_archive_when_decision_log_redacted() {
+        let ex = immutable_exemptions(
+            &DecisionLogEraseResult::Submitted {
+                holds_honored: 0,
+                matched_pseudonyms: false,
+            },
+            &DatastoreEraseResult::Skipped,
+        );
+        assert_eq!(ex.len(), 1, "{ex:?}");
+        assert_eq!(ex[0].surface, "decision_log_worm_archive");
+        assert!(ex[0].reason.contains("WORM"));
+        assert!(!ex[0].disposition.is_empty());
+    }
+
+    #[test]
+    fn exemptions_disclose_published_versions_when_datastore_scanned() {
+        // Disclosed even with zero live deletes: an old published version may
+        // still carry the subject, and those versions are never rewritten.
+        let ex = immutable_exemptions(
+            &DecisionLogEraseResult::StoreNotConfigured,
+            &DatastoreEraseResult::Erased {
+                datastores_scanned: 2,
+                entities_deleted: 0,
+            },
+        );
+        assert_eq!(ex.len(), 1, "{ex:?}");
+        assert_eq!(ex[0].surface, "published_datastore_versions");
+    }
+
+    #[test]
+    fn exemptions_cover_both_surfaces_when_both_steps_ran() {
+        let ex = immutable_exemptions(
+            &DecisionLogEraseResult::Submitted {
+                holds_honored: 1,
+                matched_pseudonyms: true,
+            },
+            &DatastoreEraseResult::Erased {
+                datastores_scanned: 1,
+                entities_deleted: 1,
+            },
+        );
+        let surfaces: Vec<&str> = ex.iter().map(|e| e.surface.as_str()).collect();
+        assert_eq!(
+            surfaces,
+            ["decision_log_worm_archive", "published_datastore_versions"]
+        );
+    }
+
+    #[test]
+    fn no_exemptions_when_nothing_immutable_was_touched() {
+        // Store unconfigured (no archive) and datastore erasure skipped: there is
+        // no immutable surface to disclose.
+        let ex = immutable_exemptions(
+            &DecisionLogEraseResult::StoreNotConfigured,
+            &DatastoreEraseResult::Skipped,
+        );
+        assert!(ex.is_empty(), "{ex:?}");
+
+        // A deferred blanket hold retained the whole store already; there is no
+        // fresh redaction, so no archive divergence to disclose.
+        let ex = immutable_exemptions(
+            &DecisionLogEraseResult::DeferredBlanketHold,
+            &DatastoreEraseResult::Erased {
+                datastores_scanned: 0,
+                entities_deleted: 0,
+            },
+        );
+        assert!(ex.is_empty(), "{ex:?}");
+    }
 }
