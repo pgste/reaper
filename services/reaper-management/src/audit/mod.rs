@@ -77,6 +77,7 @@ pub enum ResourceType {
     LegalHold,
     Environment,
     ChangeRequest,
+    Connector,
 }
 
 impl std::fmt::Display for ResourceType {
@@ -98,6 +99,7 @@ impl std::fmt::Display for ResourceType {
             ResourceType::LegalHold => write!(f, "legal_hold"),
             ResourceType::Environment => write!(f, "environment"),
             ResourceType::ChangeRequest => write!(f, "change_request"),
+            ResourceType::Connector => write!(f, "connector"),
         }
     }
 }
@@ -123,6 +125,7 @@ impl std::str::FromStr for ResourceType {
             "legal_hold" => Ok(ResourceType::LegalHold),
             "environment" => Ok(ResourceType::Environment),
             "change_request" => Ok(ResourceType::ChangeRequest),
+            "connector" => Ok(ResourceType::Connector),
             _ => Err(format!("Invalid resource type: {}", s)),
         }
     }
@@ -243,6 +246,12 @@ pub mod actions {
     /// GDPR Art. 17 subject erasure (E2): the durable proof-of-erasure record.
     pub const AUDIT_SUBJECT_ERASURE: &str = "audit.subject_erasure";
     pub const AUDIT_REPLAY: &str = "audit.replay";
+    // SIEM export connectors (E1): a connector is a standing exfiltration path,
+    // so its lifecycle and every push are audited.
+    pub const AUDIT_CONNECTOR_CREATE: &str = "audit.connector_create";
+    pub const AUDIT_CONNECTOR_UPDATE: &str = "audit.connector_update";
+    pub const AUDIT_CONNECTOR_DELETE: &str = "audit.connector_delete";
+    pub const AUDIT_CONNECTOR_EXPORT: &str = "audit.connector_export";
 }
 
 /// Audit log entry

@@ -14,7 +14,7 @@ This doc is updated as each slice lands.
 
 ---
 
-## STATUS (2026-07-15) — slices 1 & 2 landed; slices 3–4 remain
+## STATUS (2026-07-15) — slices 1, 2 & 3 landed; slice 4 (optional) remains
 
 **Decisions locked (with the maintainer):**
 1. **OCSF class = Authorize Session** (`class_uid` 3003, IAM category `category_uid`
@@ -57,6 +57,32 @@ This doc is updated as each slice lands.
   CEF is deferred to the native connector (slice 3) — Vector's encoders don't
   emit CEF. README gained a "SIEM export" section + the file listing. TOML
   syntax validated (no Vector binary in CI; operators run `vector validate`).
+
+**Landed (slice 3):**
+- New **`audit:export`** scope (`auth/scopes.rs`, all 4 sites + separation-of-duties
+  test) — a connector is a standing exfiltration path, so it's not conferred by
+  `org:admin`.
+- Migration `026_siem_connectors.sql` / `0019_siem_connectors.sql` (`siem_connectors`
+  table) + `AuditConnectorRepository` (`db/repositories/audit_connector.rs`):
+  `ConnectorType {splunk_hec, http}`, format reuses `policy_engine::ExportFormat`,
+  CRUD + `record_export` accounting, tenant-scoped.
+- `ConnectorDeliveryService` (`src/siem/mod.rs`) generalised from
+  `WebhookDeliveryService`: async reqwest, exponential-backoff retries,
+  5xx/timeout classification. Splunk-HEC token auth + `{"event":…}` wrapping;
+  generic-HTTP NDJSON body + optional HMAC-SHA-256 signature. Transport only —
+  takes shaped lines.
+- `api/connectors.rs` (`audit:export`-gated, audited): CRUD
+  (`/orgs/{org}/audit/connectors[/{id}]`), `POST …/{id}/test` (synthetic record),
+  and the **push-export** `POST …/{id}/export` — reads a decision range from
+  `DecisionStore`, reconstructs `DecisionLogEntry`, shapes via
+  `entry.export(format)`, delivers. Fully typed DTOs + ProblemDetails → the
+  api_contract publishability gate passes (the `/orgs/{org}/audit/` prefix is a
+  typed group, so every endpoint is hard-checked). Secrets never returned
+  (`ConnectorSummary.has_secret`). New audit actions
+  `audit.connector_{create,update,delete,export}` + `ResourceType::Connector`.
+- Tests: 4 siem unit tests (HEC/HTTP body shaping, empty-batch no-op), scope
+  separation test, integration `siem_connector_repo_crud_round_trips` (CRUD +
+  export accounting + tenant isolation).
 
 ---
 
@@ -118,11 +144,12 @@ Splunk-HEC / S3 sink blocks in `deploy/decision-logs/vector-siem-sinks.toml`,
 wired to the existing routes; a `decisions_ocsf` (`--format ocsf`) transform.
 Config-only, no service change.
 
-**Slice 3 — native push connector + API.** `api/connectors.rs` (CRUD for per-org
-connector subscriptions: type = splunk_hec | http, endpoint, secret, format),
-a `ConnectorDeliveryService` generalised from `WebhookDeliveryService`, a new
-`audit:export` scope (4 sites in `scopes.rs`), reading shaped records from
-`DecisionStore`. Retry/signing/delivery-result tracking reused.
+**Slice 3 — native push connector + API.** *(LANDED — see STATUS.)*
+`api/connectors.rs` (CRUD for per-org connector subscriptions: type = splunk_hec |
+http, endpoint, secret, format), a `ConnectorDeliveryService` generalised from
+`WebhookDeliveryService`, a new `audit:export` scope (4 sites in `scopes.rs`),
+reading shaped records from `DecisionStore`. Retry/signing/delivery-result
+tracking reused.
 
 **Slice 4 (optional) — agent streaming sink.** Extend `WriterSinks` fan-out for
 low-latency in-agent push where the central-store hop is too slow.
