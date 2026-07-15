@@ -123,7 +123,13 @@ jobs:
       run: cargo build -p reaper-wasm --target wasm32-unknown-unknown --locked --release
 
     - name: Install wasm-bindgen-cli (pinned to the wasm-bindgen crate version)
-      run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      run: |
+        # ~/.cargo/bin is in the cache above: a restored binary makes a plain
+        # `cargo install` fail with "already exists". Skip when the pinned
+        # version is already present; --force covers version drift.
+        if ! wasm-bindgen --version 2>/dev/null | grep -q "0.2.126"; then
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked --force
+        fi
 
     - name: Generate Node bindings
       run: >
