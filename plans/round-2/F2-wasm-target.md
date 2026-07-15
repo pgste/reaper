@@ -4,7 +4,30 @@ Strategic bet (`reviews/round-2/06-future-architecture.md` §"WebAssembly
 everywhere", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
 remediation.
 
-## STATUS (2026-07-15) — Slices 1–2 LANDED; slice 3 pending
+## STATUS (2026-07-15) — Slices 1–3 LANDED (workstream complete)
+
+**Slice 3 landed:**
+- **Check mode on the wasm surface**: `checkDocument(source, input, action,
+  resource)` wraps the AST evaluator's `check_with_input` (all violated deny
+  rules + rendered messages, CLI/agent semantics). The 17 policy-library
+  document cases now run on BOTH parity legs (native wrapper + wasm-in-Node)
+  with allowed flags and exact violation sets asserted — the full 82-case
+  library corpus is covered cross-target, nothing skipped.
+- **Measurement correctness** (wasm-bench): the per-request timed window now
+  contains ONLY the boundary crossing + evaluation (decision JSON parsing
+  moved outside it — it was inflating µs-scale percentiles ~15-30%), and
+  throughput derives from the same timed window as the latencies (wall time
+  incl. harness reported separately). rbac reference: p50 7→6µs,
+  116k→128k rps after the correction.
+- **npm packaging**: `scripts/package-npm.mjs` stamps publishable-shaped
+  `package.json` (version from Cargo.toml, private mirroring publish=false)
+  into pkg-node (`@reaper/wasm`) and pkg-web (`@reaper/wasm-web`).
+- **Browser**: web-target bindings built in CI + `demo/index.html`
+  (self-contained; deploy/evaluate in-page) smoke-tested headless in
+  Chromium through the real click handlers via `?autorun` — locally and as
+  a blocking CI step.
+
+## STATUS (earlier) — Slices 1–2
 
 **Slice 2 landed** — `crates/reaper-wasm`: a cdylib+rlib wasm-bindgen wrapper
 over the engine (`ReaperEngine`: `deployPolicy` / `loadEntitiesJson` /

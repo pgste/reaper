@@ -57,3 +57,4 @@ test-data.json
 
 # reaper-wasm generated Node bindings (wasm-bindgen output; built by CI/local)
 crates/reaper-wasm/pkg-node/
+crates/reaper-wasm/pkg-web/

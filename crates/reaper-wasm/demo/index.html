@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reaper wasm demo — policy evaluation in the browser</title>
+<style>
+  :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
+  textarea { width: 100%; min-height: 9rem; font: inherit; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }
+  input { font: inherit; padding: .25rem .5rem; }
+  button { font: inherit; padding: .4rem 1rem; cursor: pointer; }
+  pre { background: rgba(127,127,127,.12); padding: 1rem; overflow-x: auto; border-radius: 6px; }
+  .ok { color: #1a7f37; } .deny { color: #cf222e; }
+</style>
+</head>
+<body>
+<h1>Reaper — policy evaluation in the browser</h1>
+<p>The same sub-microsecond DSL engine the agent serves, compiled to
+WebAssembly (<code>reaper-wasm</code>, web target). Policy + entities load
+below; every click on <b>Evaluate</b> is an in-browser authorization
+decision — no server.</p>
+
+<h3>Policy (.reap)</h3>
+<textarea id="policy">policy rbac_demo {
+    default: deny,
+
+    rule admins_do_anything {
+        allow if "admin" in user.roles
+    }
+
+    rule engineers_read_and_deploy {
+        allow if {
+            "engineering" in user.roles &amp;&amp;
+            (context.action == "read" || context.action == "deploy")
+        }
+    }
+
+    rule suspended_never {
+        deny if user.status == "suspended"
+    }
+}</textarea>
+
+<h3>Entities (JSON)</h3>
+<textarea id="entities">{"entities":[
+  {"id":"alice","type":"User","attributes":{"roles":["engineering"],"status":"active"}},
+  {"id":"root","type":"User","attributes":{"roles":["admin"],"status":"active"}},
+  {"id":"mallory","type":"User","attributes":{"roles":["admin"],"status":"suspended"}}
+]}</textarea>
+
+<div class="row">
+  <input id="principal" value="alice" placeholder="principal" />
+  <input id="action" value="deploy" placeholder="action" />
+  <input id="resource" value="server-1" placeholder="resource" />
+  <button id="deploy">Deploy policy + data</button>
+  <button id="evaluate" disabled>Evaluate</button>
+</div>
+
+<pre id="out">loading wasm…</pre>
+
+<script type="module">
+  import init, { ReaperEngine } from "../pkg-web/reaper_wasm.js";
+
+  const out = document.getElementById("out");
+  const $ = (id) => document.getElementById(id);
+  let engine = null;
+  let policyId = null;
+
+  function show(text, cls = "") {
+    out.textContent = text;
+    out.className = cls;
+  }
+
+  await init();
+  engine = new ReaperEngine();
+  show("wasm ready — deploy the policy to begin");
+  // Marker for the headless smoke test.
+  document.body.dataset.wasmReady = "1";
+
+  $("deploy").onclick = () => {
+    try {
+      const n = engine.loadEntitiesJson($("entities").value);
+      policyId = engine.deployPolicy("browser-demo", $("policy").value);
+      const tier = engine.evaluatorType(policyId);
+      show(`deployed (${n} entities, evaluator tier: ${tier})\npolicy id: ${policyId}`);
+      $("evaluate").disabled = false;
+      document.body.dataset.deployed = "1";
+    } catch (e) {
+      show(String(e), "deny");
+    }
+  };
+
+  // ?autorun: exercise the real click handlers end-to-end (used by the
+  // headless-Chromium smoke test; also handy for quick manual checks).
+  if (new URLSearchParams(location.search).has("autorun")) {
+    queueMicrotask(() => {
+      $("deploy").click();
+      $("evaluate").click();
+    });
+  }
+
+  $("evaluate").onclick = () => {
+    try {
+      const t0 = performance.now();
+      const decision = JSON.parse(
+        engine.evaluate(policyId, $("principal").value, $("action").value, $("resource").value),
+      );
+      const ms = (performance.now() - t0).toFixed(3);
+      show(
+        `${decision.decision.toUpperCase()}  (${ms} ms round-trip in-browser)\n\n` +
+          JSON.stringify(decision, null, 2),
+        decision.decision === "Allow" ? "ok" : "deny",
+      );
+      document.body.dataset.lastDecision = decision.decision;
+    } catch (e) {
+      show(String(e), "deny");
+      document.body.dataset.lastDecision = "Error";
+    }
+  };
+</script>
+</body>
+</html>

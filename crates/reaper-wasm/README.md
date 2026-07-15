@@ -55,7 +55,32 @@ compiled evaluators, this wrapper natively, the wasm artifact in Node) runs
 every `policy-library/*/manifest.json` case on all legs in CI — a decision
 divergence anywhere is a red build.
 
-## Out of scope (slice 3+)
+## Check mode (conftest/gatekeeper style)
 
-Check/document mode, npm packaging, browser demo, native↔wasm differential
-beyond the library corpus.
+```js
+const result = JSON.parse(engine.checkDocument(policySource, inputJson, "check", "deploy.yaml"));
+// -> { allowed: false, violations: [{ rule: "no_latest_tag", message: "..." }] }
+```
+
+All violated deny rules are collected (not first-match) with rendered
+messages — same semantics as the CLI/agent check endpoints. Parity for all
+17 policy-library document cases is asserted on both legs.
+
+## Browser (web target)
+
+```bash
+wasm-bindgen --target web --out-dir crates/reaper-wasm/pkg-web \
+    target/wasm32-unknown-unknown/release/reaper_wasm.wasm
+# then serve the crate dir and open demo/index.html
+```
+
+`demo/index.html` is a self-contained page (policy + entities + evaluate,
+no server round-trips); CI smoke-tests it in headless Chrome through the
+real click handlers (`?autorun`).
+
+## npm packaging
+
+`scripts/package-npm.mjs <dir> --target nodejs|web` stamps a
+publishable-shaped `package.json` (version from Cargo.toml, `private: true`
+mirroring the workspace publish policy) into the bindings dir. CI uploads
+both packages plus the demo as the `reaper-wasm-node` artifact.

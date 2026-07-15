@@ -34,6 +34,7 @@
 
 use policy_engine::{
     DataLoader, DataStore, EnhancedPolicy, PolicyEngine, PolicyId, PolicyLanguage, PolicyRequest,
+    ReaperPolicy,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -155,6 +156,43 @@ impl ReaperEngine {
         Ok(evaluator.evaluator_type().to_string())
     }
 
+    /// Check-mode evaluation (the conftest/gatekeeper driver): run EVERY deny
+    /// rule of the policy against the request + `input` document and collect
+    /// ALL matching rules as violations (with rendered messages) — the same
+    /// `check_with_input` the CLI/agent check endpoints and the
+    /// policy-library conformance runner use. Returns `CheckResult` JSON:
+    /// `{"allowed": bool, "violations": [{"rule", "message"?}]}`.
+    ///
+    /// Check mode is an AST-evaluator feature (it needs every-rule collection
+    /// and message rendering, not the first-match compiled path), so the
+    /// policy source is parsed per call — this is the CI/linting surface,
+    /// not the sub-microsecond serving path.
+    pub fn check_document_impl(
+        &self,
+        reap_source: &str,
+        input_json: &str,
+        action: &str,
+        resource: &str,
+    ) -> Result<String, String> {
+        let policy: ReaperPolicy = reap_source
+            .parse()
+            .map_err(|e| format!("policy parse failed: {e:?}"))?;
+        let ast = policy.build_ast_evaluator(self.store.clone());
+
+        let doc: serde_json::Value = serde_json::from_str(input_json)
+            .map_err(|e| format!("input document is not valid JSON: {e}"))?;
+
+        let request = PolicyRequest {
+            resource: resource.to_string(),
+            action: action.to_string(),
+            context: HashMap::new(),
+        };
+        let result = ast
+            .check_with_input(&request, Some(&doc))
+            .map_err(|e| format!("check failed: {e}"))?;
+        serde_json::to_string(&result).map_err(|e| format!("result serialization failed: {e}"))
+    }
+
     /// Evaluate against ALL deployed policies (any deny wins) →
     /// `AllPoliciesEvaluationResult` JSON.
     pub fn evaluate_all_impl(
@@ -260,6 +298,20 @@ impl ReaperEngine {
     #[wasm_bindgen(js_name = removePolicy)]
     pub fn remove_policy(&self, policy_id: &str) -> Result<u64, JsError> {
         self.remove_policy_impl(policy_id)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Check-mode evaluation: all violated deny rules for a policy + input
+    /// document (conftest/gatekeeper style). Returns `CheckResult` JSON.
+    #[wasm_bindgen(js_name = checkDocument)]
+    pub fn check_document(
+        &self,
+        reap_source: &str,
+        input_json: &str,
+        action: &str,
+        resource: &str,
+    ) -> Result<String, JsError> {
+        self.check_document_impl(reap_source, input_json, action, resource)
             .map_err(|e| JsError::new(&e))
     }
 
