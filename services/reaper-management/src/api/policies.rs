@@ -198,6 +198,13 @@ async fn create_policy(
         )));
     }
 
+    // Per-tenant request ceiling (round-2 E4).
+    if !state.allow_org_request(organization.id) {
+        return Err(ApiError::RateLimited(
+            "per-organization request rate exceeded; retry after a short backoff".to_string(),
+        ));
+    }
+
     // Enforce the plan's policy quota (round-2 E4) before creating.
     crate::quota::enforce_can_add(&state.db, &organization, crate::quota::Dimension::Policies)
         .await?;

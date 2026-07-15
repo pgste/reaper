@@ -205,7 +205,7 @@ unaltered" question lands on.
 
 ---
 
-## Workstream E — Enterprise / compliance finishing  *(IN PROGRESS — E1 & E2 COMPLETE; E3/E4 not started. See the per-plan STATUS docs.)*
+## Workstream E — Enterprise / compliance finishing  *(COMPLETE — E1, E2, E3, E4 all landed. See the per-plan STATUS docs.)*
 
 - **E1 — Native SIEM export connectors.** *(COMPLETE — all 4 slices landed; see
   `plans/round-2/E1-siem-connectors.md` STATUS.)* *Closes PROD R2-2.* Shipped OCSF
@@ -226,11 +226,12 @@ unaltered" question lands on.
   `.sig` sidecar), `bundle import` (offline verify + deploy-with-signature +
   attestation), `bundle deploy` sidecar auto-attach, and the agent checksum report
   (`bundle_hash` on `list_policies` + `bundle attest`). **Effort M.**
-- **E4 — Real multi-tenant quota enforcement.** *Closes PROD R2-9.* Plan-limit
-  quotas are advisory (`UsageMetrics` hardcoded 0). Wire real usage counts +
-  enforce at agent-register / policy-create + per-tenant rate ceilings.
-  **Effort M.** Only matters for the multi-tenant SaaS shape; single-tenant
-  enterprise can defer.
+- **E4 — Real multi-tenant quota enforcement.** *(COMPLETE.)* *Closes PROD R2-9.*
+  Wired real usage counts (was `UsageMetrics` hardcoded 0), plan tiers persisted
+  in `Organization.settings` with per-org overrides, resource-quota enforcement at
+  agent-register / policy-create (`402` over limit), and a per-tenant request-rate
+  ceiling (`api_per_org_per_minute` → `429`) on those paths. `GET /orgs/{org}/billing`
+  exposes real usage. `src/quota/` + `docs/deployment/TENANT_QUOTAS.md`. **Effort M.**
 
 ---
 

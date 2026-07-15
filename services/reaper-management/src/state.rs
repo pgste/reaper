@@ -268,6 +268,10 @@ pub struct AppState {
     pub decision_store: Option<Arc<crate::decisions::DecisionStore>>,
     /// In-memory counterfactual-replay job registry (Plan 04 step 8).
     pub replay_jobs: crate::replay::ReplayJobs,
+    /// Per-tenant request ceiling (round-2 E4): enforces `api_per_org_per_minute`
+    /// on the resource-creating paths so one org cannot exhaust the shared
+    /// control plane. `None` when rate limiting is disabled.
+    pub org_rate_limiter: Option<Arc<crate::rate_limit::OrgRateLimiter>>,
     /// Shutdown signal for graceful shutdown
     shutdown_signal: ShutdownSignal,
     /// Flag indicating server is shutting down
@@ -355,6 +359,13 @@ impl AppState {
             .with_github_app(github_app),
         );
 
+        // Per-tenant request ceiling (E4): built only when rate limiting is on.
+        let org_rate_limiter = config.rate_limit.enabled.then(|| {
+            Arc::new(crate::rate_limit::OrgRateLimiter::new(
+                config.rate_limit.api_per_org_per_minute,
+            ))
+        });
+
         Self {
             db,
             config: Arc::new(config),
@@ -366,9 +377,20 @@ impl AppState {
             jwks_validator: Some(jwks_validator),
             decision_store,
             replay_jobs: std::sync::Arc::new(dashmap::DashMap::new()),
+            org_rate_limiter,
             shutdown_signal: ShutdownSignal::new(),
             is_shutting_down: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Enforce the per-tenant request ceiling for `org_id` (E4). No-op when rate
+    /// limiting is disabled; returns `false` when the org's per-minute ceiling is
+    /// exhausted.
+    pub fn allow_org_request(&self, org_id: uuid::Uuid) -> bool {
+        self.org_rate_limiter
+            .as_ref()
+            .map(|l| l.allow(org_id))
+            .unwrap_or(true)
     }
 
     /// Get the shutdown signal for graceful shutdown coordination

@@ -59,6 +59,18 @@ agents quota reached: 2/2 on the free plan — upgrade the plan or raise the lim
 `402` is deliberate: the request is well-formed and authorized — the remedy is to
 upgrade the plan (or raise the override), not to re-authenticate.
 
+## Per-tenant request rate ceiling
+
+Beyond the resource counts, a per-org **request rate ceiling** stops one tenant
+from monopolising the shared control plane. It is a token bucket keyed by org id
+(`api_per_org_per_minute`, default 1000/min), enforced **post-auth** on the
+resource-creating paths (agent register, policy create) — where the org identity
+is verified — and returns **`429 Too Many Requests`** (`code: "rate_limited"`,
+retryable after backoff) when exhausted. It is active only when
+`rate_limit.enabled` is true (the same global toggle as the IP limiter). This is
+distinct from the plan resource quota (a `402`): the rate ceiling is about
+*how fast*, the quota about *how many*.
+
 ## Visibility
 
 `GET /orgs/{org}/billing` reports the org's effective `plan_tier`, `limits`, real
