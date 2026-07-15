@@ -14,7 +14,7 @@ This doc is updated as each slice lands.
 
 ---
 
-## STATUS (2026-07-15) — slices 1, 2 & 3 landed; slice 4 (optional) remains
+## STATUS (2026-07-15) — all four slices landed; E1 complete
 
 **Decisions locked (with the maintainer):**
 1. **OCSF class = Authorize Session** (`class_uid` 3003, IAM category `category_uid`
@@ -84,6 +84,22 @@ This doc is updated as each slice lands.
   separation test, integration `siem_connector_repo_crud_round_trips` (CRUD +
   export accounting + tenant isolation).
 
+**Landed (slice 4):**
+- policy-engine: the decision writer gained an optional streaming mirror — a
+  non-blocking `SyncSender<Arc<DecisionLogEntry>>` on `WriterSinks` (E1 slice 4).
+  `DecisionBuffer::new_with_stream` / `create_shared_buffer_with_stream` /
+  `decision_stream_channel` wire it; the writer `try_send`s each captured entry
+  after the durable write, dropping (counted as the new `stream_dropped` stat)
+  rather than ever blocking durability. Best-effort telemetry, never the audit
+  artifact. 2 unit tests (`streaming_mirror_receives_captured_entries`,
+  `…_drops_when_saturated_without_blocking`).
+- reaper-agent: `decision_stream.rs` consumer — `StreamSinkConfig::from_env`
+  (`REAPER_DECISION_STREAM_URL`/`_FORMAT`/`_TOKEN`/`_BATCH`/`_FLUSH_MS`/`_QUEUE`)
+  and a dedicated OS thread that batches, shapes via `entry.export(format)`, and
+  POSTs to the SIEM (async reqwest on a private current-thread runtime; bearer
+  auth; 5xx/transport retries). Wired in `main.rs` (uses `_with_stream` when the
+  URL is set). README "SIEM export" gained the agent-streaming option.
+
 ---
 
 ## What already exists (reuse, don't rebuild)
@@ -151,8 +167,9 @@ http, endpoint, secret, format), a `ConnectorDeliveryService` generalised from
 reading shaped records from `DecisionStore`. Retry/signing/delivery-result
 tracking reused.
 
-**Slice 4 (optional) — agent streaming sink.** Extend `WriterSinks` fan-out for
-low-latency in-agent push where the central-store hop is too slow.
+**Slice 4 (optional) — agent streaming sink.** *(LANDED — see STATUS.)* Extend
+`WriterSinks` fan-out for low-latency in-agent push where the central-store hop is
+too slow.
 
 ## Open questions
 1. **OCSF version/class** to target (Authorization Activity 3.x) and the exact

@@ -205,11 +205,14 @@ unaltered" question lands on.
 
 ---
 
-## Workstream E — Enterprise / compliance finishing  *(IN PROGRESS — E1 scoped (`plans/round-2/E1-siem-connectors.md`, not started); E2 COMPLETE — slice 1 + all three follow-ups landed, see `plans/round-2/E2-subject-erasure.md` STATUS)*
+## Workstream E — Enterprise / compliance finishing  *(IN PROGRESS — E1 & E2 COMPLETE; E3/E4 not started. See the per-plan STATUS docs.)*
 
-- **E1 — Native SIEM export connectors.** *Closes PROD R2-2.* NDJSON/JSON only;
-  no Kafka/Splunk-HEC/CEF/OCSF. Ship Vector sink configs + an OCSF field mapping +
-  a push export API. **Effort M.** Bank SOC onboarding blocker.
+- **E1 — Native SIEM export connectors.** *(COMPLETE — all 4 slices landed; see
+  `plans/round-2/E1-siem-connectors.md` STATUS.)* *Closes PROD R2-2.* Shipped OCSF
+  (Authorize Session 3003) + CEF shaping in `policy-engine`, Vector sink overlay
+  (Kafka/Splunk-HEC/S3 + OCSF transform), the control-plane push-export connectors
+  API (`audit:export` scope), and an optional low-latency agent streaming sink.
+  **Effort M.** Bank SOC onboarding blocker.
 - **E2 — GDPR subject-erasure endpoint.** *(COMPLETE — `POST /orgs/{org}/audit/erasure`
   live + all three follow-ups landed; see `E2-subject-erasure.md` STATUS)*
   *Closes PROD R2-3.* Erase-by-subject over ClickHouse (redact-in-place,

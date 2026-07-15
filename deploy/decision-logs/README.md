@@ -200,12 +200,24 @@ are preserved under the schema's `unmapped` object.
 
 **Native push (control plane)** — for a per-tenant, authenticated **push-export
 API** (Splunk-HEC / generic HTTP, OCSF **or** CEF) reading the full history from
-the central store, see the connectors API *(slice 3, in progress)*. CEF is emitted
-there rather than in Vector (Vector's encoders don't produce CEF).
+the central store, use the connectors API: `POST /orgs/{org}/audit/connectors`
+(scope `audit:export`) then `POST …/{id}/export`. CEF is emitted there rather than
+in Vector (Vector's encoders don't produce CEF).
+
+**Agent-side streaming (lowest latency)** — to push decisions straight from the
+agent to a SIEM HTTP endpoint, bypassing the central-store hop, set
+`REAPER_DECISION_STREAM_URL` (+ optional `…_FORMAT` ocsf|cef|ndjson [default ocsf],
+`…_TOKEN` bearer, `…_BATCH`, `…_FLUSH_MS`, `…_QUEUE`). The agent's decision writer
+mirrors each captured decision to a bounded channel that a dedicated consumer
+thread shapes and POSTs. It is **best-effort telemetry, not the durable audit
+path** — a saturated consumer drops (surfaced as the `stream_dropped` stat) and
+never blocks evaluation or the file/WORM sinks. Use the control-plane connector
+above when you need governance, per-tenant auth, and full-history replay.
 
 The OCSF shape is defined once in `policy-engine`
 (`DecisionLogEntry::to_ocsf`, golden fixture `src/testdata/decision_ocsf.json`);
-the Vector transform mirrors it so both paths emit identical records.
+the Vector transform, the control-plane connector, and the agent streaming sink
+all emit identical records.
 
 ## Immutable audit anchor (WORM) — tamper-evidence you can prove
 
