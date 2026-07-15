@@ -244,6 +244,15 @@ jobs:
 
         SPEEDUP=$(echo "scale=2; $REAPER_RPS / $OPA_RPS" | bc)
 
+        # Non-degenerate workload gate: an all-allow or all-deny run means
+        # the suite exercised a single decision path (e.g. every principal
+        # unknown => error-path denies) and its latency/parity numbers are
+        # meaningless. Red, not green.
+        if [ "$REAPER_ALLOW" = "0" ] || [ "$REAPER_DENY" = "0" ]; then
+          echo "::error::degenerate ${{ matrix.scenario }} workload: reaper allowed=$REAPER_ALLOW denied=$REAPER_DENY — dataset/request mismatch?"
+          exit 1
+        fi
+
         # Create Allure results
         mkdir -p allure-results
 

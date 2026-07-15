@@ -103,3 +103,16 @@ const row = {
 };
 
 console.log(JSON.stringify(row, null, 2));
+
+// Degenerate-workload guard: a benchmark where every request allows (or
+// every request denies) is measuring one code path — likely a broken
+// dataset/request-id mismatch — and any "decision parity" against it is
+// vacuous. Fail loudly instead of going green on a meaningless run.
+// Opt-out (--allow-degenerate) for scenarios that are legitimately one-sided.
+if (!("allow-degenerate" in args) && (allowed === 0 || denied === 0)) {
+  console.error(
+    `DEGENERATE WORKLOAD: allowed=${allowed} denied=${denied} over ${requests.length} requests — ` +
+      "every request took the same decision path; dataset/request mismatch?",
+  );
+  process.exit(2);
+}

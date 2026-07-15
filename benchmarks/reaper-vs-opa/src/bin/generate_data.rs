@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("Generating {} entities...", cli.count);
 
-    let entities = match &cli.command {
+    let mut entities = match &cli.command {
         Commands::Rbac => generate_rbac_data(cli.count),
         Commands::Abac => generate_abac_data(cli.count),
         Commands::Multilayer => generate_multilayer_data(cli.count),
@@ -104,6 +104,97 @@ fn main() -> anyhow::Result<()> {
         Commands::Mega => generate_mega_data(cli.count),
         Commands::PolicySet { .. } => unreachable!("handled above"),
     };
+
+    // The benchmark's generate_request addresses a small fixed set of
+    // RESOURCE ids per scenario, and the policies gate on resource.*
+    // attributes (`resource.type == "premium_loan"`, time windows, …).
+    // Without these entities every such rule is unsatisfiable and the whole
+    // run degenerates to the deny path (caught by the wasm parity leg's
+    // degenerate-workload gate). Ids must match generate_request verbatim.
+    // (id, resource.type) pairs; type == id except regex, whose requests
+    // address *_service ids while the policy gates on *_validation types.
+    let scenario_resources: &[(&str, &str)] = match &cli.command {
+        Commands::Math => &[
+            ("premium_loan", "premium_loan"),
+            ("shopping_cart", "shopping_cart"),
+            ("featured_listing", "featured_listing"),
+            ("loyalty_reward", "loyalty_reward"),
+            ("marketplace", "marketplace"),
+            ("premium_tier", "premium_tier"),
+            ("sale_item", "sale_item"),
+            ("temperature_monitor", "temperature_monitor"),
+        ],
+        Commands::Regex => &[
+            ("email_service", "email_validation"),
+            ("payment_service", "payment_validation"),
+            ("phone_service", "phone_validation"),
+            ("uuid_service", "uuid_validation"),
+            ("web_service", "url_validation"),
+        ],
+        Commands::String => &[
+            ("admin_panel", "admin_panel"),
+            ("gov_service", "gov_service"),
+            ("internal_docs", "internal_docs"),
+            ("partner_portal", "partner_portal"),
+            ("test_environment", "test_environment"),
+        ],
+        Commands::Collection => &[
+            ("content", "content"),
+            ("document", "document"),
+            ("email_campaign", "email_campaign"),
+            ("invoice", "invoice"),
+            ("profile", "profile"),
+            ("senior_position", "senior_position"),
+            ("shared_resource", "shared_resource"),
+            ("system", "system"),
+            ("workflow", "workflow"),
+        ],
+        _ => &[],
+    };
+    for (rid, rtype) in scenario_resources {
+        entities.push(json!({
+            "id": rid,
+            "type": "resource",
+            "attributes": { "type": rtype }
+        }));
+    }
+    if matches!(&cli.command, Commands::Time) {
+        // Time policy reads real temporal attributes; give half the resources
+        // values that satisfy the rules and half that don't, so the decision
+        // mix is genuine. Timestamps are unix NANOSECONDS (the DSL time unit);
+        // anchor far in the past / future so the mix is stable for years.
+        let past_ns: i64 = 1_600_000_000_000_000_000; // 2020
+        let future_ns: i64 = 4_100_000_000_000_000_000; // 2099
+        for (i, rid) in [
+            "apartment",
+            "api_endpoint",
+            "audit_trail",
+            "conference_room",
+            "data",
+            "office_system",
+            "production_system",
+            "project_files",
+            "rate_limited_endpoint",
+            "timestamp_data",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let passes = i % 2 == 0;
+            entities.push(json!({
+                "id": rid,
+                "type": "resource",
+                "attributes": {
+                    "type": rid,
+                    "creation_time": past_ns,
+                    "retention_period_ns": if passes { future_ns - past_ns } else { 1_000_000_000i64 },
+                    "maintenance_window_start": if passes { past_ns } else { future_ns },
+                    "maintenance_window_end": future_ns,
+                    "requires_age_verification": !passes
+                }
+            }));
+        }
+    }
 
     let output = json!({
         "entities": entities
@@ -194,6 +285,23 @@ fn generate_rbac_data(count: usize) -> Vec<Value> {
         }));
     }
 
+    // Benchmark-workload principals: the benchmark's generate_request derives
+    // ids as user_{role}_{index % 1000} over these four roles. Without these
+    // entities EVERY benchmark request is an unknown-principal deny and the
+    // suite measures only the error path (the wasm parity leg exposed this).
+    // The role attribute comes from the id, so the rbac policy produces a
+    // real allow/deny mix (e.g. manager+delete denies, admin allows).
+    let request_roles = ["admin", "manager", "engineer", "viewer"];
+    for role in request_roles {
+        for n in 0..1000 {
+            entities.push(json!({
+                "id": format!("user_{}_{}", role, n),
+                "type": "user",
+                "attributes": { "role": role, "department": departments[n % departments.len()], "active": true }
+            }));
+        }
+    }
+
     entities
 }
 
@@ -242,6 +350,43 @@ fn generate_abac_data(count: usize) -> Vec<Value> {
         }));
     }
 
+    // Benchmark-workload principals + resources, ids derived exactly as the
+    // benchmark's generate_request does (see wasm-parity note in
+    // generate_rbac_data). Request index i yields dept=departments[i%5],
+    // role=roles[i%5], n=i%1000 — and 1000 % 5 == 0, so dept/role are fully
+    // determined by n. Clearance (n%5)+1 vs the resource's (m%4)+1 gives a
+    // real allow/deny mix under the department_clearance rule.
+    let req_departments = ["engineering", "hr", "finance", "sales", "operations"];
+    let req_roles = ["admin", "manager", "engineer", "analyst", "intern"];
+    let req_classifications = ["public", "internal", "confidential", "secret"];
+    for n in 0..1000 {
+        let j = n % 5;
+        entities.push(json!({
+            "id": format!("user_{}_{}_{}", req_departments[j], req_roles[j], n),
+            "type": "user",
+            "attributes": {
+                "role": req_roles[j],
+                "department": req_departments[j],
+                "clearance_level": (n % 5) + 1,
+                "high_clearance": (n % 5) >= 3,
+                "status": "active",
+                "suspended": n % 17 == 0
+            }
+        }));
+    }
+    for m in 0..100 {
+        entities.push(json!({
+            "id": format!("resource_{}_{}_{}", req_departments[m % 5], req_classifications[m % 4], m),
+            "type": "resource",
+            "attributes": {
+                "department": req_departments[m % 5],
+                "classification": req_classifications[m % 4],
+                "clearance_level": (m % 4) + 1,
+                "owner_id": format!("user_{}_{}_{}", req_departments[m % 5], req_roles[m % 5], m)
+            }
+        }));
+    }
+
     entities
 }
 
@@ -274,6 +419,60 @@ fn generate_multilayer_data(count: usize) -> Vec<Value> {
                 "years_employed": rng.gen_range(0..15),
                 "has_mfa": rng.gen_bool(0.8),
                 "active": rng.gen_bool(0.95)
+            }
+        }));
+    }
+
+    // Benchmark-workload principals + resources (see wasm-parity note in
+    // generate_rbac_data). generate_request derives user_{role[i%6]}_
+    // {dept[i%5]}_{i%1000} — the (role, dept, n) combination cycles with
+    // period lcm(6,5,1000)=3000, so iterate 3000 and dedup. Attributes come
+    // from the id components: admins/executives get high_clearance (allow),
+    // interns hit the secret-classification deny, everyone else lands on
+    // clearance comparisons — a genuine decision mix.
+    let req_roles = [
+        "admin",
+        "executive",
+        "senior",
+        "engineer",
+        "manager",
+        "intern",
+    ];
+    let req_departments = ["engineering", "hr", "finance", "executive", "operations"];
+    let req_classifications = ["public", "internal", "confidential", "secret"];
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..3000 {
+        let role = req_roles[i % 6];
+        let dept = req_departments[i % 5];
+        let n = i % 1000;
+        let id = format!("user_{}_{}_{}", role, dept, n);
+        if seen.insert(id.clone()) {
+            entities.push(json!({
+                "id": id,
+                "type": "user",
+                "attributes": {
+                    "role": role,
+                    "department": dept,
+                    "clearance_level": (n % 5) + 1,
+                    "high_clearance": role == "admin" || role == "executive",
+                    "status": "active",
+                    "suspended": n % 23 == 0,
+                    "team_role": if n % 7 == 0 { "lead" } else { "member" },
+                    "team_id": format!("team_{}", n % 20)
+                }
+            }));
+        }
+    }
+    for m in 0..200 {
+        entities.push(json!({
+            "id": format!("resource_{}_{}_{}", req_departments[m % 5], req_classifications[m % 4], m),
+            "type": "resource",
+            "attributes": {
+                "department": req_departments[m % 5],
+                "classification": req_classifications[m % 4],
+                "clearance_level": (m % 4) + 1,
+                "owner_id": format!("user_{}_{}_{}", req_roles[m % 6], req_departments[m % 5], m),
+                "team_id": format!("team_{}", m % 20)
             }
         }));
     }
