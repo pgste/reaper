@@ -198,6 +198,10 @@ async fn create_policy(
         )));
     }
 
+    // Enforce the plan's policy quota (round-2 E4) before creating.
+    crate::quota::enforce_can_add(&state.db, &organization, crate::quota::Dimension::Policies)
+        .await?;
+
     let input = CreatePolicy {
         name: request.name,
         description: request.description,

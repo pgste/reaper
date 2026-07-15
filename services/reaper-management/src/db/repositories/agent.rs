@@ -119,6 +119,19 @@ impl<'a> AgentRepository<'a> {
     }
 
     /// List agents for an organization
+    /// Count agents for an organization (quota enforcement, round-2 E4).
+    pub async fn count_by_org(&self, org_id: Uuid) -> Result<i64, DatabaseError> {
+        let pool = self
+            .db
+            .any_pool()
+            .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM agents WHERE org_id = $1")
+            .bind(org_id.to_string())
+            .fetch_one(pool)
+            .await?;
+        Ok(row.0)
+    }
+
     pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<Agent>, DatabaseError> {
         let pool = self
             .db

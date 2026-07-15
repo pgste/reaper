@@ -168,6 +168,10 @@ async fn register_agent(
         )));
     }
 
+    // Enforce the plan's agent quota (round-2 E4) before creating.
+    crate::quota::enforce_can_add(&state.db, &organization, crate::quota::Dimension::Agents)
+        .await?;
+
     // Create the agent
     let input = RegisterAgent {
         name: request.name,

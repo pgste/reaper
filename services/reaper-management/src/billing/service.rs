@@ -17,9 +17,10 @@ use uuid::Uuid;
 
 use crate::db::Database;
 use crate::domain::billing::{
-    BillingSummary, CheckoutSessionResponse, PlanLimits, PlanTier, PortalSessionResponse,
-    Subscription, SubscriptionStatus, UsageMetrics,
+    BillingSummary, CheckoutSessionResponse, PlanTier, PortalSessionResponse, Subscription,
+    SubscriptionStatus,
 };
+use crate::domain::organization::Organization;
 
 /// Billing service errors
 #[derive(Debug, Error)]
@@ -257,33 +258,17 @@ impl BillingService {
         }
     }
 
-    /// Get billing summary for an organization
+    /// Get billing summary for an organization, with **real** usage counts and
+    /// the org's effective plan limits (round-2 E4). The plan tier is resolved
+    /// from `Organization.settings.plan_tier`; usage is counted from the DB.
     pub async fn get_billing_summary(
         &self,
-        org_id: Uuid,
-        subscription: Option<Subscription>,
-    ) -> BillingSummary {
-        let plan_tier = subscription
-            .as_ref()
-            .map(|s| s.plan_tier)
-            .unwrap_or(PlanTier::Free);
+        org: &Organization,
+    ) -> Result<BillingSummary, BillingError> {
+        let limits = crate::quota::effective_limits(org);
+        let usage = crate::quota::count_usage(&self.db, org.id).await?;
 
-        let limits = PlanLimits::for_tier(plan_tier);
-
-        // Get current usage (in production, query from metrics/database)
-        let usage = UsageMetrics {
-            org_id,
-            period_start: Utc::now(),
-            period_end: Utc::now(),
-            active_agents: 0,
-            policy_evaluations: 0,
-            policy_count: 0,
-            bundle_count: 0,
-            user_count: 0,
-            storage_bytes: 0,
-        };
-
-        // Check if within limits
+        // Overage detection (unchanged): a limit of 0 or -1 means unlimited.
         let mut exceeded_limits = Vec::new();
         if limits.max_agents > 0 && usage.active_agents > limits.max_agents {
             exceeded_limits.push("agents".to_string());
@@ -298,13 +283,13 @@ impl BillingService {
             exceeded_limits.push("storage".to_string());
         }
 
-        BillingSummary {
-            subscription,
+        Ok(BillingSummary {
+            subscription: None,
             limits,
             usage,
             within_limits: exceeded_limits.is_empty(),
             exceeded_limits,
-        }
+        })
     }
 
     /// Handle Stripe webhook event
@@ -341,6 +326,7 @@ impl BillingService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::billing::PlanLimits;
 
     #[test]
     fn test_plan_limits_free() {

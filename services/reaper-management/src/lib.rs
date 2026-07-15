@@ -28,6 +28,7 @@ pub mod integrations;
 pub mod landscape;
 pub mod metrics;
 pub mod middleware;
+pub mod quota;
 pub mod rate_limit;
 pub mod replay;
 pub mod siem;

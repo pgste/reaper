@@ -21,6 +21,7 @@ use crate::{
     billing::{BillingError, BillingService},
     domain::billing::{
         BillingSummary, CheckoutSessionResponse, PlanLimits, PlanTier, PortalSessionResponse,
+        UsageMetrics,
     },
     state::AppState,
 };
@@ -40,6 +41,8 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
 pub struct BillingSummaryResponse {
     pub plan_tier: PlanTier,
     pub limits: PlanLimits,
+    /// Real usage counts (round-2 E4): active agents, policies, bundles, users.
+    pub usage: UsageMetrics,
     pub is_within_limits: bool,
     pub exceeded_limits: Vec<String>,
     pub billing_enabled: bool,
@@ -48,12 +51,11 @@ pub struct BillingSummaryResponse {
 impl From<BillingSummary> for BillingSummaryResponse {
     fn from(s: BillingSummary) -> Self {
         Self {
-            plan_tier: s
-                .subscription
-                .as_ref()
-                .map(|sub| sub.plan_tier)
-                .unwrap_or(PlanTier::Free),
+            // The effective plan tier drives the limits, so report it from there
+            // (plans persist in org settings now, not a subscription row).
+            plan_tier: s.limits.tier,
             limits: s.limits,
+            usage: s.usage,
             is_within_limits: s.within_limits,
             exceeded_limits: s.exceeded_limits,
             billing_enabled: true,
@@ -108,8 +110,9 @@ async fn get_billing_summary(
 
     let billing_service = BillingService::disabled(state.db.clone());
     let summary = billing_service
-        .get_billing_summary(organization.id, None)
-        .await;
+        .get_billing_summary(&organization)
+        .await
+        .map_err(|e| ApiError::Internal(format!("billing summary: {e}")))?;
 
     let mut response: BillingSummaryResponse = summary.into();
     response.billing_enabled = billing_service.is_enabled();
