@@ -37,12 +37,25 @@ pub struct RevocationList {
     pub revoked_bundle_hashes: Vec<String>,
     /// Signing key ids whose every bundle is distrusted (leaked key).
     pub revoked_key_ids: Vec<String>,
+    /// Revoked capability ids (F1 agentic authz). Revoking an id kills that
+    /// capability AND every capability derived from it (ancestry check in
+    /// `Capability::verify_at`). Rides the same signed list-pull channel as
+    /// bundle revocation — no per-request online check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked_capability_ids: Vec<String>,
 }
 
 impl RevocationList {
     /// Canonical bytes for signing/verification: fields in a fixed order with
-    /// the two lists sorted+deduped, so the same logical list always produces
+    /// the lists sorted+deduped, so the same logical list always produces
     /// the same signed message regardless of insertion order.
+    ///
+    /// COMPATIBILITY: the capability segment is appended ONLY when non-empty.
+    /// A list without capability revocations therefore canonicalizes to the
+    /// exact pre-F1 bytes, so existing signed lists keep verifying. An agent
+    /// running pre-F1 code that receives a list WITH capability revocations
+    /// fails signature verification and keeps its last good list — fail
+    /// closed, never silently dropping revocations it cannot see.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut hashes = self.revoked_bundle_hashes.clone();
         hashes.sort();
@@ -52,7 +65,7 @@ impl RevocationList {
         keys.dedup();
         // Domain-separated, NUL-delimited; list elements joined by \x1f (unit
         // separator) which cannot appear in hex digests or key ids.
-        let msg = format!(
+        let mut msg = format!(
             "reaper-revocation-list-v1\0{}\0{}\0{}\0{}\0{}",
             self.issued_at,
             self.serial,
@@ -60,6 +73,14 @@ impl RevocationList {
             hashes.join("\x1f"),
             keys.join("\x1f"),
         );
+        if !self.revoked_capability_ids.is_empty() {
+            let mut caps = self.revoked_capability_ids.clone();
+            caps.sort();
+            caps.dedup();
+            msg.push('\0');
+            msg.push_str("caps:");
+            msg.push_str(&caps.join("\x1f"));
+        }
         msg.into_bytes()
     }
 
@@ -129,6 +150,7 @@ mod tests {
             next_update: 0,
             revoked_bundle_hashes: vec!["aa".to_string(), "bb".to_string()],
             revoked_key_ids: vec!["leaked-key".to_string()],
+            revoked_capability_ids: Vec::new(),
         }
     }
 
@@ -168,6 +190,54 @@ mod tests {
         );
         assert!(l.is_revoked("ff", "leaked-key"), "revoked key id");
         assert!(!l.is_revoked("ff", "good-key"), "neither revoked");
+    }
+
+    #[test]
+    fn empty_capability_segment_preserves_pre_f1_canonical_bytes() {
+        // The exact byte layout existing signed lists were produced over —
+        // a list with no capability revocations MUST keep this encoding, or
+        // every already-distributed signed list stops verifying.
+        let expected =
+            b"reaper-revocation-list-v1\x002026-01-01T00:00:00Z\x003\x000\x00aa\x1fbb\x00leaked-key";
+        assert_eq!(list().canonical_bytes(), expected);
+    }
+
+    #[test]
+    fn capability_revocations_sign_verify_and_tamper() {
+        let k = key();
+        let mut l = list();
+        l.revoked_capability_ids = vec!["cap-2".to_string(), "cap-1".to_string()];
+        let signed = SignedRevocationList::sign(l, &k, "k1");
+        let verified = signed.verify(&vk(&k), Some("k1")).unwrap();
+        assert_eq!(verified.revoked_capability_ids.len(), 2);
+
+        // Adding a capability revocation without re-signing breaks the sig —
+        // a middlebox cannot strip or extend the capability kill list.
+        let mut tampered = signed.clone();
+        tampered.list.revoked_capability_ids.push("cap-3".into());
+        assert!(tampered.verify(&vk(&k), None).is_err());
+
+        // Stripping the whole segment also breaks it.
+        let mut stripped = signed;
+        stripped.list.revoked_capability_ids.clear();
+        assert!(stripped.verify(&vk(&k), None).is_err());
+    }
+
+    #[test]
+    fn capability_ids_are_order_independent() {
+        let mut a = list();
+        let mut b = list();
+        a.revoked_capability_ids = vec!["y".into(), "x".into()];
+        b.revoked_capability_ids = vec!["x".into(), "y".into(), "x".into()];
+        assert_eq!(a.canonical_bytes(), b.canonical_bytes());
+    }
+
+    #[test]
+    fn legacy_json_without_capability_field_deserializes() {
+        let json = r#"{"issued_at":"2026-01-01T00:00:00Z","serial":1,"next_update":0,
+            "revoked_bundle_hashes":[],"revoked_key_ids":[]}"#;
+        let l: RevocationList = serde_json::from_str(json).unwrap();
+        assert!(l.revoked_capability_ids.is_empty());
     }
 
     #[test]
