@@ -661,11 +661,40 @@ jobs:
       - name: Wasm parity leg (Node smoke test through the artifact)
         run: node crates/reaper-wasm/tests/node/smoke.mjs
 
-      - name: Upload wasm artifact
+      # ---- Slice 3: web target + npm packaging + browser smoke ----
+      - name: Generate Web bindings
+        run: >
+          wasm-bindgen --target web --out-dir crates/reaper-wasm/pkg-web
+          target/wasm32-unknown-unknown/release/reaper_wasm.wasm
+
+      - name: Assemble npm packages (nodejs + web)
+        run: |
+          node crates/reaper-wasm/scripts/package-npm.mjs crates/reaper-wasm/pkg-node --target nodejs
+          node crates/reaper-wasm/scripts/package-npm.mjs crates/reaper-wasm/pkg-web --target web
+
+      - name: Browser smoke test (headless Chrome, real click handlers)
+        run: |
+          cd crates/reaper-wasm
+          python3 -m http.server 8123 >/dev/null 2>&1 &
+          SRV=$!
+          sleep 1
+          BROWSER=$(command -v google-chrome || command -v chromium-browser || command -v chromium)
+          "$BROWSER" --headless --no-sandbox --disable-gpu --virtual-time-budget=8000 \
+            --dump-dom "http://127.0.0.1:8123/demo/index.html?autorun" > /tmp/demo-dom.html 2>/dev/null
+          kill $SRV || true
+          grep -q 'data-wasm-ready="1"' /tmp/demo-dom.html || { echo "::error::wasm failed to init in browser"; exit 1; }
+          grep -q 'data-deployed="1"' /tmp/demo-dom.html || { echo "::error::policy deploy failed in browser"; exit 1; }
+          grep -q 'data-last-decision="Allow"' /tmp/demo-dom.html || { echo "::error::browser evaluation did not return Allow"; exit 1; }
+          echo "browser demo: init + deploy + evaluate all green"
+
+      - name: Upload wasm artifacts (npm-shaped node + web packages, demo)
         uses: actions/upload-artifact@v4
         with:
           name: reaper-wasm-node
-          path: crates/reaper-wasm/pkg-node/
+          path: |
+            crates/reaper-wasm/pkg-node/
+            crates/reaper-wasm/pkg-web/
+            crates/reaper-wasm/demo/
 
   # ============================================================
   # Stage 4: Volume Tests (10k iterations per policy)

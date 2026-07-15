@@ -8,9 +8,9 @@
 //! the same manifests through the actual `.wasm` build. Together: manifest
 //! expectations ⇒ native wrapper ⇒ wasm artifact, one shared oracle.
 //!
-//! Document-mode cases (`input`/`violations`) are skipped: check mode is not
-//! part of the slice-2 wasm surface (tracked for slice 3 in
-//! `plans/round-2/F2-wasm-target.md`).
+//! Document-mode cases (`input`/`violations`) run through the wrapper's
+//! `checkDocument` surface (slice 3): allowed flag AND exact violated-rule
+//! set asserted per case — the full 82-case library corpus, nothing skipped.
 
 // Test-harness file: the workspace panic gate targets reachable production
 // code; helper fns here fall outside the `allow-*-in-tests` heuristic (same
@@ -44,7 +44,48 @@ struct Case {
     input: Option<String>,
     expect: String,
     #[serde(default)]
+    violations: Option<Vec<String>>,
+    #[serde(default)]
     context: Option<HashMap<String, String>>,
+}
+
+/// Run one document-mode case through the wrapper's check surface and assert
+/// the manifest's expectations (allowed flag + exact violated-rule set) —
+/// the same contract `policy_library_tests.rs` enforces on the AST evaluator.
+fn assert_check_case(
+    engine: &ReaperEngine,
+    dir: &Path,
+    policy_src: &str,
+    label: &str,
+    case: &Case,
+) {
+    let input_file = case.input.as_deref().expect("document case input");
+    let input_json = std::fs::read_to_string(dir.join(input_file)).expect("read input document");
+    let action = case.action.as_deref().unwrap_or("check");
+
+    let result_json = engine
+        .check_document_impl(policy_src, &input_json, action, input_file)
+        .unwrap_or_else(|e| panic!("{label}: checkDocument failed: {e}"));
+    let result: serde_json::Value = serde_json::from_str(&result_json).expect("check json");
+
+    let expect_allowed = case.expect == "allow";
+    assert_eq!(
+        result["allowed"].as_bool(),
+        Some(expect_allowed),
+        "{label}: allowed mismatch"
+    );
+    if let Some(ref expected) = case.violations {
+        let mut got: Vec<String> = result["violations"]
+            .as_array()
+            .expect("violations array")
+            .iter()
+            .map(|v| v["rule"].as_str().expect("rule name").to_string())
+            .collect();
+        let mut want = expected.clone();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want, "{label}: violation set mismatch");
+    }
 }
 
 fn library_root() -> PathBuf {
@@ -83,7 +124,7 @@ fn wasm_wrapper_meets_every_library_manifest() {
 
     let mut scenarios = 0;
     let mut cases_run = 0;
-    let mut skipped_document_cases = 0;
+    let mut document_cases_run = 0;
     let mut ast_fallback_scenarios: Vec<String> = Vec::new();
 
     for manifest_path in manifests {
@@ -92,17 +133,31 @@ fn wasm_wrapper_meets_every_library_manifest() {
             serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
                 .unwrap_or_else(|e| panic!("bad manifest {manifest_path:?}: {e}"));
 
-        // Document-mode scenario (all cases carry `input`): outside the
-        // slice-2 wasm surface.
-        if manifest.cases.iter().all(|c| c.input.is_some()) {
-            skipped_document_cases += manifest.cases.len();
-            continue;
-        }
-
         // Fresh engine per scenario — same isolation the library runner uses.
         let engine = ReaperEngine::new();
         let policy_src = std::fs::read_to_string(dir.join(&manifest.policy))
             .unwrap_or_else(|e| panic!("[{}] read policy: {e}", manifest.name));
+
+        // Document-mode scenario (all cases carry `input`): slice 3 — run
+        // through the wrapper's checkDocument surface, asserting allowed +
+        // the exact violation set per case. No deploy needed (check parses
+        // the source per call, matching the CLI/agent check semantics).
+        if manifest.cases.iter().all(|c| c.input.is_some()) {
+            if let Some(ref data) = manifest.data {
+                let json = std::fs::read_to_string(dir.join(data))
+                    .unwrap_or_else(|e| panic!("[{}] read data: {e}", manifest.name));
+                engine
+                    .load_entities_json_impl(&json)
+                    .unwrap_or_else(|e| panic!("[{}] load data: {e}", manifest.name));
+            }
+            for case in &manifest.cases {
+                let label = format!("[{}] {}", manifest.name, case.name);
+                assert_check_case(&engine, dir, &policy_src, &label, case);
+                document_cases_run += 1;
+            }
+            scenarios += 1;
+            continue;
+        }
 
         if let Some(ref data) = manifest.data {
             let json = std::fs::read_to_string(dir.join(data))
@@ -156,7 +211,10 @@ fn wasm_wrapper_meets_every_library_manifest() {
 
         for case in &manifest.cases {
             if case.input.is_some() {
-                skipped_document_cases += 1;
+                // Mixed manifest: document case inside an authz scenario.
+                let label = format!("[{}] {}", manifest.name, case.name);
+                assert_check_case(&engine, dir, &policy_src, &label, case);
+                document_cases_run += 1;
                 continue;
             }
             cases_run += 1;
@@ -203,6 +261,10 @@ fn wasm_wrapper_meets_every_library_manifest() {
     }
 
     assert!(cases_run >= 40, "suspiciously few cases ran: {cases_run}");
+    assert!(
+        document_cases_run >= 15,
+        "suspiciously few document-mode cases ran: {document_cases_run}"
+    );
 
     // The checked-in fallback list is the cross-target tier contract: the
     // Node leg asserts the wasm artifact serves the compiled tier for every
@@ -224,10 +286,9 @@ fn wasm_wrapper_meets_every_library_manifest() {
     );
 
     println!(
-        "wasm-wrapper parity: {scenarios} scenarios, {cases_run} authz cases verified \
-         ({skipped_document_cases} document-mode cases out of slice-2 scope); \
-         compiled tier on {} scenarios, AST fallback on {:?}",
-        scenarios - ast_fallback_scenarios.len(),
+        "wasm-wrapper parity: {scenarios} scenarios, {cases_run} authz cases + \
+         {document_cases_run} document-mode cases verified; \
+         compiled tier on all non-document scenarios, AST fallback on {:?}",
         ast_fallback_scenarios
     );
 }

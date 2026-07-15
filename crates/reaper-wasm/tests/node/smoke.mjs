@@ -50,25 +50,44 @@ assert.ok(manifests.length >= 8, `expected the full library, found ${manifests.l
 
 let scenarios = 0;
 let casesRun = 0;
-let skippedDocumentCases = 0;
+let documentCasesRun = 0;
+
+// Document-mode case: checkDocument must reproduce the manifest's allowed
+// flag AND exact violated-rule set (same contract as policy_library_tests
+// and the native wrapper leg) — through the actual wasm artifact.
+function assertCheckCase(engine, dir, policySrc, label, c) {
+  const inputJson = readFileSync(join(dir, c.input), "utf8");
+  const result = JSON.parse(
+    engine.checkDocument(policySrc, inputJson, c.action ?? "check", c.input),
+  );
+  assert.equal(result.allowed, c.expect === "allow", `${label}: allowed mismatch (wasm)`);
+  if (c.violations) {
+    const got = result.violations.map((v) => v.rule).sort();
+    const want = [...c.violations].sort();
+    assert.deepEqual(got, want, `${label}: violation set mismatch (wasm)`);
+  }
+  documentCasesRun += 1;
+}
 
 for (const manifestPath of manifests) {
   const dir = dirname(manifestPath);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
-  if (manifest.cases.every((c) => c.input !== undefined)) {
-    skippedDocumentCases += manifest.cases.length;
-    continue; // document/check mode: outside the slice-2 wasm surface
-  }
-
   const engine = new ReaperEngine();
   if (manifest.data) {
     engine.loadEntitiesJson(readFileSync(join(dir, manifest.data), "utf8"));
   }
-  const policyId = engine.deployPolicy(
-    manifest.name,
-    readFileSync(join(dir, manifest.policy), "utf8"),
-  );
+
+  if (manifest.cases.every((c) => c.input !== undefined)) {
+    const policySrc = readFileSync(join(dir, manifest.policy), "utf8");
+    for (const c of manifest.cases) {
+      assertCheckCase(engine, dir, policySrc, `[${manifest.name}] ${c.name}`, c);
+    }
+    scenarios += 1;
+    continue;
+  }
+  const policySrc = readFileSync(join(dir, manifest.policy), "utf8");
+  const policyId = engine.deployPolicy(manifest.name, policySrc);
   assert.equal(engine.policyCount(), 1, `${manifest.name}: policyCount`);
 
   // Compiled-PRIMARY contract, wasm leg: the artifact must serve each policy
@@ -86,7 +105,7 @@ for (const manifestPath of manifests) {
 
   for (const c of manifest.cases) {
     if (c.input !== undefined) {
-      skippedDocumentCases += 1;
+      assertCheckCase(engine, dir, policySrc, `[${manifest.name}] ${c.name}`, c);
       continue;
     }
     casesRun += 1;
@@ -184,8 +203,11 @@ policy clock_pin {
   );
 }
 
+assert.ok(casesRun >= 40, `suspiciously few authz cases ran: ${casesRun}`);
+assert.ok(documentCasesRun >= 15, `suspiciously few document cases ran: ${documentCasesRun}`);
+
 console.log(
-  `wasm node smoke: ${scenarios} scenarios, ${casesRun} authz cases verified through the ` +
-    `wasm artifact (${skippedDocumentCases} document-mode cases out of slice-2 scope); ` +
+  `wasm node smoke: ${scenarios} scenarios, ${casesRun} authz cases + ` +
+    `${documentCasesRun} document-mode (check) cases verified through the wasm artifact; ` +
     `clock injection + error surface OK`,
 );
