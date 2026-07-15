@@ -26,14 +26,14 @@ allow if {
 allow if {
     user.phone != null
     resource.type == "phone_validation"
-    regex.match(`^\+?1?\s?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$`, user.phone)
+    regex.match(`^\(\d{3}\) \d{3}-\d{4}$`, user.phone)
 }
 
 # URL Validation
 allow if {
     user.url != null
     resource.type == "url_validation"
-    regex.match(`^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(/.*)?$`, user.url)
+    regex.match(`^https?://[a-zA-Z0-9.-]+`, user.url)
 }
 
 # IP Address Validation (IPv4)
@@ -54,7 +54,7 @@ allow if {
 allow if {
     user.credit_card != null
     resource.type == "payment_validation"
-    regex.match(`^\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}$`, user.credit_card)
+    regex.match(`^\d{4}-\d{4}-\d{4}-\d{4}$`, user.credit_card)
 }
 
 # Redacted Data Rule (SSN redaction check)
