@@ -449,7 +449,7 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
             attribute,
         } => {
             // Check if this is an entity (user/resource/context)
-            let is_entity = matches!(variable.as_str(), "user" | "resource" | "context");
+            let is_entity = matches!(variable.as_str(), "user" | "actor" | "resource" | "context");
             if is_entity {
                 // Entity attribute access - this should have been handled earlier
                 return Err(ReaperError::InvalidPolicy {

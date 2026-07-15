@@ -55,6 +55,9 @@ pub enum EntityType {
     User,
     Resource,
     Context,
+    /// The optional non-human actor (F1 agentic authz). Appended after the
+    /// original variants so any serialized conditions keep their encoding.
+    Actor,
 }
 
 /// Index expression for bracket notation

@@ -124,11 +124,7 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                         Entity::User => DslEntityType::User,
                         Entity::Resource => DslEntityType::Resource,
                         Entity::Context => DslEntityType::Context,
-                        Entity::Actor => {
-                            return Err(ReaperError::InvalidPolicy {
-                                reason: "`actor` is not compiled yet; policy runs on the AST evaluator".to_string(),
-                            })
-                        },
+                        Entity::Actor => DslEntityType::Actor,
                         Entity::Input => {
                             return Err(ReaperError::InvalidPolicy {
                                 reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),
@@ -484,10 +480,14 @@ fn compile_rebac_call(function: &str, args: Vec<Expr>) -> Result<DslCondition, R
         match expr {
             Expr::Variable(name) if name == "user" => Ok(RebacRef::Principal),
             Expr::Variable(name) if name == "resource" => Ok(RebacRef::ResourceId),
+            // F1 agentic authz: the optional non-human actor. Evaluates as
+            // non-matching when the request carries no actor (the AST
+            // evaluator rejects the unbound pseudo-variable the same way).
+            Expr::Variable(name) if name == "actor" => Ok(RebacRef::Actor),
             Expr::Literal(crate::reap::ast::Value::String(s)) => Ok(RebacRef::Literal(s.clone())),
             other => Err(ReaperError::InvalidPolicy {
                 reason: format!(
-                    "rebac::{function}: only `user`, `resource`, or string literals compile (got {other:?}); dynamic ids use the AST evaluator"
+                    "rebac::{function}: only `user`, `actor`, `resource`, or string literals compile (got {other:?}); dynamic ids use the AST evaluator"
                 ),
             }),
         }

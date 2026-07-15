@@ -26,6 +26,7 @@ impl ReapAstEvaluator {
             Expr::Variable(var_name) => {
                 // Check if this is a pseudo-entity reference like "user.name" from entity method calls
                 if var_name.starts_with("user.")
+                    || var_name.starts_with("actor.")
                     || var_name.starts_with("resource.")
                     || var_name.starts_with("context.")
                     || var_name.starts_with("input.")
@@ -73,7 +74,7 @@ impl ReapAstEvaluator {
                         // ⇒ null, so `actor.type == "agent"` simply fails to
                         // match rather than erroring on human requests.
                         match context.actor_id {
-                            Some(actor_id) => self.get_entity_attr_by_name(actor_id, attribute),
+                            Some(actor_id) => self.get_actor_attr_by_name(actor_id, attribute),
                             None => Ok(EvalValue::Null),
                         }
                     }
@@ -142,7 +143,7 @@ impl ReapAstEvaluator {
                     }
                     "actor" => match context.actor_id {
                         Some(actor_id) => {
-                            let attr_value = self.get_entity_attr_by_name(actor_id, attribute)?;
+                            let attr_value = self.get_actor_attr_by_name(actor_id, attribute)?;
                             self.apply_index(&attr_value, index)
                         }
                         None => Ok(EvalValue::Null),

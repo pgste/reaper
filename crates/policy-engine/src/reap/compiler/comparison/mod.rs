@@ -153,11 +153,7 @@ pub fn compile_comparison_assignment(
                 Entity::User => EntityType::User,
                 Entity::Resource => EntityType::Resource,
                 Entity::Context => EntityType::Context,
-                Entity::Actor => {
-                    return Err(ReaperError::InvalidPolicy {
-                        reason: "`actor` is not compiled yet; policy runs on the AST evaluator".to_string(),
-                    })
-                },
+                Entity::Actor => EntityType::Actor,
                 Entity::Input => {
                     return Err(ReaperError::InvalidPolicy {
                         reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),

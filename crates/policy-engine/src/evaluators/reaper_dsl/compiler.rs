@@ -56,6 +56,7 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
                 RebacRef::Principal => CompiledRebacRef::Principal,
                 RebacRef::ResourceId => CompiledRebacRef::ResourceId,
                 RebacRef::Literal(s) => CompiledRebacRef::Literal(interner.intern(s)),
+                RebacRef::Actor => CompiledRebacRef::Actor,
             };
             CompiledCondition::RebacCheck {
                 kind: *kind,

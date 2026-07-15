@@ -275,7 +275,12 @@ impl ReapAstEvaluator {
             // ===== ReBAC (relationship graph) =====
             // rebac::related(subject, relation, object) -> bool
             (Some("rebac"), "related") => {
-                let (subject, relation, object) = self.rebac_ids_3(args, context, "related")?;
+                let Some((subject, relation, object)) =
+                    self.rebac_ids_3(args, context, "related")?
+                else {
+                    // Unbound actor argument: the check is false, never an error.
+                    return Ok(EvalValue::Boolean(false));
+                };
                 Ok(EvalValue::Boolean(
                     self.store
                         .relationships()
@@ -286,7 +291,12 @@ impl ReapAstEvaluator {
             // subject holds relation directly OR through groups reached via
             // its own `via` edges (bounded, cycle-safe).
             (Some("rebac"), "reachable") => {
-                let (subject, relation, object) = self.rebac_ids_3(args, context, "reachable")?;
+                let Some((subject, relation, object)) =
+                    self.rebac_ids_3(args, context, "reachable")?
+                else {
+                    // Unbound actor argument: the check is false, never an error.
+                    return Ok(EvalValue::Boolean(false));
+                };
                 let (via, max) = self.rebac_via_max(args, context, "reachable")?;
                 Ok(EvalValue::Boolean(
                     self.store
@@ -297,7 +307,12 @@ impl ReapAstEvaluator {
             // rebac::inherited(subject, relation, object, up, max_depth) -> bool
             // relation holds on the object or any ancestor along `up` edges.
             (Some("rebac"), "inherited") => {
-                let (subject, relation, object) = self.rebac_ids_3(args, context, "inherited")?;
+                let Some((subject, relation, object)) =
+                    self.rebac_ids_3(args, context, "inherited")?
+                else {
+                    // Unbound actor argument: the check is false, never an error.
+                    return Ok(EvalValue::Boolean(false));
+                };
                 let (up, max) = self.rebac_via_max(args, context, "inherited")?;
                 Ok(EvalValue::Boolean(
                     self.store
@@ -577,17 +592,20 @@ impl super::ReapAstEvaluator {
     /// call into interned ids. Args are expressions, so any string-producing
     /// value works: the `user`/`resource` pseudo-variables, bound variables,
     /// entity attributes, or literals.
+    /// Returns `Ok(None)` when an `actor` argument is unbound (the request
+    /// carries no actor): the relationship check is then FALSE (fail closed),
+    /// not an evaluation error — same semantics as the compiled evaluator.
     fn rebac_ids_3(
         &self,
         args: &[crate::reap::ast::Expr],
         context: &super::types::EvalContext,
         name: &str,
     ) -> Result<
-        (
+        Option<(
             crate::data::EntityId,
             crate::data::interning::InternedString,
             crate::data::EntityId,
-        ),
+        )>,
         ReaperError,
     > {
         if args.len() < 3 {
@@ -598,15 +616,24 @@ impl super::ReapAstEvaluator {
                 ),
             });
         }
+        // `actor` is bound as a pseudo-variable only when the request carries
+        // an actor (see rebac_pseudo_vars). Detect the unbound case up front.
+        let unbound_actor = |e: &crate::reap::ast::Expr| {
+            matches!(e, crate::reap::ast::Expr::Variable(n)
+                if n == "actor" && !context.variables.contains_key("actor"))
+        };
+        if unbound_actor(&args[0]) || unbound_actor(&args[2]) {
+            return Ok(None);
+        }
         let subject = self.rebac_string_arg(&args[0], context, name, "subject")?;
         let relation = self.rebac_string_arg(&args[1], context, name, "relation")?;
         let object = self.rebac_string_arg(&args[2], context, name, "object")?;
         let interner = self.store.interner();
-        Ok((
+        Ok(Some((
             interner.intern(&subject),
             interner.intern(&relation),
             interner.intern(&object),
-        ))
+        )))
     }
 
     /// Evaluate the (via/up, max_depth) tail of traversing rebac::* calls.

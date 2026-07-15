@@ -284,6 +284,12 @@ impl ReapAstEvaluator {
                 let value = self.evaluate_expr(expr, context)?;
                 match value {
                     EvalValue::Boolean(b) => Ok(b),
+                    // TOTAL EVALUATION: Null as a bare predicate is FALSE, not
+                    // an error — it means a missing attribute / absent actor
+                    // fed the expression (e.g. `actor.profile.has_key("env")`
+                    // with no actor bound). Fail-closed non-match, same as the
+                    // compiled evaluator's missing-receiver conditions.
+                    EvalValue::Null => Ok(false),
                     _ => Err(ReaperError::InvalidPolicy {
                         reason: format!(
                             "Expression in condition must evaluate to boolean, got: {:?}",

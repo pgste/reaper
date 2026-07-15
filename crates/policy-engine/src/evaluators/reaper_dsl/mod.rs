@@ -200,6 +200,9 @@ pub struct ReaperDSLEvaluator {
     /// Interned "resource" type id, precomputed so the synthetic-resource path
     /// doesn't re-intern the constant on every request.
     resource_type_id: crate::data::InternedString,
+    /// Interned "actor" type id, precomputed for the synthetic-actor path
+    /// (an actor id that is not a loaded entity — F1 agentic authz).
+    actor_type_id: crate::data::InternedString,
     /// Pre-compiled regex patterns for O(1) lookup during evaluation
     #[allow(dead_code)]
     regex_cache: Arc<FxHashMap<String, regex::Regex>>,
@@ -247,6 +250,7 @@ impl ReaperDSLEvaluator {
         }
 
         let resource_type_id = interner.intern("resource");
+        let actor_type_id = interner.intern("actor");
 
         Self {
             store,
@@ -254,6 +258,7 @@ impl ReaperDSLEvaluator {
             compiled_allow_rules,
             default_decision,
             resource_type_id,
+            actor_type_id,
             regex_cache: Arc::new(regex_cache),
             membership_cache: Arc::new(membership_cache),
         }
@@ -289,12 +294,19 @@ impl ReaperDSLEvaluator {
                 use crate::evaluators::reaper_dsl::CompiledRebacRef;
                 use crate::evaluators::reaper_dsl::RebacKind;
                 let resolve = |r: &CompiledRebacRef| match r {
-                    CompiledRebacRef::Principal => bindings.user.id,
-                    CompiledRebacRef::ResourceId => bindings.resource.id,
-                    CompiledRebacRef::Literal(id) => *id,
+                    CompiledRebacRef::Principal => Some(bindings.user.id),
+                    CompiledRebacRef::ResourceId => Some(bindings.resource.id),
+                    CompiledRebacRef::Literal(id) => Some(*id),
+                    // Absent actor ⇒ the check cannot hold (fail closed); a
+                    // present actor resolves to its (possibly synthesized)
+                    // entity id, so a relation may name an actor id that is
+                    // not itself a loaded entity — same as the AST evaluator.
+                    CompiledRebacRef::Actor => bindings.actor.map(|a| a.id),
                 };
-                let subject_id = resolve(subject);
-                let object_id = resolve(object);
+                let (Some(subject_id), Some(object_id)) = (resolve(subject), resolve(object))
+                else {
+                    return false;
+                };
                 let graph = self.store.relationships();
                 match kind {
                     RebacKind::Direct => graph.has_relation(object_id, *relation, subject_id),
@@ -440,12 +452,16 @@ impl ReaperDSLEvaluator {
                 key,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => bindings.user,
-                    EntityType::Resource => bindings.resource,
+                    EntityType::User => Some(bindings.user),
+                    EntityType::Resource => Some(bindings.resource),
                     EntityType::Context => return false,
+                    // Absent actor: fall through to the missing-attribute
+                    // path — the AST reads actor.* as Null when no actor is
+                    // bound, and missing-attr semantics are identical.
+                    EntityType::Actor => bindings.actor,
                 };
                 matches!(
-                    entity.get_attribute(*attribute),
+                    entity.and_then(|e| e.get_attribute(*attribute)),
                     Some(AttributeValue::Object(map)) if map.contains_key(key)
                 )
             }
@@ -455,11 +471,15 @@ impl ReaperDSLEvaluator {
                 attribute,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => bindings.user,
-                    EntityType::Resource => bindings.resource,
+                    EntityType::User => Some(bindings.user),
+                    EntityType::Resource => Some(bindings.resource),
                     EntityType::Context => return false,
+                    // Absent actor: fall through to the missing-attribute
+                    // path — the AST reads actor.* as Null when no actor is
+                    // bound, and missing-attr semantics are identical.
+                    EntityType::Actor => bindings.actor,
                 };
-                match entity.get_attribute(*attribute) {
+                match entity.and_then(|e| e.get_attribute(*attribute)) {
                     Some(AttributeValue::List(items)) => {
                         items.iter().any(|v| is_truthy(v, interner))
                     }
@@ -475,11 +495,15 @@ impl ReaperDSLEvaluator {
                 attribute,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => bindings.user,
-                    EntityType::Resource => bindings.resource,
+                    EntityType::User => Some(bindings.user),
+                    EntityType::Resource => Some(bindings.resource),
                     EntityType::Context => return false,
+                    // Absent actor: fall through to the missing-attribute
+                    // path — the AST reads actor.* as Null when no actor is
+                    // bound, and missing-attr semantics are identical.
+                    EntityType::Actor => bindings.actor,
                 };
-                match entity.get_attribute(*attribute) {
+                match entity.and_then(|e| e.get_attribute(*attribute)) {
                     // Vacuously true on an empty collection, matching AST all().
                     Some(AttributeValue::List(items)) => {
                         items.iter().all(|v| is_truthy(v, interner))
@@ -514,11 +538,15 @@ impl ReaperDSLEvaluator {
                 // Use get_nested_attr to support nested attributes like "form_data.name"
                 let value = if let Some(idx) = index {
                     let entity = match entity_type {
-                        EntityType::User => bindings.user,
-                        EntityType::Resource => bindings.resource,
+                        EntityType::User => Some(bindings.user),
+                        EntityType::Resource => Some(bindings.resource),
                         EntityType::Context => return false,
+                        // Absent actor: no value, same as a missing attribute.
+                        EntityType::Actor => bindings.actor,
                     };
-                    collection_eval::get_indexed_value_compiled(entity, *attribute, idx, interner)
+                    entity.and_then(|e| {
+                        collection_eval::get_indexed_value_compiled(e, *attribute, idx, interner)
+                    })
                 } else {
                     entity_helpers::get_nested_attr(entity_type, *attribute, bindings, interner)
                 };
@@ -569,12 +597,16 @@ impl ReaperDSLEvaluator {
                 variable,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => bindings.user,
-                    EntityType::Resource => bindings.resource,
+                    EntityType::User => Some(bindings.user),
+                    EntityType::Resource => Some(bindings.resource),
                     EntityType::Context => return false,
+                    // Absent actor: fall through to the missing-attribute
+                    // path — the AST reads actor.* as Null when no actor is
+                    // bound, and missing-attr semantics are identical.
+                    EntityType::Actor => bindings.actor,
                 };
 
-                let attr_val = entity.get_attribute(*attribute);
+                let attr_val = entity.and_then(|e| e.get_attribute(*attribute));
                 if let Some(resolved) = interner.resolve(*variable) {
                     let var_val = variables.get(&*resolved);
                     match (attr_val, var_val) {
@@ -820,12 +852,16 @@ impl ReaperDSLEvaluator {
                 value,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => bindings.user,
-                    EntityType::Resource => bindings.resource,
+                    EntityType::User => Some(bindings.user),
+                    EntityType::Resource => Some(bindings.resource),
                     EntityType::Context => return false,
+                    // Absent actor: fall through to the missing-attribute
+                    // path — the AST reads actor.* as Null when no actor is
+                    // bound, and missing-attr semantics are identical.
+                    EntityType::Actor => bindings.actor,
                 };
 
-                let attr_opt = entity.get_attribute(*attribute);
+                let attr_opt = entity.and_then(|e| e.get_attribute(*attribute));
 
                 // Evaluate comparison based on value type
                 let result = match value {
@@ -1200,11 +1236,14 @@ impl ReaperDSLEvaluator {
                 attribute,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => bindings.user,
-                    EntityType::Resource => bindings.resource,
+                    EntityType::User => Some(bindings.user),
+                    EntityType::Resource => Some(bindings.resource),
                     EntityType::Context => return None,
+                    // Absent actor: empty source, same as a missing attribute
+                    // (total iteration — matches the AST contract below).
+                    EntityType::Actor => bindings.actor,
                 };
-                match entity.get_attribute(*attribute) {
+                match entity.and_then(|e| e.get_attribute(*attribute)) {
                     Some(AttributeValue::List(items)) => items.clone(),
                     Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
                     // TOTAL ITERATION (matches the AST contract): a missing
@@ -1603,15 +1642,46 @@ impl ReaperDSLEvaluator {
             );
         }
 
+        // Actor resolution (F1 agentic authz). Same non-interning discipline
+        // as the resource above: `lookup` only — interning a per-request actor
+        // id would pin it in the shared interner forever. An actor that names
+        // no loaded entity still binds, as a synthesized STACK-LOCAL empty
+        // entity: every attribute then reads as missing (exactly the AST's
+        // Null reads), while rebac checks still see the looked-up id — a
+        // relation can name a subject id that is not itself a loaded entity.
+        // An id that was never interned gets the same never-inserted sentinel
+        // as the resource path and can match no relation and no literal.
+        let actor_found;
+        let temp_actor;
+        let actor: Option<&Entity> = match request.actor.as_deref() {
+            None => None,
+            Some(actor_str) => {
+                let actor_id = interner
+                    .lookup(actor_str)
+                    .unwrap_or(InternedString::from_id(u32::MAX));
+                actor_found = self.store.get(actor_id);
+                Some(match &actor_found {
+                    Some(entity) => entity,
+                    None => {
+                        temp_actor = Entity::new(
+                            actor_id,
+                            self.actor_type_id,
+                            std::collections::HashMap::new(),
+                        );
+                        &temp_actor
+                    }
+                })
+            }
+        };
+
         // Zero-copy evaluation context — avoids HashMap clone + 2 String allocations per call
         let eval_context = EvalContext::new(&request.action, &request.resource, &request.context);
 
-        // Entity bindings for this evaluation. `actor` stays None until the
-        // compiled path resolves `request.actor` (F1 slice B); the struct is
-        // Copy, so passing it down is the same cost as the old ref pair.
+        // Entity bindings for this evaluation; Copy, so passing it down is
+        // the same cost as the old ref pair.
         let bindings = EntityBindings {
             user: &user,
-            actor: None,
+            actor,
             resource,
         };
 

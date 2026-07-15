@@ -7,7 +7,7 @@
 
 use crate::evaluators::reaper_dsl::{
     AttrCompareOp, AttributeComparison, CompareTarget, Condition as DslCondition,
-    CrossEntityComparison, EntityType, NumericOp, WildcardComparison,
+    CrossEntityComparison, EntityType, IndexExpr, NumericOp, WildcardComparison,
 };
 use crate::reap::ast::{Entity, EntityAttr, Index, Operator, Value};
 use reaper_core::ReaperError;
@@ -18,9 +18,7 @@ fn entity_to_type(entity: &Entity) -> Result<EntityType, ReaperError> {
         Entity::User => Ok(EntityType::User),
         Entity::Resource => Ok(EntityType::Resource),
         Entity::Context => Ok(EntityType::Context),
-        Entity::Actor => Err(ReaperError::InvalidPolicy {
-            reason: "`actor` is not compiled yet; policy runs on the AST evaluator".to_string(),
-        }),
+        Entity::Actor => Ok(EntityType::Actor),
         Entity::Input => Err(ReaperError::InvalidPolicy {
             reason: "`input` document access is not compiled yet; policy runs on the AST evaluator"
                 .to_string(),
@@ -50,6 +48,33 @@ pub fn compile_value_comparison(
     value: Value,
 ) -> Result<DslCondition, ReaperError> {
     let entity_type = entity_to_type(&left.entity)?;
+
+    // Bracket-indexed comparison: `user.roles[0] == "admin"`,
+    // `user.tags[_] == "beta"`, `user.profile["tier"] == "gold"`. Only string
+    // equality compiles (IndexedEquals); every other indexed shape falls back
+    // to the AST evaluator. It must NEVER fall through to the un-indexed
+    // compile below — that silently dropped the index and compared the whole
+    // collection to the literal, a compiled-only wrong Deny (caught by the
+    // compiled-vs-AST differential when the actor cases extended it).
+    if let Some(index) = &left.index {
+        return match (&op, &value) {
+            (Operator::Equal, Value::String(s)) => Ok(DslCondition::IndexedEquals {
+                entity_type,
+                attribute: left.attribute,
+                index: match index {
+                    Index::Number(n) => IndexExpr::Number(*n),
+                    Index::String(k) => IndexExpr::String(k.clone()),
+                    Index::Wildcard => IndexExpr::Wildcard,
+                },
+                value: s.clone(),
+            }),
+            _ => Err(ReaperError::InvalidPolicy {
+                reason: "indexed comparisons compile only as `entity.attr[idx] == \"string\"`; \
+                         other operators/types run on the AST evaluator"
+                    .to_string(),
+            }),
+        };
+    }
 
     // Handle null comparisons
     if matches!(value, Value::Null) {

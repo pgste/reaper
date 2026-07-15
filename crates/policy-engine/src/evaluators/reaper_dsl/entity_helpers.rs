@@ -35,6 +35,10 @@ pub fn get_entity_for_type<'a>(
         EntityType::User => Some(bindings.user),
         EntityType::Resource => Some(bindings.resource),
         EntityType::Context => None,
+        // Absent actor ⇒ no entity ⇒ every attribute reads as missing/Null,
+        // which satisfies no comparison except an explicit `== null` literal —
+        // the same fail-closed semantics as the AST evaluator.
+        EntityType::Actor => bindings.actor,
     }
 }
 

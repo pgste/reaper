@@ -1,10 +1,11 @@
 //! F1-s2 part 2: the DSL `actor` entity binding (agentic delegation).
 //!
 //! A request may carry a non-human `actor` acting on behalf of the human
-//! principal. Policies bind it as `actor.*`, distinct from `user.*`. The
-//! compiled evaluator does not support `actor` yet, so `build_preferred`
-//! falls back to the AST interpreter for such policies — decision-safe by
-//! the compiled-vs-AST equivalence contract. These tests pin: the binding
+//! principal. Policies bind it as `actor.*`, distinct from `user.*`. Since
+//! F1-s2c the COMPILED evaluator supports `actor` directly, so
+//! `build_preferred` serves these policies on the sub-microsecond path (the
+//! AST interpreter keeps identical semantics — pinned by the
+//! compiled-vs-AST equivalence differential). These tests pin: the binding
 //! resolves, actor-less requests read null (non-matching, not error), the
 //! delegation pattern works, and the served `build_preferred` path produces
 //! the right decisions.
@@ -63,19 +64,20 @@ policy agent_deploy {
 fn preferred(store: Arc<DataStore>) -> Box<dyn PolicyEvaluator> {
     let policy: ReaperPolicy = POLICY.parse().expect("parse");
     // build_preferred is the served path: compiled when possible, AST
-    // fallback otherwise. `actor` forces the fallback.
+    // fallback otherwise. `actor` compiles since F1-s2c.
     policy.build_preferred(store).expect("build")
 }
 
 #[test]
-fn served_path_falls_back_to_ast_for_actor_policies() {
+fn served_path_compiles_actor_policies() {
     let eval = preferred(store());
-    // The compiled evaluator can't do `actor`, so build_preferred must have
-    // handed back the AST interpreter.
+    // Actor policies must run on the compiled sub-microsecond path — the
+    // founding feature is fast AND secure decisions; the AST interpreter is
+    // only a fallback for constructs the compiler can't handle yet.
     assert_eq!(
         eval.evaluator_type(),
-        "ReapAstEvaluator",
-        "actor policy must be served by the AST fallback"
+        "reaper_dsl",
+        "actor policy must be served by the compiled evaluator"
     );
 }
 
@@ -136,6 +138,7 @@ fn actor_delegation_via_rebac_relationship() {
             // ReBAC direction: related(subject, rel, object) holds when the
             // OBJECT declares the relation. "agent-b acts for bob" ⇒ the user
             // (object) bob declares acts_for → agent-b (subject).
+            {"id": "alice", "type": "user", "attributes": {"role": "engineer"}},
             {"id": "bob", "type": "user", "attributes": {"role": "engineer"},
              "relationships": {"acts_for": ["agent-b"]}},
             {"id": "agent-b", "type": "agent", "attributes": {"trusted": true}},
@@ -159,6 +162,8 @@ policy delegated {
 "#;
     let policy: ReaperPolicy = policy_src.parse().unwrap();
     let eval = policy.build_preferred(s).unwrap();
+    // rebac::related(actor, ...) compiles too — no fallback.
+    assert_eq!(eval.evaluator_type(), "reaper_dsl");
 
     // agent-b acts_for bob → allow.
     let allow = eval

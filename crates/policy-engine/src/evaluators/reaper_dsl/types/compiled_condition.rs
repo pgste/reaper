@@ -349,4 +349,7 @@ pub enum CompiledRebacRef {
     Principal,
     ResourceId,
     Literal(InternedString),
+    /// The request's optional actor; resolves to the bound actor entity's id
+    /// or fails the check when the request carries no actor.
+    Actor,
 }
