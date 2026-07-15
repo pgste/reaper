@@ -51,12 +51,16 @@ fn benchmark_policy_evaluation(c: &mut Criterion) {
         resource: "*".to_string(),
         action: "read".to_string(),
         context: HashMap::new(),
+
+        ..Default::default()
     };
 
     let complex_request = PolicyRequest {
         resource: "resource-50".to_string(),
         action: "read".to_string(),
         context: HashMap::new(),
+
+        ..Default::default()
     };
 
     // Benchmark simple policy evaluation
@@ -158,6 +162,8 @@ fn benchmark_concurrent_access(c: &mut Criterion) {
                                 resource: format!("resource-{}", i),
                                 action: "read".to_string(),
                                 context: HashMap::new(),
+
+                                ..Default::default()
                             };
                             engine.evaluate(&policy.id, &request)
                         } else {
@@ -268,6 +274,8 @@ fn benchmark_realistic_workloads(c: &mut Criterion) {
                 ),
                 ("user_id".to_string(), format!("user-{}", i)),
             ]),
+
+            ..Default::default()
         })
         .collect();
 
@@ -308,6 +316,8 @@ fn benchmark_latency_targets(c: &mut Criterion) {
         resource: "test".to_string(),
         action: "read".to_string(),
         context: HashMap::new(),
+
+        ..Default::default()
     };
 
     // Let Criterion handle timing - much more accurate

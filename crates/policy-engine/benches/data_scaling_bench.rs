@@ -110,6 +110,8 @@ fn make_request(principal: &str, action: &str, resource: &str) -> PolicyRequest 
         resource: resource.to_string(),
         action: action.to_string(),
         context: ctx,
+
+        ..Default::default()
     }
 }
 

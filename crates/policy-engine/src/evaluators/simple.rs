@@ -288,6 +288,8 @@ mod tests {
             resource: "test-resource".to_string(),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -306,6 +308,8 @@ mod tests {
             resource: "any-resource".to_string(),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -324,6 +328,8 @@ mod tests {
             resource: "other-resource".to_string(),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -349,6 +355,8 @@ mod tests {
             resource: "test-resource".to_string(),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();

@@ -202,6 +202,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resource,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let lat_start = Instant::now();

@@ -443,6 +443,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -469,6 +471,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -495,6 +499,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context: context.clone(),
+
+            ..Default::default()
         };
         let decision = evaluator.evaluate(&request).unwrap();
         assert!(matches!(decision, PolicyAction::Allow));
@@ -506,6 +512,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context: context2,
+
+            ..Default::default()
         };
         let decision2 = evaluator.evaluate(&request2).unwrap();
         assert!(matches!(decision2, PolicyAction::Deny));
@@ -536,6 +544,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context: context1,
+
+            ..Default::default()
         };
         assert!(matches!(
             evaluator.evaluate(&request1).unwrap(),
@@ -549,6 +559,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context: context2,
+
+            ..Default::default()
         };
         assert!(matches!(
             evaluator.evaluate(&request2).unwrap(),
@@ -584,6 +596,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -614,6 +628,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -646,6 +662,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -679,6 +697,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -711,6 +731,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -745,6 +767,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -776,6 +800,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -806,6 +832,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -836,6 +864,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -868,6 +898,8 @@ mod tests {
             resource: "doc1".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();

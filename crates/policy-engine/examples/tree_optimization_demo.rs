@@ -211,6 +211,8 @@ fn generate_test_requests(count: usize) -> Vec<PolicyRequest> {
             resource: format!("users:{}", resource_id),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         });
     }
 

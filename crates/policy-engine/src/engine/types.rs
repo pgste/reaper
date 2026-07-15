@@ -205,12 +205,59 @@ pub struct PolicyRule {
     pub conditions: Vec<String>,
 }
 
+/// Trust level of one request-context attribute (F1 taint model, locked
+/// design: per-key provenance map, fail-untrusted).
+///
+/// Ordering matters: `Llm < Verified < Platform`. When a request carries a
+/// provenance map, any context key ABSENT from it defaults to the lowest
+/// level (`Llm`) — an attribute a possibly-prompt-injected model asserted
+/// must never be mistaken for one the platform derived. Labels are assigned
+/// by the enforcing edge (agent handler / MCP gate), never trusted from the
+/// caller body alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustLevel {
+    /// Asserted by an LLM / untrusted caller — the floor.
+    Llm,
+    /// Independently verified (e.g. carried by a verified capability).
+    Verified,
+    /// Derived by the platform itself.
+    Platform,
+}
+
 /// Policy evaluation request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `actor` and `context_provenance` are the F1 agentic extensions — both
+/// optional and `serde(default)`, so every pre-F1 wire payload and stored
+/// replay input deserializes unchanged (absent = today's single-principal,
+/// untainted behavior).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyRequest {
+    #[serde(default)]
     pub resource: String,
+    #[serde(default)]
     pub action: String,
+    #[serde(default)]
     pub context: std::collections::HashMap<String, String>,
+    /// The non-human actor wielding this request on behalf of the principal
+    /// (the DSL's `actor` entity binding). `None` = no delegation in play.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    /// Per-key trust labels for `context` (taint mode). `None` = taint mode
+    /// off: every key behaves as platform-trusted, preserving pre-F1
+    /// semantics. `Some(map)` = taint mode on: unlabeled keys are `Llm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_provenance: Option<std::collections::HashMap<String, TrustLevel>>,
+}
+
+impl PolicyRequest {
+    /// Effective trust of one context key under the fail-untrusted rule.
+    pub fn context_trust(&self, key: &str) -> TrustLevel {
+        match &self.context_provenance {
+            None => TrustLevel::Platform,
+            Some(map) => map.get(key).copied().unwrap_or(TrustLevel::Llm),
+        }
+    }
 }
 
 /// Policy evaluation result

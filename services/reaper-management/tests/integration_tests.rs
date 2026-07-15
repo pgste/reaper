@@ -1820,6 +1820,7 @@ async fn test_data_plane_end_to_end() {
         resource: resource.to_string(),
         action: "write".to_string(),
         context: HashMap::from([("principal".to_string(), principal.to_string())]),
+        ..Default::default()
     };
 
     // alice: editor binding (RBAC) + mfa attribute (ABAC) -> allow
@@ -1842,6 +1843,7 @@ async fn test_data_plane_end_to_end() {
         resource: resource.to_string(),
         action: "read".to_string(),
         context: HashMap::from([("principal".to_string(), principal.to_string())]),
+        ..Default::default()
     };
     let d = evaluator.evaluate(&read("carol", "doc-1")).unwrap();
     assert_eq!(format!("{d:?}"), "Allow", "carol via group-hop ReBAC");
@@ -3893,6 +3895,8 @@ async fn test_replay_engine_loads_real_bundle_and_api_guards() {
                 resource: "/api".to_string(),
                 action: action.to_string(),
                 context,
+
+                ..Default::default()
             },
         )
     };

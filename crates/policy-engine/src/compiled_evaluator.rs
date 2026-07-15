@@ -329,6 +329,8 @@ mod tests {
             resource: "/api/users".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();
@@ -356,6 +358,8 @@ mod tests {
             resource: "/api/users".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let decision = evaluator.evaluate(&request).unwrap();

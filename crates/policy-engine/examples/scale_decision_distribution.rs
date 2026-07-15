@@ -47,6 +47,8 @@ fn benchmark_scenario(
             resource: resource_id.clone(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let start = Instant::now();

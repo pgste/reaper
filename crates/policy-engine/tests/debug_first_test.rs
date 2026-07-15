@@ -61,6 +61,8 @@ fn test_type_checking_bdd_scenario() {
         resource: "string_check".to_string(),
         action: "validate".to_string(),
         context: context_ast,
+
+        ..Default::default()
     };
     let ast_result = ast_evaluator.evaluate(&request_ast);
     eprintln!("AST result: {:?}", ast_result);
@@ -84,6 +86,8 @@ fn test_type_checking_bdd_scenario() {
         resource: "string_check".to_string(),
         action: "validate".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request);
@@ -129,6 +133,8 @@ policy test_string {
         resource: "string_check".to_string(),
         action: "validate".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = ast_evaluator.evaluate(&request);
@@ -186,6 +192,8 @@ policy test_two_level {
         resource: "api_endpoint".to_string(),
         action: "submit".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = ast_evaluator.evaluate(&request);
@@ -250,6 +258,8 @@ policy test_nested {
         resource: "object_check".to_string(),
         action: "validate".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = ast_evaluator.evaluate(&request);
@@ -298,6 +308,8 @@ policy test_nested {
                 resource: "object_check".to_string(),
                 action: "validate".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             let result = compiled.evaluate(&request);
@@ -355,6 +367,8 @@ policy test_null_safety {
         resource: "nullable_field".to_string(),
         action: "access".to_string(),
         context: context_ast,
+
+        ..Default::default()
     };
     let ast_result = ast_eval.evaluate(&request_ast);
     eprintln!("AST null_safety result: {:?}", ast_result);
@@ -371,6 +385,8 @@ policy test_null_safety {
                 resource: "nullable_field".to_string(),
                 action: "access".to_string(),
                 context,
+
+                ..Default::default()
             };
 
             let result = compiled.evaluate(&request);
@@ -432,6 +448,8 @@ policy test_not_empty {
         resource: "test_resource".to_string(),
         action: "test".to_string(),
         context: context_ast,
+
+        ..Default::default()
     };
     let ast_result = ast_eval.evaluate(&request_ast);
     eprintln!("AST string != '' result: {:?}", ast_result);
@@ -445,6 +463,8 @@ policy test_not_empty {
                 resource: "test_resource".to_string(),
                 action: "test".to_string(),
                 context,
+
+                ..Default::default()
             };
             let result = compiled.evaluate(&request);
             eprintln!("Compiled string != '' result: {:?}", result);
@@ -499,6 +519,8 @@ policy test_assignment {
         resource: "test_resource".to_string(),
         action: "test".to_string(),
         context: context_ast,
+
+        ..Default::default()
     };
     let ast_result = ast_eval.evaluate(&request_ast);
     eprintln!("AST assignment result: {:?}", ast_result);
@@ -512,6 +534,8 @@ policy test_assignment {
                 resource: "test_resource".to_string(),
                 action: "test".to_string(),
                 context,
+
+                ..Default::default()
             };
             let result = compiled.evaluate(&request);
             eprintln!("Compiled assignment result: {:?}", result);
@@ -559,6 +583,8 @@ fn test_bdd_object_validation() {
         resource: "object_check".to_string(),
         action: "validate".to_string(),
         context: context_ast,
+
+        ..Default::default()
     };
     let ast_result = ast_eval.evaluate(&request_ast);
     eprintln!("AST object_validation result: {:?}", ast_result);
@@ -573,6 +599,8 @@ fn test_bdd_object_validation() {
                 resource: "object_check".to_string(),
                 action: "validate".to_string(),
                 context,
+
+                ..Default::default()
             };
             let result = compiled.evaluate(&request);
             eprintln!("Compiled object_validation result: {:?}", result);
@@ -648,6 +676,8 @@ policy test_first {
         resource: "task_queue".to_string(),
         action: "check".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = compiled.evaluate(&request).expect("evaluation failed");
@@ -722,6 +752,8 @@ policy test_first {
         resource: "task_queue".to_string(),
         action: "check".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = ast_evaluator

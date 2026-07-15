@@ -89,6 +89,8 @@ pub async fn check_document(
             .unwrap_or_else(|| "document".to_string()),
         action: payload.action.clone(),
         context,
+
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();

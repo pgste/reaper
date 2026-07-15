@@ -39,6 +39,8 @@ fn eval(evaluator: &ReapAstEvaluator, principal: &str) -> PolicyAction {
             resource: "res".to_string(),
             action: "act".to_string(),
             context: ctx,
+
+            ..Default::default()
         })
         .expect("Eval failed")
 }

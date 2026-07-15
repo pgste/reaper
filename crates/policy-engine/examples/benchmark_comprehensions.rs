@@ -109,6 +109,8 @@ fn benchmark_set_comprehension(store: Arc<DataStore>, count: usize) -> u128 {
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -158,6 +160,8 @@ fn benchmark_array_comprehension(store: Arc<DataStore>, count: usize) -> u128 {
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -205,6 +209,8 @@ fn benchmark_object_comprehension(store: Arc<DataStore>, count: usize) -> u128 {
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup

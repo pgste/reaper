@@ -186,6 +186,8 @@ fn run_scenario(dir: &Path, manifest: &Manifest) -> anyhow::Result<Vec<(String, 
                 resource: input_file.clone(),
                 action: case.action.clone().unwrap_or_else(|| "check".to_string()),
                 context: case.context.clone().unwrap_or_default(),
+
+                ..Default::default()
             };
             match ast.check_with_input(&request, Some(&doc)) {
                 Ok(result) => {
@@ -218,6 +220,8 @@ fn run_scenario(dir: &Path, manifest: &Manifest) -> anyhow::Result<Vec<(String, 
                 resource: case.resource.clone().unwrap_or_default(),
                 action: case.action.clone().unwrap_or_default(),
                 context,
+
+                ..Default::default()
             };
             match ast.evaluate(&request) {
                 Ok(decision) => {

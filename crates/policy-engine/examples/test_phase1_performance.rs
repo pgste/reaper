@@ -74,6 +74,8 @@ fn test_baseline_performance() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -157,6 +159,8 @@ fn test_membership_set_performance() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -241,6 +245,8 @@ fn test_membership_list_performance() {
         resource: "doc1".to_string(),
         action: "write".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -338,6 +344,8 @@ fn test_indexed_access_performance() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -421,6 +429,8 @@ fn test_variable_assignment_performance() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup
@@ -536,6 +546,8 @@ fn test_complex_policy_performance() {
         resource: "doc1".to_string(),
         action: "write".to_string(),
         context,
+
+        ..Default::default()
     };
 
     // Warmup

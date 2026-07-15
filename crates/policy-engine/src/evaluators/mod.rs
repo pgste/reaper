@@ -154,6 +154,8 @@ mod tests {
             resource: "test".to_string(),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let result = evaluator.evaluate(&request).unwrap();

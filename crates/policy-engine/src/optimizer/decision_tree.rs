@@ -502,6 +502,8 @@ mod tests {
             resource: "resource1".to_string(),
             action: "read".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let store = DataStore::new();

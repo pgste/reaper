@@ -88,6 +88,8 @@ fn test_wildcard_small_list() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
     for _ in 0..1000 {
         let _ = evaluator.evaluate(&request);
@@ -164,6 +166,8 @@ fn test_wildcard_medium_list() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
     for _ in 0..1000 {
         let _ = evaluator.evaluate(&request);
@@ -239,6 +243,8 @@ fn test_wildcard_large_list() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
     for _ in 0..1000 {
         let _ = evaluator.evaluate(&request);
@@ -315,6 +321,8 @@ fn test_wildcard_set() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
     for _ in 0..1000 {
         let _ = evaluator.evaluate(&request);
@@ -386,6 +394,8 @@ fn test_wildcard_first_match() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     // Warm up
@@ -462,6 +472,8 @@ fn test_wildcard_last_match() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context: context.clone(),
+
+        ..Default::default()
     };
 
     // Warm up

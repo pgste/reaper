@@ -160,6 +160,8 @@ impl PolicyEvent {
                 _ => "unknown".to_string(),
             },
             context,
+
+            ..Default::default()
         }
     }
 }

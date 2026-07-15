@@ -186,6 +186,8 @@ fn test_behavior_changes_on_update() {
         resource: "any".to_string(),
         action: "read".to_string(),
         context: HashMap::new(),
+
+        ..Default::default()
     };
 
     let initial_policy = engine.get_policy(&policy_id).unwrap();

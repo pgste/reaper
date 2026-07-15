@@ -72,6 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resource: resource.to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let start = Instant::now();
@@ -102,6 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resource: doc_id,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let eval_start = Instant::now();

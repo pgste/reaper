@@ -74,6 +74,8 @@ fn doc_request() -> PolicyRequest {
         resource: "plan".to_string(),
         action: "apply".to_string(),
         context: HashMap::new(),
+
+        ..Default::default()
     }
 }
 

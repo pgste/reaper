@@ -138,6 +138,8 @@ pub fn run_comparison_reaper_only(
             resource: test_case.input.resource.clone(),
             action: test_case.input.action.clone(),
             context,
+
+            ..Default::default()
         };
 
         // Evaluate with Reaper

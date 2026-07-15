@@ -178,6 +178,8 @@ fn test_set_comprehension_basic() {
         resource: "prod_db".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -214,6 +216,8 @@ fn test_set_comprehension_with_filters() {
         resource: "prod_db".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -244,6 +248,8 @@ fn test_array_comprehension_preserves_order() {
         resource: "prod_db".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -278,6 +284,8 @@ fn test_array_comprehension_with_multiple_filters() {
         resource: "prod_db".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -308,6 +316,8 @@ fn test_object_comprehension_creates_map() {
         resource: "prod_db".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -341,6 +351,8 @@ fn test_object_comprehension_with_filter() {
         resource: "prod_db".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -389,6 +401,8 @@ fn test_empty_collection() {
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -450,6 +464,8 @@ fn test_comprehension_deduplication() {
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -479,6 +495,8 @@ fn assert_both_evaluators(
         resource: "resource1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let ast = policy.clone().build_ast_evaluator(store.clone());

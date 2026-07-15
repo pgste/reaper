@@ -44,6 +44,8 @@ fn request(resource: &str) -> PolicyRequest {
         resource: resource.to_string(),
         action: "read".to_string(),
         context: HashMap::new(),
+
+        ..Default::default()
     }
 }
 
@@ -341,6 +343,8 @@ fn dsl_request(resource: &str, action: &str) -> PolicyRequest {
         resource: resource.to_string(),
         action: action.to_string(),
         context,
+
+        ..Default::default()
     }
 }
 

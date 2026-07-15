@@ -48,6 +48,8 @@ fn test_reaper_dsl_simple_rule() {
         resource: "doc1".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -101,6 +103,8 @@ fn test_reaper_dsl_complex_rule() {
         resource: "doc2".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let decision = evaluator.evaluate(&request).unwrap();
@@ -353,6 +357,8 @@ fn test_ridx_soundness_differential() {
                 resource: probe.to_string(),
                 action: "read".to_string(),
                 context,
+
+                ..Default::default()
             };
             let (_action, matched) = ev.evaluate_matched(&request).unwrap();
             assert!(

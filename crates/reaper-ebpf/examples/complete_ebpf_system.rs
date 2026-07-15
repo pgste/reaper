@@ -236,6 +236,7 @@ async fn simulate_traffic(_ebpf_engine: &EbpfPolicyEngine) -> Result<()> {
             resource: resource.to_string(),
             action: "read".to_string(),
             context,
+            ..Default::default()
         };
 
         // In a real system, this would be evaluated

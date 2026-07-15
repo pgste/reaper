@@ -68,6 +68,8 @@ fn benchmark_policy(
             resource: resource_id,
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let iter_start = Instant::now();

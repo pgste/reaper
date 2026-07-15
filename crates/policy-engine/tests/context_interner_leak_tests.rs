@@ -49,6 +49,8 @@ fn request(token: &str) -> PolicyRequest {
         resource: "doc".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     }
 }
 

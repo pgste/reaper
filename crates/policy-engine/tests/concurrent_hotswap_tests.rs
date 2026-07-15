@@ -146,6 +146,8 @@ async fn test_evaluation_during_hot_swap() {
                     resource: "test".to_string(),
                     action: "read".to_string(),
                     context: HashMap::new(),
+
+                    ..Default::default()
                 };
 
                 if let Some(policy) = engine.get_policy(&policy_id) {

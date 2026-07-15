@@ -56,6 +56,8 @@ policy unicode_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -69,6 +71,8 @@ policy unicode_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2).unwrap();
@@ -114,6 +118,8 @@ policy chinese_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -158,6 +164,8 @@ policy korean_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -208,6 +216,8 @@ policy emoji_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -221,6 +231,8 @@ policy emoji_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context: context2,
+
+        ..Default::default()
     };
 
     let result2 = evaluator.evaluate(&request2).unwrap();
@@ -267,6 +279,8 @@ policy complex_emoji_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -312,6 +326,8 @@ policy zero_width_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -357,6 +373,8 @@ policy combining_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -405,6 +423,8 @@ policy arabic_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -449,6 +469,8 @@ policy hebrew_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -498,6 +520,8 @@ policy contains_unicode_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -543,6 +567,8 @@ policy startswith_unicode_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -592,6 +618,8 @@ policy mixed_script_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -636,6 +664,8 @@ policy cyrillic_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -680,6 +710,8 @@ policy greek_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -734,6 +766,8 @@ policy long_unicode_test {
         resource: "test".to_string(),
         action: "read".to_string(),
         context,
+
+        ..Default::default()
     };
 
     let result = evaluator.evaluate(&request).unwrap();
@@ -786,6 +820,8 @@ policy normalization_test {
             resource: "test".to_string(),
             action: "read".to_string(),
             context,
+
+            ..Default::default()
         };
 
         let result = evaluator.evaluate(&request).unwrap();

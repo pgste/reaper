@@ -194,6 +194,8 @@ impl DecisionMatrix {
                             action: action.clone(),
                             resource: resource.clone(),
                             context: context.clone(),
+
+                            ..Default::default()
                         };
 
                         // Create key
@@ -380,6 +382,8 @@ mod tests {
             action: "read".to_string(),
             resource: "/api/users".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let decision = matrix.lookup(&request, "alice");
@@ -460,6 +464,8 @@ mod tests {
             action: "read".to_string(),
             resource: "/api/users".to_string(),
             context: HashMap::new(),
+
+            ..Default::default()
         };
 
         let decision = matrix.lookup(&request, "alice");

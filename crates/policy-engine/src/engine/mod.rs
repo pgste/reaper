@@ -28,7 +28,7 @@ pub use types::{
     AllPoliciesEvaluationResult, DenyInfo, PackageEvaluationResult, PackageInfo, PolicyAction,
     PolicyDecision, PolicyEngineStats, PolicyLanguage, PolicyRequest, PolicyRule, PolicySource,
     PolicySourceMetadata, PolicyVersion, PruningIndexStats, SetEvalOutcome, SimpleAction,
-    SimpleRule, StagedPackage,
+    SimpleRule, StagedPackage, TrustLevel,
 };
 
 use arc_swap::ArcSwap;
