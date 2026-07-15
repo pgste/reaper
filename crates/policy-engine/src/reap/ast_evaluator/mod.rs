@@ -118,6 +118,7 @@ impl ReapAstEvaluator {
             actor_id,
             resource_id,
             request_context,
+            context_provenance: request.context_provenance.clone(),
             input: input_value,
         };
 
@@ -184,6 +185,7 @@ impl ReapAstEvaluator {
             actor_id,
             resource_id,
             request_context,
+            context_provenance: request.context_provenance.clone(),
             input: input_value,
         };
 
