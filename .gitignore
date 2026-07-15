@@ -54,3 +54,6 @@ test-data.json
 /benchmarks/reaper-vs-opa/.archive
 /benchmarks/reaper-vs-opa/results
 .build-tmp/
+
+# reaper-wasm generated Node bindings (wasm-bindgen output; built by CI/local)
+crates/reaper-wasm/pkg-node/

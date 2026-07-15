@@ -4,7 +4,24 @@ Strategic bet (`reviews/round-2/06-future-architecture.md` §"WebAssembly
 everywhere", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
 remediation.
 
-## STATUS (2026-07-15) — Slice 1 LANDED; slices 2–3 pending
+## STATUS (2026-07-15) — Slices 1–2 LANDED; slice 3 pending
+
+**Slice 2 landed** — `crates/reaper-wasm`: a cdylib+rlib wasm-bindgen wrapper
+over the engine (`ReaperEngine`: `deployPolicy` / `loadEntitiesJson` /
+`evaluate` / `evaluateAll` / `policyCount` / `setNowUnixNs`+`clearInjectedNow`
+clock pinning on wasm). JSON at the boundary, matching the engine's
+serialized `PolicyDecision`/`AllPoliciesEvaluationResult` shapes; request
+building mirrors the agent exactly (principal-only context injection, agent
+fast-path scalar coercion). **Three-leg parity contract in CI** (`wasm-build`
+job): the policy-library manifests gate the AST+compiled evaluators
+(pre-existing), the native wrapper (`tests/parity.rs`), and the actual wasm
+artifact in Node (`tests/node/smoke.mjs`) — 10 scenarios / 65 authz cases per
+leg, plus injected-clock determinism and error-surface checks through the
+wasm boundary. wasm-bindgen-cli is pinned (0.2.126) to the crate version; the
+Node bindings are a CI artifact (`reaper-wasm-node`), not committed.
+Document/check-mode cases (17) are out of slice-2 scope → slice 3.
+
+## STATUS (earlier) — Slice 1
 
 **Slice 1 landed** (decisions confirmed: JS-first packaging, Cedar excluded
 from wasm builds, host-injectable clock with JS fallback, crate at
