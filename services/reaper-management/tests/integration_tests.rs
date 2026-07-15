@@ -8717,3 +8717,64 @@ async fn siem_connector_repo_crud_round_trips() {
     assert!(repo.delete(org.id, created.id).await.unwrap());
     assert!(repo.get(org.id, created.id).await.unwrap().is_none());
 }
+
+/// E4: plan quotas are enforced from real counts. A Free-plan org (max_agents 2)
+/// admits two agents, then `enforce_can_add` refuses the third with a 402; a
+/// per-org settings override lifts the cap.
+#[tokio::test]
+async fn quota_enforcement_counts_and_refuses_over_limit() {
+    use reaper_management::db::repositories::AgentRepository;
+    use reaper_management::domain::agent::RegisterAgent;
+    use reaper_management::quota::{self, Dimension};
+
+    let env = setup_test_env().await;
+    // Free plan → max_agents = 2.
+    let org = OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "Quota Org".to_string(),
+            slug: "quota-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: json!({ "plan_tier": "free" }),
+        })
+        .await
+        .unwrap();
+
+    let agents = AgentRepository::new(&env.db);
+    // Under the cap: the first two are admitted.
+    for i in 0..2 {
+        quota::enforce_can_add(&env.db, &org, Dimension::Agents)
+            .await
+            .unwrap_or_else(|_| panic!("agent {i} should be under the Free cap"));
+        agents
+            .create(
+                org.id,
+                RegisterAgent {
+                    name: format!("agent-{i}"),
+                    hostname: None,
+                    version: None,
+                    labels: json!({}),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    // Real usage now reflects the two agents.
+    let usage = quota::count_usage(&env.db, org.id).await.unwrap();
+    assert_eq!(usage.active_agents, 2, "usage is counted, not hardcoded 0");
+
+    // At the cap: the third is refused (402 QuotaExceeded).
+    let err = quota::enforce_can_add(&env.db, &org, Dimension::Agents)
+        .await
+        .unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(msg.contains("Quota") || msg.contains("quota"), "{msg}");
+
+    // A per-org override raises the ceiling → the third is admitted.
+    let mut bumped = org.clone();
+    bumped.settings = json!({ "plan_tier": "free", "max_agents": 5 });
+    quota::enforce_can_add(&env.db, &bumped, Dimension::Agents)
+        .await
+        .expect("override lifts the cap");
+}

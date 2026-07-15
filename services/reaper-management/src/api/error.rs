@@ -50,6 +50,17 @@ pub enum ApiError {
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
+    /// A plan-limit quota would be exceeded (round-2 E4). 402 Payment Required:
+    /// the request is well-formed and authorized, but the org's subscription
+    /// tier does not permit it — the remedy is to upgrade, not to re-auth.
+    #[error("Quota exceeded: {0}")]
+    QuotaExceeded(String),
+
+    /// The org's per-tenant request ceiling was hit (round-2 E4). 429 Too Many
+    /// Requests: retryable after backoff, unlike a plan quota.
+    #[error("Rate limited: {0}")]
+    RateLimited(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -113,6 +124,12 @@ impl IntoResponse for ApiError {
             ),
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone()),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone()),
+            ApiError::QuotaExceeded(msg) => {
+                (StatusCode::PAYMENT_REQUIRED, "quota_exceeded", msg.clone())
+            }
+            ApiError::RateLimited(msg) => {
+                (StatusCode::TOO_MANY_REQUESTS, "rate_limited", msg.clone())
+            }
             ApiError::ServiceUnavailable(msg) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "service_unavailable",

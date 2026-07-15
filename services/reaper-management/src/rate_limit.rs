@@ -30,6 +30,36 @@ use crate::config::RateLimitConfig;
 /// Per-IP keyed rate limiter.
 type KeyedIpLimiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
 
+/// Per-org keyed rate limiter (round-2 E4).
+type KeyedOrgLimiter = RateLimiter<uuid::Uuid, DefaultKeyedStateStore<uuid::Uuid>, DefaultClock>;
+
+/// Per-tenant request ceiling: a token bucket keyed by org id, enforcing the
+/// `api_per_org_per_minute` config so one tenant cannot exhaust the shared
+/// control plane. Unlike the global/per-IP limiters (a pre-auth middleware),
+/// this is checked **post-auth** on the resource-creating paths, where the org
+/// identity is verified.
+pub struct OrgRateLimiter {
+    limiter: KeyedOrgLimiter,
+}
+
+impl OrgRateLimiter {
+    /// Build a per-org limiter allowing `per_minute` requests per org (min 1).
+    pub fn new(per_minute: u32) -> Self {
+        let quota = Quota::per_minute(
+            NonZeroU32::new(per_minute).unwrap_or_else(|| NonZeroU32::new(1).unwrap()),
+        );
+        Self {
+            limiter: RateLimiter::keyed(quota),
+        }
+    }
+
+    /// True if the request is admitted; false when the org's per-minute ceiling
+    /// is exhausted.
+    pub fn allow(&self, org_id: uuid::Uuid) -> bool {
+        self.limiter.check_key(&org_id).is_ok()
+    }
+}
+
 /// Rate limiter for the API
 pub struct ApiRateLimiter {
     /// Global rate limiter (all requests)
@@ -283,6 +313,24 @@ pub fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<ApiRateLimite
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn org_rate_limiter_enforces_per_org_ceiling() {
+        // 3/min burst 3: the first three requests for an org pass, the fourth is
+        // refused — and a different org is bucketed independently.
+        let limiter = OrgRateLimiter::new(3);
+        let org_a = uuid::Uuid::new_v4();
+        let org_b = uuid::Uuid::new_v4();
+        assert!(limiter.allow(org_a));
+        assert!(limiter.allow(org_a));
+        assert!(limiter.allow(org_a));
+        assert!(
+            !limiter.allow(org_a),
+            "4th request over the ceiling is refused"
+        );
+        // A different tenant has its own bucket.
+        assert!(limiter.allow(org_b), "per-org isolation");
+    }
 
     #[test]
     fn test_get_path_prefix() {

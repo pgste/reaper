@@ -168,6 +168,18 @@ async fn register_agent(
         )));
     }
 
+    // Per-tenant request ceiling (round-2 E4): a single org cannot hammer the
+    // control plane past its plan's per-minute budget.
+    if !state.allow_org_request(organization.id) {
+        return Err(ApiError::RateLimited(
+            "per-organization request rate exceeded; retry after a short backoff".to_string(),
+        ));
+    }
+
+    // Enforce the plan's agent quota (round-2 E4) before creating.
+    crate::quota::enforce_can_add(&state.db, &organization, crate::quota::Dimension::Agents)
+        .await?;
+
     // Create the agent
     let input = RegisterAgent {
         name: request.name,
