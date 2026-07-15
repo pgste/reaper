@@ -76,12 +76,14 @@ pub use batch::{BatchEvaluator, BatchResult, BatchStats};
 
 // Decision logging (OPA-style structured decision logs)
 pub mod decision_buffer;
+pub mod decision_export;
 pub mod decision_log;
 pub mod decision_privacy;
 
 pub use decision_buffer::{
     create_shared_buffer, DecisionBuffer, DecisionBufferStats, DecisionFilter, SharedDecisionBuffer,
 };
+pub use decision_export::ExportFormat;
 pub use decision_log::{DecisionLogConfig, DecisionLogEntry, PrivacyProfile};
 pub use decision_privacy::{
     decrypt_input_data, generate_encryption_key_hex, pseudonymize, pseudonymize_domain,

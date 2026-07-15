@@ -14,6 +14,40 @@ This doc is updated as each slice lands.
 
 ---
 
+## STATUS (2026-07-15) — slice 1 landed; slices 2–4 remain
+
+**Decisions locked (with the maintainer):**
+1. **OCSF class = Authorize Session** (`class_uid` 3003, IAM category `category_uid`
+   3), schema **version 1.1.0** — chosen for cleanest SIEM integration (native
+   ingest by Amazon Security Lake / Splunk / Snowflake, no custom parsers).
+   Allow/deny rides the universal `status_id` axis (allow→1 Success, deny→2
+   Failure, log/other→99 Other); the decision isn't one of the class's
+   Assign-Privileges/Groups activities, so `activity_id` is honestly `99` (Other)
+   with `activity_name = "Authorization Decision"`. The action reads as a
+   requested `privileges` entry, the resource as a `resources` entry, and every
+   Reaper-specific field with no OCSF home is preserved under the schema's blessed
+   `unmapped` object (nothing dropped, still validates).
+2. **Push-export authority = a dedicated `audit:export` scope** (slice 3), mirroring
+   the `audit:erase` separation-of-duties precedent — a read-only/admin token
+   can't wire up an exfiltration sink without it.
+
+**Landed (slice 1):**
+- `crates/policy-engine/src/decision_export.rs`: `ExportFormat` enum
+  (`ndjson`/`ocsf`/`cef`, parse + `as_str`) and `DecisionLogEntry::{to_ocsf,
+  to_ocsf_ndjson, to_cef, export}`. OCSF per the mapping above; CEF (ArcSight)
+  with correct header (`\`, `|`) and extension (`\`, `=`, newlines) escaping,
+  standard keys (`rt`/`suser`/`act`/`outcome`/`request`/`externalId`) plus
+  labelled `cs*`/`cn*` customs for policy/rule/agent/trace/eval-time/data-version.
+  Both formats omit the large, possibly-encrypted `input_data`/`replay_input`
+  blobs (they stay in NDJSON for the replay path); redaction is inherited from
+  capture-time `decision_privacy`.
+- Golden fixture `src/testdata/decision_ocsf.json` (the reviewable sign-off
+  artifact) + 9 unit tests incl. `ocsf_matches_golden_fixture` and CEF
+  metacharacter-escaping.
+- Re-exported `policy_engine::ExportFormat`. No transport yet (slices 2–3).
+
+---
+
 ## What already exists (reuse, don't rebuild)
 
 - **Decision record + capture-time redaction**: `DecisionLogEntry`
@@ -62,9 +96,10 @@ Home for the push API: **reaper-management**, not the agent — the central stor
 has full history and the authenticated, OpenAPI-contracted, multi-tenant surface.
 
 ## Work breakdown (sliced by PR)
-**Slice 1 — OCSF field mapping.** A `to_ocsf()` (and `to_cef()`) over
-`DecisionLogEntry` in `policy-engine`, with a fixed OCSF class mapping
-(Authorization Activity), unit-tested against golden fixtures. No transport yet.
+**Slice 1 — OCSF field mapping.** *(LANDED — see STATUS.)* A `to_ocsf()` (and
+`to_cef()`) over `DecisionLogEntry` in `policy-engine`, with a fixed OCSF class
+mapping (Authorize Session 3003), unit-tested against golden fixtures. No
+transport yet.
 
 **Slice 2 — Vector sink configs.** Documented Kafka / Splunk-HEC / S3 sink blocks
 in `deploy/decision-logs/`, wired to the existing routes; a `--format ocsf`

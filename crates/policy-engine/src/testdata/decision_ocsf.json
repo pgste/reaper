@@ -1,0 +1,42 @@
+{
+  "activity_id": 99,
+  "activity_name": "Authorization Decision",
+  "category_uid": 3,
+  "category_name": "Identity & Access Management",
+  "class_uid": 3003,
+  "class_name": "Authorize Session",
+  "type_uid": 300399,
+  "time": 0,
+  "severity_id": 2,
+  "severity": "Low",
+  "status_id": 2,
+  "status": "Failure",
+  "status_detail": "deny",
+  "message": "Authorization deny: read on /records/42",
+  "metadata": {
+    "version": "1.1.0",
+    "product": { "name": "Reaper", "vendor_name": "Reaper" },
+    "uid": "dec-uuid-1",
+    "log_name": "decision_log",
+    "correlation_uid": "trace-abc"
+  },
+  "actor": {
+    "user": { "name": "alice@example.com", "uid": "alice@example.com", "type": "User" }
+  },
+  "privileges": ["read"],
+  "resources": [ { "name": "/records/42", "type": "resource" } ],
+  "unmapped": {
+    "action": "read",
+    "decision": "deny",
+    "policy_id": "pol-uuid-1",
+    "policy_name": "records-policy",
+    "policy_version": "3",
+    "evaluation_time_ns": 450,
+    "cache_hit": false,
+    "matched_rule": "deny-pii",
+    "agent_id": "agent-1",
+    "data_version": 7,
+    "model_version": 2,
+    "context": { "region": "eu-west-1" }
+  }
+}
