@@ -301,7 +301,11 @@ jobs:
 
         echo "speedup=$SPEEDUP" >> $GITHUB_OUTPUT
         echo "reaper_rps=$REAPER_RPS" >> $GITHUB_OUTPUT
+        echo "reaper_p50=$REAPER_P50" >> $GITHUB_OUTPUT
+        echo "reaper_p99=$REAPER_P99" >> $GITHUB_OUTPUT
         echo "opa_rps=$OPA_RPS" >> $GITHUB_OUTPUT
+        echo "opa_p50=$OPA_P50" >> $GITHUB_OUTPUT
+        echo "opa_p99=$OPA_P99" >> $GITHUB_OUTPUT
 
     # In-process wasm leg (F2): the SAME request stream the HTTP rows used
     # (emitted by the same generate_request code — zero drift), replayed
@@ -345,6 +349,25 @@ jobs:
         echo "wasm_p99=$WASM_P99" >> $GITHUB_OUTPUT
         echo "wasm_tier=$WASM_TIER" >> $GITHUB_OUTPUT
 
+        # Fold the wasm row into the scenario metrics file so the aggregate
+        # report (allure-report job) renders it beside the reaper/opa stats.
+        OPA_RPS=$(jq -r '.[1].throughput_rps' results.json)
+        WASM_SPEEDUP=$(echo "scale=2; $WASM_RPS / $OPA_RPS" | bc)
+        METRICS="allure-results/${{ matrix.scenario }}-metrics.json"
+        jq --slurpfile w wasm-results.json --arg sp "$WASM_SPEEDUP" \
+          '. + {wasm: {
+                  throughput_rps: ($w[0].throughput_rps | floor),
+                  latency_p50_us: $w[0].latency_p50_us,
+                  latency_p99_us: $w[0].latency_p99_us,
+                  allowed: $w[0].allowed,
+                  denied: $w[0].denied,
+                  evaluator_tier: $w[0].evaluator_tier,
+                  transport: "in-process"
+                },
+                wasm_speedup: ($sp | tonumber),
+                wasm_match: ($w[0].allowed == .reaper.allowed)}' \
+          "$METRICS" > "$METRICS.tmp" && mv "$METRICS.tmp" "$METRICS"
+
     - name: Upload Allure Results
       uses: actions/upload-artifact@v4
       with:
@@ -365,9 +388,9 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Engine | Throughput | p50 | p99 | Speedup |" >> $GITHUB_STEP_SUMMARY
         echo "|--------|------------|-----|-----|---------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Reaper (HTTP)** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | | | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reaper (HTTP)** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | ${{ steps.benchmark.outputs.reaper_p50 }}µs | ${{ steps.benchmark.outputs.reaper_p99 }}µs | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
         echo "| **Reaper (wasm, in-process, ${{ steps.wasm.outputs.wasm_tier }})** | ${{ steps.wasm.outputs.wasm_rps }} req/s | ${{ steps.wasm.outputs.wasm_p50 }}µs | ${{ steps.wasm.outputs.wasm_p99 }}µs | |" >> $GITHUB_STEP_SUMMARY
-        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | | | baseline |" >> $GITHUB_STEP_SUMMARY
+        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | ${{ steps.benchmark.outputs.opa_p50 }}µs | ${{ steps.benchmark.outputs.opa_p99 }}µs | baseline |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "_wasm row is single-threaded in-process replay of the identical request stream; HTTP rows include the wire. Decision parity (allow counts) between wasm and Reaper-HTTP is asserted in-job._" >> $GITHUB_STEP_SUMMARY
 
@@ -578,8 +601,8 @@ jobs:
         # Generate summary table from all metrics
         echo "# 🚀 Reaper vs OPA Benchmark Results" > allure-history/SUMMARY.md
         echo "" >> allure-history/SUMMARY.md
-        echo "| Scenario | Reaper RPS | OPA RPS | Speedup | Match |" >> allure-history/SUMMARY.md
-        echo "|----------|------------|---------|---------|-------|" >> allure-history/SUMMARY.md
+        echo "| Scenario | Reaper RPS | Wasm RPS (in-proc) | Wasm p50/p99 µs | OPA RPS | Speedup | Wasm× | Match | Wasm match |" >> allure-history/SUMMARY.md
+        echo "|----------|------------|--------------------|-----------------|---------|---------|-------|-------|------------|" >> allure-history/SUMMARY.md
 
         for f in allure-results/*-metrics.json; do
           if [ -f "$f" ]; then
@@ -589,7 +612,12 @@ jobs:
             SPEEDUP=$(jq -r '.speedup' "$f")
             MATCH=$(jq -r '.policy_match' "$f")
             ICON=$([ "$MATCH" = "true" ] && echo "✅" || echo "❌")
-            echo "| $SCENARIO | $R_RPS | $O_RPS | **${SPEEDUP}x** | $ICON |" >> allure-history/SUMMARY.md
+            W_RPS=$(jq -r '.wasm.throughput_rps // "—"' "$f")
+            W_P50=$(jq -r '.wasm.latency_p50_us // "—"' "$f")
+            W_P99=$(jq -r '.wasm.latency_p99_us // "—"' "$f")
+            W_SPEEDUP=$(jq -r 'if .wasm_speedup then "**\(.wasm_speedup)x**" else "—" end' "$f")
+            W_MATCH=$(jq -r 'if has("wasm_match") then (if .wasm_match then "✅" else "❌" end) else "—" end' "$f")
+            echo "| $SCENARIO | $R_RPS | $W_RPS | ${W_P50}/${W_P99} | $O_RPS | **${SPEEDUP}x** | $W_SPEEDUP | $ICON | $W_MATCH |" >> allure-history/SUMMARY.md
           fi
         done
 
@@ -612,8 +640,8 @@ jobs:
         # Also show summary table
         echo "### Quick Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Scenario | Reaper | OPA | Speedup |" >> $GITHUB_STEP_SUMMARY
-        echo "|----------|--------|-----|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Scenario | Reaper | Wasm (in-proc) | OPA | Speedup | Wasm× |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|-----------------|-----|---------|-------|" >> $GITHUB_STEP_SUMMARY
 
         for f in allure-results/*-metrics.json; do
           if [ -f "$f" ]; then
@@ -621,6 +649,8 @@ jobs:
             R_RPS=$(jq -r '.reaper.throughput_rps' "$f")
             O_RPS=$(jq -r '.opa.throughput_rps' "$f")
             SPEEDUP=$(jq -r '.speedup' "$f")
-            echo "| $SCENARIO | $R_RPS | $O_RPS | **${SPEEDUP}x** |" >> $GITHUB_STEP_SUMMARY
+            W_RPS=$(jq -r '.wasm.throughput_rps // "—"' "$f")
+            W_SPEEDUP=$(jq -r 'if .wasm_speedup then "**\(.wasm_speedup)x**" else "—" end' "$f")
+            echo "| $SCENARIO | $R_RPS | $W_RPS | $O_RPS | **${SPEEDUP}x** | $W_SPEEDUP |" >> $GITHUB_STEP_SUMMARY
           fi
         done
