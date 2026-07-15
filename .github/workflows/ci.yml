@@ -639,6 +639,34 @@ jobs:
       - name: Build policy-engine for wasm32-unknown-unknown (release)
         run: cargo build -p policy-engine --no-default-features --target wasm32-unknown-unknown --locked --release
 
+      # ---- Slice 2: the reaper-wasm embedding + three-leg parity ----
+      # The same policy-library manifests that gate the AST/compiled
+      # evaluators (policy_library_tests.rs) are run through the wrapper
+      # natively, then through the actual wasm artifact in Node. A decision
+      # divergence on any leg fails this job.
+      - name: Native parity leg (reaper-wasm wrapper vs library manifests)
+        run: cargo test -p reaper-wasm --locked
+
+      - name: Build reaper-wasm cdylib (wasm32, release)
+        run: cargo build -p reaper-wasm --target wasm32-unknown-unknown --locked --release
+
+      - name: Install wasm-bindgen-cli (pinned to the wasm-bindgen crate version)
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
+      - name: Generate Node bindings
+        run: >
+          wasm-bindgen --target nodejs --out-dir crates/reaper-wasm/pkg-node
+          target/wasm32-unknown-unknown/release/reaper_wasm.wasm
+
+      - name: Wasm parity leg (Node smoke test through the artifact)
+        run: node crates/reaper-wasm/tests/node/smoke.mjs
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reaper-wasm-node
+          path: crates/reaper-wasm/pkg-node/
+
   # ============================================================
   # Stage 4: Volume Tests (10k iterations per policy)
   # ============================================================

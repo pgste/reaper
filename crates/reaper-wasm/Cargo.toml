@@ -1,0 +1,29 @@
+[package]
+name = "reaper-wasm"
+version = "0.1.0"
+edition = "2021"
+# Not published to crates.io — internal workspace crate (Plan 06: lets
+# cargo-deny treat it as private for license/wildcard checks).
+publish = false
+description = "WebAssembly embedding of the Reaper policy evaluation core (Workstream F2)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+# cdylib: the wasm artifact (wasm-bindgen). rlib: lets native tests exercise
+# the exact same wrapper code the wasm build ships, so the parity suite runs
+# the identical entry points on both targets.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The engine, minus native-only machinery (cedar / rayon batch / tokio audit
+# buffer / privacy crypto) — the same feature cut the slice-1 CI gate builds.
+policy-engine = { path = "../policy-engine", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

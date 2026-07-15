@@ -95,11 +95,58 @@ jobs:
           benchmarks/reaper-vs-opa/target/release/benchmark
           benchmarks/reaper-vs-opa/target/release/generate-data
 
+  # reaper-wasm Node bindings, built once and shared by every scenario job
+  # (F2: the in-process wasm leg of the comparison).
+  build-wasm:
+    name: Build reaper-wasm (Node bindings)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust with wasm32 target
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build reaper-wasm (wasm32, release)
+      run: cargo build -p reaper-wasm --target wasm32-unknown-unknown --locked --release
+
+    - name: Install wasm-bindgen-cli (pinned to the wasm-bindgen crate version)
+      run: |
+        # ~/.cargo/bin is in the cache above: a restored binary makes a plain
+        # `cargo install` fail with "already exists". Skip when the pinned
+        # version is already present; --force covers version drift.
+        if ! wasm-bindgen --version 2>/dev/null | grep -q "0.2.126"; then
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked --force
+        fi
+
+    - name: Generate Node bindings
+      run: >
+        wasm-bindgen --target nodejs --out-dir pkg-node
+        target/wasm32-unknown-unknown/release/reaper_wasm.wasm
+
+    - name: Upload Node bindings
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-wasm-node-bench
+        path: pkg-node/
+
   # Run benchmarks in parallel using pre-built binaries
   benchmark:
     name: ${{ matrix.scenario }}-${{ matrix.scale }}
     runs-on: ubuntu-latest
-    needs: [build-agent, build-benchmark]
+    needs: [build-agent, build-benchmark, build-wasm]
 
     strategy:
       matrix:
@@ -197,6 +244,15 @@ jobs:
 
         SPEEDUP=$(echo "scale=2; $REAPER_RPS / $OPA_RPS" | bc)
 
+        # Non-degenerate workload gate: an all-allow or all-deny run means
+        # the suite exercised a single decision path (e.g. every principal
+        # unknown => error-path denies) and its latency/parity numbers are
+        # meaningless. Red, not green.
+        if [ "$REAPER_ALLOW" = "0" ] || [ "$REAPER_DENY" = "0" ]; then
+          echo "::error::degenerate ${{ matrix.scenario }} workload: reaper allowed=$REAPER_ALLOW denied=$REAPER_DENY — dataset/request mismatch?"
+          exit 1
+        fi
+
         # Create Allure results
         mkdir -p allure-results
 
@@ -260,7 +316,72 @@ jobs:
 
         echo "speedup=$SPEEDUP" >> $GITHUB_OUTPUT
         echo "reaper_rps=$REAPER_RPS" >> $GITHUB_OUTPUT
+        echo "reaper_p50=$REAPER_P50" >> $GITHUB_OUTPUT
+        echo "reaper_p99=$REAPER_P99" >> $GITHUB_OUTPUT
         echo "opa_rps=$OPA_RPS" >> $GITHUB_OUTPUT
+        echo "opa_p50=$OPA_P50" >> $GITHUB_OUTPUT
+        echo "opa_p99=$OPA_P99" >> $GITHUB_OUTPUT
+
+    # In-process wasm leg (F2): the SAME request stream the HTTP rows used
+    # (emitted by the same generate_request code — zero drift), replayed
+    # through the reaper-wasm artifact. Decision accounting matches
+    # send_reaper_request (errors fail closed to deny), so the allow-count
+    # parity check against the Reaper HTTP row is meaningful.
+    - name: Download reaper-wasm Node bindings
+      uses: actions/download-artifact@v4
+      with:
+        name: reaper-wasm-node-bench
+        path: crates/reaper-wasm/pkg-node/
+
+    - name: Run wasm leg
+      id: wasm
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        REQUESTS=${{ github.event.inputs.requests || '10000' }}
+        ./bin/benchmark --emit-requests --scenario ${{ matrix.scenario }} \
+          --requests $REQUESTS 2>/dev/null > wasm-requests.ndjson
+        node bin/wasm-bench.mjs \
+          --scenario ${{ matrix.scenario }} \
+          --policy policies/reaper/${{ matrix.scenario }}.reap \
+          --data data/100k/${{ matrix.scenario }}.json \
+          --requests-file wasm-requests.ndjson > wasm-results.json
+        cat wasm-results.json
+
+        WASM_RPS=$(jq -r '.throughput_rps | floor' wasm-results.json)
+        WASM_P50=$(jq -r '.latency_p50_us' wasm-results.json)
+        WASM_P99=$(jq -r '.latency_p99_us' wasm-results.json)
+        WASM_ALLOW=$(jq -r '.allowed' wasm-results.json)
+        WASM_TIER=$(jq -r '.evaluator_tier' wasm-results.json)
+        REAPER_ALLOW=$(jq -r '.[0].allowed' results.json)
+
+        # Decision parity vs the Reaper HTTP row on the identical workload.
+        if [ "$WASM_ALLOW" != "$REAPER_ALLOW" ]; then
+          echo "::error::wasm/HTTP decision divergence: wasm allowed $WASM_ALLOW, HTTP allowed $REAPER_ALLOW"
+          exit 1
+        fi
+        echo "wasm_rps=$WASM_RPS" >> $GITHUB_OUTPUT
+        echo "wasm_p50=$WASM_P50" >> $GITHUB_OUTPUT
+        echo "wasm_p99=$WASM_P99" >> $GITHUB_OUTPUT
+        echo "wasm_tier=$WASM_TIER" >> $GITHUB_OUTPUT
+
+        # Fold the wasm row into the scenario metrics file so the aggregate
+        # report (allure-report job) renders it beside the reaper/opa stats.
+        OPA_RPS=$(jq -r '.[1].throughput_rps' results.json)
+        WASM_SPEEDUP=$(echo "scale=2; $WASM_RPS / $OPA_RPS" | bc)
+        METRICS="allure-results/${{ matrix.scenario }}-metrics.json"
+        jq --slurpfile w wasm-results.json --arg sp "$WASM_SPEEDUP" \
+          '. + {wasm: {
+                  throughput_rps: ($w[0].throughput_rps | floor),
+                  latency_p50_us: $w[0].latency_p50_us,
+                  latency_p99_us: $w[0].latency_p99_us,
+                  allowed: $w[0].allowed,
+                  denied: $w[0].denied,
+                  evaluator_tier: $w[0].evaluator_tier,
+                  transport: "in-process"
+                },
+                wasm_speedup: ($sp | tonumber),
+                wasm_match: ($w[0].allowed == .reaper.allowed)}' \
+          "$METRICS" > "$METRICS.tmp" && mv "$METRICS.tmp" "$METRICS"
 
     - name: Upload Allure Results
       uses: actions/upload-artifact@v4
@@ -272,16 +393,21 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: benchmark-${{ matrix.scenario }}-${{ matrix.scale }}
-        path: benchmarks/reaper-vs-opa/results.json
+        path: |
+          benchmarks/reaper-vs-opa/results.json
+          benchmarks/reaper-vs-opa/wasm-results.json
 
     - name: Write Job Summary
       run: |
         echo "## 📊 ${{ matrix.scenario }} @ ${{ matrix.scale }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Engine | Throughput | Speedup |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|------------|---------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Reaper** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
-        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | baseline |" >> $GITHUB_STEP_SUMMARY
+        echo "| Engine | Throughput | p50 | p99 | Speedup |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|------------|-----|-----|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reaper (HTTP)** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | ${{ steps.benchmark.outputs.reaper_p50 }}µs | ${{ steps.benchmark.outputs.reaper_p99 }}µs | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reaper (wasm, in-process, ${{ steps.wasm.outputs.wasm_tier }})** | ${{ steps.wasm.outputs.wasm_rps }} req/s | ${{ steps.wasm.outputs.wasm_p50 }}µs | ${{ steps.wasm.outputs.wasm_p99 }}µs | |" >> $GITHUB_STEP_SUMMARY
+        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | ${{ steps.benchmark.outputs.opa_p50 }}µs | ${{ steps.benchmark.outputs.opa_p99 }}µs | baseline |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_wasm row is single-threaded in-process replay of the identical request stream; HTTP rows include the wire. Decision parity (allow counts) between wasm and Reaper-HTTP is asserted in-job._" >> $GITHUB_STEP_SUMMARY
 
     - name: Stop Services
       if: always()
@@ -490,8 +616,8 @@ jobs:
         # Generate summary table from all metrics
         echo "# 🚀 Reaper vs OPA Benchmark Results" > allure-history/SUMMARY.md
         echo "" >> allure-history/SUMMARY.md
-        echo "| Scenario | Reaper RPS | OPA RPS | Speedup | Match |" >> allure-history/SUMMARY.md
-        echo "|----------|------------|---------|---------|-------|" >> allure-history/SUMMARY.md
+        echo "| Scenario | Reaper RPS | Wasm RPS (in-proc) | Wasm p50/p99 µs | OPA RPS | Speedup | Wasm× | Match | Wasm match |" >> allure-history/SUMMARY.md
+        echo "|----------|------------|--------------------|-----------------|---------|---------|-------|-------|------------|" >> allure-history/SUMMARY.md
 
         for f in allure-results/*-metrics.json; do
           if [ -f "$f" ]; then
@@ -501,7 +627,12 @@ jobs:
             SPEEDUP=$(jq -r '.speedup' "$f")
             MATCH=$(jq -r '.policy_match' "$f")
             ICON=$([ "$MATCH" = "true" ] && echo "✅" || echo "❌")
-            echo "| $SCENARIO | $R_RPS | $O_RPS | **${SPEEDUP}x** | $ICON |" >> allure-history/SUMMARY.md
+            W_RPS=$(jq -r '.wasm.throughput_rps // "—"' "$f")
+            W_P50=$(jq -r '.wasm.latency_p50_us // "—"' "$f")
+            W_P99=$(jq -r '.wasm.latency_p99_us // "—"' "$f")
+            W_SPEEDUP=$(jq -r 'if .wasm_speedup then "**\(.wasm_speedup)x**" else "—" end' "$f")
+            W_MATCH=$(jq -r 'if has("wasm_match") then (if .wasm_match then "✅" else "❌" end) else "—" end' "$f")
+            echo "| $SCENARIO | $R_RPS | $W_RPS | ${W_P50}/${W_P99} | $O_RPS | **${SPEEDUP}x** | $W_SPEEDUP | $ICON | $W_MATCH |" >> allure-history/SUMMARY.md
           fi
         done
 
@@ -524,8 +655,8 @@ jobs:
         # Also show summary table
         echo "### Quick Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Scenario | Reaper | OPA | Speedup |" >> $GITHUB_STEP_SUMMARY
-        echo "|----------|--------|-----|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Scenario | Reaper | Wasm (in-proc) | OPA | Speedup | Wasm× |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|-----------------|-----|---------|-------|" >> $GITHUB_STEP_SUMMARY
 
         for f in allure-results/*-metrics.json; do
           if [ -f "$f" ]; then
@@ -533,6 +664,8 @@ jobs:
             R_RPS=$(jq -r '.reaper.throughput_rps' "$f")
             O_RPS=$(jq -r '.opa.throughput_rps' "$f")
             SPEEDUP=$(jq -r '.speedup' "$f")
-            echo "| $SCENARIO | $R_RPS | $O_RPS | **${SPEEDUP}x** |" >> $GITHUB_STEP_SUMMARY
+            W_RPS=$(jq -r '.wasm.throughput_rps // "—"' "$f")
+            W_SPEEDUP=$(jq -r 'if .wasm_speedup then "**\(.wasm_speedup)x**" else "—" end' "$f")
+            echo "| $SCENARIO | $R_RPS | $W_RPS | $O_RPS | **${SPEEDUP}x** | $W_SPEEDUP |" >> $GITHUB_STEP_SUMMARY
           fi
         done

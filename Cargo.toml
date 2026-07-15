@@ -4,6 +4,7 @@ members = [
     "crates/reaper-core",
     "crates/policy-engine",
     "crates/reaper-sdk",
+    "crates/reaper-wasm",
     "crates/reaper-ebpf",
     "services/reaper-agent",
     "services/reaper-platform",
