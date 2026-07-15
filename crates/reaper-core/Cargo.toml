@@ -25,6 +25,17 @@ p256 = { workspace = true }
 sha2 = { workspace = true }
 getrandom = "0.4"
 
+# getrandom >=0.3 has no built-in wasm32-unknown-unknown backend: the `wasm_js`
+# feature (paired with the `getrandom_backend="wasm_js"` rustflag set in
+# .cargo/config.toml) routes it through JS crypto.getRandomValues. Only the
+# key-generation path needs entropy; verification is deterministic.
+# The renamed getrandom 0.2 entry turns on the same JS backend for the
+# rand_core 0.6 node that the ed25519-dalek/p256 stack still pulls (features
+# unify graph-wide per version; this crate never calls 0.2 directly).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
 [dev-dependencies]
 tokio-test = { workspace = true }
 criterion = { workspace = true }

@@ -9,6 +9,23 @@ publish = false
 description = "High-performance policy evaluation engine"
 license = "MIT OR Apache-2.0"
 
+[features]
+# Native default = everything on: zero behavior change for existing consumers.
+# The wasm32 build target (F2, plans/round-2/F2-wasm-target.md) selects down
+# with --no-default-features to drop native-only machinery (rayon threads,
+# tokio timers, host crypto RNG, Cedar's heavyweight dep).
+default = ["cedar", "batch", "audit-buffer"]
+# AWS Cedar policy language support (CedarPolicyEvaluator). Without it,
+# deploying a PolicyLanguage::Cedar policy fails with a clear error.
+cedar = ["dep:cedar-policy"]
+# Parallel batch evaluation (rayon work-stealing pool — native only).
+batch = ["dep:rayon"]
+# Decision-log privacy: keyed pseudonymization + input_data AEAD encryption.
+decision-privacy = ["dep:aes-gcm", "dep:hmac"]
+# Async decision buffer + file export (host runtime: tokio sync/time timers,
+# background writer thread, std::fs). Implies decision-privacy.
+audit-buffer = ["decision-privacy", "dep:tokio"]
+
 [dependencies]
 reaper-core = { path = "../reaper-core" }
 serde = { workspace = true }
@@ -24,27 +41,33 @@ smallvec = { workspace = true }
 crossbeam-utils = { workspace = true }
 tracing = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
-cedar-policy = "4.2"
+cedar-policy = { version = "4.2", optional = true }
 pest = "2.7"
 pest_derive = "2.7"
 postcard = { workspace = true }
 regex = "1.10"
 sha2 = { workspace = true }
-hmac = { workspace = true }     # Keyed principal pseudonymization (decision logs)
-aes-gcm = { workspace = true }  # AEAD encryption of decision-log input_data
+hmac = { workspace = true, optional = true }     # Keyed principal pseudonymization (decision logs)
+aes-gcm = { workspace = true, optional = true }  # AEAD encryption of decision-log input_data
 base64 = { workspace = true }
 hex = "0.4"  # Hex encoding for checksums
 memchr = "2.7"  # SIMD-accelerated string search
 lazy_static = "1.4"  # Thread-local regex cache global state
 bumpalo = { version = "3.16", features = ["collections"] }  # Arena allocator for zero-alloc evaluation
-rayon = "1.10"  # Parallel batch evaluation
+rayon = { version = "1.10", optional = true }  # Parallel batch evaluation
 # Async durable-ack for mandatory-audit decision logging (oneshot + timeout).
 # Only sync/time are needed in non-test code; the dev-dependency pulls full.
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time"], optional = true }
 
 # JSON parsing: sonic-rs (SIMD) for native, serde_json for WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 sonic-rs = "0.5"
+
+# wasm32-unknown-unknown has no ambient clock; chrono's `wasmbind` routes
+# Utc::now() through JS Date (the JS-first packaging decision). Deterministic
+# embeddings pin time via `clock::set_injected_now_unix_ns` instead.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

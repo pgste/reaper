@@ -89,10 +89,10 @@ impl PolicyEngine {
         }
 
         let mut results = Vec::with_capacity(policies.len());
-        let start = std::time::Instant::now();
+        let start = crate::clock::Stopwatch::start();
 
         for policy in &policies {
-            let eval_start = std::time::Instant::now();
+            let eval_start = crate::clock::Stopwatch::start();
 
             if let Some(evaluator) = &policy.evaluator {
                 // Evaluate and handle potential errors - treat errors as deny for security
@@ -100,7 +100,7 @@ impl PolicyEngine {
                     Ok(d) => d,
                     Err(_) => PolicyAction::Deny, // Treat evaluation errors as deny
                 };
-                let eval_time = eval_start.elapsed().as_nanos() as u64;
+                let eval_time = eval_start.elapsed_ns();
 
                 let policy_decision = PolicyDecision {
                     decision: decision.clone(),
@@ -123,7 +123,7 @@ impl PolicyEngine {
                             matched_rule: None,
                         }),
                         policies_evaluated: results.len() + 1,
-                        total_evaluation_time_ns: start.elapsed().as_nanos() as u64,
+                        total_evaluation_time_ns: start.elapsed_ns(),
                         results,
                     });
                 }
@@ -137,7 +137,7 @@ impl PolicyEngine {
             decision: PolicyAction::Allow,
             denied_by: None,
             policies_evaluated: results.len(),
-            total_evaluation_time_ns: start.elapsed().as_nanos() as u64,
+            total_evaluation_time_ns: start.elapsed_ns(),
             results,
         })
     }
@@ -153,7 +153,7 @@ impl PolicyEngine {
     /// # Returns
     /// * `AllPoliciesEvaluationResult` - Result with decision and statistics
     pub fn evaluate_all(&self, request: &PolicyRequest) -> AllPoliciesEvaluationResult {
-        let start = std::time::Instant::now();
+        let start = crate::clock::Stopwatch::start();
         let mut policies_evaluated = 0;
         let packages: Vec<String> = self.list_packages();
 
@@ -181,7 +181,7 @@ impl PolicyEngine {
                         }),
                         policies_evaluated,
                         packages_evaluated: packages.len(),
-                        total_evaluation_time_ns: start.elapsed().as_nanos() as u64,
+                        total_evaluation_time_ns: start.elapsed_ns(),
                     };
                 }
             }
@@ -192,7 +192,7 @@ impl PolicyEngine {
             denied_by: None,
             policies_evaluated,
             packages_evaluated: packages.len(),
-            total_evaluation_time_ns: start.elapsed().as_nanos() as u64,
+            total_evaluation_time_ns: start.elapsed_ns(),
         }
     }
 }

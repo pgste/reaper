@@ -619,7 +619,6 @@ pub(super) fn compare_attribute_values(
 
 use super::chain_method_eval::evaluate_chained_method;
 use super::types::{CompiledExprIndexType, CompiledExprType};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Evaluate a compiled expression type and return the result.
 ///
@@ -999,13 +998,11 @@ pub fn evaluate_compiled_expr_type(
         }
 
         CompiledExprType::TimeNow | CompiledExprType::TimeNowMs | CompiledExprType::TimeNowNs => {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default();
+            let now_ns = crate::clock::now_unix_ns().unwrap_or(0);
             let value = match expr_type {
-                CompiledExprType::TimeNow => now.as_secs() as i64,
-                CompiledExprType::TimeNowMs => now.as_millis() as i64,
-                CompiledExprType::TimeNowNs => now.as_nanos() as i64,
+                CompiledExprType::TimeNow => now_ns / 1_000_000_000,
+                CompiledExprType::TimeNowMs => now_ns / 1_000_000,
+                CompiledExprType::TimeNowNs => now_ns,
                 _ => unreachable!(),
             };
             Some(AttributeValue::Int(value))

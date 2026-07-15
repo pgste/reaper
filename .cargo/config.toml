@@ -3,3 +3,10 @@ jobs = 2  # Limit parallel compilation jobs
 
 [profile.dev]
 split-debuginfo = "unpacked"  # Reduce memory during linking
+
+# F2 wasm eval target (plans/round-2/F2-wasm-target.md): getrandom >=0.3
+# requires an explicit backend on wasm32-unknown-unknown; wasm_js routes it
+# through JS crypto.getRandomValues (paired with the `wasm_js` cargo feature
+# on the getrandom dependents).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

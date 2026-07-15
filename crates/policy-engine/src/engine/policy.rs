@@ -7,7 +7,9 @@
 use super::types::{
     default_priority, PolicyLanguage, PolicyRule, PolicySource, PolicySourceMetadata,
 };
-use crate::evaluators::{CedarPolicyEvaluator, PolicyEvaluator, SimplePolicyEvaluator};
+#[cfg(feature = "cedar")]
+use crate::evaluators::CedarPolicyEvaluator;
+use crate::evaluators::{PolicyEvaluator, SimplePolicyEvaluator};
 use reaper_core::{PolicyId, ReaperError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -192,9 +194,18 @@ impl EnhancedPolicy {
                     Arc::new(SimplePolicyEvaluator::new(rules))
                 }
             }
+            #[cfg(feature = "cedar")]
             PolicyLanguage::Cedar => {
                 let evaluator = CedarPolicyEvaluator::new(self.content.clone())?;
                 Arc::new(evaluator)
+            }
+            #[cfg(not(feature = "cedar"))]
+            PolicyLanguage::Cedar => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "Cedar policy support is not compiled in \
+                             (enable the `cedar` feature of policy-engine)"
+                        .to_string(),
+                });
             }
             PolicyLanguage::ReaperDsl => {
                 let store = data_store.unwrap_or_else(|| Arc::new(crate::data::DataStore::new()));

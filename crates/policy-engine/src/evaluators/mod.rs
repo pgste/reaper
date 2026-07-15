@@ -8,11 +8,14 @@ use crate::{PolicyAction, PolicyRequest};
 use reaper_core::ReaperError;
 use std::fmt::Debug;
 
+#[cfg(feature = "cedar")]
 pub mod cedar;
+#[cfg(feature = "cedar")]
 pub mod cedar_integration;
 pub mod reaper_dsl;
 pub mod simple;
 
+#[cfg(feature = "cedar")]
 pub use cedar::CedarPolicyEvaluator;
 pub use simple::SimplePolicyEvaluator;
 // Note: datastore_to_cedar_entities and ReaperDSLEvaluator are not yet used
