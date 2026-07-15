@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod bundle_signing;
+pub mod capability;
 pub mod config;
 pub mod error;
 pub mod platform;

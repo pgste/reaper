@@ -248,7 +248,7 @@ impl SigningKey {
         }
     }
 
-    fn sign_raw(&self, msg: &[u8]) -> Vec<u8> {
+    pub(crate) fn sign_raw(&self, msg: &[u8]) -> Vec<u8> {
         match self {
             SigningKey::Ed25519(k) => k.sign(msg).to_bytes().to_vec(),
             SigningKey::EcdsaP256(k) => {
@@ -294,7 +294,7 @@ impl VerifyingKey {
         }
     }
 
-    fn verify_raw(&self, msg: &[u8], sig: &[u8]) -> Result<(), SignatureError> {
+    pub(crate) fn verify_raw(&self, msg: &[u8], sig: &[u8]) -> Result<(), SignatureError> {
         match self {
             VerifyingKey::Ed25519(k) => {
                 let arr: [u8; 64] = sig.try_into().map_err(|_| {
