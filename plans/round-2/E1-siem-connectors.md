@@ -14,7 +14,7 @@ This doc is updated as each slice lands.
 
 ---
 
-## STATUS (2026-07-15) — slice 1 landed; slices 2–4 remain
+## STATUS (2026-07-15) — slices 1 & 2 landed; slices 3–4 remain
 
 **Decisions locked (with the maintainer):**
 1. **OCSF class = Authorize Session** (`class_uid` 3003, IAM category `category_uid`
@@ -45,6 +45,18 @@ This doc is updated as each slice lands.
   artifact) + 9 unit tests incl. `ocsf_matches_golden_fixture` and CEF
   metacharacter-escaping.
 - Re-exported `policy_engine::ExportFormat`. No transport yet (slices 2–3).
+
+**Landed (slice 2):**
+- `deploy/decision-logs/vector-siem-sinks.toml`: a Vector overlay loaded next to
+  `vector.toml` (`vector --config vector.toml --config vector-siem-sinks.toml`).
+  An active `decisions_ocsf` remap transform reshapes `route._unmatched` into the
+  same OCSF Authorize Session shape as the Rust `to_ocsf` (verified by eye against
+  the golden fixture), plus commented copy-paste **Kafka**, **Splunk-HEC**, and
+  **S3 data-lake** sink blocks (uncomment + set env, like the WORM block). Sinks
+  point `inputs` at `decisions_ocsf` (OCSF) or `route._unmatched` (raw NDJSON).
+  CEF is deferred to the native connector (slice 3) — Vector's encoders don't
+  emit CEF. README gained a "SIEM export" section + the file listing. TOML
+  syntax validated (no Vector binary in CI; operators run `vector validate`).
 
 ---
 
@@ -101,9 +113,10 @@ has full history and the authenticated, OpenAPI-contracted, multi-tenant surface
 mapping (Authorize Session 3003), unit-tested against golden fixtures. No
 transport yet.
 
-**Slice 2 — Vector sink configs.** Documented Kafka / Splunk-HEC / S3 sink blocks
-in `deploy/decision-logs/`, wired to the existing routes; a `--format ocsf`
-transform option. Config-only, no service change.
+**Slice 2 — Vector sink configs.** *(LANDED — see STATUS.)* Documented Kafka /
+Splunk-HEC / S3 sink blocks in `deploy/decision-logs/vector-siem-sinks.toml`,
+wired to the existing routes; a `decisions_ocsf` (`--format ocsf`) transform.
+Config-only, no service change.
 
 **Slice 3 — native push connector + API.** `api/connectors.rs` (CRUD for per-org
 connector subscriptions: type = splunk_hec | http, endpoint, secret, format),

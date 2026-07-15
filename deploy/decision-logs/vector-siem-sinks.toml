@@ -1,0 +1,157 @@
+# Vector SIEM export overlay (round-2 E1, slice 2).
+#
+# Config-only fan-out of Reaper decision logs to SIEM/data-lake destinations for
+# operators who already run Vector (the cheapest transport altitude — Vector
+# ships these sinks natively, no Rust). Load it ALONGSIDE the main pipeline:
+#
+#     vector --config vector.toml --config vector-siem-sinks.toml
+#     vector validate --config vector.toml --config vector-siem-sinks.toml   # check first
+#
+# It reuses the main file's routes: `route._unmatched` (decision entries) and
+# `decisions_fmt`. The one active piece is the OCSF-shaping transform below; the
+# sinks are commented reference blocks (they need your endpoints/creds) — uncomment
+# the ones you want and set the env vars, exactly like the S3 WORM block in
+# vector.toml.
+#
+# FORMAT CHOICE per sink `inputs`:
+#   - inputs = ["decisions_ocsf"]  -> OCSF Authorize Session JSON (SIEM-native)
+#   - inputs = ["route._unmatched"] -> raw Reaper NDJSON (leanest, Reaper-shaped)
+# CEF: emitted by the native control-plane connector (slice 3); Vector's encoders
+# don't produce CEF, so shape it there rather than reproducing the escaping in VRL.
+
+# --- OCSF shaping transform (`--format ocsf`) -------------------------------
+# Reshapes a decision into OCSF Authorize Session (class_uid 3003, schema 1.1.0),
+# mirroring policy_engine::DecisionLogEntry::to_ocsf so the Vector-only path and
+# the native connector emit identical records. Allow/deny rides `status_id`;
+# Reaper-specific fields are preserved under the schema's `unmapped` object.
+[transforms.decisions_ocsf]
+type = "remap"
+inputs = ["route._unmatched"]
+source = '''
+decision = to_string(.decision) ?? ""
+
+status_id = 99
+status = "Other"
+severity_id = 1
+severity = "Informational"
+if decision == "allow" {
+    status_id = 1
+    status = "Success"
+}
+if decision == "deny" {
+    status_id = 2
+    status = "Failure"
+    severity_id = 2
+    severity = "Low"
+}
+
+ts = to_timestamp(.timestamp) ?? now()
+time_ms = to_int(to_unix_timestamp(ts, unit: "milliseconds")) ?? 0
+
+# Reaper-specific fields with no first-class OCSF home — preserved, never dropped.
+unmapped = {
+    "action": .action,
+    "decision": .decision,
+    "policy_id": .policy_id,
+    "policy_name": .policy_name,
+    "evaluation_time_ns": .evaluation_time_ns,
+    "cache_hit": .cache_hit,
+}
+if exists(.policy_version) { unmapped.policy_version = .policy_version }
+if exists(.matched_rule)   { unmapped.matched_rule = .matched_rule }
+if exists(.agent_id)       { unmapped.agent_id = .agent_id }
+if exists(.data_version)   { unmapped.data_version = .data_version }
+if exists(.model_version)  { unmapped.model_version = .model_version }
+if exists(.context)        { unmapped.context = .context }
+
+metadata = {
+    "version": "1.1.0",
+    "product": { "name": "Reaper", "vendor_name": "Reaper" },
+    "uid": .decision_id,
+    "log_name": "decision_log",
+}
+if exists(.trace_id) { metadata.correlation_uid = .trace_id }
+
+message = "Authorization " + decision + ": " + (to_string(.action) ?? "") + " on " + (to_string(.resource) ?? "")
+
+. = {
+    "activity_id": 99,
+    "activity_name": "Authorization Decision",
+    "category_uid": 3,
+    "category_name": "Identity & Access Management",
+    "class_uid": 3003,
+    "class_name": "Authorize Session",
+    "type_uid": 300399,
+    "time": time_ms,
+    "severity_id": severity_id,
+    "severity": severity,
+    "status_id": status_id,
+    "status": status,
+    "status_detail": decision,
+    "message": message,
+    "metadata": metadata,
+    "actor": { "user": { "name": .principal, "uid": .principal, "type": "User" } },
+    "privileges": [.action],
+    "resources": [{ "name": .resource, "type": "resource" }],
+    "unmapped": unmapped,
+    "tenant_id": .tenant_id,
+}
+'''
+
+# --- Kafka (Redpanda / MSK / Confluent) ------------------------------------
+# High-throughput bus fan-out. Point `inputs` at decisions_ocsf for OCSF, or
+# route._unmatched for raw Reaper NDJSON. Keyed by decision_id for even
+# partitioning; at-least-once with a disk buffer so a broker blip never blocks.
+# [sinks.kafka]
+# type = "kafka"
+# inputs = ["decisions_ocsf"]
+# bootstrap_servers = "${KAFKA_BOOTSTRAP:-localhost:9092}"
+# topic = "${KAFKA_TOPIC:-reaper.decisions.ocsf}"
+# key_field = ".metadata.uid"          # OCSF: decision_id; for raw use ".decision_id"
+# compression = "lz4"
+# encoding.codec = "json"
+# [sinks.kafka.buffer]
+# type = "disk"
+# max_size = 1000000000
+# when_full = "block"
+# [sinks.kafka.librdkafka_options]
+# # For SASL/TLS (Confluent/MSK): uncomment and set creds.
+# # "security.protocol" = "sasl_ssl"
+# # "sasl.mechanism" = "PLAIN"
+# # "sasl.username" = "${KAFKA_USER}"
+# # "sasl.password" = "${KAFKA_PASSWORD}"
+
+# --- Splunk HTTP Event Collector (HEC) -------------------------------------
+# Splunk-native ingest. `sourcetype = _json` lets Splunk's OCSF app parse the
+# Authorize Session records directly. Token auth over TLS.
+# [sinks.splunk_hec]
+# type = "splunk_hec_logs"
+# inputs = ["decisions_ocsf"]
+# endpoint = "${SPLUNK_HEC_ENDPOINT:-https://splunk:8088}"
+# default_token = "${SPLUNK_HEC_TOKEN}"
+# encoding.codec = "json"
+# sourcetype = "_json"
+# index = "${SPLUNK_INDEX:-reaper_audit}"
+# [sinks.splunk_hec.buffer]
+# type = "disk"
+# max_size = 1000000000
+# when_full = "block"
+# [sinks.splunk_hec.acknowledgements]
+# enabled = true
+
+# --- S3 / MinIO data lake (analytics, NOT the WORM compliance archive) ------
+# A queryable analytics lake (Athena/Trino/Snowflake external tables over OCSF
+# JSON), distinct from vector.toml's Object-Lock WORM archive. Time-partitioned,
+# gzipped. Use OCSF here so lake tables share the SIEM schema.
+# [sinks.s3_lake]
+# type = "aws_s3"
+# inputs = ["decisions_ocsf"]
+# bucket = "${S3_LAKE_BUCKET}"
+# region = "${S3_LAKE_REGION:-us-east-1}"
+# # endpoint = "${S3_LAKE_ENDPOINT}"   # set for MinIO / S3-compatible stores
+# key_prefix = "${S3_LAKE_PREFIX:-ocsf/}date=%Y-%m-%d/hour=%H/"
+# compression = "gzip"
+# encoding.codec = "json"
+# [sinks.s3_lake.buffer]
+# type = "disk"
+# max_size = 2000000000
