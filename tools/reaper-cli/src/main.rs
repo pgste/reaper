@@ -41,6 +41,7 @@ fn handle_analyze_policy(
     anyhow::bail!("eBPF commands are only available on Linux")
 }
 
+mod airgap;
 mod library;
 
 #[derive(Parser)]
@@ -360,6 +361,80 @@ enum BundleAction {
         /// Package version
         #[arg(short, long, default_value = "1.0.0")]
         version: String,
+    },
+    /// Sign a bundle for air-gapped transfer (writes <output> + <output>.sig)
+    Export {
+        /// Input: a source policy (.reap/.yaml/.json) or a compiled .rbb
+        input: String,
+
+        /// Output .rbb path (default: input with a .rbb extension)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Signing private key hex (default: REAPER_BUNDLE_SIGNING_KEY)
+        #[arg(long)]
+        key: Option<String>,
+
+        /// Signing key id (default: REAPER_BUNDLE_SIGNING_KEY_ID or "default")
+        #[arg(long = "key-id")]
+        key_id: Option<String>,
+
+        /// Signature algorithm (default: ed25519-sha256)
+        #[arg(long)]
+        algorithm: Option<String>,
+
+        /// Bundle lineage UUID the envelope binds to (default: random)
+        #[arg(long = "bundle-id")]
+        bundle_id: Option<String>,
+
+        /// Monotonic lineage version (default: current unix milliseconds)
+        #[arg(long)]
+        version: Option<u64>,
+
+        /// Days the signature stays valid (default: 3650)
+        #[arg(long = "validity-days", default_value_t = 3650)]
+        validity_days: u64,
+    },
+    /// Verify a signed bundle offline, then optionally deploy it to an agent
+    Import {
+        /// Path to the .rbb bundle (signature read from <file>.sig unless --sig)
+        file: String,
+
+        /// Detached signature path (default: <file>.sig)
+        #[arg(long)]
+        sig: Option<String>,
+
+        /// Public verifying key hex (default: REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY)
+        #[arg(long = "public-key")]
+        public_key: Option<String>,
+
+        /// Signature algorithm (default: ed25519-sha256)
+        #[arg(long)]
+        algorithm: Option<String>,
+
+        /// Pin verification to this key id (default: REAPER_MANAGEMENT_BUNDLE_KEY_ID)
+        #[arg(long = "key-id")]
+        key_id: Option<String>,
+
+        /// Accept legacy v1 envelopes (default: require v2 anti-replay)
+        #[arg(long = "allow-v1")]
+        allow_v1: bool,
+
+        /// Skip signature verification entirely (NOT recommended)
+        #[arg(long = "insecure-skip-verify")]
+        insecure_skip_verify: bool,
+
+        /// After verifying, deploy to the agent (also sends the signature)
+        #[arg(long)]
+        deploy: bool,
+
+        /// Optional JSON data file to load before deploying
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Force deployment even if the version already exists
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -1803,13 +1878,22 @@ async fn handle_bundle_action(
             );
             println!("   • Rules: {}", bundle.policy.rules.len());
 
+            // Attach a detached signature sidecar if one sits next to the bundle
+            // (`<file>.sig`), so the agent verifies it — closing the gap where a
+            // CLI deploy previously sent an unsigned bundle.
+            let signature = load_sidecar_signature(file);
+            if signature.is_some() {
+                println!("   • Signature: attached ({})", airgap::sidecar_path(file));
+            }
+
             // Send to agent
             let response = client
                 .post(format!("{}/api/v1/bundles/deploy", cli.agent_url))
                 .json(&serde_json::json!({
                     "bundle": bundle_bytes,
                     "version": bundle.metadata.policy_version.as_deref().unwrap_or("1.0.0"),
-                    "force": force
+                    "force": force,
+                    "signature": signature,
                 }))
                 .send()
                 .await?;
@@ -1982,6 +2066,266 @@ async fn handle_bundle_action(
             println!();
             println!("📦 Output: {} ({} bytes)", output, bytes.len());
             println!("═══════════════════════════════════════════════════════");
+        }
+
+        BundleAction::Export {
+            input,
+            output,
+            key,
+            key_id,
+            algorithm,
+            bundle_id,
+            version,
+            validity_days,
+        } => {
+            handle_bundle_export(
+                input,
+                output.as_deref(),
+                key.as_deref(),
+                key_id.as_deref(),
+                algorithm.as_deref(),
+                bundle_id.as_deref(),
+                *version,
+                *validity_days,
+            )?;
+        }
+
+        BundleAction::Import {
+            file,
+            sig,
+            public_key,
+            algorithm,
+            key_id,
+            allow_v1,
+            insecure_skip_verify,
+            deploy,
+            data,
+            force,
+        } => {
+            handle_bundle_import(
+                cli,
+                client,
+                file,
+                sig.as_deref(),
+                public_key.as_deref(),
+                algorithm.as_deref(),
+                key_id.as_deref(),
+                *allow_v1,
+                *insecure_skip_verify,
+                *deploy,
+                data.as_deref(),
+                *force,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Read a `<file>.sig` detached-signature sidecar if present and parseable.
+fn load_sidecar_signature(
+    bundle_path: &str,
+) -> Option<reaper_core::bundle_signing::BundleSignature> {
+    let path = airgap::sidecar_path(bundle_path);
+    let bytes = fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Bundle bytes from `input`: pass through an already-compiled `.rbb` (magic
+/// `REAP`), otherwise compile a source policy (.reap/.yaml/.json).
+fn load_or_compile_bundle(input: &str) -> anyhow::Result<Vec<u8>> {
+    let raw = fs::read(input).map_err(|e| anyhow::anyhow!("failed to read {input}: {e}"))?;
+    if raw.starts_with(b"REAP") {
+        return Ok(raw);
+    }
+    let policy = ReaperPolicy::from_file_auto(input)
+        .map_err(|e| anyhow::anyhow!("failed to parse policy {input}: {e:?}"))?;
+    policy
+        .compile_to_bundle()
+        .map_err(|e| anyhow::anyhow!("compilation failed: {e:?}"))
+}
+
+/// Default `.rbb` output path for an input: keep a `.rbb` input as-is, otherwise
+/// swap the extension to `.rbb`.
+fn default_rbb_path(input: &str) -> String {
+    let p = Path::new(input);
+    if p.extension().and_then(|e| e.to_str()) == Some("rbb") {
+        return input.to_string();
+    }
+    p.with_extension("rbb").to_string_lossy().to_string()
+}
+
+/// Handle: reaper bundle export — sign a bundle for air-gapped transfer.
+#[allow(clippy::too_many_arguments)]
+fn handle_bundle_export(
+    input: &str,
+    output: Option<&str>,
+    key: Option<&str>,
+    key_id: Option<&str>,
+    algorithm: Option<&str>,
+    bundle_id: Option<&str>,
+    version: Option<u64>,
+    validity_days: u64,
+) -> anyhow::Result<()> {
+    println!("🔏 Signing bundle for air-gapped transfer\n");
+
+    let bundle_bytes = load_or_compile_bundle(input)?;
+    let output_path = output
+        .map(str::to_string)
+        .unwrap_or_else(|| default_rbb_path(input));
+
+    let identity = airgap::resolve_signing_identity(key, algorithm, key_id)?;
+    let bundle_id = bundle_id
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let params = airgap::ExportParams {
+        bundle_id: bundle_id.clone(),
+        version: version.unwrap_or_else(airgap::now_millis),
+        validity_days,
+    };
+    let signature = airgap::sign_export(&bundle_bytes, &identity, &params);
+
+    fs::write(&output_path, &bundle_bytes)
+        .map_err(|e| anyhow::anyhow!("failed to write bundle {output_path}: {e}"))?;
+    let sig_path = airgap::sidecar_path(&output_path);
+    let sig_json = serde_json::to_vec_pretty(&signature)
+        .map_err(|e| anyhow::anyhow!("failed to serialize signature: {e}"))?;
+    fs::write(&sig_path, &sig_json)
+        .map_err(|e| anyhow::anyhow!("failed to write signature {sig_path}: {e}"))?;
+
+    println!(
+        "   ✓ Bundle:    {} ({} bytes)",
+        output_path,
+        bundle_bytes.len()
+    );
+    println!("   ✓ Signature: {}", sig_path);
+    println!();
+    println!("   • Algorithm:  {}", signature.algorithm);
+    println!("   • Key id:     {}", signature.key_id);
+    println!("   • Bundle id:  {}", signature.bundle_id);
+    println!("   • Version:    {}", signature.version);
+    println!("   • SHA-256:    {}", signature.sha256);
+    println!("   • Expires at: {} (unix)", signature.expires_at);
+    println!();
+    println!("Carry BOTH files across the air gap, then on the isolated side:");
+    println!("   reaper bundle import {output_path} --deploy");
+    Ok(())
+}
+
+/// Handle: reaper bundle import — verify a signed bundle offline, then deploy.
+#[allow(clippy::too_many_arguments)]
+async fn handle_bundle_import(
+    cli: &Cli,
+    client: &Client,
+    file: &str,
+    sig: Option<&str>,
+    public_key: Option<&str>,
+    algorithm: Option<&str>,
+    key_id: Option<&str>,
+    allow_v1: bool,
+    insecure_skip_verify: bool,
+    deploy: bool,
+    data: Option<&str>,
+    force: bool,
+) -> anyhow::Result<()> {
+    println!("🔎 Importing signed bundle: {file}\n");
+
+    let bundle_bytes =
+        fs::read(file).map_err(|e| anyhow::anyhow!("failed to read bundle {file}: {e}"))?;
+
+    // 1. Offline verification (the air-gap value: prove authenticity before apply).
+    let signature = if insecure_skip_verify {
+        println!("⚠️  Skipping signature verification (--insecure-skip-verify)\n");
+        None
+    } else {
+        let sig_path = sig
+            .map(str::to_string)
+            .unwrap_or_else(|| airgap::sidecar_path(file));
+        let sig_bytes = fs::read(&sig_path).map_err(|e| {
+            anyhow::anyhow!(
+                "no signature sidecar at {sig_path}: {e} \
+                 (pass --sig <path> or --insecure-skip-verify)"
+            )
+        })?;
+        let signature: reaper_core::bundle_signing::BundleSignature =
+            serde_json::from_slice(&sig_bytes)
+                .map_err(|e| anyhow::anyhow!("malformed signature {sig_path}: {e}"))?;
+        let vk = airgap::resolve_verifying_identity(public_key, algorithm, key_id)?;
+        let verified = airgap::verify_export(&bundle_bytes, &signature, &vk, !allow_v1)?;
+        println!("   ✅ Signature verified (offline)");
+        println!("      • key id:    {}", signature.key_id);
+        println!("      • bundle id: {}", verified.bundle_id);
+        println!("      • version:   {}", verified.version);
+        println!("      • envelope:  v{}", verified.envelope_version);
+        println!("      • SHA-256:   {}", signature.sha256);
+        println!();
+        Some(signature)
+    };
+
+    if !deploy {
+        println!("Verify-only. Pass --deploy to apply this bundle to the agent.");
+        return Ok(());
+    }
+
+    // 2. Optionally load entity data first.
+    if let Some(data_path) = data {
+        println!("📤 Loading entity data: {data_path}");
+        let data_content = fs::read_to_string(data_path)
+            .map_err(|e| anyhow::anyhow!("failed to read data file {data_path}: {e}"))?;
+        let response = client
+            .post(format!("{}/api/v1/data", cli.agent_url))
+            .json(&json!({ "data": data_content }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!("failed to load data: {}", response.status());
+        }
+        println!("   ✓ data loaded\n");
+    }
+
+    // 3. Deploy to the agent WITH the signature so it re-verifies before hot-swap.
+    let version_str = PolicyBundle::from_bytes(&bundle_bytes)
+        .ok()
+        .and_then(|b| b.metadata.policy_version)
+        .unwrap_or_else(|| "1.0.0".to_string());
+    println!("🚀 Deploying to agent: {}", cli.agent_url);
+    let response = client
+        .post(format!("{}/api/v1/bundles/deploy", cli.agent_url))
+        .json(&json!({
+            "bundle": bundle_bytes,
+            "version": version_str,
+            "force": force,
+            "signature": &signature,
+        }))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let error_text = response.text().await?;
+        anyhow::bail!("deployment failed: {error_text}");
+    }
+    let result: Value = response.json().await?;
+    let agent_hash = result
+        .get("bundle_hash")
+        .and_then(|h| h.as_str())
+        .unwrap_or("");
+    println!("   ✅ Deployed");
+    if let Some(id) = result.get("policy_id").and_then(|v| v.as_str()) {
+        println!("      • policy id: {id}");
+    }
+    println!("      • agent bundle hash: {agent_hash}");
+
+    // 4. Attestation: the agent's reported hash is SHA-256 of the loaded bundle
+    // bytes — confirm it matches the signed digest, proving the air-gapped agent
+    // applied exactly the bytes we signed.
+    if let Some(sig) = &signature {
+        if agent_hash.eq_ignore_ascii_case(&sig.sha256) {
+            println!("      • ✅ attested: agent hash matches the signed SHA-256");
+        } else {
+            anyhow::bail!(
+                "ATTESTATION MISMATCH: agent loaded {agent_hash} but the signed digest is {} \
+                 — the applied bundle is not the one that was signed",
+                sig.sha256
+            );
         }
     }
     Ok(())
