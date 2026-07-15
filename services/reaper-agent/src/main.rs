@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod bootstrap;
 mod cache;
+mod decision_stream;
 mod handlers;
 mod management;
 mod metrics_cache;
@@ -25,8 +26,8 @@ use axum::{
 use cache::PolicyCache;
 use clap::Parser;
 use policy_engine::{
-    cache_config::CacheConfig, create_shared_buffer, DecisionLogConfig, EnhancedPolicy,
-    PolicyEngine,
+    cache_config::CacheConfig, create_shared_buffer, create_shared_buffer_with_stream,
+    decision_stream_channel, DecisionLogConfig, EnhancedPolicy, PolicyEngine,
 };
 use reaper_core::{config::ReaperAgentConfig, endpoints, BUILD_INFO, VERSION};
 use serde::Deserialize;
@@ -570,13 +571,36 @@ async fn run(
             anyhow::bail!("invalid decision-log configuration: {e}");
         }
     }
+    // Optional low-latency SIEM streaming sink (E1 slice 4): when configured, the
+    // buffer's writer mirrors every captured decision to a bounded channel that a
+    // dedicated consumer thread shapes + pushes to the SIEM. Best-effort; never
+    // gates durability or evaluation.
+    let stream_cfg = decision_stream::StreamSinkConfig::from_env();
     let decision_buffer = if decision_log_config.enabled {
-        match create_shared_buffer(decision_log_config) {
-            Ok(buffer) => {
+        let created = match &stream_cfg {
+            Some(_) => {
+                let (tx, rx) =
+                    decision_stream_channel(decision_stream::StreamSinkConfig::queue_capacity());
+                create_shared_buffer_with_stream(decision_log_config, tx).map(|b| (b, Some(rx)))
+            }
+            None => create_shared_buffer(decision_log_config).map(|b| (b, None)),
+        };
+        match created {
+            Ok((buffer, stream_rx)) => {
                 if audit_required {
                     info!("Decision logging enabled (MANDATORY audit — fail-closed)");
                 } else {
                     info!("Decision logging enabled");
+                }
+                // Start the streaming consumer once the buffer (and its writer)
+                // exist, so the channel has a live sender.
+                if let (Some(cfg), Some(rx)) = (stream_cfg, stream_rx) {
+                    info!(
+                        url = %cfg.url,
+                        format = cfg.format.as_str(),
+                        "Decision streaming sink enabled"
+                    );
+                    decision_stream::spawn(cfg, rx);
                 }
                 Some(buffer)
             }

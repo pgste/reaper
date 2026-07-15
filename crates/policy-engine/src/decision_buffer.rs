@@ -376,6 +376,15 @@ impl Checkpointer {
 struct WriterSinks {
     file: Option<BufWriter<std::fs::File>>,
     stdout: Option<BufWriter<std::io::Stdout>>,
+    /// Optional low-latency streaming mirror (round-2 E1 slice 4): a non-blocking
+    /// hand-off of the captured `Arc<DecisionLogEntry>` to an out-of-process
+    /// consumer (the agent's SIEM streaming task). It is a **best-effort telemetry
+    /// mirror, NOT the durable audit artifact**, so a saturated/closed consumer
+    /// drops (counted) rather than ever blocking the writer's durability path.
+    stream: Option<SyncSender<Arc<DecisionLogEntry>>>,
+    /// Streamed records dropped because the consumer was full/gone. Shared with
+    /// the buffer so it surfaces as the `stream_dropped` stat.
+    stream_dropped: Arc<AtomicU64>,
 }
 
 impl WriterSinks {
@@ -385,6 +394,22 @@ impl WriterSinks {
         }
         if let Some(w) = self.stdout.as_mut() {
             let _ = w.flush();
+        }
+    }
+
+    /// Mirror one captured entry to the streaming consumer, non-blocking. Never
+    /// affects durability or audit health — a drop here is telemetry loss only.
+    fn stream_entry(&self, entry: &Arc<DecisionLogEntry>) {
+        if let Some(tx) = self.stream.as_ref() {
+            if tx.try_send(Arc::clone(entry)).is_err() {
+                let prior = self.stream_dropped.fetch_add(1, Ordering::Relaxed);
+                if prior == 0 {
+                    tracing::warn!(
+                        "decision stream sink saturated or closed: dropping streamed records \
+                         (durable file/stdout sinks are unaffected)"
+                    );
+                }
+            }
         }
     }
 }
@@ -404,6 +429,10 @@ pub struct DecisionBufferStats {
     pub writer_dropped: u64,
     /// Allow decisions dropped by sampling (`sample_allow_rate < 1.0`).
     pub sampled_out: u64,
+    /// Records dropped from the optional low-latency streaming mirror (E1 slice
+    /// 4) because the consumer was saturated/gone — telemetry loss only, never a
+    /// durable audit loss.
+    pub stream_dropped: u64,
     /// Mandatory-audit mode has latched audit-compromised (a durable loss
     /// occurred): the agent is failing eval closed. Always false when audit is
     /// not required.
@@ -508,6 +537,11 @@ pub struct DecisionBuffer {
     /// Applied before an entry reaches the ring or the writer, so every
     /// downstream view sees only protected data. None = nothing configured.
     protection: Option<DataProtection>,
+
+    /// Records dropped from the optional streaming mirror (E1 slice 4) because
+    /// the consumer was saturated/gone. Telemetry loss only — never a durable
+    /// audit loss. Shared with the writer thread's `WriterSinks`.
+    stream_dropped: Arc<AtomicU64>,
 }
 
 impl DecisionBuffer {
@@ -517,6 +551,20 @@ impl DecisionBuffer {
     /// encryption without a valid key) — the agent must not start logging
     /// unprotected data because a secret was missing.
     pub fn new(config: DecisionLogConfig) -> std::io::Result<Self> {
+        Self::new_with_stream(config, None)
+    }
+
+    /// Like [`Self::new`], but also attaches an optional low-latency streaming
+    /// mirror (round-2 E1 slice 4): every captured decision is handed
+    /// non-blocking to `stream` (typically an out-of-process SIEM push task).
+    /// The mirror is best-effort telemetry — it never gates durability, and a
+    /// saturated/closed consumer drops (counted as `stream_dropped`). Passing
+    /// `Some(..)` also starts the writer thread even when no file/stdout sink is
+    /// configured, so streaming can run standalone.
+    pub fn new_with_stream(
+        config: DecisionLogConfig,
+        stream: Option<SyncSender<Arc<DecisionLogEntry>>>,
+    ) -> std::io::Result<Self> {
         // Fail closed on invalid config (e.g. mandatory-audit invariants).
         config
             .validate()
@@ -529,7 +577,9 @@ impl DecisionBuffer {
         // error there also flags the loss.
         let audit = AuditHealth::new(config.audit_required);
 
-        let writer_tx = if config.file_path.is_some() || config.emit_stdout {
+        let stream_dropped = Arc::new(AtomicU64::new(0));
+
+        let writer_tx = if config.file_path.is_some() || config.emit_stdout || stream.is_some() {
             let file = if let Some(ref path) = config.file_path {
                 // Ensure parent directory exists
                 if let Some(parent) = Path::new(path).parent() {
@@ -546,7 +596,12 @@ impl DecisionBuffer {
             } else {
                 None
             };
-            let mut sinks = WriterSinks { file, stdout };
+            let mut sinks = WriterSinks {
+                file,
+                stdout,
+                stream,
+                stream_dropped: stream_dropped.clone(),
+            };
 
             // One chain identity per writer boot (round-2 A2), shared by the
             // HashChain (stamped into every decision record) and the
@@ -661,6 +716,7 @@ impl DecisionBuffer {
             sampled_out: AtomicU64::new(0),
             writer_tx,
             protection,
+            stream_dropped,
         })
     }
 
@@ -745,6 +801,8 @@ impl DecisionBuffer {
                     }
                     Err(_) => audit.note_loss(),
                 }
+                // Best-effort low-latency mirror (never gates durability).
+                sinks.stream_entry(&entry);
                 // Fold the just-stamped durable record into the checkpoint
                 // window (may emit a signed checkpoint over the same sinks).
                 if let Some(cp) = checkpointer.as_mut() {
@@ -764,6 +822,7 @@ impl DecisionBuffer {
                 if !durable {
                     audit.note_loss();
                 }
+                sinks.stream_entry(&entry);
                 // Ignore send errors: the receiver may have timed out and gone.
                 let _ = ack.send(durable);
                 // Fold into the checkpoint window exactly like Entry.
@@ -1072,6 +1131,7 @@ impl DecisionBuffer {
             deny_count: self.deny_count.load(Ordering::Relaxed),
             writer_dropped: self.audit.durable_loss(),
             sampled_out: self.sampled_out.load(Ordering::Relaxed),
+            stream_dropped: self.stream_dropped.load(Ordering::Relaxed),
             audit_compromised: !self.audit.is_healthy(),
         }
     }
@@ -1273,9 +1333,35 @@ impl DecisionFilter {
 /// Thread-safe handle to a decision buffer
 pub type SharedDecisionBuffer = Arc<DecisionBuffer>;
 
+/// Sender half of the low-latency streaming mirror (E1 slice 4): the writer
+/// thread hands each captured `Arc<DecisionLogEntry>` here non-blocking.
+pub type DecisionStreamSender = SyncSender<Arc<DecisionLogEntry>>;
+/// Receiver half — owned by the consumer (e.g. the agent's SIEM push task).
+pub type DecisionStreamReceiver = std::sync::mpsc::Receiver<Arc<DecisionLogEntry>>;
+
+/// Create a bounded streaming-mirror channel. `capacity` bounds how many entries
+/// buffer before the writer starts dropping (telemetry loss, never a durable
+/// loss) — size it for the consumer's push latency.
+pub fn decision_stream_channel(capacity: usize) -> (DecisionStreamSender, DecisionStreamReceiver) {
+    sync_channel(capacity)
+}
+
 /// Create a shared decision buffer from configuration
 pub fn create_shared_buffer(config: DecisionLogConfig) -> std::io::Result<SharedDecisionBuffer> {
     Ok(Arc::new(DecisionBuffer::new(config)?))
+}
+
+/// Create a shared decision buffer with an attached streaming mirror (E1 slice
+/// 4). Pair with [`decision_stream_channel`]; the returned receiver feeds the
+/// out-of-process SIEM push consumer.
+pub fn create_shared_buffer_with_stream(
+    config: DecisionLogConfig,
+    stream: DecisionStreamSender,
+) -> std::io::Result<SharedDecisionBuffer> {
+    Ok(Arc::new(DecisionBuffer::new_with_stream(
+        config,
+        Some(stream),
+    )?))
 }
 
 #[cfg(test)]
@@ -1342,6 +1428,59 @@ mod tests {
         assert!(!contents.contains("alice@example.com"));
         assert!(!contents.contains("s3cr3t"));
         assert!(contents.contains("sha256:"));
+    }
+
+    #[test]
+    fn streaming_mirror_receives_captured_entries() {
+        // The streaming mirror (E1 slice 4) hands every captured entry to the
+        // consumer channel, off the durability path.
+        let (tx, rx) = decision_stream_channel(16);
+        let config = DecisionLogConfig {
+            enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new_with_stream(config, Some(tx)).unwrap();
+        buffer.log(test_entry("deny"));
+        buffer.log(test_entry("deny"));
+
+        let mut got = Vec::new();
+        for _ in 0..2 {
+            match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(e) => got.push(e),
+                Err(_) => break,
+            }
+        }
+        assert_eq!(got.len(), 2, "both captured entries reach the stream");
+        assert!(got.iter().all(|e| e.decision == "deny"));
+    }
+
+    #[test]
+    fn streaming_mirror_drops_when_saturated_without_blocking() {
+        // A saturated consumer must never block the writer's durability path —
+        // excess records drop and surface as the `stream_dropped` stat.
+        let (tx, _rx) = decision_stream_channel(1); // capacity 1; _rx never drains
+        let config = DecisionLogConfig {
+            enabled: true,
+            privacy_profile: Some(PrivacyProfile::Raw),
+            ..Default::default()
+        };
+        let buffer = DecisionBuffer::new_with_stream(config, Some(tx)).unwrap();
+        for _ in 0..50 {
+            buffer.log(test_entry("deny"));
+        }
+        let mut dropped = 0;
+        for _ in 0..200 {
+            dropped = buffer.stats().stream_dropped;
+            if dropped > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            dropped > 0,
+            "saturated stream must drop, not block the writer"
+        );
     }
 
     #[test]

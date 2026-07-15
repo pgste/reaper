@@ -81,7 +81,9 @@ pub mod decision_log;
 pub mod decision_privacy;
 
 pub use decision_buffer::{
-    create_shared_buffer, DecisionBuffer, DecisionBufferStats, DecisionFilter, SharedDecisionBuffer,
+    create_shared_buffer, create_shared_buffer_with_stream, decision_stream_channel,
+    DecisionBuffer, DecisionBufferStats, DecisionFilter, DecisionStreamReceiver,
+    DecisionStreamSender, SharedDecisionBuffer,
 };
 pub use decision_export::ExportFormat;
 pub use decision_log::{DecisionLogConfig, DecisionLogEntry, PrivacyProfile};
