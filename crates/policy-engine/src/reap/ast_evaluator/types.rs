@@ -15,13 +15,33 @@ pub(super) struct EvalContext {
     pub(super) variables: HashMap<String, EvalValue>,
     /// User entity from request
     pub(super) user_id: EntityId,
+    /// Actor entity (F1 agentic authz): the non-human actor from the
+    /// request's `actor` field. `None` when the request carries no actor —
+    /// `actor.*` then reads null rather than erroring.
+    pub(super) actor_id: Option<EntityId>,
     /// Resource entity from request
     pub(super) resource_id: EntityId,
     /// Request context (includes action and other attributes)
     pub(super) request_context: HashMap<String, String>,
+    /// Per-key context provenance (F1 taint). `None` = taint mode off (every
+    /// key platform-trusted); `Some(map)` = taint on, unlabeled keys are the
+    /// `Llm` floor. Drives the `taint::level`/`taint::trusted` DSL builtins.
+    pub(super) context_provenance: Option<HashMap<String, crate::TrustLevel>>,
     /// Structured request document (`input`): arbitrary nested JSON converted
     /// once per evaluation. None when the request carries no document.
     pub(super) input: Option<EvalValue>,
+}
+
+impl EvalContext {
+    /// Effective trust of one context key under the fail-untrusted rule —
+    /// the same semantics as [`crate::PolicyRequest::context_trust`], but on
+    /// the eval-side provenance snapshot.
+    pub(super) fn context_trust(&self, key: &str) -> crate::TrustLevel {
+        match &self.context_provenance {
+            None => crate::TrustLevel::Platform,
+            Some(map) => map.get(key).copied().unwrap_or(crate::TrustLevel::Llm),
+        }
+    }
 }
 
 /// Runtime value during evaluation

@@ -2,7 +2,31 @@
 
 Strategic bet (`reviews/round-2/06-future-architecture.md` §"AI / LLM-era
 authorization", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
-remediation. **Status: F1-s1 LANDED (capability core); s2–s5 pending.**
+remediation. **Status: F1-s1 + s2 LANDED (capability core, request shape, DSL actor + taint); s3–s5 pending.**
+
+## STATUS (2026-07-15) — F1-s2 agentic request shape + DSL surface
+
+- **Request shape** (part 1, merged in #70): `PolicyRequest` gained
+  `actor: Option<String>` and `context_provenance: Option<{key -> TrustLevel}>`
+  (Llm < Verified < Platform), both additive/default-off (pre-F1 payloads
+  deserialize unchanged). `context_trust()` encodes the fail-untrusted rule
+  (unlabeled key under taint mode = Llm floor).
+- **DSL actor binding** (part 2): first-class `actor` entity beside `user`,
+  resolved from `request.actor`; actor-less requests read `actor.*` as null
+  (non-matching, not error). Works in attribute/indexed/chained access and as
+  a rebac arg (`rebac::related(actor, "acts_for", user)` — the delegation
+  model). Compiled evaluator falls back to AST for actor policies (parse
+  + 5 compiler sites reject cleanly) — decision-safe by the equivalence
+  contract; compiled-path actor is a perf follow-up.
+- **DSL taint predicate** (part 2): `taint::trusted("key")` (bool, key is not
+  LLM-tainted) and `taint::level("key")` ("platform"|"verified"|"llm"),
+  reading the request provenance under the same fail-untrusted rule. An
+  LLM-asserted attribute can never satisfy a platform-trust gate. AST-path
+  (compiler falls back for `taint::`).
+- Tests: actor_binding_tests (6), taint_predicate_tests (6), request_shape_tests
+  (4, merged); full engine suite + compiled-vs-AST equivalence (42) +
+  policy-library (82) green; clippy -D warnings; reaper-core + engine wasm32
+  builds green.
 
 ## STATUS (2026-07-15) — F1-s1 capability core
 

@@ -212,6 +212,7 @@ fn parse_decision(s: &str) -> Result<Decision, ReaperError> {
 fn parse_entity(s: &str) -> Result<Entity, ReaperError> {
     match s.to_lowercase().as_str() {
         "user" => Ok(Entity::User),
+        "actor" => Ok(Entity::Actor),
         "resource" => Ok(Entity::Resource),
         "context" => Ok(Entity::Context),
         "input" => Ok(Entity::Input),

@@ -306,6 +306,31 @@ impl ReapAstEvaluator {
                 ))
             }
 
+            // ===== Taint / context provenance (F1 agentic authz) =====
+            // taint::level("key") -> "platform" | "verified" | "llm".
+            // Reads the request's per-key provenance under the fail-untrusted
+            // rule: taint mode off ⇒ everything is "platform"; taint mode on
+            // ⇒ an unlabeled key is "llm" (an LLM-asserted attribute can never
+            // masquerade as platform-derived).
+            (Some("taint"), "level") => {
+                let key = self.taint_key_arg(args, context)?;
+                let level = match context.context_trust(&key) {
+                    crate::TrustLevel::Platform => "platform",
+                    crate::TrustLevel::Verified => "verified",
+                    crate::TrustLevel::Llm => "llm",
+                };
+                Ok(EvalValue::String(level.to_string()))
+            }
+            // taint::trusted("key") -> bool: true iff the key is NOT
+            // LLM-tainted (level >= verified). The common gate: reject any
+            // attribute a possibly-injected model could have asserted.
+            (Some("taint"), "trusted") => {
+                let key = self.taint_key_arg(args, context)?;
+                Ok(EvalValue::Boolean(
+                    context.context_trust(&key) >= crate::TrustLevel::Verified,
+                ))
+            }
+
             (Some("regex"), "matches") => {
                 if args.len() != 2 {
                     return Err(ReaperError::InvalidPolicy {
@@ -612,6 +637,25 @@ impl super::ReapAstEvaluator {
         };
         // Explicit bound, clamped: traversal cost is capped by construction.
         Ok((self.store.interner().intern(&via), max.min(16)))
+    }
+
+    /// Resolve the single string key argument of a `taint::*` call.
+    fn taint_key_arg(
+        &self,
+        args: &[crate::reap::ast::Expr],
+        context: &super::types::EvalContext,
+    ) -> Result<String, ReaperError> {
+        if args.len() != 1 {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!("taint:: requires exactly (key), got {} args", args.len()),
+            });
+        }
+        match self.evaluate_expr(&args[0], context)? {
+            super::types::EvalValue::String(s) => Ok(s),
+            other => Err(ReaperError::InvalidPolicy {
+                reason: format!("taint:: key must be a string, got {other:?}"),
+            }),
+        }
     }
 
     fn rebac_string_arg(

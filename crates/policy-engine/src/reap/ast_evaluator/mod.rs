@@ -97,6 +97,9 @@ impl ReapAstEvaluator {
                 .unwrap_or(""),
         );
         let resource_id = interner.intern(&request.resource);
+        // Actor (F1): intern the request's actor id so `actor.*` resolves the
+        // loaded actor entity, exactly as `user` resolves the principal.
+        let actor_id = request.actor.as_deref().map(|a| interner.intern(a));
 
         // Create evaluation context
         let mut request_context = request.context.clone();
@@ -112,8 +115,10 @@ impl ReapAstEvaluator {
         let mut context = EvalContext {
             variables: rebac_pseudo_vars(request),
             user_id,
+            actor_id,
             resource_id,
             request_context,
+            context_provenance: request.context_provenance.clone(),
             input: input_value,
         };
 
@@ -165,6 +170,7 @@ impl ReapAstEvaluator {
                 .unwrap_or(""),
         );
         let resource_id = interner.intern(&request.resource);
+        let actor_id = request.actor.as_deref().map(|a| interner.intern(a));
 
         let mut request_context = request.context.clone();
         request_context.insert("action".to_string(), request.action.clone());
@@ -176,8 +182,10 @@ impl ReapAstEvaluator {
         let base = EvalContext {
             variables: rebac_pseudo_vars(request),
             user_id,
+            actor_id,
             resource_id,
             request_context,
+            context_provenance: request.context_provenance.clone(),
             input: input_value,
         };
 
@@ -909,11 +917,13 @@ mod tests {
 
 /// Pseudo-variable bindings so entity ids can appear as bare arguments in
 /// function calls (`rebac::related(user, "owner", resource)`): `user` = the
-/// request principal id, `resource` = the request resource id. Attribute
-/// access like `user.role` still routes to the entity keyword path, so these
-/// only surface where a plain identifier is evaluated as a variable.
+/// request principal id, `resource` = the request resource id, `actor` = the
+/// request actor id (F1 agentic delegation — `rebac::related(actor,
+/// "acts_for", user)`). Attribute access like `user.role` still routes to the
+/// entity keyword path, so these only surface where a plain identifier is
+/// evaluated as a variable.
 fn rebac_pseudo_vars(request: &PolicyRequest) -> HashMap<String, types::EvalValue> {
-    let mut vars = HashMap::with_capacity(2);
+    let mut vars = HashMap::with_capacity(3);
     vars.insert(
         "user".to_string(),
         types::EvalValue::String(
@@ -928,6 +938,13 @@ fn rebac_pseudo_vars(request: &PolicyRequest) -> HashMap<String, types::EvalValu
         "resource".to_string(),
         types::EvalValue::String(request.resource.clone()),
     );
+    // Actor is optional; bind it only when present so `rebac::related(actor,
+    // ...)` on an actor-less request evaluates `actor` as an undefined
+    // variable (→ the rebac arg is rejected and the check is non-matching),
+    // rather than silently binding an empty id that could match a "".
+    if let Some(actor) = &request.actor {
+        vars.insert("actor".to_string(), types::EvalValue::String(actor.clone()));
+    }
     vars
 }
 

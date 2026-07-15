@@ -18,6 +18,9 @@ fn entity_to_type(entity: &Entity) -> Result<EntityType, ReaperError> {
         Entity::User => Ok(EntityType::User),
         Entity::Resource => Ok(EntityType::Resource),
         Entity::Context => Ok(EntityType::Context),
+        Entity::Actor => Err(ReaperError::InvalidPolicy {
+            reason: "`actor` is not compiled yet; policy runs on the AST evaluator".to_string(),
+        }),
         Entity::Input => Err(ReaperError::InvalidPolicy {
             reason: "`input` document access is not compiled yet; policy runs on the AST evaluator"
                 .to_string(),

@@ -124,6 +124,11 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                         Entity::User => DslEntityType::User,
                         Entity::Resource => DslEntityType::Resource,
                         Entity::Context => DslEntityType::Context,
+                        Entity::Actor => {
+                            return Err(ReaperError::InvalidPolicy {
+                                reason: "`actor` is not compiled yet; policy runs on the AST evaluator".to_string(),
+                            })
+                        },
                         Entity::Input => {
                             return Err(ReaperError::InvalidPolicy {
                                 reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),

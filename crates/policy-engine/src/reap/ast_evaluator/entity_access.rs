@@ -52,8 +52,15 @@ impl ReapAstEvaluator {
             };
         }
 
+        // Actor (F1): no actor on the request ⇒ the whole access is Null, so
+        // `actor.*` on a human (actor-less) request is simply non-matching
+        // rather than an error. When present it resolves like any entity.
         let entity_id = match attr.entity {
             Entity::User => context.user_id,
+            Entity::Actor => match context.actor_id {
+                Some(id) => id,
+                None => return Ok(EvalValue::Null),
+            },
             Entity::Resource => context.resource_id,
             Entity::Context => unreachable!("Context entity handled above"),
             Entity::Input => unreachable!("Input entity handled above"),
