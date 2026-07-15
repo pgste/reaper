@@ -102,7 +102,53 @@ const row = {
   latency_max_us: sorted[sorted.length - 1] / 1e3,
 };
 
-console.log(JSON.stringify(row, null, 2));
+// Human-readable output mirroring the Rust benchmark's table/CSV renderers
+// (same columns as BenchmarkRow / the csv arm in src/main.rs). Table goes to
+// stderr like the Rust tool's, so stdout stays clean for jq consumers.
+const pctOf = (n) => ((n / requests.length) * 100).toFixed(1);
+const cells = {
+  Engine: "Reaper-wasm",
+  Scenario: scenario,
+  Requests: String(requests.length),
+  Success: "100.0%",
+  Allow: `${allowed} (${pctOf(allowed)}%)`,
+  Deny: `${denied} (${pctOf(denied)}%)`,
+  RPS: String(Math.round(row.throughput_rps)),
+  "P50 (μs)": row.latency_p50_us.toFixed(0),
+  "P95 (μs)": row.latency_p95_us.toFixed(0),
+  "P99 (μs)": row.latency_p99_us.toFixed(0),
+  "Max (μs)": row.latency_max_us.toFixed(0),
+};
+
+if (args.output === "csv") {
+  console.log(
+    "Engine,Scenario,Requests,Success,Failed,Duration(s),RPS,P50(μs),P95(μs),P99(μs),Max(μs)",
+  );
+  console.log(
+    [
+      "Reaper-wasm", scenario, requests.length, requests.length, 0,
+      (totalNs / 1e9).toFixed(2), Math.round(row.throughput_rps),
+      row.latency_p50_us.toFixed(0), row.latency_p95_us.toFixed(0),
+      row.latency_p99_us.toFixed(0), row.latency_max_us.toFixed(0),
+    ].join(","),
+  );
+} else {
+  console.log(JSON.stringify(row, null, 2));
+}
+
+const keys = Object.keys(cells);
+const widths = keys.map((k) => Math.max(k.length, cells[k].length));
+const line = (l, m, r) => l + widths.map((w) => "─".repeat(w + 2)).join(m) + r;
+console.error("\n📈 Benchmark Results (wasm, in-process)");
+console.error("=".repeat(80));
+console.error(line("┌", "┬", "┐"));
+console.error("│ " + keys.map((k, i) => k.padEnd(widths[i])).join(" │ ") + " │");
+console.error(line("├", "┼", "┤"));
+console.error("│ " + keys.map((k, i) => cells[k].padEnd(widths[i])).join(" │ ") + " │");
+console.error(line("└", "┴", "┘"));
+console.error(
+  `  evaluator tier: ${tier} · entities: ${entityCount} (loaded in ${Math.round(loadMs)} ms) · duration: ${(totalNs / 1e9).toFixed(2)} s`,
+);
 
 // Degenerate-workload guard: a benchmark where every request allows (or
 // every request denies) is measuring one code path — likely a broken
