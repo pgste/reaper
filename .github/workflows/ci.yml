@@ -591,6 +591,54 @@ jobs:
             ebpf-complete-system.txt
             ebpf-summary.md
 
+  # WebAssembly eval-target gate (Workstream F2, plans/round-2/F2-wasm-target.md).
+  # BLOCKING: proves the I/O-free engine core keeps compiling for
+  # wasm32-unknown-unknown with the native-only machinery feature-gated off
+  # (cedar / batch / decision-privacy / audit-buffer). This is the regression
+  # firewall for the wasm distribution bet — the first PR that adds an
+  # unconditional native-only dependency to policy-engine turns this red.
+  wasm-build:
+    name: Wasm Build (policy-engine, wasm32-unknown-unknown)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Enable sccache only if its cache backend is reachable
+        shell: bash
+        run: |
+          # Same fail-open probe as the other jobs: only route rustc through
+          # sccache once the GHAC backend is confirmed reachable.
+          if [ -n "${RUSTC_WRAPPER+x}" ]; then
+            echo "RUSTC_WRAPPER pinned to '${RUSTC_WRAPPER}' by the job — leaving sccache disabled"
+          elif sccache --start-server >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "sccache backend reachable — compiler cache enabled"
+          else
+            echo "::warning::sccache backend unavailable — building without compiler cache"
+          fi
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-ci-wasm"
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Build policy-engine for wasm32-unknown-unknown (minimal features)
+        run: cargo build -p policy-engine --no-default-features --target wasm32-unknown-unknown --locked
+
+      - name: Build policy-engine for wasm32-unknown-unknown (release)
+        run: cargo build -p policy-engine --no-default-features --target wasm32-unknown-unknown --locked --release
+
   # ============================================================
   # Stage 4: Volume Tests (10k iterations per policy)
   # ============================================================

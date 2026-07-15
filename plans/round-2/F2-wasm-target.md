@@ -2,7 +2,42 @@
 
 Strategic bet (`reviews/round-2/06-future-architecture.md` §"WebAssembly
 everywhere", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
-remediation. **Status: SCOPING — no implementation committed yet.**
+remediation.
+
+## STATUS (2026-07-15) — Slice 1 LANDED; slices 2–3 pending
+
+**Slice 1 landed** (decisions confirmed: JS-first packaging, Cedar excluded
+from wasm builds, host-injectable clock with JS fallback, crate at
+`crates/reaper-wasm` when slice 2 lands):
+
+- `policy-engine` gained its first `[features]` section:
+  `default = ["cedar", "batch", "audit-buffer"]` — native consumers are
+  unchanged; the wasm build selects down with `--no-default-features`.
+  `cedar` gates the Cedar evaluator (a `PolicyLanguage::Cedar` deploy without
+  it fails with a clear error), `batch` gates rayon + `BatchEvaluator`,
+  `decision-privacy` gates aes-gcm/hmac crypto, `audit-buffer` (implies
+  decision-privacy) gates the tokio/thread/fs decision buffer + export.
+- New `policy-engine::clock` module: everything the eval path reaches
+  (`PolicyEngine::evaluate`/`evaluate_set`/`evaluate_package`/`evaluate_all`
+  latency probes, `DataLoader` timing, DSL `time::now*` builtins on both the
+  AST and compiled paths) reads time through `clock::Stopwatch`/`now_unix_ns`.
+  Native: `Instant`/`SystemTime` passthrough. wasm32: host-injected epoch
+  (`set_injected_now_unix_ns`, deterministic/replayable) with `chrono`
+  `wasmbind` (JS `Date`) fallback; builtins fail closed when no clock exists.
+- getrandom wasm backends wired: `wasm_js` on getrandom 0.4 (reaper-core's
+  keygen) + `js` on the 0.2 node pulled by the ed25519/p256 stack, and the
+  `getrandom_backend="wasm_js"` rustflag in `.cargo/config.toml`.
+- **CI gate**: blocking `wasm-build` job in `ci.yml` builds
+  `cargo build -p policy-engine --no-default-features --target
+  wasm32-unknown-unknown --locked` (debug + release). This is the regression
+  firewall for the whole bet.
+- Verified: native default-feature build byte-equivalent in behavior — full
+  policy-engine suite green (637 lib + all integration suites), clippy
+  `-D warnings`, fmt; wasm32 debug + release builds green locally.
+
+**Remaining:** slice 2 (`reaper-wasm` cdylib + wasm-bindgen API + npm
+packaging + Node smoke test), slice 3 (native↔wasm decision-parity
+differential over the policy corpus, docs, demo).
 
 ## Goal (restated)
 

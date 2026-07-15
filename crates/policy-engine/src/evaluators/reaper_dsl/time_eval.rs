@@ -12,8 +12,6 @@
 // Allow unused functions - some are used in tests only or reserved for future use
 #![allow(dead_code)]
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::data::{AttributeValue, Entity, InternedString};
 
 use super::entity_helpers::get_entity_for_type;
@@ -129,28 +127,19 @@ pub fn eval_time_is_between(
 /// Get current time as unix timestamp (seconds since epoch)
 #[inline]
 pub fn get_time_now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::clock::now_unix_ns().unwrap_or(0) / 1_000_000_000
 }
 
 /// Get current time as milliseconds since epoch
 #[inline]
 pub fn get_time_now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    crate::clock::now_unix_ns().unwrap_or(0) / 1_000_000
 }
 
 /// Get current time as nanoseconds since epoch
 #[inline]
 pub fn get_time_now_nanos() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0)
+    crate::clock::now_unix_ns().unwrap_or(0)
 }
 
 /// Evaluate time attribute plus duration: entity.attr + duration_secs

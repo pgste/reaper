@@ -9,47 +9,38 @@
 use super::super::types::EvalValue;
 use reaper_core::ReaperError;
 
+/// Current unix nanos via the target-portable clock (`crate::clock`), failing
+/// closed when no clock is available (bare wasm with no injected time).
+#[inline]
+fn clock_now_ns() -> Result<i64, ReaperError> {
+    crate::clock::now_unix_ns().ok_or_else(|| ReaperError::InvalidPolicy {
+        reason: "System time error: no clock available on this target \
+                 (inject one via clock::set_injected_now_unix_ns)"
+            .to_string(),
+    })
+}
+
 /// time::now_ns() - Returns current time in nanoseconds since Unix epoch
 #[inline]
 pub fn now_ns() -> Result<EvalValue, ReaperError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| ReaperError::InvalidPolicy {
-            reason: format!("System time error: {}", e),
-        })?;
-    Ok(EvalValue::Integer(now.as_nanos() as i64))
+    Ok(EvalValue::Integer(clock_now_ns()?))
 }
 
 /// time::now_ms() - Returns current time in milliseconds since Unix epoch
 #[inline]
 /// Current unix time in SECONDS — the unit JWT `exp`/`nbf`/`iat` use.
 pub fn now_secs() -> Result<EvalValue, ReaperError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| ReaperError::InvalidPolicy {
-            reason: format!("System time error: {}", e),
-        })?;
-    Ok(EvalValue::Integer(now.as_secs() as i64))
+    Ok(EvalValue::Integer(clock_now_ns()? / 1_000_000_000))
 }
 
 pub fn now_ms() -> Result<EvalValue, ReaperError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| ReaperError::InvalidPolicy {
-            reason: format!("System time error: {}", e),
-        })?;
-    Ok(EvalValue::Integer(now.as_millis() as i64))
+    Ok(EvalValue::Integer(clock_now_ns()? / 1_000_000))
 }
 
 /// time::now() - Returns current time in seconds since Unix epoch
 #[inline]
 pub fn now() -> Result<EvalValue, ReaperError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| ReaperError::InvalidPolicy {
-            reason: format!("System time error: {}", e),
-        })?;
-    Ok(EvalValue::Integer(now.as_secs() as i64))
+    Ok(EvalValue::Integer(clock_now_ns()? / 1_000_000_000))
 }
 
 /// time::parse_rfc3339(string) - Parse RFC3339/ISO8601 timestamp to nanoseconds

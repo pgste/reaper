@@ -8,11 +8,12 @@
 
 use super::entity::{AttributeValue, EntityBuilder};
 use super::store::DataStore;
+use crate::clock::Stopwatch;
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Supported data formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +145,7 @@ impl DataLoader {
     /// assert_eq!(stats.total, 2);
     /// ```
     pub fn load_json_values(&self, entities: Vec<JsonValue>) -> Result<LoadStats, ReaperError> {
-        let start = Instant::now();
+        let start = Stopwatch::start();
         let mut stats = LoadStats::new();
         let interner = self.store.interner();
 

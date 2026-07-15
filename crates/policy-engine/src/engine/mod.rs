@@ -422,7 +422,7 @@ impl PolicyEngine {
         policy_id: &PolicyId,
         request: &PolicyRequest,
     ) -> Result<PolicyDecision> {
-        let start_time = std::time::Instant::now();
+        let start_time = crate::clock::Stopwatch::start();
 
         let policy = self
             .get_policy(policy_id)
@@ -449,7 +449,7 @@ impl PolicyEngine {
         };
 
         let decision = evaluator.evaluate(request)?;
-        let evaluation_time_ns = start_time.elapsed().as_nanos() as u64;
+        let evaluation_time_ns = start_time.elapsed_ns();
 
         // Trace-level logging gated behind level check — zero cost at info/debug level
         if tracing::enabled!(tracing::Level::TRACE) {
@@ -525,9 +525,9 @@ impl PolicyEngine {
                 }
             };
 
-            let start = std::time::Instant::now();
+            let start = crate::clock::Stopwatch::start();
             let result = evaluator.evaluate_matched(request);
-            outcome.total_eval_time_ns += start.elapsed().as_nanos() as u64;
+            outcome.total_eval_time_ns += start.elapsed_ns();
 
             match result {
                 // Nothing matched: non-decisive, this policy is silent.
