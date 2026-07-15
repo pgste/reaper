@@ -21,6 +21,16 @@ wasm boundary. wasm-bindgen-cli is pinned (0.2.126) to the crate version; the
 Node bindings are a CI artifact (`reaper-wasm-node`), not committed.
 Document/check-mode cases (17) are out of slice-2 scope → slice 3.
 
+**Compiled-primary contract (wasm = native):** the wrapper deploys through
+`build_preferred`, so the compiled DSL v2 evaluator is the PRIMARY tier on
+wasm exactly as on the agent (AST interpreter only as feature fallback,
+decision-identical by the equivalence differential). Enforced, not assumed:
+`evaluatorType(policyId)` is exported; the native parity leg checks the
+reported tier against independent compiler ground truth per scenario and
+pins the fallback set in `tests/fixtures/ast-fallback-scenarios.json`
+(currently **empty — all 10 library scenarios compile**), and the Node leg
+asserts the same tier through the actual wasm artifact.
+
 ## STATUS (earlier) — Slice 1
 
 **Slice 1 landed** (decisions confirmed: JS-first packaging, Cedar excluded

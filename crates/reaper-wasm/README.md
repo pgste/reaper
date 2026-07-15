@@ -41,6 +41,11 @@ const all = JSON.parse(engine.evaluateAll("alice", "read", "doc-1"));
 
 // Deterministic/replayable time for DSL `time::*` builtins (wasm only):
 engine.setNowUnixNs(1_700_000_000_000_000_000n);
+
+// Compiled-primary, same as the agent: "reaper_dsl" = compiled DSL v2
+// evaluator; "ReapAstEvaluator" = AST fallback (identical decisions, only
+// speed differs). The parity suite asserts the tier cross-target.
+engine.evaluatorType(policyId); // -> "reaper_dsl"
 ```
 
 Semantics are pinned to the agent's serving path: the principal is injected

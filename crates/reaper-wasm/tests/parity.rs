@@ -84,6 +84,7 @@ fn wasm_wrapper_meets_every_library_manifest() {
     let mut scenarios = 0;
     let mut cases_run = 0;
     let mut skipped_document_cases = 0;
+    let mut ast_fallback_scenarios: Vec<String> = Vec::new();
 
     for manifest_path in manifests {
         let dir = manifest_path.parent().expect("manifest has parent dir");
@@ -114,6 +115,44 @@ fn wasm_wrapper_meets_every_library_manifest() {
         let policy_id = engine
             .deploy_policy_impl(&manifest.name, &policy_src)
             .unwrap_or_else(|e| panic!("[{}] deploy: {e}", manifest.name));
+
+        // Compiled-PRIMARY contract: the wrapper must serve this policy from
+        // the same evaluator tier the engine would pick natively. Ground
+        // truth is computed independently: if `ReaperPolicy::build` (the
+        // compiler) succeeds, the wrapper MUST report the compiled tier —
+        // an AST fallback there would mean the wasm surface silently
+        // downgraded the primary path.
+        let compiles = {
+            use policy_engine::{DataLoader as PeLoader, DataStore as PeStore, ReaperPolicy};
+            let probe_store = std::sync::Arc::new(PeStore::new());
+            if let Some(ref data) = manifest.data {
+                let json = std::fs::read_to_string(dir.join(data)).expect("re-read data");
+                PeLoader::new((*probe_store).clone())
+                    .load_json(&json)
+                    .unwrap_or_else(|e| panic!("[{}] probe load: {e}", manifest.name));
+            }
+            policy_src
+                .parse::<ReaperPolicy>()
+                .expect("policy parsed once already")
+                .build(probe_store)
+                .is_ok()
+        };
+        let tier = engine
+            .evaluator_type_impl(&policy_id)
+            .unwrap_or_else(|e| panic!("[{}] evaluator_type: {e}", manifest.name));
+        let expected_tier = if compiles {
+            "reaper_dsl"
+        } else {
+            "ReapAstEvaluator"
+        };
+        assert_eq!(
+            tier, expected_tier,
+            "[{}] evaluator tier mismatch (compiled-primary contract)",
+            manifest.name
+        );
+        if !compiles {
+            ast_fallback_scenarios.push(manifest.name.clone());
+        }
 
         for case in &manifest.cases {
             if case.input.is_some() {
@@ -164,9 +203,32 @@ fn wasm_wrapper_meets_every_library_manifest() {
     }
 
     assert!(cases_run >= 40, "suspiciously few cases ran: {cases_run}");
+
+    // The checked-in fallback list is the cross-target tier contract: the
+    // Node leg asserts the wasm artifact serves the compiled tier for every
+    // scenario NOT on this list. This assertion keeps the list honest — if a
+    // library policy starts (or stops) compiling, the fixture must move with
+    // it, and the Node leg follows automatically.
+    let fixture_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ast-fallback-scenarios.json");
+    let mut expected_fallbacks: Vec<String> = serde_json::from_str(
+        &std::fs::read_to_string(&fixture_path).expect("read ast-fallback-scenarios.json"),
+    )
+    .expect("fixture is a JSON string array");
+    expected_fallbacks.sort();
+    ast_fallback_scenarios.sort();
+    assert_eq!(
+        ast_fallback_scenarios, expected_fallbacks,
+        "AST-fallback scenario set drifted — update \
+         tests/fixtures/ast-fallback-scenarios.json to match reality"
+    );
+
     println!(
         "wasm-wrapper parity: {scenarios} scenarios, {cases_run} authz cases verified \
-         ({skipped_document_cases} document-mode cases out of slice-2 scope)"
+         ({skipped_document_cases} document-mode cases out of slice-2 scope); \
+         compiled tier on {} scenarios, AST fallback on {:?}",
+        scenarios - ast_fallback_scenarios.len(),
+        ast_fallback_scenarios
     );
 }
 

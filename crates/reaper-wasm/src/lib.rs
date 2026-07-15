@@ -110,6 +110,27 @@ impl ReaperEngine {
         serde_json::to_string(&decision).map_err(|e| format!("decision serialization failed: {e}"))
     }
 
+    /// The evaluator tier serving a deployed policy: `"reaper_dsl"` is the
+    /// compiled DSL v2 evaluator (the PRIMARY path, same as the agent);
+    /// `"ReapAstEvaluator"` is the AST-interpreter fallback for constructs
+    /// the compiler does not yet support. The two are pinned to identical
+    /// decisions by the compiled-vs-AST equivalence differential — the tier
+    /// affects speed, never outcomes. The parity suite asserts wasm and
+    /// native land on the SAME tier for every library scenario.
+    pub fn evaluator_type_impl(&self, policy_id: &str) -> Result<String, String> {
+        let id = policy_id
+            .parse::<PolicyId>()
+            .map_err(|e| format!("invalid policy id '{policy_id}': {e}"))?;
+        let policy = self
+            .engine
+            .get_policy(&id)
+            .ok_or_else(|| format!("no policy with id '{policy_id}'"))?;
+        let evaluator = policy
+            .get_evaluator()
+            .map_err(|e| format!("evaluator not built: {e}"))?;
+        Ok(evaluator.evaluator_type().to_string())
+    }
+
     /// Evaluate against ALL deployed policies (any deny wins) →
     /// `AllPoliciesEvaluationResult` JSON.
     pub fn evaluate_all_impl(
@@ -201,6 +222,14 @@ impl ReaperEngine {
     #[wasm_bindgen(js_name = policyCount)]
     pub fn policy_count(&self) -> u32 {
         self.engine.get_stats().total_policies as u32
+    }
+
+    /// The evaluator tier serving a deployed policy (`"reaper_dsl"` =
+    /// compiled PRIMARY path, `"ReapAstEvaluator"` = AST fallback).
+    #[wasm_bindgen(js_name = evaluatorType)]
+    pub fn evaluator_type(&self, policy_id: &str) -> Result<String, JsError> {
+        self.evaluator_type_impl(policy_id)
+            .map_err(|e| JsError::new(&e))
     }
 
     /// Pin the evaluation clock to a fixed unix-epoch nanosecond timestamp so

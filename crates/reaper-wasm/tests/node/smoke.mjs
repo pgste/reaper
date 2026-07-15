@@ -25,6 +25,11 @@ const require = createRequire(import.meta.url);
 const { ReaperEngine } = require(join(here, "..", "..", "pkg-node", "reaper_wasm.js"));
 
 const libraryRoot = join(here, "..", "..", "..", "..", "policy-library");
+// Scenarios the compiler cannot yet handle (AST-interpreter fallback). The
+// native parity leg verifies this list against compiler ground truth.
+const astFallbackScenarios = JSON.parse(
+  readFileSync(join(here, "..", "fixtures", "ast-fallback-scenarios.json"), "utf8"),
+);
 
 function findManifests(dir, out) {
   for (const name of readdirSync(dir)) {
@@ -65,6 +70,19 @@ for (const manifestPath of manifests) {
     readFileSync(join(dir, manifest.policy), "utf8"),
   );
   assert.equal(engine.policyCount(), 1, `${manifest.name}: policyCount`);
+
+  // Compiled-PRIMARY contract, wasm leg: the artifact must serve each policy
+  // from the compiled DSL v2 evaluator ("reaper_dsl"), exactly like the
+  // native engine, except scenarios pinned in the fixture (kept honest by
+  // the native leg's independent compiler ground-truth check).
+  const expectedTier = astFallbackScenarios.includes(manifest.name)
+    ? "ReapAstEvaluator"
+    : "reaper_dsl";
+  assert.equal(
+    engine.evaluatorType(policyId),
+    expectedTier,
+    `${manifest.name}: evaluator tier mismatch on wasm (compiled-primary contract)`,
+  );
 
   for (const c of manifest.cases) {
     if (c.input !== undefined) {
