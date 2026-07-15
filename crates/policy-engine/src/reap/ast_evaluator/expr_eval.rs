@@ -68,6 +68,15 @@ impl ReapAstEvaluator {
                         // Get user entity attribute
                         self.get_entity_attr_by_name(context.user_id, attribute)
                     }
+                    "actor" => {
+                        // Actor entity attribute (F1). No actor on the request
+                        // ⇒ null, so `actor.type == "agent"` simply fails to
+                        // match rather than erroring on human requests.
+                        match context.actor_id {
+                            Some(actor_id) => self.get_entity_attr_by_name(actor_id, attribute),
+                            None => Ok(EvalValue::Null),
+                        }
+                    }
                     "resource" => {
                         // Get resource entity attribute
                         self.get_entity_attr_by_name(context.resource_id, attribute)
@@ -131,6 +140,13 @@ impl ReapAstEvaluator {
                         let attr_value = self.get_entity_attr_by_name(entity_id, attribute)?;
                         self.apply_index(&attr_value, index)
                     }
+                    "actor" => match context.actor_id {
+                        Some(actor_id) => {
+                            let attr_value = self.get_entity_attr_by_name(actor_id, attribute)?;
+                            self.apply_index(&attr_value, index)
+                        }
+                        None => Ok(EvalValue::Null),
+                    },
                     "context" => {
                         // Context entity not yet fully supported
                         Ok(EvalValue::Null)

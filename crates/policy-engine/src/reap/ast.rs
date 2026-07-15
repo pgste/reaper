@@ -114,6 +114,10 @@ pub enum Index {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Entity {
     User,
+    /// The non-human actor acting on behalf of the principal (F1 agentic
+    /// authz). Bound from the request's `actor` field; when the request
+    /// carries no actor, `actor.*` reads null (never errors).
+    Actor,
     Resource,
     Context,
     /// The structured request document (`input`): arbitrary nested JSON
@@ -324,6 +328,7 @@ impl From<&str> for Entity {
     fn from(s: &str) -> Self {
         match s {
             "user" => Entity::User,
+            "actor" => Entity::Actor,
             "resource" => Entity::Resource,
             "context" => Entity::Context,
             "input" => Entity::Input,

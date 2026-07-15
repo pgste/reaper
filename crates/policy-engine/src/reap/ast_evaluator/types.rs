@@ -15,6 +15,10 @@ pub(super) struct EvalContext {
     pub(super) variables: HashMap<String, EvalValue>,
     /// User entity from request
     pub(super) user_id: EntityId,
+    /// Actor entity (F1 agentic authz): the non-human actor from the
+    /// request's `actor` field. `None` when the request carries no actor —
+    /// `actor.*` then reads null rather than erroring.
+    pub(super) actor_id: Option<EntityId>,
     /// Resource entity from request
     pub(super) resource_id: EntityId,
     /// Request context (includes action and other attributes)

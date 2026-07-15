@@ -228,7 +228,7 @@ var_method_call = {
 bracket_index = { "[" ~ bracket_index_value ~ "]" }
 bracket_index_value = { "_" | integer | string }
 
-entity = { "user" | "resource" | "context" | "input" }
+entity = { "user" | "actor" | "resource" | "context" | "input" }
 
 // Operators
 op = {

@@ -52,9 +52,20 @@ pub fn parse_entity_type(entity: &str) -> Result<EntityType, ReaperError> {
         "user" => Ok(EntityType::User),
         "resource" => Ok(EntityType::Resource),
         "context" => Ok(EntityType::Context),
+        // `actor` (F1 agentic authz) is intentionally NOT compiled yet: it is
+        // a valid binding the AST evaluator handles, so returning an error
+        // here makes `build_preferred` fall back to the AST interpreter for
+        // policies that use it — decision-safe by the compiled-vs-AST
+        // equivalence contract. Compiled-path actor support is a perf
+        // follow-up (threads an actor entity through the eval functions).
+        "actor" => Err(ReaperError::InvalidPolicy {
+            reason: "entity 'actor' is not supported by the compiled evaluator yet \
+                     (AST-evaluated via fallback)"
+                .to_string(),
+        }),
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(
-                "Unknown entity type '{}'. Expected 'user', 'resource', or 'context'",
+                "Unknown entity type '{}'. Expected 'user', 'actor', 'resource', or 'context'",
                 entity
             ),
         }),
