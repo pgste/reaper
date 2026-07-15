@@ -15,7 +15,7 @@
 
 use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
 
-use super::types::EntityType;
+use super::types::{EntityBindings, EntityType};
 
 /// Get the entity reference for a given entity type.
 ///
@@ -23,18 +23,17 @@ use super::types::EntityType;
 ///
 /// # Examples
 /// ```text
-/// let entity = get_entity_for_type(&entity_type, user, resource)?;
+/// let entity = get_entity_for_type(&entity_type, bindings)?;
 /// let attr = entity.get_attribute(attr_name);
 /// ```
 #[inline(always)]
 pub fn get_entity_for_type<'a>(
     entity_type: &EntityType,
-    user: &'a Entity,
-    resource: &'a Entity,
+    bindings: EntityBindings<'a>,
 ) -> Option<&'a Entity> {
     match entity_type {
-        EntityType::User => Some(user),
-        EntityType::Resource => Some(resource),
+        EntityType::User => Some(bindings.user),
+        EntityType::Resource => Some(bindings.resource),
         EntityType::Context => None,
     }
 }
@@ -49,10 +48,9 @@ pub fn get_entity_for_type<'a>(
 pub fn get_string_attr<'a>(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &'a Entity,
-    resource: &'a Entity,
+    bindings: EntityBindings<'a>,
 ) -> Option<InternedString> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::String(s)) => Some(*s),
         _ => None,
@@ -69,10 +67,9 @@ pub fn get_string_attr<'a>(
 pub fn get_numeric_attr(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<f64> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Int(n)) => Some(*n as f64),
         Some(AttributeValue::Float(f)) => Some(*f),
@@ -85,10 +82,9 @@ pub fn get_numeric_attr(
 pub fn get_int_attr(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<i64> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Int(n)) => Some(*n),
         _ => None,
@@ -100,10 +96,9 @@ pub fn get_int_attr(
 pub fn get_bool_attr(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<bool> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Bool(b)) => Some(*b),
         _ => None,
@@ -115,10 +110,9 @@ pub fn get_bool_attr(
 pub fn get_attr<'a>(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &'a Entity,
-    resource: &'a Entity,
+    bindings: EntityBindings<'a>,
 ) -> Option<&'a AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     entity.get_attribute(attribute)
 }
 
@@ -135,11 +129,10 @@ pub fn get_attr<'a>(
 pub fn get_nested_attr<'a>(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &'a Entity,
-    resource: &'a Entity,
+    bindings: EntityBindings<'a>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
 
     // Fast path: a simple (non-nested) attribute is stored directly under its
     // interned id. Try that first so the common case pays ZERO interner
@@ -189,12 +182,11 @@ pub fn get_nested_attr<'a>(
 pub fn is_nested_attr_null(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
     matches!(
-        get_nested_attr(entity_type, attribute, user, resource, interner),
+        get_nested_attr(entity_type, attribute, bindings, interner),
         None | Some(AttributeValue::Null)
     )
 }
@@ -207,10 +199,9 @@ pub fn string_attr_equals(
     entity_type: &EntityType,
     attribute: InternedString,
     value: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    get_string_attr(entity_type, attribute, user, resource)
+    get_string_attr(entity_type, attribute, bindings)
         .map(|actual| actual == value)
         .unwrap_or(false)
 }
@@ -221,11 +212,10 @@ pub fn numeric_comparison(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     cmp: impl Fn(f64, f64) -> bool,
 ) -> bool {
-    get_numeric_attr(entity_type, attribute, user, resource)
+    get_numeric_attr(entity_type, attribute, bindings)
         .map(|actual| cmp(actual, threshold))
         .unwrap_or(false)
 }
@@ -236,12 +226,9 @@ pub fn attr_gte(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| {
-        a >= t
-    })
+    numeric_comparison(entity_type, attribute, threshold, bindings, |a, t| a >= t)
 }
 
 /// Check if attribute value is greater than threshold.
@@ -250,12 +237,9 @@ pub fn attr_gt(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| {
-        a > t
-    })
+    numeric_comparison(entity_type, attribute, threshold, bindings, |a, t| a > t)
 }
 
 /// Check if attribute value is less than or equal to threshold.
@@ -264,12 +248,9 @@ pub fn attr_lte(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| {
-        a <= t
-    })
+    numeric_comparison(entity_type, attribute, threshold, bindings, |a, t| a <= t)
 }
 
 /// Check if attribute value is less than threshold.
@@ -278,12 +259,9 @@ pub fn attr_lt(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    numeric_comparison(entity_type, attribute, threshold, user, resource, |a, t| {
-        a < t
-    })
+    numeric_comparison(entity_type, attribute, threshold, bindings, |a, t| a < t)
 }
 
 /// Get the count of elements in a List or Set attribute.
@@ -291,10 +269,9 @@ pub fn attr_lt(
 pub fn get_collection_count(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<usize> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(list)) => Some(list.len()),
         Some(AttributeValue::Set(set)) => Some(set.len()),
@@ -305,6 +282,7 @@ pub fn get_collection_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Entity;
     use crate::data::StringInterner;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -352,7 +330,14 @@ mod tests {
     fn test_get_entity_for_type_user() {
         let interner = create_test_interner();
         let (user, resource, ..) = create_test_entities(&interner);
-        let entity = get_entity_for_type(&EntityType::User, &user, &resource);
+        let entity = get_entity_for_type(
+            &EntityType::User,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(entity.is_some());
         assert_eq!(entity.unwrap().id, user.id);
     }
@@ -361,7 +346,14 @@ mod tests {
     fn test_get_entity_for_type_resource() {
         let interner = create_test_interner();
         let (user, resource, ..) = create_test_entities(&interner);
-        let entity = get_entity_for_type(&EntityType::Resource, &user, &resource);
+        let entity = get_entity_for_type(
+            &EntityType::Resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(entity.is_some());
         assert_eq!(entity.unwrap().id, resource.id);
     }
@@ -370,7 +362,14 @@ mod tests {
     fn test_get_entity_for_type_context() {
         let interner = create_test_interner();
         let (user, resource, ..) = create_test_entities(&interner);
-        let entity = get_entity_for_type(&EntityType::Context, &user, &resource);
+        let entity = get_entity_for_type(
+            &EntityType::Context,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(entity.is_none());
     }
 
@@ -379,7 +378,15 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, role_key, _, _, admin_val) = create_test_entities(&interner);
 
-        let result = get_string_attr(&EntityType::User, role_key, &user, &resource);
+        let result = get_string_attr(
+            &EntityType::User,
+            role_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(result.is_some());
         assert_eq!(result.unwrap(), admin_val);
     }
@@ -390,7 +397,15 @@ mod tests {
         let (user, resource, ..) = create_test_entities(&interner);
         let unknown_key = interner.intern("unknown");
 
-        let result = get_string_attr(&EntityType::User, unknown_key, &user, &resource);
+        let result = get_string_attr(
+            &EntityType::User,
+            unknown_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(result.is_none());
     }
 
@@ -399,7 +414,15 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
-        let result = get_numeric_attr(&EntityType::User, level_key, &user, &resource);
+        let result = get_numeric_attr(
+            &EntityType::User,
+            level_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(result.is_some());
         assert!((result.unwrap() - 5.0).abs() < 0.001);
     }
@@ -414,15 +437,21 @@ mod tests {
             &EntityType::User,
             role_key,
             admin_val,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!string_attr_equals(
             &EntityType::User,
             role_key,
             viewer_val,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -435,22 +464,31 @@ mod tests {
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(attr_gte(
             &EntityType::User,
             level_key,
             4.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!attr_gte(
             &EntityType::User,
             level_key,
             6.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -459,20 +497,35 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
-        assert!(attr_gt(&EntityType::User, level_key, 4.0, &user, &resource));
+        assert!(attr_gt(
+            &EntityType::User,
+            level_key,
+            4.0,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
+        ));
         assert!(!attr_gt(
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!attr_gt(
             &EntityType::User,
             level_key,
             6.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -485,22 +538,31 @@ mod tests {
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(attr_lte(
             &EntityType::User,
             level_key,
             6.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!attr_lte(
             &EntityType::User,
             level_key,
             4.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -509,20 +571,35 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
-        assert!(attr_lt(&EntityType::User, level_key, 6.0, &user, &resource));
+        assert!(attr_lt(
+            &EntityType::User,
+            level_key,
+            6.0,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
+        ));
         assert!(!attr_lt(
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!attr_lt(
             &EntityType::User,
             level_key,
             4.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -545,23 +622,41 @@ mod tests {
             &EntityType::User,
             score_key,
             7.5,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(attr_gte(
             &EntityType::User,
             score_key,
             7.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
-        assert!(attr_gt(&EntityType::User, score_key, 7.0, &user, &resource));
+        assert!(attr_gt(
+            &EntityType::User,
+            score_key,
+            7.0,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
+        ));
         assert!(!attr_gt(
             &EntityType::User,
             score_key,
             7.5,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -588,7 +683,15 @@ mod tests {
         let resource_type = interner.intern("Resource");
         let resource = Entity::new(resource_id, resource_type, HashMap::new());
 
-        let count = get_collection_count(&EntityType::User, roles_key, &user, &resource);
+        let count = get_collection_count(
+            &EntityType::User,
+            roles_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert_eq!(count, Some(2));
     }
 
@@ -598,7 +701,15 @@ mod tests {
         let (user, resource, _, _, owner_key, _) = create_test_entities(&interner);
         let alice_val = interner.intern("alice");
 
-        let result = get_string_attr(&EntityType::Resource, owner_key, &user, &resource);
+        let result = get_string_attr(
+            &EntityType::Resource,
+            owner_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(result.is_some());
         assert_eq!(result.unwrap(), alice_val);
 
@@ -606,8 +717,11 @@ mod tests {
             &EntityType::Resource,
             owner_key,
             alice_val,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -626,7 +740,15 @@ mod tests {
         let resource_type = interner.intern("Resource");
         let resource = Entity::new(resource_id, resource_type, HashMap::new());
 
-        let result = get_bool_attr(&EntityType::User, active_key, &user, &resource);
+        let result = get_bool_attr(
+            &EntityType::User,
+            active_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert_eq!(result, Some(true));
     }
 
@@ -635,7 +757,15 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, _, level_key, ..) = create_test_entities(&interner);
 
-        let result = get_int_attr(&EntityType::User, level_key, &user, &resource);
+        let result = get_int_attr(
+            &EntityType::User,
+            level_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert_eq!(result, Some(5));
     }
 
@@ -644,7 +774,15 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, role_key, ..) = create_test_entities(&interner);
 
-        let result = get_attr(&EntityType::User, role_key, &user, &resource);
+        let result = get_attr(
+            &EntityType::User,
+            role_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+            },
+        );
         assert!(result.is_some());
         assert!(matches!(result.unwrap(), AttributeValue::String(_)));
     }
@@ -654,15 +792,45 @@ mod tests {
         let interner = create_test_interner();
         let (user, resource, role_key, ..) = create_test_entities(&interner);
 
-        assert!(get_string_attr(&EntityType::Context, role_key, &user, &resource).is_none());
-        assert!(get_numeric_attr(&EntityType::Context, role_key, &user, &resource).is_none());
-        assert!(get_bool_attr(&EntityType::Context, role_key, &user, &resource).is_none());
+        assert!(get_string_attr(
+            &EntityType::Context,
+            role_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
+        )
+        .is_none());
+        assert!(get_numeric_attr(
+            &EntityType::Context,
+            role_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
+        )
+        .is_none());
+        assert!(get_bool_attr(
+            &EntityType::Context,
+            role_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
+        )
+        .is_none());
         assert!(!string_attr_equals(
             &EntityType::Context,
             role_key,
             role_key,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 }

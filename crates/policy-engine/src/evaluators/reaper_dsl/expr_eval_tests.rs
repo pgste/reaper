@@ -1,7 +1,7 @@
 //! Tests for expression evaluation helpers.
 
 use super::expr_eval::*;
-use super::types::EntityType;
+use super::types::{EntityBindings, EntityType};
 use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,7 +76,16 @@ fn test_eval_string_lower() {
 
     let name_key = interner.intern("name");
 
-    let result = eval_string_lower(&EntityType::User, name_key, &user, &resource, &interner);
+    let result = eval_string_lower(
+        &EntityType::User,
+        name_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::String(s)) = result {
         let resolved = interner.resolve(s).unwrap();
@@ -94,7 +103,16 @@ fn test_eval_string_upper() {
 
     let name_key = interner.intern("name");
 
-    let result = eval_string_upper(&EntityType::User, name_key, &user, &resource, &interner);
+    let result = eval_string_upper(
+        &EntityType::User,
+        name_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::String(s)) = result {
         let resolved = interner.resolve(s).unwrap();
@@ -112,7 +130,16 @@ fn test_eval_string_trim() {
 
     let name_key = interner.intern("name");
 
-    let result = eval_string_trim(&EntityType::User, name_key, &user, &resource, &interner);
+    let result = eval_string_trim(
+        &EntityType::User,
+        name_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::String(s)) = result {
         let resolved = interner.resolve(s).unwrap();
@@ -134,8 +161,11 @@ fn test_eval_string_split() {
         &EntityType::User,
         email_key,
         "@",
-        &user,
-        &resource,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
         &interner,
     );
     assert!(result.is_some());
@@ -159,8 +189,11 @@ fn test_eval_string_replace() {
         email_key,
         "example",
         "test",
-        &user,
-        &resource,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
         &interner,
     );
     assert!(result.is_some());
@@ -180,7 +213,16 @@ fn test_eval_collection_count() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_count(&EntityType::User, scores_key, &user, &resource, &interner);
+    let result = eval_collection_count(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert_eq!(result, Some(AttributeValue::Int(4)));
 }
 
@@ -193,7 +235,16 @@ fn test_eval_string_count() {
     let email_key = interner.intern("email");
 
     // "alice@example.com" has 17 characters
-    let result = eval_collection_count(&EntityType::User, email_key, &user, &resource, &interner);
+    let result = eval_collection_count(
+        &EntityType::User,
+        email_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert_eq!(result, Some(AttributeValue::Int(17)));
 }
 
@@ -205,7 +256,15 @@ fn test_eval_collection_sum() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_sum(&EntityType::User, scores_key, &user, &resource);
+    let result = eval_collection_sum(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     // 85 + 90 + 78 + 92 = 345
     assert_eq!(result, Some(AttributeValue::Int(345)));
 }
@@ -218,7 +277,15 @@ fn test_eval_collection_min() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_min(&EntityType::User, scores_key, &user, &resource);
+    let result = eval_collection_min(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, Some(AttributeValue::Int(78)));
 }
 
@@ -230,7 +297,15 @@ fn test_eval_collection_max() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_max(&EntityType::User, scores_key, &user, &resource);
+    let result = eval_collection_max(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, Some(AttributeValue::Int(92)));
 }
 
@@ -242,7 +317,15 @@ fn test_eval_collection_average() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_average(&EntityType::User, scores_key, &user, &resource);
+    let result = eval_collection_average(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     // 345 / 4 = 86.25
     assert_eq!(result, Some(AttributeValue::Float(86.25)));
 }
@@ -255,7 +338,15 @@ fn test_eval_collection_first() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_first(&EntityType::User, scores_key, &user, &resource);
+    let result = eval_collection_first(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, Some(AttributeValue::Int(85)));
 }
 
@@ -267,7 +358,15 @@ fn test_eval_collection_last() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_last(&EntityType::User, scores_key, &user, &resource);
+    let result = eval_collection_last(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, Some(AttributeValue::Int(92)));
 }
 
@@ -279,7 +378,15 @@ fn test_eval_map_keys() {
 
     let metadata_key = interner.intern("metadata");
 
-    let result = eval_map_keys(&EntityType::User, metadata_key, &user, &resource);
+    let result = eval_map_keys(
+        &EntityType::User,
+        metadata_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::List(keys)) = result {
         assert_eq!(keys.len(), 2);
@@ -296,7 +403,15 @@ fn test_eval_map_values() {
 
     let metadata_key = interner.intern("metadata");
 
-    let result = eval_map_values(&EntityType::User, metadata_key, &user, &resource);
+    let result = eval_map_values(
+        &EntityType::User,
+        metadata_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::List(values)) = result {
         assert_eq!(values.len(), 2);
@@ -337,15 +452,42 @@ fn test_eval_indexed_access() {
     let scores_key = interner.intern("scores");
 
     // First element
-    let result = eval_indexed_access(&EntityType::User, scores_key, 0, &user, &resource);
+    let result = eval_indexed_access(
+        &EntityType::User,
+        scores_key,
+        0,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, Some(AttributeValue::Int(85)));
 
     // Negative index (last element)
-    let result = eval_indexed_access(&EntityType::User, scores_key, -1, &user, &resource);
+    let result = eval_indexed_access(
+        &EntityType::User,
+        scores_key,
+        -1,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, Some(AttributeValue::Int(92)));
 
     // Out of bounds
-    let result = eval_indexed_access(&EntityType::User, scores_key, 100, &user, &resource);
+    let result = eval_indexed_access(
+        &EntityType::User,
+        scores_key,
+        100,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert_eq!(result, None);
 }
 
@@ -361,8 +503,11 @@ fn test_eval_map_access() {
         &EntityType::User,
         metadata_key,
         "level",
-        &user,
-        &resource,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
         &interner,
     );
     assert_eq!(result, Some(AttributeValue::Int(3)));
@@ -371,8 +516,11 @@ fn test_eval_map_access() {
         &EntityType::User,
         metadata_key,
         "unknown",
-        &user,
-        &resource,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
         &interner,
     );
     assert_eq!(result, None);
@@ -386,7 +534,15 @@ fn test_eval_collection_unique() {
 
     let tags_key = interner.intern("tags");
 
-    let result = eval_collection_unique(&EntityType::User, tags_key, &user, &resource);
+    let result = eval_collection_unique(
+        &EntityType::User,
+        tags_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::List(items)) = result {
         // Should have 2 unique tags (admin appears twice)
@@ -404,7 +560,16 @@ fn test_eval_collection_sort() {
 
     let scores_key = interner.intern("scores");
 
-    let result = eval_collection_sort(&EntityType::User, scores_key, &user, &resource, &interner);
+    let result = eval_collection_sort(
+        &EntityType::User,
+        scores_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert!(result.is_some());
     if let Some(AttributeValue::List(items)) = result {
         assert_eq!(items.len(), 4);
@@ -426,7 +591,16 @@ fn test_context_entity_type_returns_none() {
 
     let name_key = interner.intern("name");
 
-    let result = eval_string_lower(&EntityType::Context, name_key, &user, &resource, &interner);
+    let result = eval_string_lower(
+        &EntityType::Context,
+        name_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert_eq!(result, None);
 }
 
@@ -438,6 +612,15 @@ fn test_missing_attribute_returns_none() {
 
     let unknown_key = interner.intern("unknown");
 
-    let result = eval_string_lower(&EntityType::User, unknown_key, &user, &resource, &interner);
+    let result = eval_string_lower(
+        &EntityType::User,
+        unknown_key,
+        EntityBindings {
+            user: &user,
+            actor: None,
+            resource: &resource,
+        },
+        &interner,
+    );
     assert_eq!(result, None);
 }

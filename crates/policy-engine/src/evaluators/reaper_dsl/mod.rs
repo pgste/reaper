@@ -267,8 +267,7 @@ impl ReaperDSLEvaluator {
     fn evaluate_compiled_condition(
         &self,
         condition: &CompiledCondition,
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         _context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
     ) -> bool {
@@ -290,8 +289,8 @@ impl ReaperDSLEvaluator {
                 use crate::evaluators::reaper_dsl::CompiledRebacRef;
                 use crate::evaluators::reaper_dsl::RebacKind;
                 let resolve = |r: &CompiledRebacRef| match r {
-                    CompiledRebacRef::Principal => user.id,
-                    CompiledRebacRef::ResourceId => resource.id,
+                    CompiledRebacRef::Principal => bindings.user.id,
+                    CompiledRebacRef::ResourceId => bindings.resource.id,
                     CompiledRebacRef::Literal(id) => *id,
                 };
                 let subject_id = resolve(subject);
@@ -332,12 +331,12 @@ impl ReaperDSLEvaluator {
                 if matches!(comp.entity_type, EntityType::Context) {
                     self.eval_context_attribute_comparison(comp, _context, interner)
                 } else {
-                    comparison_eval::eval_attribute_comparison(comp, user, resource, interner)
+                    comparison_eval::eval_attribute_comparison(comp, bindings, interner)
                 }
             }
 
             CompiledCondition::StringOp(op) => {
-                string_eval::eval_string_operation(op, user, resource, interner)
+                string_eval::eval_string_operation(op, bindings, interner)
             }
 
             CompiledCondition::VariableStringOp(op) => {
@@ -345,10 +344,10 @@ impl ReaperDSLEvaluator {
             }
 
             CompiledCondition::CountOp(cond) => {
-                collection_eval::eval_count_operation(cond, user, resource)
+                collection_eval::eval_count_operation(cond, bindings)
             }
 
-            CompiledCondition::TimeOp(cond) => time_eval::eval_time_operation(cond, user, resource),
+            CompiledCondition::TimeOp(cond) => time_eval::eval_time_operation(cond, bindings),
 
             CompiledCondition::CrossEntityCompare(comp) => {
                 // context.* on either side resolves from the REQUEST, not an
@@ -363,7 +362,7 @@ impl ReaperDSLEvaluator {
                 let needs_ctx = matches!(comp.left_entity, EntityType::Context)
                     || matches!(comp.right_entity, EntityType::Context);
                 if !needs_ctx {
-                    comparison_eval::eval_cross_entity_comparison(comp, user, resource, interner)
+                    comparison_eval::eval_cross_entity_comparison(comp, bindings, interner)
                 } else {
                     // Ok(v)  = a concrete AttributeValue (entity attr, parsed
                     //          number, or an already-interned request string).
@@ -384,8 +383,7 @@ impl ReaperDSLEvaluator {
                                 Some(Err(Arc::from(raw)))
                             }
                         } else {
-                            entity_helpers::get_nested_attr(etype, attr, user, resource, interner)
-                                .map(Ok)
+                            entity_helpers::get_nested_attr(etype, attr, bindings, interner).map(Ok)
                         }
                     };
                     let op: AttrCompareOp = comp.op.into();
@@ -429,11 +427,11 @@ impl ReaperDSLEvaluator {
             }
 
             CompiledCondition::WildcardCompare(comp) => {
-                comparison_eval::eval_wildcard_comparison(comp, user, resource, interner)
+                comparison_eval::eval_wildcard_comparison(comp, bindings, interner)
             }
 
             CompiledCondition::RegexMatch(m) => {
-                string_eval::eval_regex_match(m, user, resource, interner)
+                string_eval::eval_regex_match(m, bindings, interner)
             }
 
             CompiledCondition::ObjectHasKey {
@@ -442,8 +440,8 @@ impl ReaperDSLEvaluator {
                 key,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => user,
-                    EntityType::Resource => resource,
+                    EntityType::User => bindings.user,
+                    EntityType::Resource => bindings.resource,
                     EntityType::Context => return false,
                 };
                 matches!(
@@ -457,8 +455,8 @@ impl ReaperDSLEvaluator {
                 attribute,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => user,
-                    EntityType::Resource => resource,
+                    EntityType::User => bindings.user,
+                    EntityType::Resource => bindings.resource,
                     EntityType::Context => return false,
                 };
                 match entity.get_attribute(*attribute) {
@@ -477,8 +475,8 @@ impl ReaperDSLEvaluator {
                 attribute,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => user,
-                    EntityType::Resource => resource,
+                    EntityType::User => bindings.user,
+                    EntityType::Resource => bindings.resource,
                     EntityType::Context => return false,
                 };
                 match entity.get_attribute(*attribute) {
@@ -503,8 +501,7 @@ impl ReaperDSLEvaluator {
                 *left_attr,
                 *right_attr,
                 op,
-                user,
-                resource,
+                bindings,
                 interner,
             ),
 
@@ -517,19 +514,13 @@ impl ReaperDSLEvaluator {
                 // Use get_nested_attr to support nested attributes like "form_data.name"
                 let value = if let Some(idx) = index {
                     let entity = match entity_type {
-                        EntityType::User => user,
-                        EntityType::Resource => resource,
+                        EntityType::User => bindings.user,
+                        EntityType::Resource => bindings.resource,
                         EntityType::Context => return false,
                     };
                     collection_eval::get_indexed_value_compiled(entity, *attribute, idx, interner)
                 } else {
-                    entity_helpers::get_nested_attr(
-                        entity_type,
-                        *attribute,
-                        user,
-                        resource,
-                        interner,
-                    )
+                    entity_helpers::get_nested_attr(entity_type, *attribute, bindings, interner)
                 };
 
                 if let Some(val) = value {
@@ -554,8 +545,7 @@ impl ReaperDSLEvaluator {
                 entity_type,
                 *attribute,
                 index.as_ref(),
-                user,
-                resource,
+                bindings,
                 interner,
             ),
 
@@ -569,8 +559,7 @@ impl ReaperDSLEvaluator {
                 *attribute,
                 index,
                 *value,
-                user,
-                resource,
+                bindings,
                 interner,
             ),
 
@@ -580,8 +569,8 @@ impl ReaperDSLEvaluator {
                 variable,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => user,
-                    EntityType::Resource => resource,
+                    EntityType::User => bindings.user,
+                    EntityType::Resource => bindings.resource,
                     EntityType::Context => return false,
                 };
 
@@ -599,8 +588,7 @@ impl ReaperDSLEvaluator {
 
             CompiledCondition::And(conditions) => {
                 for (i, c) in conditions.iter().enumerate() {
-                    let result =
-                        self.evaluate_compiled_condition(c, user, resource, _context, variables);
+                    let result = self.evaluate_compiled_condition(c, bindings, _context, variables);
                     if !result {
                         tracing::debug!(
                             condition_index = i,
@@ -616,27 +604,27 @@ impl ReaperDSLEvaluator {
 
             CompiledCondition::Or(conditions) => conditions
                 .iter()
-                .any(|c| self.evaluate_compiled_condition(c, user, resource, _context, variables)),
+                .any(|c| self.evaluate_compiled_condition(c, bindings, _context, variables)),
 
             CompiledCondition::Not(condition) => {
-                !self.evaluate_compiled_condition(condition, user, resource, _context, variables)
+                !self.evaluate_compiled_condition(condition, bindings, _context, variables)
             }
 
             // Old flat variants removed - now handled by V2 types above
             CompiledCondition::IsString {
                 entity_type,
                 attribute,
-            } => collection_eval::eval_is_string(entity_type, *attribute, user, resource),
+            } => collection_eval::eval_is_string(entity_type, *attribute, bindings),
 
             CompiledCondition::IsNumber {
                 entity_type,
                 attribute,
-            } => collection_eval::eval_is_number(entity_type, *attribute, user, resource),
+            } => collection_eval::eval_is_number(entity_type, *attribute, bindings),
 
             CompiledCondition::IsBool {
                 entity_type,
                 attribute,
-            } => collection_eval::eval_is_bool(entity_type, *attribute, user, resource),
+            } => collection_eval::eval_is_bool(entity_type, *attribute, bindings),
 
             CompiledCondition::SetIntersectionCountGreater {
                 entity_type,
@@ -648,8 +636,7 @@ impl ReaperDSLEvaluator {
                 *attribute,
                 values,
                 *threshold,
-                user,
-                resource,
+                bindings,
             ),
 
             CompiledCondition::MapKeyExists {
@@ -660,8 +647,7 @@ impl ReaperDSLEvaluator {
                 entity_type,
                 *attribute,
                 key,
-                user,
-                resource,
+                bindings,
             ),
 
             CompiledCondition::ComprehensionCountGreaterEqual {
@@ -678,8 +664,7 @@ impl ReaperDSLEvaluator {
                 filter_value,
                 filter_op,
                 *threshold,
-                user,
-                resource,
+                bindings,
                 interner,
             ),
 
@@ -697,8 +682,7 @@ impl ReaperDSLEvaluator {
                 filter_value,
                 filter_op,
                 *threshold,
-                user,
-                resource,
+                bindings,
                 interner,
             ),
 
@@ -707,8 +691,8 @@ impl ReaperDSLEvaluator {
                 variable,
                 expr_type,
             } => {
-                if let Some(value) = self
-                    .evaluate_expr_type(expr_type, user, resource, _context, variables, interner)
+                if let Some(value) =
+                    self.evaluate_expr_type(expr_type, bindings, _context, variables, interner)
                 {
                     let var_name = interner
                         .resolve(*variable)
@@ -729,8 +713,8 @@ impl ReaperDSLEvaluator {
                 op,
                 value,
             } => {
-                if let Some(expr_value) = self
-                    .evaluate_expr_type(expr_type, user, resource, _context, variables, interner)
+                if let Some(expr_value) =
+                    self.evaluate_expr_type(expr_type, bindings, _context, variables, interner)
                 {
                     // Compare the expression result with the literal value
                     let result = match (&expr_value, value, op) {
@@ -836,8 +820,8 @@ impl ReaperDSLEvaluator {
                 value,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => user,
-                    EntityType::Resource => resource,
+                    EntityType::User => bindings.user,
+                    EntityType::Resource => bindings.resource,
                     EntityType::Context => return false,
                 };
 
@@ -918,8 +902,7 @@ impl ReaperDSLEvaluator {
                 let attr_is_null = entity_helpers::is_nested_attr_null(
                     entity_type,
                     *attribute,
-                    user,
-                    resource,
+                    bindings,
                     interner,
                 );
 
@@ -1092,8 +1075,7 @@ impl ReaperDSLEvaluator {
             } => {
                 if let Some(result) = self.evaluate_comprehension(
                     comprehension,
-                    user,
-                    resource,
+                    bindings,
                     _context,
                     variables,
                     interner,
@@ -1194,21 +1176,19 @@ impl ReaperDSLEvaluator {
     fn evaluate_expr_type(
         &self,
         expr_type: &CompiledExprType,
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         _context: &EvalContext<'_>,
         variables: &std::collections::HashMap<String, AttributeValue>,
         interner: &crate::data::StringInterner,
     ) -> Option<AttributeValue> {
-        expr_eval::evaluate_compiled_expr_type(expr_type, user, resource, variables, interner)
+        expr_eval::evaluate_compiled_expr_type(expr_type, bindings, variables, interner)
     }
 
     /// Evaluate a comprehension and return the resulting collection
     fn evaluate_comprehension(
         &self,
         comp: &CompiledComprehension,
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         context: &EvalContext<'_>,
         variables: &std::collections::HashMap<String, AttributeValue>,
         interner: &crate::data::StringInterner,
@@ -1220,8 +1200,8 @@ impl ReaperDSLEvaluator {
                 attribute,
             } => {
                 let entity = match entity_type {
-                    EntityType::User => user,
-                    EntityType::Resource => resource,
+                    EntityType::User => bindings.user,
+                    EntityType::Resource => bindings.resource,
                     EntityType::Context => return None,
                 };
                 match entity.get_attribute(*attribute) {
@@ -1273,8 +1253,7 @@ impl ReaperDSLEvaluator {
                     // Evaluate filters
                     let passes = self.evaluate_object_comprehension_filters(
                         &comp.filters,
-                        user,
-                        resource,
+                        bindings,
                         context,
                         &mut local_vars,
                         interner,
@@ -1324,8 +1303,7 @@ impl ReaperDSLEvaluator {
             // Recursively evaluate filters with nested iteration support
             self.evaluate_comprehension_filters_recursive(
                 &comp.filters,
-                user,
-                resource,
+                bindings,
                 context,
                 &mut local_vars,
                 &comp.output,
@@ -1348,14 +1326,13 @@ impl ReaperDSLEvaluator {
     fn evaluate_object_comprehension_filters(
         &self,
         filters: &[CompiledCondition],
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         _interner: &crate::data::StringInterner,
     ) -> bool {
         for filter in filters {
-            if !self.evaluate_compiled_condition(filter, user, resource, context, variables) {
+            if !self.evaluate_compiled_condition(filter, bindings, context, variables) {
                 return false;
             }
         }
@@ -1378,8 +1355,7 @@ impl ReaperDSLEvaluator {
     fn evaluate_comprehension_filters_recursive(
         &self,
         filters: &[CompiledCondition],
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         output: &Option<CompiledOutput>,
@@ -1437,8 +1413,7 @@ impl ReaperDSLEvaluator {
                         inner_vars.insert(var_name.clone(), element);
                         self.evaluate_comprehension_filters_recursive(
                             remaining,
-                            user,
-                            resource,
+                            bindings,
                             context,
                             &mut inner_vars,
                             output,
@@ -1454,17 +1429,16 @@ impl ReaperDSLEvaluator {
         // Regular filter - evaluate and continue if it passes
         let passes = self.evaluate_compiled_condition_with_vars(
             filter,
-            user,
-            resource,
+            bindings,
             context,
             &mut variables.clone(),
             interner,
         );
         if passes {
             // Update variables if this was an assignment filter
-            self.apply_filter_variable_update(filter, variables, user, resource, context, interner);
+            self.apply_filter_variable_update(filter, variables, bindings, context, interner);
             self.evaluate_comprehension_filters_recursive(
-                remaining, user, resource, context, variables, output, interner, result,
+                remaining, bindings, context, variables, output, interner, result,
             );
         }
     }
@@ -1484,8 +1458,7 @@ impl ReaperDSLEvaluator {
         &self,
         filter: &CompiledCondition,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         context: &EvalContext<'_>,
         interner: &crate::data::StringInterner,
     ) {
@@ -1495,8 +1468,8 @@ impl ReaperDSLEvaluator {
                 expr_type,
             } => {
                 if let Some(var_name) = interner.resolve(*variable) {
-                    if let Some(val) = self
-                        .evaluate_expr_type(expr_type, user, resource, context, variables, interner)
+                    if let Some(val) =
+                        self.evaluate_expr_type(expr_type, bindings, context, variables, interner)
                     {
                         variables.insert(var_name.to_string(), val);
                     }
@@ -1512,15 +1485,14 @@ impl ReaperDSLEvaluator {
     fn evaluate_compiled_condition_with_vars(
         &self,
         condition: &CompiledCondition,
-        user: &Entity,
-        resource: &Entity,
+        bindings: EntityBindings<'_>,
         context: &EvalContext<'_>,
         variables: &mut std::collections::HashMap<String, AttributeValue>,
         _interner: &crate::data::StringInterner,
     ) -> bool {
         // For comprehension filters, we need to handle VarAttr comparisons
         // For now, delegate to the regular evaluation
-        self.evaluate_compiled_condition(condition, user, resource, context, variables)
+        self.evaluate_compiled_condition(condition, bindings, context, variables)
     }
 }
 
@@ -1634,6 +1606,15 @@ impl ReaperDSLEvaluator {
         // Zero-copy evaluation context — avoids HashMap clone + 2 String allocations per call
         let eval_context = EvalContext::new(&request.action, &request.resource, &request.context);
 
+        // Entity bindings for this evaluation. `actor` stays None until the
+        // compiled path resolves `request.actor` (F1 slice B); the struct is
+        // Copy, so passing it down is the same cost as the old ref pair.
+        let bindings = EntityBindings {
+            user: &user,
+            actor: None,
+            resource,
+        };
+
         // Variable context for local bindings (scoped to policy evaluation)
         // Performance: no allocation until first variable use (most policies have zero variables)
         let mut variables = std::collections::HashMap::new();
@@ -1646,8 +1627,7 @@ impl ReaperDSLEvaluator {
         for rule in &self.compiled_deny_rules {
             if self.evaluate_compiled_condition(
                 &rule.condition,
-                &user,
-                resource,
+                bindings,
                 &eval_context,
                 &mut variables,
             ) {
@@ -1662,8 +1642,7 @@ impl ReaperDSLEvaluator {
         for rule in &self.compiled_allow_rules {
             let matches = self.evaluate_compiled_condition(
                 &rule.condition,
-                &user,
-                resource,
+                bindings,
                 &eval_context,
                 &mut variables,
             );

@@ -11,12 +11,13 @@
 // Allow unused functions - some are used in tests only or reserved for future V1 compatibility
 #![allow(dead_code)]
 
-use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
+use crate::data::{AttributeValue, InternedString, StringInterner};
 
 use super::entity_helpers::{get_nested_attr, get_numeric_attr};
 use super::types::{
     AttrCompareOp, CompiledAttributeComparison, CompiledCompareTarget,
-    CompiledCrossEntityComparison, CompiledWildcardComparison, EntityType, NumericOp,
+    CompiledCrossEntityComparison, CompiledWildcardComparison, EntityBindings, EntityType,
+    NumericOp,
 };
 
 // ============================================================================
@@ -27,8 +28,7 @@ use super::types::{
 #[inline]
 pub fn eval_attribute_comparison(
     comp: &CompiledAttributeComparison,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
     match &comp.target {
@@ -40,7 +40,7 @@ pub fn eval_attribute_comparison(
         // does NOT match Int(5); it did before, which made the compiled
         // evaluator disagree with the AST and the oracle.
         CompiledCompareTarget::LiteralNum(threshold) => {
-            match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
+            match get_nested_attr(&comp.entity_type, comp.attribute, bindings, interner) {
                 Some(AttributeValue::Int(n)) => compare_f64(n as f64, *threshold, &comp.op),
                 Some(AttributeValue::Float(f)) => compare_f64(f, *threshold, &comp.op),
                 Some(AttributeValue::Null) | None => false,
@@ -52,7 +52,7 @@ pub fn eval_attribute_comparison(
             }
         }
         CompiledCompareTarget::LiteralString(expected) => {
-            match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
+            match get_nested_attr(&comp.entity_type, comp.attribute, bindings, interner) {
                 Some(AttributeValue::String(actual)) => match comp.op {
                     NumericOp::Equal => actual == *expected,
                     NumericOp::NotEqual => actual != *expected,
@@ -66,7 +66,7 @@ pub fn eval_attribute_comparison(
             }
         }
         CompiledCompareTarget::LiteralBool(expected) => {
-            match get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner) {
+            match get_nested_attr(&comp.entity_type, comp.attribute, bindings, interner) {
                 Some(AttributeValue::Bool(actual)) => match comp.op {
                     NumericOp::Equal => actual == *expected,
                     NumericOp::NotEqual => actual != *expected,
@@ -81,8 +81,7 @@ pub fn eval_attribute_comparison(
         }
         CompiledCompareTarget::LiteralNull => {
             // Handle null comparisons: attr == null or attr != null
-            let attr_val =
-                get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner);
+            let attr_val = get_nested_attr(&comp.entity_type, comp.attribute, bindings, interner);
             let is_null = match &attr_val {
                 None => true,                       // Missing attribute is null
                 Some(AttributeValue::Null) => true, // Explicit null
@@ -98,10 +97,8 @@ pub fn eval_attribute_comparison(
             entity_type: other_entity_type,
             attribute: other_attr,
         } => {
-            let left_val =
-                get_nested_attr(&comp.entity_type, comp.attribute, user, resource, interner);
-            let right_val =
-                get_nested_attr(other_entity_type, *other_attr, user, resource, interner);
+            let left_val = get_nested_attr(&comp.entity_type, comp.attribute, bindings, interner);
+            let right_val = get_nested_attr(other_entity_type, *other_attr, bindings, interner);
             compare_attr_values(left_val.as_ref(), right_val.as_ref(), &comp.op.into())
         }
         CompiledCompareTarget::Variable(_var) => {
@@ -116,18 +113,11 @@ pub fn eval_attribute_comparison(
 #[inline]
 pub fn eval_cross_entity_comparison(
     comp: &CompiledCrossEntityComparison,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let left_val = get_nested_attr(&comp.left_entity, comp.left_attr, user, resource, interner);
-    let right_val = get_nested_attr(
-        &comp.right_entity,
-        comp.right_attr,
-        user,
-        resource,
-        interner,
-    );
+    let left_val = get_nested_attr(&comp.left_entity, comp.left_attr, bindings, interner);
+    let right_val = get_nested_attr(&comp.right_entity, comp.right_attr, bindings, interner);
     compare_attr_values(left_val.as_ref(), right_val.as_ref(), &comp.op.into())
 }
 
@@ -135,24 +125,16 @@ pub fn eval_cross_entity_comparison(
 #[inline]
 pub fn eval_wildcard_comparison(
     comp: &CompiledWildcardComparison,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
     let collection = get_nested_attr(
         &comp.collection_entity,
         comp.collection_attr,
-        user,
-        resource,
+        bindings,
         interner,
     );
-    let scalar_val = get_nested_attr(
-        &comp.scalar_entity,
-        comp.scalar_attr,
-        user,
-        resource,
-        interner,
-    );
+    let scalar_val = get_nested_attr(&comp.scalar_entity, comp.scalar_attr, bindings, interner);
 
     // NULL SEMANTICS: `matched` is None when either side is MISSING (or the
     // left side is not a collection / right side not a scalar). In that case
@@ -201,11 +183,10 @@ pub fn eval_attr_equals_literal(
     entity_type: &EntityType,
     attribute: InternedString,
     value: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    match get_nested_attr(entity_type, attribute, user, resource, interner) {
+    match get_nested_attr(entity_type, attribute, bindings, interner) {
         Some(AttributeValue::String(actual)) => actual == value,
         Some(AttributeValue::Bool(actual)) => interner
             .resolve(value)
@@ -225,10 +206,9 @@ pub fn eval_attr_gte_literal(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    get_numeric_attr(entity_type, attribute, user, resource)
+    get_numeric_attr(entity_type, attribute, bindings)
         .map(|actual| actual >= threshold)
         .unwrap_or(false)
 }
@@ -239,10 +219,9 @@ pub fn eval_attr_gt_literal(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    get_numeric_attr(entity_type, attribute, user, resource)
+    get_numeric_attr(entity_type, attribute, bindings)
         .map(|actual| actual > threshold)
         .unwrap_or(false)
 }
@@ -253,10 +232,9 @@ pub fn eval_attr_lte_literal(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    get_numeric_attr(entity_type, attribute, user, resource)
+    get_numeric_attr(entity_type, attribute, bindings)
         .map(|actual| actual <= threshold)
         .unwrap_or(false)
 }
@@ -267,10 +245,9 @@ pub fn eval_attr_lt_literal(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: f64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    get_numeric_attr(entity_type, attribute, user, resource)
+    get_numeric_attr(entity_type, attribute, bindings)
         .map(|actual| actual < threshold)
         .unwrap_or(false)
 }
@@ -281,18 +258,11 @@ pub fn eval_attr_lt_literal(
 pub fn eval_user_equals_resource(
     user_attr: InternedString,
     resource_attr: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
-    let resource_val = get_nested_attr(
-        &EntityType::Resource,
-        resource_attr,
-        user,
-        resource,
-        interner,
-    );
+    let user_val = get_nested_attr(&EntityType::User, user_attr, bindings, interner);
+    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, bindings, interner);
     match (user_val, resource_val) {
         (Some(AttributeValue::String(u)), Some(AttributeValue::String(r))) => u == r,
         (Some(AttributeValue::Int(u)), Some(AttributeValue::Int(r))) => u == r,
@@ -307,18 +277,11 @@ pub fn eval_user_equals_resource(
 pub fn eval_user_int_greater(
     user_attr: InternedString,
     resource_attr: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
-    let resource_val = get_nested_attr(
-        &EntityType::Resource,
-        resource_attr,
-        user,
-        resource,
-        interner,
-    );
+    let user_val = get_nested_attr(&EntityType::User, user_attr, bindings, interner);
+    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, bindings, interner);
     match (user_val, resource_val) {
         (Some(AttributeValue::Int(u)), Some(AttributeValue::Int(r))) => u > r,
         _ => false,
@@ -331,18 +294,11 @@ pub fn eval_user_int_greater(
 pub fn eval_resource_int_greater(
     resource_attr: InternedString,
     user_attr: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let resource_val = get_nested_attr(
-        &EntityType::Resource,
-        resource_attr,
-        user,
-        resource,
-        interner,
-    );
-    let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
+    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, bindings, interner);
+    let user_val = get_nested_attr(&EntityType::User, user_attr, bindings, interner);
     match (resource_val, user_val) {
         (Some(AttributeValue::Int(r)), Some(AttributeValue::Int(u))) => r > u,
         _ => false,
@@ -357,18 +313,11 @@ pub fn eval_resource_int_greater(
 pub fn eval_user_wildcard_equals_resource(
     user_attr: InternedString,
     resource_attr: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let resource_val = get_nested_attr(
-        &EntityType::Resource,
-        resource_attr,
-        user,
-        resource,
-        interner,
-    );
-    let user_collection = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
+    let resource_val = get_nested_attr(&EntityType::Resource, resource_attr, bindings, interner);
+    let user_collection = get_nested_attr(&EntityType::User, user_attr, bindings, interner);
 
     match (user_collection, resource_val) {
         (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => items
@@ -395,18 +344,12 @@ pub fn eval_user_wildcard_equals_resource(
 pub fn eval_resource_wildcard_equals_user(
     resource_attr: InternedString,
     user_attr: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let user_val = get_nested_attr(&EntityType::User, user_attr, user, resource, interner);
-    let resource_collection = get_nested_attr(
-        &EntityType::Resource,
-        resource_attr,
-        user,
-        resource,
-        interner,
-    );
+    let user_val = get_nested_attr(&EntityType::User, user_attr, bindings, interner);
+    let resource_collection =
+        get_nested_attr(&EntityType::Resource, resource_attr, bindings, interner);
 
     match (resource_collection, user_val) {
         (Some(AttributeValue::List(items)), Some(AttributeValue::String(expected))) => items
@@ -433,12 +376,11 @@ pub fn eval_same_entity_attr_compare(
     left_attr: InternedString,
     right_attr: InternedString,
     op: &AttrCompareOp,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let left_val = get_nested_attr(entity_type, left_attr, user, resource, interner);
-    let right_val = get_nested_attr(entity_type, right_attr, user, resource, interner);
+    let left_val = get_nested_attr(entity_type, left_attr, bindings, interner);
+    let right_val = get_nested_attr(entity_type, right_attr, bindings, interner);
 
     compare_attr_values(left_val.as_ref(), right_val.as_ref(), op)
 }
@@ -570,6 +512,7 @@ fn compare_floats(l: f64, r: f64, op: &AttrCompareOp) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Entity;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -648,30 +591,42 @@ mod tests {
         // Missing collection attribute: both == and != must FAIL.
         assert!(!eval_wildcard_comparison(
             &wildcard("nonexistent", "owner", false),
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
         assert!(!eval_wildcard_comparison(
             &wildcard("nonexistent", "owner", true),
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
 
         // Missing scalar attribute: both == and != must FAIL.
         assert!(!eval_wildcard_comparison(
             &wildcard("roles", "nonexistent", true),
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
 
         // Present, no element matches ("alice" not in roles): != is true.
         assert!(eval_wildcard_comparison(
             &wildcard("roles", "owner", true),
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
         // Present and matching (readers contains "admin"? use owner=="alice"
@@ -685,7 +640,13 @@ mod tests {
             negated: true,
         };
         assert!(!eval_wildcard_comparison(
-            &matching, &user, &resource, &interner
+            &matching,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
+            &interner
         ));
     }
 
@@ -703,8 +664,11 @@ mod tests {
             &EntityType::User,
             role_key,
             admin_val,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
 
@@ -712,8 +676,11 @@ mod tests {
             &EntityType::User,
             role_key,
             viewer_val,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
     }
@@ -730,22 +697,31 @@ mod tests {
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(eval_attr_gte_literal(
             &EntityType::User,
             level_key,
             4.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!eval_attr_gte_literal(
             &EntityType::User,
             level_key,
             6.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -761,15 +737,21 @@ mod tests {
             &EntityType::User,
             level_key,
             4.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!eval_attr_gt_literal(
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -785,22 +767,31 @@ mod tests {
             &EntityType::User,
             level_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(eval_attr_lte_literal(
             &EntityType::User,
             level_key,
             6.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
         assert!(!eval_attr_lte_literal(
             &EntityType::User,
             level_key,
             4.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 
@@ -814,14 +805,28 @@ mod tests {
 
         // Both have department = engineering
         assert!(eval_user_equals_resource(
-            dept_key, dept_key, &user, &resource, &interner
+            dept_key,
+            dept_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
+            &interner
         ));
 
         // role != owner
         let role_key = interner.intern("role");
         let owner_key = interner.intern("owner");
         assert!(!eval_user_equals_resource(
-            role_key, owner_key, &user, &resource, &interner
+            role_key,
+            owner_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
+            &interner
         ));
     }
 
@@ -838,8 +843,11 @@ mod tests {
         assert!(eval_user_int_greater(
             level_key,
             min_level_key,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
     }
@@ -857,8 +865,11 @@ mod tests {
         assert!(!eval_resource_int_greater(
             min_level_key,
             level_key,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
     }
@@ -876,7 +887,14 @@ mod tests {
         // resource.owner is "alice"
         // So roles[_] == owner should be false
         assert!(!eval_user_wildcard_equals_resource(
-            roles_key, owner_key, &user, &resource, &interner
+            roles_key,
+            owner_key,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
+            &interner
         ));
     }
 
@@ -895,8 +913,11 @@ mod tests {
         assert!(eval_resource_wildcard_equals_user(
             readers_key,
             role_key,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
     }
@@ -927,8 +948,11 @@ mod tests {
             a_key,
             b_key,
             &AttrCompareOp::Greater,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
 
@@ -938,8 +962,11 @@ mod tests {
             a_key,
             b_key,
             &AttrCompareOp::Equal,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
     }
@@ -1024,8 +1051,11 @@ mod tests {
             &EntityType::Context,
             role_key,
             admin_val,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            },
             &interner
         ));
 
@@ -1033,8 +1063,11 @@ mod tests {
             &EntityType::Context,
             role_key,
             5.0,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource
+            }
         ));
     }
 }

@@ -1,10 +1,31 @@
 //! Core types for the Reaper DSL evaluator.
 
+use crate::data::Entity;
 use crate::PolicyAction;
 use serde::{Deserialize, Serialize};
 
 use super::compiled_condition::CompiledCondition;
 use super::condition::Condition;
+
+/// Borrowed entity bindings for one evaluation pass.
+///
+/// Groups the request's resolved entities so evaluation helpers take a single
+/// parameter instead of a growing list of entity refs. `Copy` — passing this
+/// by value is two/three pointers, identical codegen to the previous
+/// `(user, resource)` pair.
+///
+/// `actor` (F1 agentic authz) is the optional non-human actor from the
+/// request's `actor` field. `None` means the request carried no actor;
+/// actor-referencing conditions then read null and must not match.
+#[derive(Clone, Copy)]
+pub struct EntityBindings<'a> {
+    /// Principal entity (`user.*`), resolved from `context["principal"]`.
+    pub user: &'a Entity,
+    /// Optional actor entity (`actor.*`), resolved from `request.actor`.
+    pub actor: Option<&'a Entity>,
+    /// Resource entity (`resource.*`), loaded or synthesized from the id.
+    pub resource: &'a Entity,
+}
 
 /// A single policy rule
 #[derive(Debug, Clone, Serialize, Deserialize)]

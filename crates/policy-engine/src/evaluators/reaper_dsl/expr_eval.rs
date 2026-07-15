@@ -14,7 +14,7 @@
 // Allow unused functions - some are used in tests only or reserved for future use
 #![allow(dead_code)]
 
-use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
+use crate::data::{AttributeValue, InternedString, StringInterner};
 use std::collections::HashMap;
 
 use super::entity_helpers::get_entity_for_type;
@@ -25,11 +25,10 @@ use super::types::EntityType;
 pub fn eval_string_lower(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let lower = resolved.to_lowercase();
@@ -45,11 +44,10 @@ pub fn eval_string_lower(
 pub fn eval_string_upper(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let upper = resolved.to_uppercase();
@@ -65,11 +63,10 @@ pub fn eval_string_upper(
 pub fn eval_string_trim(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let trimmed = resolved.trim().to_string();
@@ -86,11 +83,10 @@ pub fn eval_string_split(
     entity_type: &EntityType,
     attribute: InternedString,
     delimiter: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let parts: Vec<AttributeValue> = resolved
@@ -113,11 +109,10 @@ pub fn eval_string_replace(
     attribute: InternedString,
     pattern: &str,
     replacement: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let replaced = resolved.replace(pattern, replacement);
@@ -135,11 +130,10 @@ pub fn eval_string_substring(
     attribute: InternedString,
     start: usize,
     end: Option<usize>,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     if let Some(AttributeValue::String(s)) = entity.get_attribute(attribute) {
         if let Some(resolved) = interner.resolve(*s) {
             let end_idx = end.unwrap_or(resolved.len()).min(resolved.len());
@@ -163,11 +157,10 @@ pub fn eval_string_substring(
 pub fn eval_collection_count(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => Some(AttributeValue::Int(items.len() as i64)),
         Some(AttributeValue::Set(items)) => Some(AttributeValue::Int(items.len() as i64)),
@@ -185,10 +178,9 @@ pub fn eval_collection_count(
 pub fn eval_collection_sum(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let sum: f64 = items
@@ -230,10 +222,9 @@ pub fn eval_collection_sum(
 pub fn eval_collection_min(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let min = items
@@ -280,10 +271,9 @@ pub fn eval_collection_min(
 pub fn eval_collection_max(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let max = items
@@ -330,10 +320,9 @@ pub fn eval_collection_max(
 pub fn eval_collection_average(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let nums: Vec<f64> = items
@@ -376,10 +365,9 @@ pub fn eval_collection_average(
 pub fn eval_collection_first(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => items.first().cloned(),
         Some(AttributeValue::Set(items)) => items.iter().next().cloned(),
@@ -392,10 +380,9 @@ pub fn eval_collection_first(
 pub fn eval_collection_last(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => items.last().cloned(),
         Some(AttributeValue::Set(items)) => items.iter().last().cloned(),
@@ -408,10 +395,9 @@ pub fn eval_collection_last(
 pub fn eval_collection_reverse(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let mut reversed = items.clone();
@@ -427,10 +413,9 @@ pub fn eval_collection_reverse(
 pub fn eval_map_keys(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Object(map)) => {
             let keys: Vec<AttributeValue> =
@@ -446,10 +431,9 @@ pub fn eval_map_keys(
 pub fn eval_map_values(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Object(map)) => {
             let values: Vec<AttributeValue> = map.values().cloned().collect();
@@ -479,10 +463,9 @@ pub fn eval_indexed_access(
     entity_type: &EntityType,
     attribute: InternedString,
     index: i64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let idx = if index < 0 {
@@ -503,11 +486,10 @@ pub fn eval_map_access(
     entity_type: &EntityType,
     attribute: InternedString,
     key: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Object(map)) => {
             let key_interned = interner.intern(key);
@@ -522,10 +504,9 @@ pub fn eval_map_access(
 pub fn eval_collection_unique(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let mut seen = std::collections::HashSet::new();
@@ -554,11 +535,10 @@ pub fn eval_collection_unique(
 pub fn eval_collection_sort(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
     match entity.get_attribute(attribute) {
         Some(AttributeValue::List(items)) => {
             let mut sorted = items.clone();
@@ -618,7 +598,7 @@ pub(super) fn compare_attribute_values(
 // ============================================================================
 
 use super::chain_method_eval::evaluate_chained_method;
-use super::types::{CompiledExprIndexType, CompiledExprType};
+use super::types::{CompiledExprIndexType, CompiledExprType, EntityBindings};
 
 /// Evaluate a compiled expression type and return the result.
 ///
@@ -632,8 +612,7 @@ use super::types::{CompiledExprIndexType, CompiledExprType};
 /// - Chained method calls
 pub fn evaluate_compiled_expr_type(
     expr_type: &CompiledExprType,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     variables: &HashMap<String, AttributeValue>,
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
@@ -641,53 +620,53 @@ pub fn evaluate_compiled_expr_type(
         CompiledExprType::StringLower {
             entity_type,
             attribute,
-        } => eval_string_lower(entity_type, *attribute, user, resource, interner),
+        } => eval_string_lower(entity_type, *attribute, bindings, interner),
 
         CompiledExprType::StringUpper {
             entity_type,
             attribute,
-        } => eval_string_upper(entity_type, *attribute, user, resource, interner),
+        } => eval_string_upper(entity_type, *attribute, bindings, interner),
 
         CompiledExprType::StringTrim {
             entity_type,
             attribute,
-        } => eval_string_trim(entity_type, *attribute, user, resource, interner),
+        } => eval_string_trim(entity_type, *attribute, bindings, interner),
 
         CompiledExprType::StringSplit {
             entity_type,
             attribute,
             delimiter,
-        } => eval_string_split(entity_type, *attribute, delimiter, user, resource, interner),
+        } => eval_string_split(entity_type, *attribute, delimiter, bindings, interner),
 
         CompiledExprType::CollectionCount {
             entity_type,
             attribute,
-        } => eval_collection_count(entity_type, *attribute, user, resource, interner),
+        } => eval_collection_count(entity_type, *attribute, bindings, interner),
 
         CompiledExprType::CollectionSum {
             entity_type,
             attribute,
-        } => eval_collection_sum(entity_type, *attribute, user, resource),
+        } => eval_collection_sum(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionMax {
             entity_type,
             attribute,
-        } => eval_collection_max(entity_type, *attribute, user, resource),
+        } => eval_collection_max(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionMin {
             entity_type,
             attribute,
-        } => eval_collection_min(entity_type, *attribute, user, resource),
+        } => eval_collection_min(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionFirst {
             entity_type,
             attribute,
-        } => eval_collection_first(entity_type, *attribute, user, resource),
+        } => eval_collection_first(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionLast {
             entity_type,
             attribute,
-        } => eval_collection_last(entity_type, *attribute, user, resource),
+        } => eval_collection_last(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionSlice {
             entity_type,
@@ -695,7 +674,7 @@ pub fn evaluate_compiled_expr_type(
             start,
             end,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => {
                     let start_idx = (*start).max(0) as usize;
@@ -714,17 +693,17 @@ pub fn evaluate_compiled_expr_type(
         CompiledExprType::CollectionReverse {
             entity_type,
             attribute,
-        } => eval_collection_reverse(entity_type, *attribute, user, resource),
+        } => eval_collection_reverse(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionSort {
             entity_type,
             attribute,
-        } => eval_collection_sort(entity_type, *attribute, user, resource, interner),
+        } => eval_collection_sort(entity_type, *attribute, bindings, interner),
 
         CompiledExprType::CollectionUnique {
             entity_type,
             attribute,
-        } => eval_collection_unique(entity_type, *attribute, user, resource),
+        } => eval_collection_unique(entity_type, *attribute, bindings),
 
         CompiledExprType::CollectionDifference {
             entity_type,
@@ -732,8 +711,8 @@ pub fn evaluate_compiled_expr_type(
             other_entity_type,
             other_attribute,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
-            let other_entity = get_entity_for_type(other_entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
+            let other_entity = get_entity_for_type(other_entity_type, bindings)?;
 
             let items: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => items.clone(),
@@ -790,8 +769,8 @@ pub fn evaluate_compiled_expr_type(
             other_entity_type,
             other_attribute,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
-            let other_entity = get_entity_for_type(other_entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
+            let other_entity = get_entity_for_type(other_entity_type, bindings)?;
 
             let mut items: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => items.clone(),
@@ -840,8 +819,8 @@ pub fn evaluate_compiled_expr_type(
             other_entity_type,
             other_attribute,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
-            let other_entity = get_entity_for_type(other_entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
+            let other_entity = get_entity_for_type(other_entity_type, bindings)?;
 
             let items: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => items.clone(),
@@ -897,7 +876,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             values,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             let items_vec: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => items.clone(),
                 Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
@@ -922,7 +901,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             values,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => {
                     let mut union: Vec<AttributeValue> = items.clone();
@@ -945,7 +924,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             values,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             let items_vec: Vec<AttributeValue> = match entity.get_attribute(*attribute) {
                 Some(AttributeValue::List(items)) => items.clone(),
                 Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
@@ -971,7 +950,7 @@ pub fn evaluate_compiled_expr_type(
             entity_type,
             attribute,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             match entity.get_attribute(*attribute) {
                 Some(AttributeValue::Object(map)) => {
                     let keys: Vec<AttributeValue> =
@@ -986,7 +965,7 @@ pub fn evaluate_compiled_expr_type(
             entity_type,
             attribute,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             match entity.get_attribute(*attribute) {
                 // Matches AST method_values: the object's values as a list.
                 Some(AttributeValue::Object(map)) => {
@@ -1013,7 +992,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             substring,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     return Some(AttributeValue::Bool(resolved.contains(substring.as_str())));
@@ -1027,7 +1006,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             prefix,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     return Some(AttributeValue::Bool(resolved.starts_with(prefix.as_str())));
@@ -1041,7 +1020,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             suffix,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     return Some(AttributeValue::Bool(resolved.ends_with(suffix.as_str())));
@@ -1055,7 +1034,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             pattern,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     let matches = crate::regex_cache::matches(pattern, &resolved);
@@ -1070,7 +1049,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             pattern,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
@@ -1089,7 +1068,7 @@ pub fn evaluate_compiled_expr_type(
             attribute,
             pattern,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
@@ -1116,7 +1095,7 @@ pub fn evaluate_compiled_expr_type(
             pattern,
             replacement,
         } => {
-            let entity = get_entity_for_type(entity_type, user, resource)?;
+            let entity = get_entity_for_type(entity_type, bindings)?;
             if let Some(AttributeValue::String(s)) = entity.get_attribute(*attribute) {
                 if let Some(resolved) = interner.resolve(*s) {
                     if let Some(re) = crate::regex_cache::get_or_compile(pattern) {
@@ -1132,8 +1111,7 @@ pub fn evaluate_compiled_expr_type(
 
         CompiledExprType::ChainedMethod { base, method } => {
             // First evaluate the base expression recursively
-            let base_value =
-                evaluate_compiled_expr_type(base, user, resource, variables, interner)?;
+            let base_value = evaluate_compiled_expr_type(base, bindings, variables, interner)?;
 
             // Then apply the chained method
             evaluate_chained_method(method, base_value, interner)

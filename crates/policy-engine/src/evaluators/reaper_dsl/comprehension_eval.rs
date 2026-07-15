@@ -6,12 +6,13 @@
 //! - Method calls on output values
 //! - Comprehension filter value comparison
 
-use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
+use crate::data::{AttributeValue, InternedString, StringInterner};
 use std::collections::HashMap;
 
 use super::entity_helpers::get_entity_for_type;
 use super::types::{
-    CompiledLiteralValue, CompiledOutput, ComprehensionFilterOp, EntityType, OutputMethod,
+    CompiledLiteralValue, CompiledOutput, ComprehensionFilterOp, EntityBindings, EntityType,
+    OutputMethod,
 };
 
 /// Compare compiled values for comprehension filters
@@ -108,11 +109,10 @@ pub fn eval_comprehension_count_gte(
     filter_value: &CompiledLiteralValue,
     filter_op: &ComprehensionFilterOp,
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -149,11 +149,10 @@ pub fn eval_comprehension_count_eq(
     filter_value: &CompiledLiteralValue,
     filter_op: &ComprehensionFilterOp,
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
