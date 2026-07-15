@@ -29,9 +29,19 @@ remediation. **Status: F1-s1 + s2 LANDED (capability core, request shape, DSL ac
     method-on-Null now yields Null (was error), Null as a bare predicate is
     false (was error), unbound `actor` rebac arg is non-match (was error),
     unloaded actor entity reads Null (was error).
-- Taint (`taint::trusted`/`taint::level`) still AST-fallback — slice C.
-- Gates: engine suite 950, workspace libs 1196, differential 61, clippy -D,
-  fmt, wasm32 engine + reaper-wasm builds, wasm parity (3) — all green.
+- **Slice C (compiled taint)**: `Condition::TaintTrusted { key }` /
+  `CompiledCondition::TaintTrusted` (predicate) and `ExprType::TaintLevel` /
+  `CompiledExprType::TaintLevel` (assignment form), all appended at enum
+  ends. `EntityBindings` carries the request's provenance map by reference
+  (`context_trust()` = the same fail-untrusted rule as PolicyRequest); eval
+  is one HashMap get, no interner. Only literal keys compile — dynamic key
+  expressions fall back to the AST. taint_predicate_tests now assert
+  `evaluator_type() == "reaper_dsl"` on both the predicate and assignment
+  forms. Differential 61 → 64 (trusted × 5 provenance shapes, level × 5,
+  actor+taint composition).
+- Gates: engine suite 953, workspace libs 1196, differential 64, clippy -D
+  (workspace), fmt, wasm32 engine + reaper-wasm builds, wasm parity (3) —
+  all green.
 
 ## STATUS (2026-07-15) — F1-s2 agentic request shape + DSL surface
 

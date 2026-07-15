@@ -219,6 +219,19 @@ fn compile_function_call(
             compile_rebac_call(&function, args)
         }
 
+        // taint::trusted("key") — provenance gate (F1 agentic authz). Only a
+        // literal key compiles; a dynamic key expression runs on the AST
+        // evaluator instead.
+        ("taint", "trusted") => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!("taint::trusted requires 1 argument, got {}", args.len()),
+                });
+            }
+            let key = extract_string_literal(&args[0])?;
+            Ok(DslCondition::TaintTrusted { key })
+        }
+
         // regex::matches(entity.attribute, "pattern")
         ("regex", "matches") => {
             if args.len() != 2 {

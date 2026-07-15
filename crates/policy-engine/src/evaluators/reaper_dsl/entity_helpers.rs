@@ -340,6 +340,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(entity.is_some());
@@ -356,6 +357,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(entity.is_some());
@@ -372,6 +374,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(entity.is_none());
@@ -389,6 +392,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(result.is_some());
@@ -408,6 +412,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(result.is_none());
@@ -425,6 +430,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(result.is_some());
@@ -444,7 +450,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!string_attr_equals(
@@ -454,7 +461,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -471,7 +479,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(attr_gte(
@@ -481,7 +490,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_gte(
@@ -491,7 +501,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -508,7 +519,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_gt(
@@ -518,7 +530,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_gt(
@@ -528,7 +541,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -545,7 +559,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(attr_lte(
@@ -555,7 +570,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_lte(
@@ -565,7 +581,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -582,7 +599,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_lt(
@@ -592,7 +610,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_lt(
@@ -602,7 +621,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -629,7 +649,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(attr_gte(
@@ -639,7 +660,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(attr_gt(
@@ -649,7 +671,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
         assert!(!attr_gt(
@@ -659,7 +682,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -694,6 +718,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert_eq!(count, Some(2));
@@ -712,6 +737,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(result.is_some());
@@ -724,7 +750,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }
@@ -751,6 +778,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert_eq!(result, Some(true));
@@ -768,6 +796,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert_eq!(result, Some(5));
@@ -785,6 +814,7 @@ mod tests {
                 user: &user,
                 actor: None,
                 resource: &resource,
+                provenance: None,
             },
         );
         assert!(result.is_some());
@@ -802,7 +832,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         )
         .is_none());
@@ -812,7 +843,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         )
         .is_none());
@@ -822,7 +854,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         )
         .is_none());
@@ -833,7 +866,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             }
         ));
     }

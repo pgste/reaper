@@ -83,6 +83,7 @@ fn test_eval_string_lower() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -110,6 +111,7 @@ fn test_eval_string_upper() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -137,6 +139,7 @@ fn test_eval_string_trim() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -165,6 +168,7 @@ fn test_eval_string_split() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -193,6 +197,7 @@ fn test_eval_string_replace() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -220,6 +225,7 @@ fn test_eval_collection_count() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -242,6 +248,7 @@ fn test_eval_string_count() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -263,6 +270,7 @@ fn test_eval_collection_sum() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     // 85 + 90 + 78 + 92 = 345
@@ -284,6 +292,7 @@ fn test_eval_collection_min() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, Some(AttributeValue::Int(78)));
@@ -304,6 +313,7 @@ fn test_eval_collection_max() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, Some(AttributeValue::Int(92)));
@@ -324,6 +334,7 @@ fn test_eval_collection_average() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     // 345 / 4 = 86.25
@@ -345,6 +356,7 @@ fn test_eval_collection_first() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, Some(AttributeValue::Int(85)));
@@ -365,6 +377,7 @@ fn test_eval_collection_last() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, Some(AttributeValue::Int(92)));
@@ -385,6 +398,7 @@ fn test_eval_map_keys() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert!(result.is_some());
@@ -410,6 +424,7 @@ fn test_eval_map_values() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert!(result.is_some());
@@ -460,6 +475,7 @@ fn test_eval_indexed_access() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, Some(AttributeValue::Int(85)));
@@ -473,6 +489,7 @@ fn test_eval_indexed_access() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, Some(AttributeValue::Int(92)));
@@ -486,6 +503,7 @@ fn test_eval_indexed_access() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert_eq!(result, None);
@@ -507,6 +525,7 @@ fn test_eval_map_access() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -520,6 +539,7 @@ fn test_eval_map_access() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -541,6 +561,7 @@ fn test_eval_collection_unique() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
     );
     assert!(result.is_some());
@@ -567,6 +588,7 @@ fn test_eval_collection_sort() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -598,6 +620,7 @@ fn test_context_entity_type_returns_none() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );
@@ -619,6 +642,7 @@ fn test_missing_attribute_returns_none() {
             user: &user,
             actor: None,
             resource: &resource,
+            provenance: None,
         },
         &interner,
     );

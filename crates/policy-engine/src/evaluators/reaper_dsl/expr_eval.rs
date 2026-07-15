@@ -987,6 +987,20 @@ pub fn evaluate_compiled_expr_type(
             Some(AttributeValue::Int(value))
         }
 
+        // taint::level("key") — the trust level of one context key under the
+        // request provenance's fail-untrusted rule, as one of three constant
+        // strings. Interning is idempotent on a 3-value set, so this pins
+        // nothing new after the first evaluation and compares by id against
+        // pre-interned rule literals like "verified".
+        CompiledExprType::TaintLevel { key } => {
+            let level = match bindings.context_trust(key) {
+                crate::TrustLevel::Platform => "platform",
+                crate::TrustLevel::Verified => "verified",
+                crate::TrustLevel::Llm => "llm",
+            };
+            Some(AttributeValue::String(interner.intern(level)))
+        }
+
         CompiledExprType::StringContains {
             entity_type,
             attribute,

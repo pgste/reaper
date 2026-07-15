@@ -376,7 +376,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -388,7 +389,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -400,7 +402,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -421,7 +424,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -433,7 +437,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -454,7 +459,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -466,7 +472,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -478,7 +485,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -500,7 +508,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -513,7 +522,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -589,7 +599,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -601,7 +612,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -629,7 +641,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -646,7 +659,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -663,7 +677,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -685,7 +700,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -698,7 +714,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -719,7 +736,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -731,7 +749,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -752,7 +771,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));
@@ -783,7 +803,8 @@ mod tests {
             EntityBindings {
                 user: &user,
                 actor: None,
-                resource: &resource
+                resource: &resource,
+                provenance: None
             },
             &interner
         ));

@@ -25,6 +25,22 @@ pub struct EntityBindings<'a> {
     pub actor: Option<&'a Entity>,
     /// Resource entity (`resource.*`), loaded or synthesized from the id.
     pub resource: &'a Entity,
+    /// Per-key context provenance from the request (F1 taint). `None` =
+    /// taint mode off (every key platform-trusted). Drives `taint::level`
+    /// and `taint::trusted` on the compiled path.
+    pub provenance: Option<&'a std::collections::HashMap<String, crate::TrustLevel>>,
+}
+
+impl EntityBindings<'_> {
+    /// Effective trust of one context key under the fail-untrusted rule —
+    /// same semantics as [`crate::PolicyRequest::context_trust`]: taint mode
+    /// off ⇒ platform; taint mode on ⇒ unlabeled keys floor to llm.
+    pub fn context_trust(&self, key: &str) -> crate::TrustLevel {
+        match self.provenance {
+            None => crate::TrustLevel::Platform,
+            Some(map) => map.get(key).copied().unwrap_or(crate::TrustLevel::Llm),
+        }
+    }
 }
 
 /// A single policy rule

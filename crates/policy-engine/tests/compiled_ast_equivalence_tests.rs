@@ -1046,3 +1046,163 @@ fn actor_and_user_bindings_stay_distinct() {
     );
     assert_actor_equivalent_is(p, "alice", Some("alice"), "res_actor", PolicyAction::Deny);
 }
+
+// ===========================================================================
+// Taint predicates (F1-s2c): compiled `taint::trusted` / `taint::level`.
+//
+// Matrix: each predicate × provenance level (platform / verified / llm) ×
+// taint mode off (no provenance map) × unlabeled key under taint mode (the
+// fail-untrusted llm floor). Forced-compile, so a taint construct the
+// compiler stops supporting fails loudly instead of falling back.
+// ===========================================================================
+
+fn taint_request(
+    principal: &str,
+    resource: &str,
+    context: &[(&str, &str)],
+    provenance: Option<&[(&str, policy_engine::TrustLevel)]>,
+) -> PolicyRequest {
+    let mut req = request(principal, resource);
+    for (k, v) in context {
+        req.context.insert(k.to_string(), v.to_string());
+    }
+    req.context_provenance =
+        provenance.map(|p| p.iter().map(|(k, t)| (k.to_string(), *t)).collect());
+    req
+}
+
+fn assert_taint_equivalent_is(
+    policy_text: &str,
+    req: &PolicyRequest,
+    expected: PolicyAction,
+    label: &str,
+) {
+    let policy = ReaperPolicy::from_str(policy_text)
+        .unwrap_or_else(|e| panic!("parse failed: {e}\npolicy:\n{policy_text}"));
+
+    let compiled = policy
+        .clone()
+        .build(store_with_data())
+        .unwrap_or_else(|e| panic!("taint policy must compile: {e}\npolicy:\n{policy_text}"));
+    let ast = policy.build_ast_evaluator(store_with_data());
+
+    let compiled_decision = compiled.evaluate(req).expect("compiled evaluate");
+    let ast_decision = ast.evaluate(req).expect("ast evaluate");
+
+    assert_eq!(
+        compiled_decision, ast_decision,
+        "compiled and AST evaluators diverged [{label}]\n\
+         compiled={compiled_decision:?} ast={ast_decision:?}\npolicy:\n{policy_text}"
+    );
+    assert_eq!(
+        compiled_decision, expected,
+        "decision mismatch [{label}] (both agreed on {compiled_decision:?}, expected {expected:?})"
+    );
+}
+
+#[test]
+fn taint_trusted_gate_across_levels() {
+    use policy_engine::TrustLevel;
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_actor" && context.approved == "yes" && taint::trusted("approved") } } }"#;
+    type TaintCase<'a> = (Option<&'a [(&'a str, TrustLevel)]>, PolicyAction, &'a str);
+    let cases: &[TaintCase] = &[
+        (
+            Some(&[("approved", TrustLevel::Platform)]),
+            PolicyAction::Allow,
+            "platform",
+        ),
+        (
+            Some(&[("approved", TrustLevel::Verified)]),
+            PolicyAction::Allow,
+            "verified",
+        ),
+        (
+            Some(&[("approved", TrustLevel::Llm)]),
+            PolicyAction::Deny,
+            "llm",
+        ),
+        // taint mode ON but this key unlabeled -> llm floor -> deny
+        (
+            Some(&[("other", TrustLevel::Platform)]),
+            PolicyAction::Deny,
+            "unlabeled",
+        ),
+        // taint mode OFF -> platform -> allow (pre-F1 behavior)
+        (None, PolicyAction::Allow, "taint-off"),
+    ];
+    for (prov, expected, label) in cases {
+        let req = taint_request("alice", "res_actor", &[("approved", "yes")], *prov);
+        assert_taint_equivalent_is(p, &req, expected.clone(), label);
+    }
+}
+
+#[test]
+fn taint_level_assignment_across_levels() {
+    use policy_engine::TrustLevel;
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_actor" && lvl := taint::level("k") && lvl == "verified" } } }"#;
+    type TaintCase<'a> = (Option<&'a [(&'a str, TrustLevel)]>, PolicyAction, &'a str);
+    let cases: &[TaintCase] = &[
+        (
+            Some(&[("k", TrustLevel::Verified)]),
+            PolicyAction::Allow,
+            "verified",
+        ),
+        (
+            Some(&[("k", TrustLevel::Platform)]),
+            PolicyAction::Deny,
+            "platform-not-verified",
+        ),
+        (Some(&[("k", TrustLevel::Llm)]), PolicyAction::Deny, "llm"),
+        // taint off -> "platform" -> exact-match rule denies
+        (None, PolicyAction::Deny, "taint-off-platform"),
+        // unlabeled under taint mode -> "llm" -> deny
+        (
+            Some(&[("other", TrustLevel::Platform)]),
+            PolicyAction::Deny,
+            "unlabeled",
+        ),
+    ];
+    for (prov, expected, label) in cases {
+        let req = taint_request("alice", "res_actor", &[], *prov);
+        assert_taint_equivalent_is(p, &req, expected.clone(), label);
+    }
+}
+
+#[test]
+fn taint_gate_composes_with_actor() {
+    // The real agentic shape: a trusted agent AND a platform-derived
+    // approval. Either leg failing denies.
+    use policy_engine::TrustLevel;
+    let p = r#"policy p { default: deny, rule r { allow if {
+        resource == "res_actor" && actor.trusted == true && taint::trusted("approved") } } }"#;
+
+    let mut req = taint_request(
+        "alice",
+        "res_actor",
+        &[("approved", "yes")],
+        Some(&[("approved", TrustLevel::Platform)]),
+    );
+    req.actor = Some("agent-x".to_string());
+    assert_taint_equivalent_is(p, &req, PolicyAction::Allow, "trusted-agent+platform");
+
+    // Same actor, LLM-asserted approval -> deny.
+    let mut req2 = taint_request(
+        "alice",
+        "res_actor",
+        &[("approved", "yes")],
+        Some(&[("approved", TrustLevel::Llm)]),
+    );
+    req2.actor = Some("agent-x".to_string());
+    assert_taint_equivalent_is(p, &req2, PolicyAction::Deny, "trusted-agent+llm");
+
+    // Platform approval but no actor -> deny.
+    let req3 = taint_request(
+        "alice",
+        "res_actor",
+        &[("approved", "yes")],
+        Some(&[("approved", TrustLevel::Platform)]),
+    );
+    assert_taint_equivalent_is(p, &req3, PolicyAction::Deny, "no-actor+platform");
+}

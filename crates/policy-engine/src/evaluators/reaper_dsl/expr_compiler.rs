@@ -15,6 +15,9 @@ pub(super) fn compile_expr_type(
     interner: &StringInterner,
 ) -> CompiledExprType {
     match expr_type {
+        // Taint: raw-String key, looks up the request provenance at eval.
+        ExprType::TaintLevel { key } => CompiledExprType::TaintLevel { key: key.clone() },
+
         ExprType::StringLower {
             entity_type,
             attribute,

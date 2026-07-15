@@ -281,6 +281,14 @@ impl ReaperDSLEvaluator {
         match condition {
             CompiledCondition::Always => true,
 
+            // taint::trusted("key") — true iff the key's request provenance
+            // is >= verified under the fail-untrusted rule (taint mode off ⇒
+            // platform; unlabeled key under taint mode ⇒ llm). One HashMap
+            // get on the request's provenance map; no interner involved.
+            CompiledCondition::TaintTrusted { key } => {
+                bindings.context_trust(key) >= crate::TrustLevel::Verified
+            }
+
             // ReBAC: pure interned graph lookups. Direct = one DashMap get +
             // binary search (~100ns); traversals are bounded BFS.
             CompiledCondition::RebacCheck {
@@ -1683,6 +1691,7 @@ impl ReaperDSLEvaluator {
             user: &user,
             actor,
             resource,
+            provenance: request.context_provenance.as_ref(),
         };
 
         // Variable context for local bindings (scoped to policy evaluation)
