@@ -46,6 +46,11 @@ pub enum RebacRef {
     ResourceId,
     /// A literal entity id from the policy text.
     Literal(String),
+    /// The request's optional non-human actor (the `actor` pseudo-binding,
+    /// F1 agentic authz). Absent actor ⇒ the check is non-matching, same as
+    /// the AST evaluator's unbound-variable rejection. Appended after the
+    /// original variants so serialized conditions keep their encoding.
+    Actor,
 }
 
 /// Policy condition (compiled from YAML/DSL)
@@ -358,4 +363,12 @@ pub enum Condition {
     Or(Vec<Condition>),
     /// NOT of a condition
     Not(Box<Condition>),
+
+    /// `taint::trusted("key")` — true iff the context key is not LLM-tainted
+    /// (trust >= verified) under the request provenance's fail-untrusted
+    /// rule (F1 agentic authz). Appended after the original variants so
+    /// serialized conditions keep their encoding.
+    TaintTrusted {
+        key: String,
+    },
 }

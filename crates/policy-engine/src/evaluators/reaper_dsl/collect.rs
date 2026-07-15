@@ -53,6 +53,10 @@ pub fn collect_strings_for_interning(
     match condition {
         Condition::ActionEquals { value } => intern(value),
 
+        // Taint keys look up the request's provenance map by raw string —
+        // nothing to pre-intern.
+        Condition::TaintTrusted { .. } => {}
+
         // Pre-intern rebac strings so compilation is alloc-free at eval time.
         Condition::RebacCheck {
             subject,
@@ -535,6 +539,10 @@ fn collect_expr_type_strings(
             }
         }
         ExprType::TimeNow | ExprType::TimeNowMs | ExprType::TimeNowNs => {}
+
+        // Taint keys look up the request's provenance map by raw string —
+        // nothing to pre-intern.
+        ExprType::TaintLevel { .. } => {}
     }
 }
 

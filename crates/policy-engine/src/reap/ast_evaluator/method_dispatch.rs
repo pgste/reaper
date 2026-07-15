@@ -25,6 +25,17 @@ impl ReapAstEvaluator {
     ) -> Result<EvalValue, ReaperError> {
         let receiver_value = self.evaluate_expr(receiver, context)?;
 
+        // TOTAL EVALUATION: a method invoked on Null yields Null. The
+        // receiver being Null means a missing attribute or an absent-actor
+        // read; the result then satisfies no comparison and is falsy as a
+        // predicate — a fail-closed non-match, never an eval error. This is
+        // the same contract as attribute access on null (returns null) and
+        // matches the compiled evaluator, which treats a missing receiver as
+        // a non-matching condition.
+        if matches!(receiver_value, EvalValue::Null) {
+            return Ok(EvalValue::Null);
+        }
+
         match method {
             // Aggregate methods (using builtin_methods)
             MethodName::Count => builtin_methods::method_count(&receiver_value),

@@ -58,8 +58,12 @@ impl ReapAstEvaluator {
         let entity_id = match attr.entity {
             Entity::User => context.user_id,
             Entity::Actor => match context.actor_id {
-                Some(id) => id,
-                None => return Ok(EvalValue::Null),
+                // An actor id that names no loaded entity also reads Null —
+                // it can still satisfy rebac checks (a relation may name it),
+                // but it has no attributes. Same rule as the compiled path's
+                // synthesized empty actor entity.
+                Some(id) if self.store.get(id).is_some() => id,
+                _ => return Ok(EvalValue::Null),
             },
             Entity::Resource => context.resource_id,
             Entity::Context => unreachable!("Context entity handled above"),
@@ -116,6 +120,22 @@ impl ReapAstEvaluator {
                 None => Ok(EvalValue::Null),
             }
         }
+    }
+
+    /// Actor attribute read: like [`Self::get_entity_attr_by_name`], but an
+    /// actor id that names no loaded entity reads Null instead of erroring —
+    /// the actor is request-supplied, so "unknown actor" must fail closed
+    /// (non-matching), never fail the evaluation. Mirrors the compiled
+    /// path's synthesized empty actor entity.
+    pub(super) fn get_actor_attr_by_name(
+        &self,
+        actor_id: EntityId,
+        attribute: &str,
+    ) -> Result<EvalValue, ReaperError> {
+        if self.store.get(actor_id).is_none() {
+            return Ok(EvalValue::Null);
+        }
+        self.get_entity_attr_by_name(actor_id, attribute)
     }
 
     /// Get entity attribute by entity_id and attribute name

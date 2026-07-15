@@ -391,6 +391,18 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
                 ("time", "now") => Ok(ExprType::TimeNow),
                 ("time", "now_ms") => Ok(ExprType::TimeNowMs),
                 ("time", "now_ns") => Ok(ExprType::TimeNowNs),
+                // taint::level("key") in assignment form (`lvl :=
+                // taint::level("k") && lvl == "verified"`). Literal keys only;
+                // dynamic keys fall back to the AST evaluator.
+                ("taint", "level") => {
+                    if args.len() != 1 {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "taint::level requires 1 argument".to_string(),
+                        });
+                    }
+                    let key = extract_string_literal(&args[0])?;
+                    Ok(ExprType::TaintLevel { key })
+                }
                 ("regex", "matches") => {
                     if args.len() != 2 {
                         return Err(ReaperError::InvalidPolicy {
@@ -449,7 +461,7 @@ pub fn compile_expr_to_type(expr: Expr) -> Result<ExprType, ReaperError> {
             attribute,
         } => {
             // Check if this is an entity (user/resource/context)
-            let is_entity = matches!(variable.as_str(), "user" | "resource" | "context");
+            let is_entity = matches!(variable.as_str(), "user" | "actor" | "resource" | "context");
             if is_entity {
                 // Entity attribute access - this should have been handled earlier
                 return Err(ReaperError::InvalidPolicy {

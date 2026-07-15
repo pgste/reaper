@@ -12,10 +12,10 @@
 // Allow unused functions - some are used in tests only or reserved for future use
 #![allow(dead_code)]
 
-use crate::data::{AttributeValue, Entity, InternedString};
+use crate::data::{AttributeValue, InternedString};
 
 use super::entity_helpers::get_entity_for_type;
-use super::types::{CompiledTimeCondition, EntityType, NumericOp};
+use super::types::{CompiledTimeCondition, EntityBindings, EntityType, NumericOp};
 
 // ============================================================================
 // V2 Dispatch Functions
@@ -23,8 +23,8 @@ use super::types::{CompiledTimeCondition, EntityType, NumericOp};
 
 /// Evaluate a V2 time operation
 #[inline]
-pub fn eval_time_operation(cond: &CompiledTimeCondition, user: &Entity, resource: &Entity) -> bool {
-    let entity = match get_entity_for_type(&cond.entity_type, user, resource) {
+pub fn eval_time_operation(cond: &CompiledTimeCondition, bindings: EntityBindings<'_>) -> bool {
+    let entity = match get_entity_for_type(&cond.entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -63,10 +63,9 @@ pub fn eval_time_is_after(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: i64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -84,10 +83,9 @@ pub fn eval_time_is_before(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: i64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -106,10 +104,9 @@ pub fn eval_time_is_between(
     attribute: InternedString,
     start: i64,
     end: i64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -148,10 +145,9 @@ pub fn eval_time_add_duration(
     entity_type: &EntityType,
     attribute: InternedString,
     duration_secs: i64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
 
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Int(ts)) => Some(AttributeValue::Int(*ts + duration_secs)),
@@ -166,10 +162,9 @@ pub fn eval_time_sub_duration(
     entity_type: &EntityType,
     attribute: InternedString,
     duration_secs: i64,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<AttributeValue> {
-    let entity = get_entity_for_type(entity_type, user, resource)?;
+    let entity = get_entity_for_type(entity_type, bindings)?;
 
     match entity.get_attribute(attribute) {
         Some(AttributeValue::Int(ts)) => Some(AttributeValue::Int(*ts - duration_secs)),
@@ -183,11 +178,10 @@ pub fn eval_time_sub_duration(
 pub fn eval_time_is_future(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
     let now = get_time_now_secs();
-    eval_time_is_after(entity_type, attribute, now, user, resource)
+    eval_time_is_after(entity_type, attribute, now, bindings)
 }
 
 /// Check if time attribute is in the past (less than now)
@@ -195,11 +189,10 @@ pub fn eval_time_is_future(
 pub fn eval_time_is_past(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
     let now = get_time_now_secs();
-    eval_time_is_before(entity_type, attribute, now, user, resource)
+    eval_time_is_before(entity_type, attribute, now, bindings)
 }
 
 /// Get time difference between two attributes in seconds
@@ -209,11 +202,10 @@ pub fn eval_time_diff_secs(
     attribute1: InternedString,
     entity2_type: &EntityType,
     attribute2: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> Option<i64> {
-    let entity1 = get_entity_for_type(entity1_type, user, resource)?;
-    let entity2 = get_entity_for_type(entity2_type, user, resource)?;
+    let entity1 = get_entity_for_type(entity1_type, bindings)?;
+    let entity2 = get_entity_for_type(entity2_type, bindings)?;
 
     let ts1 = match entity1.get_attribute(attribute1) {
         Some(AttributeValue::Int(ts)) => *ts,
@@ -233,6 +225,7 @@ pub fn eval_time_diff_secs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Entity;
     use crate::data::StringInterner;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -280,8 +273,12 @@ mod tests {
             &EntityType::User,
             created_key,
             1699999999,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
 
         // 1700000000 > 1700000000 is false
@@ -289,8 +286,12 @@ mod tests {
             &EntityType::User,
             created_key,
             1700000000,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
 
         // 1700000000 > 1700000001 is false
@@ -298,8 +299,12 @@ mod tests {
             &EntityType::User,
             created_key,
             1700000001,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -316,8 +321,12 @@ mod tests {
             &EntityType::User,
             created_key,
             1700000001,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
 
         // 1700000000 < 1700000000 is false
@@ -325,8 +334,12 @@ mod tests {
             &EntityType::User,
             created_key,
             1700000000,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -344,8 +357,12 @@ mod tests {
             created_key,
             1699999999,
             1700000001,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
 
         // Edge case: equal to boundaries
@@ -354,8 +371,12 @@ mod tests {
             created_key,
             1700000000,
             1700000000,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
 
         // Outside range
@@ -364,8 +385,12 @@ mod tests {
             created_key,
             1700000001,
             1700000002,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -394,8 +419,12 @@ mod tests {
             &EntityType::User,
             created_key,
             3600, // +1 hour
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None,
+            },
         );
         assert_eq!(result, Some(AttributeValue::Int(1700003600)));
     }
@@ -412,8 +441,12 @@ mod tests {
             &EntityType::User,
             created_key,
             3600, // -1 hour
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None,
+            },
         );
         assert_eq!(result, Some(AttributeValue::Int(1699996400)));
     }
@@ -430,8 +463,12 @@ mod tests {
         assert!(eval_time_is_future(
             &EntityType::User,
             created_key,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -447,8 +484,12 @@ mod tests {
         assert!(eval_time_is_past(
             &EntityType::User,
             created_key,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -467,8 +508,12 @@ mod tests {
             expires_key,
             &EntityType::User,
             created_key,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None,
+            },
         );
         assert_eq!(diff, Some(3600));
     }
@@ -485,8 +530,12 @@ mod tests {
             &EntityType::Context,
             created_key,
             1699999999,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -502,8 +551,12 @@ mod tests {
             &EntityType::User,
             unknown_key,
             1699999999,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -530,8 +583,12 @@ mod tests {
             &EntityType::User,
             name_key,
             1699999999,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -557,8 +614,12 @@ mod tests {
             &EntityType::User,
             ts_key,
             1699999999,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 }

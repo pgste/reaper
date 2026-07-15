@@ -4,6 +4,45 @@ Strategic bet (`reviews/round-2/06-future-architecture.md` §"AI / LLM-era
 authorization", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
 remediation. **Status: F1-s1 + s2 LANDED (capability core, request shape, DSL actor + taint); s3–s5 pending.**
 
+## STATUS (2026-07-15) — F1-s2c compiled-path actor (slices A+B)
+
+- **Slice A (EntityBindings)**: the compiled evaluator's 85
+  `(user: &Entity, resource: &Entity)` parameter pairs became one Copy
+  struct `EntityBindings<'a> { user, actor: Option<&Entity>, resource }` —
+  zero behavior change, proven by the full suite + differential.
+- **Slice B (compiled actor)**: `EntityType::Actor` (appended at enum end),
+  `RebacRef::Actor`/`CompiledRebacRef::Actor`, all compiler rejection sites
+  now compile actor, `evaluate_with_match` resolves `request.actor`
+  (lookup-only — no interning; unloaded actor id binds a synthesized empty
+  stack-local entity so attributes read missing while rebac still sees the
+  id). Absent actor rides the missing-attribute path everywhere ⇒ identical
+  fail-closed semantics to the AST's Null reads; explicit `== null` matches.
+  actor_binding_tests now assert `evaluator_type() == "reaper_dsl"`.
+- **Differential grew 42 → 61 cases** (actor matrix: every operator class ×
+  present/absent/unloaded actor, `== null` trap, rebac incl. ghost ids). It
+  caught and we fixed:
+  - **compiled index-drop bug (pre-existing, user-affecting)**:
+    `user.skills[0] == "rust"` compiled by DROPPING the index (compared the
+    list to the literal ⇒ wrong Deny). Now compiles to `IndexedEquals`;
+    other indexed shapes fall back to AST instead of miscompiling.
+  - AST totality gaps: method receivers `actor.*` (pseudo-var path),
+    method-on-Null now yields Null (was error), Null as a bare predicate is
+    false (was error), unbound `actor` rebac arg is non-match (was error),
+    unloaded actor entity reads Null (was error).
+- **Slice C (compiled taint)**: `Condition::TaintTrusted { key }` /
+  `CompiledCondition::TaintTrusted` (predicate) and `ExprType::TaintLevel` /
+  `CompiledExprType::TaintLevel` (assignment form), all appended at enum
+  ends. `EntityBindings` carries the request's provenance map by reference
+  (`context_trust()` = the same fail-untrusted rule as PolicyRequest); eval
+  is one HashMap get, no interner. Only literal keys compile — dynamic key
+  expressions fall back to the AST. taint_predicate_tests now assert
+  `evaluator_type() == "reaper_dsl"` on both the predicate and assignment
+  forms. Differential 61 → 64 (trusted × 5 provenance shapes, level × 5,
+  actor+taint composition).
+- Gates: engine suite 953, workspace libs 1196, differential 64, clippy -D
+  (workspace), fmt, wasm32 engine + reaper-wasm builds, wasm parity (3) —
+  all green.
+
 ## STATUS (2026-07-15) — F1-s2 agentic request shape + DSL surface
 
 - **Request shape** (part 1, merged in #70): `PolicyRequest` gained

@@ -279,6 +279,13 @@ pub enum CompiledCondition {
     And(Vec<CompiledCondition>),
     Or(Vec<CompiledCondition>),
     Not(Box<CompiledCondition>),
+
+    /// `taint::trusted("key")` — true iff the context key's request
+    /// provenance is >= verified (fail-untrusted rule). The key stays a raw
+    /// String: it looks up the request's provenance map, never the interner.
+    TaintTrusted {
+        key: String,
+    },
 }
 
 // ============================================================================
@@ -349,4 +356,7 @@ pub enum CompiledRebacRef {
     Principal,
     ResourceId,
     Literal(InternedString),
+    /// The request's optional actor; resolves to the bound actor entity's id
+    /// or fails the check when the request carries no actor.
+    Actor,
 }

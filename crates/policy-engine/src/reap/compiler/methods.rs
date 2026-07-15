@@ -29,11 +29,12 @@ pub fn compile_method_call(
         // Check if this is a pseudo-variable representing an entity attribute (e.g., "user.email")
         // The parser creates these for method chains like user.email.contains(...)
         if let Some((entity, attr)) = var_name.split_once('.') {
-            if matches!(entity, "user" | "resource" | "context") {
+            if matches!(entity, "user" | "actor" | "resource" | "context") {
                 // This is actually an entity attribute, not a variable
                 // Convert back to entity attribute format and continue
                 let entity_type = match entity {
                     "user" => DslEntityType::User,
+                    "actor" => DslEntityType::Actor,
                     "resource" => DslEntityType::Resource,
                     "context" => DslEntityType::Context,
                     _ => unreachable!(),
@@ -52,7 +53,7 @@ pub fn compile_method_call(
         attribute,
     } = &receiver
     {
-        let is_entity = matches!(variable.as_str(), "user" | "resource" | "context");
+        let is_entity = matches!(variable.as_str(), "user" | "actor" | "resource" | "context");
         if !is_entity {
             // It's a variable attribute method call, like d.permissions.contains("execute")
             return compile_variable_attr_method_call(

@@ -190,6 +190,14 @@ pub enum ExprType {
         attribute: String,
         index: ExprIndexType,
     },
+
+    /// `taint::level("key")` — the request-provenance trust level of one
+    /// context key as a string ("platform" | "verified" | "llm"), under the
+    /// fail-untrusted rule (F1 agentic authz). Appended after the original
+    /// variants so serialized expressions keep their encoding.
+    TaintLevel {
+        key: String,
+    },
 }
 
 /// Index type for indexed access expressions

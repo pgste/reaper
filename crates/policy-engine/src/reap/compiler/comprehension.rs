@@ -90,11 +90,7 @@ pub fn compile_iterator(
                 Entity::User => DslEntityType::User,
                 Entity::Resource => DslEntityType::Resource,
                 Entity::Context => DslEntityType::Context,
-                Entity::Actor => {
-                    return Err(ReaperError::InvalidPolicy {
-                        reason: "`actor` is not compiled yet; policy runs on the AST evaluator".to_string(),
-                    })
-                },
+                Entity::Actor => DslEntityType::Actor,
                 Entity::Input => {
                     return Err(ReaperError::InvalidPolicy {
                         reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),

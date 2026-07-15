@@ -13,12 +13,13 @@
 // Allow unused functions - some are used in tests only or reserved for future use
 #![allow(dead_code)]
 
-use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
+use crate::data::{AttributeValue, InternedString, StringInterner};
 use memchr::memmem;
 
 use super::entity_helpers::get_entity_for_type;
 use super::types::{
-    CompiledRegexMatch, CompiledStringOperation, CompiledVariableStringOp, EntityType, StringOp,
+    CompiledRegexMatch, CompiledStringOperation, CompiledVariableStringOp, EntityBindings,
+    EntityType, StringOp,
 };
 
 // ============================================================================
@@ -29,11 +30,10 @@ use super::types::{
 #[inline]
 pub fn eval_string_operation(
     op: &CompiledStringOperation,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(&op.entity_type, user, resource) {
+    let entity = match get_entity_for_type(&op.entity_type, bindings) {
         Some(e) => e,
         None => {
             tracing::debug!(
@@ -101,11 +101,10 @@ pub fn eval_variable_string_operation(
 #[inline]
 pub fn eval_regex_match(
     m: &CompiledRegexMatch,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(&m.entity_type, user, resource) {
+    let entity = match get_entity_for_type(&m.entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -130,11 +129,10 @@ pub fn eval_string_contains(
     entity_type: &EntityType,
     attribute: InternedString,
     substring: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -155,11 +153,10 @@ pub fn eval_string_starts_with(
     entity_type: &EntityType,
     attribute: InternedString,
     prefix: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -178,11 +175,10 @@ pub fn eval_string_ends_with(
     entity_type: &EntityType,
     attribute: InternedString,
     suffix: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -201,11 +197,10 @@ pub fn eval_regex_matches(
     entity_type: &EntityType,
     attribute: InternedString,
     pattern: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -282,11 +277,10 @@ pub fn eval_string_lower_equals(
     entity_type: &EntityType,
     attribute: InternedString,
     value: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -309,11 +303,10 @@ pub fn eval_string_upper_equals(
     entity_type: &EntityType,
     attribute: InternedString,
     value: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -333,6 +326,7 @@ pub fn eval_string_upper_equals(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Entity;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -379,8 +373,12 @@ mod tests {
             &EntityType::User,
             email_key,
             "@company.com",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -388,8 +386,12 @@ mod tests {
             &EntityType::User,
             email_key,
             "alice",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -397,8 +399,12 @@ mod tests {
             &EntityType::User,
             email_key,
             "@gmail.com",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -415,8 +421,12 @@ mod tests {
             &EntityType::User,
             email_key,
             "alice",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -424,8 +434,12 @@ mod tests {
             &EntityType::User,
             email_key,
             "bob",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -442,8 +456,12 @@ mod tests {
             &EntityType::User,
             email_key,
             ".com",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -451,8 +469,12 @@ mod tests {
             &EntityType::User,
             email_key,
             "@company.com",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -460,8 +482,12 @@ mod tests {
             &EntityType::User,
             email_key,
             ".gov",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -479,8 +505,12 @@ mod tests {
             &EntityType::User,
             email_key,
             r"^[a-z]+@[a-z]+\.[a-z]+$",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -489,8 +519,12 @@ mod tests {
             &EntityType::User,
             email_key,
             r"^[0-9]+$",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -562,8 +596,12 @@ mod tests {
             &EntityType::User,
             name_key,
             "alice smith",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -571,8 +609,12 @@ mod tests {
             &EntityType::User,
             name_key,
             "Alice Smith",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -594,7 +636,16 @@ mod tests {
             op: StringOp::LowerNotEquals,
             value: "admin".to_string(),
         };
-        assert!(!eval_string_operation(&op_ne, &user, &resource, &interner));
+        assert!(!eval_string_operation(
+            &op_ne,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
+            &interner
+        ));
 
         // Present and different after lowercasing → true.
         let op_ne_present = CompiledStringOperation {
@@ -605,8 +656,12 @@ mod tests {
         };
         assert!(eval_string_operation(
             &op_ne_present,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -619,8 +674,12 @@ mod tests {
         };
         assert!(!eval_string_operation(
             &op_ne_equal,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -638,8 +697,12 @@ mod tests {
             &EntityType::User,
             code_key,
             "ABC123",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -648,8 +711,12 @@ mod tests {
             &EntityType::User,
             code_key,
             "abc123",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -666,8 +733,12 @@ mod tests {
             &EntityType::Context,
             email_key,
             "test",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -675,8 +746,12 @@ mod tests {
             &EntityType::Context,
             email_key,
             "test",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -693,8 +768,12 @@ mod tests {
             &EntityType::User,
             unknown_key,
             "test",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -721,8 +800,12 @@ mod tests {
             &EntityType::User,
             level_key,
             "5",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }

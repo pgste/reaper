@@ -18,7 +18,9 @@ use crate::data::{AttributeValue, Entity, InternedString, StringInterner};
 use rustc_hash::FxHashSet;
 
 use super::entity_helpers::get_entity_for_type;
-use super::types::{CompiledCountCondition, CompiledLiteralValue, CountOp, EntityType, IndexExpr};
+use super::types::{
+    CompiledCountCondition, CompiledLiteralValue, CountOp, EntityBindings, EntityType, IndexExpr,
+};
 
 // ============================================================================
 // V2 Dispatch Functions
@@ -26,12 +28,8 @@ use super::types::{CompiledCountCondition, CompiledLiteralValue, CountOp, Entity
 
 /// Evaluate a V2 count operation
 #[inline]
-pub fn eval_count_operation(
-    cond: &CompiledCountCondition,
-    user: &Entity,
-    resource: &Entity,
-) -> bool {
-    let entity = match get_entity_for_type(&cond.entity_type, user, resource) {
+pub fn eval_count_operation(cond: &CompiledCountCondition, bindings: EntityBindings<'_>) -> bool {
+    let entity = match get_entity_for_type(&cond.entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -61,10 +59,9 @@ pub fn eval_count_gte(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -82,10 +79,9 @@ pub fn eval_count_gt(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -103,10 +99,9 @@ pub fn eval_count_eq(
     entity_type: &EntityType,
     attribute: InternedString,
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -154,11 +149,10 @@ pub fn eval_membership_test(
     entity_type: &EntityType,
     attribute: InternedString,
     index: Option<&IndexExpr>,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -223,11 +217,10 @@ pub fn eval_indexed_equals(
     attribute: InternedString,
     index: &IndexExpr,
     value: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -261,11 +254,10 @@ pub fn eval_set_intersection_count_gt(
     attribute: InternedString,
     values: &[String],
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -308,11 +300,10 @@ pub fn eval_map_key_exists(
     entity_type: &EntityType,
     attribute: InternedString,
     key: &str,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
     interner: &StringInterner,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -335,10 +326,9 @@ pub fn eval_map_key_exists(
 pub fn eval_is_string(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -353,10 +343,9 @@ pub fn eval_is_string(
 pub fn eval_is_number(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -371,10 +360,9 @@ pub fn eval_is_number(
 pub fn eval_is_bool(
     entity_type: &EntityType,
     attribute: InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -391,10 +379,9 @@ pub fn eval_set_intersection_count_greater(
     attribute: InternedString,
     values: &[InternedString],
     threshold: usize,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -427,10 +414,9 @@ pub fn eval_map_key_exists_interned(
     entity_type: &EntityType,
     attribute: InternedString,
     key: &InternedString,
-    user: &Entity,
-    resource: &Entity,
+    bindings: EntityBindings<'_>,
 ) -> bool {
-    let entity = match get_entity_for_type(entity_type, user, resource) {
+    let entity = match get_entity_for_type(entity_type, bindings) {
         Some(e) => e,
         None => return false,
     };
@@ -444,6 +430,7 @@ pub fn eval_map_key_exists_interned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Entity;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -514,22 +501,34 @@ mod tests {
             &EntityType::User,
             roles_key,
             3,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
         assert!(eval_count_gte(
             &EntityType::User,
             roles_key,
             2,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
         assert!(!eval_count_gte(
             &EntityType::User,
             roles_key,
             4,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -545,15 +544,23 @@ mod tests {
             &EntityType::User,
             roles_key,
             2,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
         assert!(!eval_count_gt(
             &EntityType::User,
             roles_key,
             3,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -569,15 +576,23 @@ mod tests {
             &EntityType::User,
             roles_key,
             3,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
         assert!(!eval_count_eq(
             &EntityType::User,
             roles_key,
             2,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -692,8 +707,12 @@ mod tests {
             roles_key,
             &IndexExpr::Number(0),
             admin,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -714,8 +733,12 @@ mod tests {
             roles_key,
             &IndexExpr::Wildcard,
             admin,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -725,8 +748,12 @@ mod tests {
             roles_key,
             &IndexExpr::Wildcard,
             unknown,
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -743,8 +770,12 @@ mod tests {
             &EntityType::User,
             metadata_key,
             "department",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
 
@@ -752,8 +783,12 @@ mod tests {
             &EntityType::User,
             metadata_key,
             "unknown_key",
-            &user,
-            &resource,
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            },
             &interner
         ));
     }
@@ -770,8 +805,12 @@ mod tests {
             &EntityType::Context,
             roles_key,
             1,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 
@@ -787,8 +826,12 @@ mod tests {
             &EntityType::User,
             unknown_key,
             1,
-            &user,
-            &resource
+            EntityBindings {
+                user: &user,
+                actor: None,
+                resource: &resource,
+                provenance: None
+            }
         ));
     }
 }

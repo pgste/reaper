@@ -3,8 +3,9 @@
 //! Per-request context provenance lets a policy demand that a sensitive
 //! attribute was platform-derived, not asserted by a possibly-injected LLM.
 //! Fail-untrusted: taint mode off ⇒ everything reads platform (pre-F1
-//! behavior); taint mode on ⇒ an unlabeled key is `llm`. The compiled
-//! evaluator falls back to the AST interpreter for `taint::` policies.
+//! behavior); taint mode on ⇒ an unlabeled key is `llm`. Since F1-s2c,
+//! `taint::` policies run on the COMPILED evaluator (sub-microsecond path);
+//! the AST interpreter keeps identical semantics.
 
 use policy_engine::reap::ReaperPolicy;
 use policy_engine::{
@@ -63,8 +64,9 @@ fn eval() -> Box<dyn PolicyEvaluator> {
 }
 
 #[test]
-fn taint_policy_uses_ast_fallback() {
-    assert_eq!(eval().evaluator_type(), "ReapAstEvaluator");
+fn taint_policy_runs_compiled() {
+    // Fast AND secure: the provenance gate must not cost the AST fallback.
+    assert_eq!(eval().evaluator_type(), "reaper_dsl");
 }
 
 #[test]
@@ -134,6 +136,8 @@ policy lvl {
 "#;
     let policy: ReaperPolicy = policy_src.parse().unwrap();
     let e = policy.build_preferred(store()).unwrap();
+    // the assignment form compiles too (CompiledExprType::TaintLevel)
+    assert_eq!(e.evaluator_type(), "reaper_dsl");
     // exactly verified → allow
     assert_eq!(
         e.evaluate(&req(&[], Some(&[("k", TrustLevel::Verified)])))

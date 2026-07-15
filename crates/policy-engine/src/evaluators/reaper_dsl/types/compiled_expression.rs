@@ -187,6 +187,12 @@ pub enum CompiledExprType {
         attribute: InternedString,
         index: CompiledExprIndexType,
     },
+
+    /// `taint::level("key")` — trust level of one context key as a string,
+    /// read from the request provenance under the fail-untrusted rule.
+    TaintLevel {
+        key: String,
+    },
 }
 
 /// Compiled index type for indexed access expressions

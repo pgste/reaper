@@ -42,6 +42,10 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
     match condition {
         Condition::Always => CompiledCondition::Always,
 
+        // Taint: the key stays a raw String — it looks up the request's
+        // provenance map at eval time, never the interner.
+        Condition::TaintTrusted { key } => CompiledCondition::TaintTrusted { key: key.clone() },
+
         Condition::RebacCheck {
             kind,
             subject,
@@ -56,6 +60,7 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
                 RebacRef::Principal => CompiledRebacRef::Principal,
                 RebacRef::ResourceId => CompiledRebacRef::ResourceId,
                 RebacRef::Literal(s) => CompiledRebacRef::Literal(interner.intern(s)),
+                RebacRef::Actor => CompiledRebacRef::Actor,
             };
             CompiledCondition::RebacCheck {
                 kind: *kind,
