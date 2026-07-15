@@ -194,6 +194,39 @@ pub async fn evaluate_policy(
         return Ok(([(header::CONTENT_TYPE, "application/json")], body));
     }
 
+    // CAPABILITY GATE (F1-s3): a presented capability must verify — crypto,
+    // window, revocation, subject/actor binding, grant coverage — BEFORE any
+    // policy evaluation; on success it may bind the request's actor. Denies
+    // are served like the other pre-eval guards, reason in matched_rule.
+    if let Err(reason) = crate::capability_gate::enforce(
+        &state,
+        &payload.principal,
+        &payload.action,
+        &payload.resource,
+        &mut payload.actor,
+        payload.capability.as_ref(),
+        crate::capability_gate::now_unix(),
+    ) {
+        ERRORS_TOTAL
+            .with_label_values(&["capability_rejected"])
+            .inc();
+        crate::observability::record_denial("capability_gate", &payload.resource, &payload.action);
+        let body = sonic_rs::to_vec(&EvalResponse {
+            decision_id,
+            decision: "deny",
+            policy_id: "",
+            policy_version: 0,
+            evaluation_time_microseconds: 0.0,
+            total_time_microseconds: 0.0,
+            matched_rule: &reason,
+            agent_id: &state.agent_id,
+            cache_hit: false,
+        })
+        .unwrap_or_default();
+        observe_early_return(&state, start_time);
+        return Ok(([(header::CONTENT_TYPE, "application/json")], body));
+    }
+
     // Determine which policy/policies to evaluate
     // Can specify: UUID, policy name, or nothing (evaluate all)
     let policy_ids: SmallVec<[Uuid; 1]> = if let Some(id_str) = payload.policy_id.take() {
@@ -349,8 +382,12 @@ pub async fn evaluate_policy(
         resource: payload.resource.clone(),
         action: payload.action.clone(),
         context,
-
-        ..Default::default()
+        // F1 agentic authz: actor (possibly bound from a verified capability
+        // by the gate above) and taint labels flow into the engine. Both are
+        // in the decision-cache fingerprint, so entries cannot cross actors
+        // or trust labels.
+        actor: payload.actor.take(),
+        context_provenance: payload.context_provenance.take(),
     };
 
     // Scope the cache to the exact policy set being evaluated so decisions for
@@ -652,6 +689,46 @@ pub async fn evaluate_policy(
 )]
 pub async fn fast_evaluate_policy(
     State(state): State<Arc<AgentState>>,
+    body: Bytes,
+) -> Result<axum::response::Response, StatusCode> {
+    // Agentic requests (actor / capability / taint labels) take the STANDARD
+    // path: they need capability enforcement and full typed parsing, and are
+    // a small fraction of fast-path traffic. The dispatch probe is a SIMD
+    // substring scan for the quoted keys — a false positive (the text inside
+    // some value) merely routes that one request through the standard lane,
+    // which parses properly and stays correct; a real key can never be
+    // missed. Plain requests pay three memmem probes and keep the pure
+    // SIMD lane.
+    fn looks_agentic(body: &[u8]) -> bool {
+        use memchr::memmem::find;
+        find(body, b"\"capability\"").is_some()
+            || find(body, b"\"actor\"").is_some()
+            || find(body, b"\"context_provenance\"").is_some()
+    }
+    if looks_agentic(&body) {
+        return match serde_json::from_slice::<EvaluateRequest>(&body) {
+            Ok(payload) => evaluate_policy(State(state), Json(payload))
+                .await
+                .map(IntoResponse::into_response),
+            Err(e) => {
+                ERRORS_TOTAL.with_label_values(&["parse_error"]).inc();
+                let body = sonic_rs::to_vec(&json!({
+                    "error": format!("JSON parse error: {}", e),
+                    "decision": "deny"
+                }))
+                .unwrap_or_default();
+                Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+            }
+        };
+    }
+    fast_evaluate_policy_plain(state, body)
+        .await
+        .map(IntoResponse::into_response)
+}
+
+/// The original SIMD lane: no actor, no capability, no taint labels.
+async fn fast_evaluate_policy_plain(
+    state: Arc<AgentState>,
     body: Bytes,
 ) -> Result<impl IntoResponse, StatusCode> {
     use sonic_rs::{JsonContainerTrait, JsonValueTrait};
@@ -1057,20 +1134,34 @@ pub async fn batch_evaluate_policy(
     let policy_name = policy.name.clone();
     let policy_id = policy.id;
 
-    // Convert batch requests to PolicyRequests — take ownership where possible
-    let requests: Vec<PolicyRequest> = payload
+    // Convert batch requests to PolicyRequests — take ownership where
+    // possible. The capability gate (F1-s3) runs per item HERE, before the
+    // parallel eval loop: an item failing it becomes a pre-denied slot
+    // (Err(reason)) that skips evaluation and reports the reason.
+    let gate_now = crate::capability_gate::now_unix();
+    let requests: Vec<Result<PolicyRequest, String>> = payload
         .requests
         .iter()
         .map(|r| {
+            let mut actor = r.actor.clone();
+            crate::capability_gate::enforce(
+                &state,
+                &r.principal,
+                &r.action,
+                &r.resource,
+                &mut actor,
+                r.capability.as_ref(),
+                gate_now,
+            )?;
             let mut context = r.context.clone().unwrap_or_default();
             context.insert("principal".to_string(), r.principal.clone());
-            PolicyRequest {
+            Ok(PolicyRequest {
                 resource: r.resource.clone(),
                 action: r.action.clone(),
                 context,
-
-                ..Default::default()
-            }
+                actor,
+                context_provenance: r.context_provenance.clone(),
+            })
         })
         .collect();
 
@@ -1105,6 +1196,24 @@ pub async fn batch_evaluate_policy(
             .enumerate()
             .map(|(i, req)| {
                 let eval_start = std::time::Instant::now();
+
+                // Pre-denied by the capability gate: report without evaluating.
+                let req = match req {
+                    Ok(req) => req,
+                    Err(reason) => {
+                        ERRORS_TOTAL
+                            .with_label_values(&["capability_rejected"])
+                            .inc();
+                        metrics.counter(&PolicyAction::Deny).inc();
+                        return json!({
+                            "index": i,
+                            "decision": "deny",
+                            "matched_rule": reason,
+                            "evaluation_time_microseconds": 0.0,
+                            "cache_hit": false
+                        });
+                    }
+                };
 
                 // Check decision cache first
                 let (decision, cache_hit) = if let Some(ref cache) = state.decision_cache {

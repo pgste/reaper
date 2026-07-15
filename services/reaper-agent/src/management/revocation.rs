@@ -25,6 +25,9 @@ struct Cached {
     next_update: i64,
     hashes: HashSet<String>,
     key_ids: HashSet<String>,
+    /// Revoked capability ids (F1 agentic authz), shared as an Arc so the
+    /// eval-path capability gate takes a snapshot without cloning the set.
+    capability_ids: std::sync::Arc<HashSet<String>>,
     /// True once at least one valid list has been applied.
     loaded: bool,
 }
@@ -77,14 +80,53 @@ impl RevocationStore {
             .map(|h| h.to_ascii_lowercase())
             .collect();
         cached.key_ids = list.revoked_key_ids.iter().cloned().collect();
+        cached.capability_ids =
+            std::sync::Arc::new(list.revoked_capability_ids.iter().cloned().collect());
         cached.loaded = true;
         info!(
             serial = list.serial,
             revoked_hashes = cached.hashes.len(),
             revoked_keys = cached.key_ids.len(),
+            revoked_capabilities = cached.capability_ids.len(),
             "Applied revocation list"
         );
         Ok(())
+    }
+
+    /// Snapshot of the revoked capability ids for the eval-path gate, with
+    /// the same staleness policy as bundle loads applied first: a stale list
+    /// under `Enforce` refuses capability verification outright (fail
+    /// closed); under `Monitor` it serves on the last-good set with a
+    /// warning. A cold agent that has never fetched a list gets an empty set
+    /// (nothing to enforce yet — mirrors the bundle-load posture).
+    pub fn capability_revocations(
+        &self,
+        now: i64,
+    ) -> Result<std::sync::Arc<HashSet<String>>, String> {
+        let cached = self.cached.read();
+        if !cached.loaded {
+            return Ok(std::sync::Arc::new(HashSet::new()));
+        }
+        if cached.next_update != 0 && now > cached.next_update {
+            match self.staleness {
+                RevocationStaleness::Enforce => {
+                    return Err(format!(
+                        "revocation list is stale (next_update {} < now {}) and staleness mode \
+                         is enforce: refusing capability verification",
+                        cached.next_update, now
+                    ));
+                }
+                RevocationStaleness::Monitor => {
+                    warn!(
+                        next_update = cached.next_update,
+                        now,
+                        "Revocation list is stale (monitor mode: capability gate serving \
+                         last-good revocations)"
+                    );
+                }
+            }
+        }
+        Ok(std::sync::Arc::clone(&cached.capability_ids))
     }
 
     /// Load-time check for one bundle. `Err(reason)` refuses the load.
@@ -153,6 +195,7 @@ mod tests {
                 next_update,
                 revoked_bundle_hashes: hashes.iter().map(|s| s.to_string()).collect(),
                 revoked_key_ids: keys.iter().map(|s| s.to_string()).collect(),
+                revoked_capability_ids: Vec::new(),
             },
             sk,
             "k1",
@@ -236,5 +279,51 @@ mod tests {
         assert!(store
             .apply(&signed(&sk, 1, 0, &["aa"], &[]), &other_vk, None)
             .is_err());
+    }
+
+    #[test]
+    fn capability_revocations_snapshot_and_staleness() {
+        let (sk, vk) = keypair();
+        let mut list = RevocationList {
+            issued_at: "2026-01-01T00:00:00Z".into(),
+            serial: 1,
+            next_update: 500,
+            revoked_bundle_hashes: Vec::new(),
+            revoked_key_ids: Vec::new(),
+            revoked_capability_ids: vec!["cap-1".into()],
+        };
+
+        let enforce = RevocationStore::new(RevocationStaleness::Enforce);
+        enforce
+            .apply(
+                &SignedRevocationList::sign(list.clone(), &sk, "k1"),
+                &vk,
+                Some("k1"),
+            )
+            .unwrap();
+        // Fresh: the revoked set is served.
+        let set = enforce.capability_revocations(400).unwrap();
+        assert!(set.contains("cap-1"));
+        // Stale + Enforce: capability verification is refused (fail closed).
+        assert!(enforce.capability_revocations(600).is_err());
+
+        // Stale + Monitor: last-good set still served.
+        list.serial = 2;
+        let monitor = RevocationStore::new(RevocationStaleness::Monitor);
+        monitor
+            .apply(
+                &SignedRevocationList::sign(list, &sk, "k1"),
+                &vk,
+                Some("k1"),
+            )
+            .unwrap();
+        let set = monitor.capability_revocations(600).unwrap();
+        assert!(set.contains("cap-1"));
+    }
+
+    #[test]
+    fn cold_store_serves_empty_capability_set() {
+        let store = RevocationStore::new(RevocationStaleness::Enforce);
+        assert!(store.capability_revocations(100).unwrap().is_empty());
     }
 }

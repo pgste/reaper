@@ -18,6 +18,7 @@ pub mod api;
 pub mod auth;
 pub mod bootstrap;
 pub mod cache;
+pub mod capability_gate;
 pub mod decision_stream;
 pub mod handlers;
 pub mod management;

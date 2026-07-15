@@ -360,6 +360,10 @@ impl ReaperAgentConfig {
             self.auth.open_data_plane =
                 matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
+        if let Ok(val) = std::env::var("REAPER_REQUIRE_ACTOR_CAPABILITY") {
+            self.auth.require_actor_capability =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // TLS settings
         if let Ok(val) = std::env::var("REAPER_TLS_ENABLED") {

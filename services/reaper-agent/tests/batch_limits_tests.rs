@@ -53,6 +53,9 @@ fn batch_of(n: usize) -> BatchEvaluateRequest {
                 resource: "/doc".to_string(),
                 action: "read".to_string(),
                 context: None,
+                actor: None,
+                context_provenance: None,
+                capability: None,
             })
             .collect(),
     }
@@ -112,6 +115,9 @@ async fn parallel_batch_preserves_order_and_decisions() {
             resource: if i % 2 == 0 { "/doc" } else { "/other" }.to_string(),
             action: "read".to_string(),
             context: None,
+            actor: None,
+            context_provenance: None,
+            capability: None,
         })
         .collect();
     let req = BatchEvaluateRequest {
@@ -164,6 +170,9 @@ async fn single_evals_complete_while_large_batch_runs() {
                         resource: "/doc".to_string(),
                         action: "read".to_string(),
                         context: None,
+                        actor: None,
+                        context_provenance: None,
+                        capability: None,
                     }),
                 )
                 .await

@@ -91,6 +91,29 @@ fn context_fold(request: &PolicyRequest, salt: u64) -> u64 {
     sum ^ xor
 }
 
+/// Order-independent fold of the context-provenance map (F1 taint), same
+/// commutative construction as [`context_fold`]. `None` (taint mode off) and
+/// `Some(empty)` fold differently on purpose: they have different eval
+/// semantics (off = platform for all keys; on+unlabeled = llm floor).
+#[inline]
+fn provenance_fold(request: &PolicyRequest, salt: u64) -> u64 {
+    let Some(map) = &request.context_provenance else {
+        return 0;
+    };
+    let mut sum: u64 = 0x9e37_79b9_7f4a_7c15; // non-zero base ≠ the None fold
+    let mut xor: u64 = 0;
+    for (key, level) in map {
+        let mut eh = rustc_hash::FxBuildHasher.build_hasher();
+        salt.hash(&mut eh);
+        key.hash(&mut eh);
+        (*level as u8).hash(&mut eh);
+        let pair = eh.finish();
+        sum = sum.wrapping_add(pair);
+        xor ^= pair.rotate_left(32);
+    }
+    sum ^ xor
+}
+
 /// Compute the 128-bit fingerprint `(key, verify)` for a request under a scope.
 ///
 /// The `scope` distinguishes which policy (or policy set) the decision was
@@ -106,6 +129,12 @@ fn fingerprint(request: &PolicyRequest, scope: u64) -> (u64, u64) {
         request.action.hash(&mut h);
         request.resource.hash(&mut h);
         context_fold(request, salt).hash(&mut h);
+        // F1 agentic authz: the actor and per-key provenance influence the
+        // decision (actor.* conditions, taint predicates), so they MUST be in
+        // the fingerprint — otherwise two requests differing only in actor or
+        // taint would share a cached decision (cross-actor cache poisoning).
+        request.actor.hash(&mut h);
+        provenance_fold(request, salt).hash(&mut h);
         h.finish()
     }
 
@@ -385,6 +414,62 @@ mod tests {
 
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn actor_isolates_cache_entries() {
+        // Two requests identical except for the actor must NOT share a
+        // decision — actor.* conditions make the actor decision-relevant.
+        let cache = DecisionCache::new(100);
+        let gen = cache.generation();
+
+        let mut with_actor = make_request("alice", "deploy", "svc");
+        with_actor.actor = Some("agent-ci".to_string());
+        cache.insert(&with_actor, 0, PolicyAction::Allow, gen);
+
+        let mut other_actor = with_actor.clone();
+        other_actor.actor = Some("agent-rogue".to_string());
+        assert!(cache.get(&other_actor, 0).is_none(), "different actor");
+
+        let actorless = make_request("alice", "deploy", "svc");
+        assert!(cache.get(&actorless, 0).is_none(), "no actor");
+        assert!(matches!(
+            cache.get(&with_actor, 0),
+            Some(PolicyAction::Allow)
+        ));
+    }
+
+    #[test]
+    fn provenance_isolates_cache_entries() {
+        // Taint labels are decision-relevant (taint::trusted gates); a request
+        // with LLM-tainted context must not hit a platform-trusted entry, and
+        // taint-mode-off (None) must not collide with an empty map (their eval
+        // semantics differ).
+        let cache = DecisionCache::new(100);
+        let gen = cache.generation();
+
+        let mut platform = make_request("alice", "act", "r");
+        platform.context_provenance = Some(
+            [("approved".to_string(), crate::TrustLevel::Platform)]
+                .into_iter()
+                .collect(),
+        );
+        cache.insert(&platform, 0, PolicyAction::Allow, gen);
+
+        let mut llm = platform.clone();
+        llm.context_provenance = Some(
+            [("approved".to_string(), crate::TrustLevel::Llm)]
+                .into_iter()
+                .collect(),
+        );
+        assert!(cache.get(&llm, 0).is_none(), "different trust level");
+
+        let taint_off = make_request("alice", "act", "r");
+        assert!(cache.get(&taint_off, 0).is_none(), "taint off ≠ labeled");
+
+        let mut empty_map = make_request("alice", "act", "r");
+        empty_map.context_provenance = Some(HashMap::new());
+        assert!(cache.get(&empty_map, 0).is_none(), "taint on+empty ≠ off");
     }
 
     #[test]

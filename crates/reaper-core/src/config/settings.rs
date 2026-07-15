@@ -160,6 +160,15 @@ pub struct AgentAuthSettings {
     /// regardless of this flag. Default false (auth gates everything).
     #[serde(default)]
     pub open_data_plane: bool,
+
+    /// F1 agentic authz: require a valid signed capability on every
+    /// actor-carrying evaluation request. When true, a request that names an
+    /// `actor` but presents no capability (or an invalid one) is denied
+    /// before evaluation. Default false — capabilities are verified whenever
+    /// presented, but actor requests without one still evaluate (the policy
+    /// itself remains the gate).
+    #[serde(default)]
+    pub require_actor_capability: bool,
 }
 
 impl Default for AgentAuthSettings {
@@ -175,6 +184,7 @@ impl Default for AgentAuthSettings {
             jwt_audience: default_agent_jwt_audience(),
             allow_unauthenticated: false,
             open_data_plane: false,
+            require_actor_capability: false,
         }
     }
 }

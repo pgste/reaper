@@ -31,6 +31,20 @@ pub struct EvaluateRequest {
     pub action: String,
     /// Additional context for evaluation (optional)
     pub context: Option<HashMap<String, String>>,
+    /// Optional non-human actor acting on behalf of the principal (F1
+    /// agentic authz). Flows into the engine request's `actor` binding.
+    #[serde(default)]
+    pub actor: Option<String>,
+    /// Optional per-key context provenance (taint labels). Absent = taint
+    /// mode off; present = unlabeled keys floor to `llm` in the engine.
+    #[serde(default)]
+    pub context_provenance: Option<HashMap<String, policy_engine::TrustLevel>>,
+    /// Optional signed capability. When present the agent verifies it —
+    /// signature, validity window, revocation, subject/actor binding, and
+    /// grant coverage of (action, resource) — BEFORE any policy evaluation,
+    /// and denies on any failure.
+    #[serde(default)]
+    pub capability: Option<reaper_core::capability::Capability>,
 }
 
 /// Response from policy evaluation.
@@ -68,6 +82,16 @@ pub struct BatchRequestItem {
     pub resource: String,
     pub action: String,
     pub context: Option<HashMap<String, String>>,
+    /// Optional actor (F1 agentic authz) — see [`EvaluateRequest::actor`].
+    #[serde(default)]
+    pub actor: Option<String>,
+    /// Optional taint labels — see [`EvaluateRequest::context_provenance`].
+    #[serde(default)]
+    pub context_provenance: Option<HashMap<String, policy_engine::TrustLevel>>,
+    /// Optional per-item signed capability — see
+    /// [`EvaluateRequest::capability`].
+    #[serde(default)]
+    pub capability: Option<reaper_core::capability::Capability>,
 }
 
 /// Response item for batch evaluation.

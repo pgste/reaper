@@ -65,6 +65,9 @@ fn evaluate_all_request(resource: &str) -> EvaluateRequest {
         resource: resource.to_string(),
         action: "read".to_string(),
         context: None,
+        actor: None,
+        context_provenance: None,
+        capability: None,
     }
 }
 
