@@ -51,6 +51,15 @@ struct Args {
     /// Save results to file
     #[arg(long)]
     save: Option<String>,
+
+    /// Emit the exact request stream for `--scenario` as NDJSON on stdout
+    /// (`{"principal","action","resource"}` per line — the same fields
+    /// `send_reaper_request` puts on the wire) and exit without benchmarking.
+    /// This is how out-of-process harnesses (the reaper-wasm Node bench)
+    /// replay an identical workload instead of re-implementing
+    /// `generate_request` and drifting.
+    #[arg(long)]
+    emit_requests: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -193,6 +202,24 @@ struct Resource {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let json_output = args.output == "json";
+
+    if args.emit_requests {
+        let mut out = String::with_capacity(args.requests * 64);
+        for i in 0..args.requests {
+            let r = generate_request(&args.scenario, i);
+            out.push_str(
+                &json!({
+                    "principal": r.principal.id,
+                    "action": r.action,
+                    "resource": r.resource,
+                })
+                .to_string(),
+            );
+            out.push('\n');
+        }
+        print!("{out}");
+        return Ok(());
+    }
 
     // Build a transport per engine. The endpoint scheme (`http://` vs `unix:`)
     // selects TCP or Unix-domain-socket; everything downstream is transport-agnostic.

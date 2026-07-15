@@ -233,6 +233,48 @@ fn wasm_wrapper_meets_every_library_manifest() {
 }
 
 #[test]
+fn redeploy_is_atomic_hot_swap_not_static() {
+    // The wasm embedding is dynamic like the agent: redeploying the same
+    // policy NAME keeps the id, bumps the version, and flips decisions
+    // in place; removePolicy retires it.
+    let engine = ReaperEngine::new();
+    engine
+        .load_entities_json_impl(r#"{"entities":[{"id":"svc","type":"User","attributes":{}}]}"#)
+        .expect("load entity");
+
+    let v1 = r#"policy swap { default: deny, rule r { allow if context.env == "prod" } }"#;
+    let v2 = r#"policy swap { default: deny, rule r { deny if context.env == "prod" } }"#;
+
+    let id1 = engine.deploy_policy_impl("swap", v1).expect("deploy v1");
+    let d1 = engine
+        .evaluate_impl(&id1, "svc", "read", "x", Some(r#"{"env":"prod"}"#))
+        .expect("eval v1");
+    assert_eq!(decision_of(&d1), "allow");
+
+    let id2 = engine.deploy_policy_impl("swap", v2).expect("redeploy v2");
+    assert_eq!(id1, id2, "hot-swap must keep the policy id");
+    let d2 = engine
+        .evaluate_impl(&id2, "svc", "read", "x", Some(r#"{"env":"prod"}"#))
+        .expect("eval v2");
+    assert_eq!(decision_of(&d2), "deny", "redeploy must flip the decision");
+    let v2_json: serde_json::Value = serde_json::from_str(&d2).expect("decision json");
+    assert_eq!(
+        v2_json["policy_version"].as_u64(),
+        Some(2),
+        "hot-swap must bump the version"
+    );
+
+    let removed_version = engine.remove_policy_impl(&id2).expect("remove");
+    assert_eq!(removed_version, 2);
+    assert!(
+        engine
+            .evaluate_impl(&id2, "svc", "read", "x", None)
+            .is_err(),
+        "evaluating a removed policy must fail"
+    );
+}
+
+#[test]
 fn context_coercion_matches_agent_fast_path() {
     // Scalars coerce to strings; nested values drop; caller-supplied
     // context.principal is overridden by the typed principal — the same

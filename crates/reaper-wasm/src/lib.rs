@@ -61,6 +61,11 @@ impl Default for ReaperEngine {
 // ---------------------------------------------------------------------------
 impl ReaperEngine {
     /// Deploy a Reaper DSL (`.reap`) policy; returns its UUID string.
+    ///
+    /// Fully dynamic, like the agent: redeploying an existing policy NAME is
+    /// an atomic zero-downtime hot-swap — the policy keeps its id, its
+    /// version bumps, and concurrent evaluations see either the old or the
+    /// new version, never a gap (the engine's `deploy_policy` DashMap swap).
     pub fn deploy_policy_impl(&self, name: &str, reap_source: &str) -> Result<String, String> {
         let mut policy = EnhancedPolicy::new_with_language(
             name.to_string(),
@@ -69,6 +74,12 @@ impl ReaperEngine {
             reap_source.to_string(),
         )
         .map_err(|e| format!("policy parse/build failed: {e}"))?;
+
+        // Hot-swap semantics: same name ⇒ same policy id, next version.
+        if let Some(existing) = self.engine.get_policy_by_name(name) {
+            policy.id = existing.id;
+            policy.version = existing.version + 1;
+        }
 
         policy
             .build_evaluator_with_data(Some(self.store.clone()))
@@ -79,6 +90,19 @@ impl ReaperEngine {
             .deploy_policy(policy)
             .map_err(|e| format!("deploy failed: {e}"))?;
         Ok(id.to_string())
+    }
+
+    /// Remove a deployed policy (atomic; in-flight evaluations holding the
+    /// old Arc complete against it). Returns the removed policy's version.
+    pub fn remove_policy_impl(&self, policy_id: &str) -> Result<u64, String> {
+        let id = policy_id
+            .parse::<PolicyId>()
+            .map_err(|e| format!("invalid policy id '{policy_id}': {e}"))?;
+        let removed = self
+            .engine
+            .remove_policy(&id)
+            .map_err(|e| format!("remove failed: {e}"))?;
+        Ok(removed.version)
     }
 
     /// Load a `{"entities": [...]}` JSON document; returns entities loaded.
@@ -229,6 +253,13 @@ impl ReaperEngine {
     #[wasm_bindgen(js_name = evaluatorType)]
     pub fn evaluator_type(&self, policy_id: &str) -> Result<String, JsError> {
         self.evaluator_type_impl(policy_id)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Remove a deployed policy (atomic). Returns the removed version.
+    #[wasm_bindgen(js_name = removePolicy)]
+    pub fn remove_policy(&self, policy_id: &str) -> Result<u64, JsError> {
+        self.remove_policy_impl(policy_id)
             .map_err(|e| JsError::new(&e))
     }
 

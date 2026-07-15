@@ -147,6 +147,28 @@ policy clock_pin {
   );
 }
 
+// ---- 2b. Dynamic hot-swap through the wasm boundary ----------------------
+{
+  const engine = new ReaperEngine();
+  engine.loadEntitiesJson(JSON.stringify({ entities: [{ id: "svc", type: "User", attributes: {} }] }));
+  const v1 = `policy swap { default: deny, rule r { allow if context.env == "prod" } }`;
+  const v2 = `policy swap { default: deny, rule r { deny if context.env == "prod" } }`;
+  const ctx = JSON.stringify({ env: "prod" });
+
+  const id1 = engine.deployPolicy("swap", v1);
+  assert.equal(decisionOf(engine.evaluate(id1, "svc", "read", "x", ctx)), "allow");
+
+  const id2 = engine.deployPolicy("swap", v2); // redeploy = atomic hot-swap
+  assert.equal(id1, id2, "hot-swap keeps the policy id");
+  const swapped = JSON.parse(engine.evaluate(id2, "svc", "read", "x", ctx));
+  assert.equal(swapped.decision.toLowerCase(), "deny", "redeploy flips the decision");
+  assert.equal(swapped.policy_version, 2, "hot-swap bumps the version");
+  assert.equal(engine.policyCount(), 1, "still one policy after swap");
+
+  assert.equal(engine.removePolicy(id2), 2n, "remove returns the retired version");
+  assert.equal(engine.policyCount(), 0);
+}
+
 // ---- 3. Error surface sanity ---------------------------------------------
 {
   const engine = new ReaperEngine();

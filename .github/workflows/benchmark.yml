@@ -95,11 +95,52 @@ jobs:
           benchmarks/reaper-vs-opa/target/release/benchmark
           benchmarks/reaper-vs-opa/target/release/generate-data
 
+  # reaper-wasm Node bindings, built once and shared by every scenario job
+  # (F2: the in-process wasm leg of the comparison).
+  build-wasm:
+    name: Build reaper-wasm (Node bindings)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust with wasm32 target
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build reaper-wasm (wasm32, release)
+      run: cargo build -p reaper-wasm --target wasm32-unknown-unknown --locked --release
+
+    - name: Install wasm-bindgen-cli (pinned to the wasm-bindgen crate version)
+      run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
+    - name: Generate Node bindings
+      run: >
+        wasm-bindgen --target nodejs --out-dir pkg-node
+        target/wasm32-unknown-unknown/release/reaper_wasm.wasm
+
+    - name: Upload Node bindings
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-wasm-node-bench
+        path: pkg-node/
+
   # Run benchmarks in parallel using pre-built binaries
   benchmark:
     name: ${{ matrix.scenario }}-${{ matrix.scale }}
     runs-on: ubuntu-latest
-    needs: [build-agent, build-benchmark]
+    needs: [build-agent, build-benchmark, build-wasm]
 
     strategy:
       matrix:
@@ -262,6 +303,48 @@ jobs:
         echo "reaper_rps=$REAPER_RPS" >> $GITHUB_OUTPUT
         echo "opa_rps=$OPA_RPS" >> $GITHUB_OUTPUT
 
+    # In-process wasm leg (F2): the SAME request stream the HTTP rows used
+    # (emitted by the same generate_request code — zero drift), replayed
+    # through the reaper-wasm artifact. Decision accounting matches
+    # send_reaper_request (errors fail closed to deny), so the allow-count
+    # parity check against the Reaper HTTP row is meaningful.
+    - name: Download reaper-wasm Node bindings
+      uses: actions/download-artifact@v4
+      with:
+        name: reaper-wasm-node-bench
+        path: crates/reaper-wasm/pkg-node/
+
+    - name: Run wasm leg
+      id: wasm
+      working-directory: benchmarks/reaper-vs-opa
+      run: |
+        REQUESTS=${{ github.event.inputs.requests || '10000' }}
+        ./bin/benchmark --emit-requests --scenario ${{ matrix.scenario }} \
+          --requests $REQUESTS 2>/dev/null > wasm-requests.ndjson
+        node bin/wasm-bench.mjs \
+          --scenario ${{ matrix.scenario }} \
+          --policy policies/reaper/${{ matrix.scenario }}.reap \
+          --data data/100k/${{ matrix.scenario }}.json \
+          --requests-file wasm-requests.ndjson > wasm-results.json
+        cat wasm-results.json
+
+        WASM_RPS=$(jq -r '.throughput_rps | floor' wasm-results.json)
+        WASM_P50=$(jq -r '.latency_p50_us' wasm-results.json)
+        WASM_P99=$(jq -r '.latency_p99_us' wasm-results.json)
+        WASM_ALLOW=$(jq -r '.allowed' wasm-results.json)
+        WASM_TIER=$(jq -r '.evaluator_tier' wasm-results.json)
+        REAPER_ALLOW=$(jq -r '.[0].allowed' results.json)
+
+        # Decision parity vs the Reaper HTTP row on the identical workload.
+        if [ "$WASM_ALLOW" != "$REAPER_ALLOW" ]; then
+          echo "::error::wasm/HTTP decision divergence: wasm allowed $WASM_ALLOW, HTTP allowed $REAPER_ALLOW"
+          exit 1
+        fi
+        echo "wasm_rps=$WASM_RPS" >> $GITHUB_OUTPUT
+        echo "wasm_p50=$WASM_P50" >> $GITHUB_OUTPUT
+        echo "wasm_p99=$WASM_P99" >> $GITHUB_OUTPUT
+        echo "wasm_tier=$WASM_TIER" >> $GITHUB_OUTPUT
+
     - name: Upload Allure Results
       uses: actions/upload-artifact@v4
       with:
@@ -272,16 +355,21 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: benchmark-${{ matrix.scenario }}-${{ matrix.scale }}
-        path: benchmarks/reaper-vs-opa/results.json
+        path: |
+          benchmarks/reaper-vs-opa/results.json
+          benchmarks/reaper-vs-opa/wasm-results.json
 
     - name: Write Job Summary
       run: |
         echo "## 📊 ${{ matrix.scenario }} @ ${{ matrix.scale }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Engine | Throughput | Speedup |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|------------|---------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Reaper** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
-        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | baseline |" >> $GITHUB_STEP_SUMMARY
+        echo "| Engine | Throughput | p50 | p99 | Speedup |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|------------|-----|-----|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reaper (HTTP)** | ${{ steps.benchmark.outputs.reaper_rps }} req/s | | | **${{ steps.benchmark.outputs.speedup }}x** |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reaper (wasm, in-process, ${{ steps.wasm.outputs.wasm_tier }})** | ${{ steps.wasm.outputs.wasm_rps }} req/s | ${{ steps.wasm.outputs.wasm_p50 }}µs | ${{ steps.wasm.outputs.wasm_p99 }}µs | |" >> $GITHUB_STEP_SUMMARY
+        echo "| OPA | ${{ steps.benchmark.outputs.opa_rps }} req/s | | | baseline |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_wasm row is single-threaded in-process replay of the identical request stream; HTTP rows include the wire. Decision parity (allow counts) between wasm and Reaper-HTTP is asserted in-job._" >> $GITHUB_STEP_SUMMARY
 
     - name: Stop Services
       if: always()
