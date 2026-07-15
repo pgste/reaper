@@ -220,9 +220,12 @@ unaltered" question lands on.
   request-supplied salt) + DataStore cascade, with immutable-surface exemptions
   disclosed on a receipt and a queryable `audit_erasure_requests` history
   (`GET …/audit/erasures`). **Effort M.** UK DPA-2018 DSAR gap.
-- **E3 — Signed air-gap export/import.** *Closes PROD R2-4, SEC (air-gap half of
-  R2-10 round-1).* `compile` doesn't sign; CLI deploy sends no signature. Add
-  `bundle export --sign` / `import --verify` + agent checksum report. **Effort M.**
+- **E3 — Signed air-gap export/import.** *(COMPLETE — see
+  `plans/round-2/E3-airgap-signing.md` STATUS.)* *Closes PROD R2-4, SEC (air-gap
+  half of R2-10 round-1).* Shipped `reaper bundle export` (v2-signed `.rbb` +
+  `.sig` sidecar), `bundle import` (offline verify + deploy-with-signature +
+  attestation), `bundle deploy` sidecar auto-attach, and the agent checksum report
+  (`bundle_hash` on `list_policies` + `bundle attest`). **Effort M.**
 - **E4 — Real multi-tenant quota enforcement.** *Closes PROD R2-9.* Plan-limit
   quotas are advisory (`UsageMetrics` hardcoded 0). Wire real usage counts +
   enforce at agent-register / policy-create + per-tenant rate ceilings.

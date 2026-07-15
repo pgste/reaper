@@ -155,11 +155,25 @@ pub async fn list_policies(
     let policy_list: Vec<Value> = policies
         .into_iter()
         .map(|policy| {
+            // Surface the active bundle's SHA-256 (the checksum report): an
+            // operator confirms an air-gapped agent loaded exactly the signed
+            // bytes by matching this against `reaper bundle export`'s digest.
+            let bundle_hash = state
+                .policy_engine
+                .get_version(&policy.id)
+                .map(|v| {
+                    v.bundle_hash
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
             json!({
                 "id": policy.id.to_string(),
                 "name": policy.name,
                 "version": policy.version,
                 "rules_count": policy.rules.len(),
+                "bundle_hash": bundle_hash,
                 "created_at": policy.created_at,
                 "updated_at": policy.updated_at
             })
