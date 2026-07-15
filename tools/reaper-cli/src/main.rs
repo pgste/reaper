@@ -436,6 +436,12 @@ enum BundleAction {
         #[arg(long)]
         force: bool,
     },
+    /// Report the SHA-256 of every bundle an agent has loaded (checksum report)
+    Attest {
+        /// Only show the policy whose bundle hash equals this value
+        #[arg(long)]
+        expect_hash: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2118,6 +2124,73 @@ async fn handle_bundle_action(
             )
             .await?;
         }
+
+        BundleAction::Attest { expect_hash } => {
+            handle_bundle_attest(cli, client, expect_hash.as_deref()).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle: reaper bundle attest — report the SHA-256 of every loaded bundle.
+async fn handle_bundle_attest(
+    cli: &Cli,
+    client: &Client,
+    expect_hash: Option<&str>,
+) -> anyhow::Result<()> {
+    println!("🔐 Loaded-bundle checksum report: {}\n", cli.agent_url);
+
+    let response = client
+        .get(format!("{}/api/v1/policies", cli.agent_url))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        anyhow::bail!("failed to query agent: {}", response.status());
+    }
+    let body: Value = response.json().await?;
+    let policies = body
+        .get("policies")
+        .and_then(|p| p.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    if policies.is_empty() {
+        println!("   (no policies loaded)");
+        return Ok(());
+    }
+
+    let mut matched = false;
+    for p in &policies {
+        let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let version = p.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+        let hash = p.get("bundle_hash").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(expected) = expect_hash {
+            if !hash.eq_ignore_ascii_case(expected) {
+                continue;
+            }
+            matched = true;
+        }
+        let mark = match expect_hash {
+            Some(_) => "✅ ",
+            None => "",
+        };
+        println!("   {mark}{name}  v{version}");
+        println!(
+            "      sha256: {}",
+            if hash.is_empty() { "(none)" } else { hash }
+        );
+    }
+
+    if let Some(expected) = expect_hash {
+        if !matched {
+            anyhow::bail!("no loaded bundle matches sha256 {expected}");
+        }
+        println!("\n✅ a loaded bundle matches the expected SHA-256");
+    } else {
+        println!(
+            "\nCompare a hash against `reaper bundle export`'s SHA-256 to confirm \
+             the agent loaded exactly the signed bytes."
+        );
     }
     Ok(())
 }
