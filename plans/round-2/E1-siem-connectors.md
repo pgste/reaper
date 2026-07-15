@@ -14,6 +14,78 @@ This doc is updated as each slice lands.
 
 ---
 
+## STATUS (2026-07-15) — slices 1, 2 & 3 landed; slice 4 (optional) remains
+
+**Decisions locked (with the maintainer):**
+1. **OCSF class = Authorize Session** (`class_uid` 3003, IAM category `category_uid`
+   3), schema **version 1.1.0** — chosen for cleanest SIEM integration (native
+   ingest by Amazon Security Lake / Splunk / Snowflake, no custom parsers).
+   Allow/deny rides the universal `status_id` axis (allow→1 Success, deny→2
+   Failure, log/other→99 Other); the decision isn't one of the class's
+   Assign-Privileges/Groups activities, so `activity_id` is honestly `99` (Other)
+   with `activity_name = "Authorization Decision"`. The action reads as a
+   requested `privileges` entry, the resource as a `resources` entry, and every
+   Reaper-specific field with no OCSF home is preserved under the schema's blessed
+   `unmapped` object (nothing dropped, still validates).
+2. **Push-export authority = a dedicated `audit:export` scope** (slice 3), mirroring
+   the `audit:erase` separation-of-duties precedent — a read-only/admin token
+   can't wire up an exfiltration sink without it.
+
+**Landed (slice 1):**
+- `crates/policy-engine/src/decision_export.rs`: `ExportFormat` enum
+  (`ndjson`/`ocsf`/`cef`, parse + `as_str`) and `DecisionLogEntry::{to_ocsf,
+  to_ocsf_ndjson, to_cef, export}`. OCSF per the mapping above; CEF (ArcSight)
+  with correct header (`\`, `|`) and extension (`\`, `=`, newlines) escaping,
+  standard keys (`rt`/`suser`/`act`/`outcome`/`request`/`externalId`) plus
+  labelled `cs*`/`cn*` customs for policy/rule/agent/trace/eval-time/data-version.
+  Both formats omit the large, possibly-encrypted `input_data`/`replay_input`
+  blobs (they stay in NDJSON for the replay path); redaction is inherited from
+  capture-time `decision_privacy`.
+- Golden fixture `src/testdata/decision_ocsf.json` (the reviewable sign-off
+  artifact) + 9 unit tests incl. `ocsf_matches_golden_fixture` and CEF
+  metacharacter-escaping.
+- Re-exported `policy_engine::ExportFormat`. No transport yet (slices 2–3).
+
+**Landed (slice 2):**
+- `deploy/decision-logs/vector-siem-sinks.toml`: a Vector overlay loaded next to
+  `vector.toml` (`vector --config vector.toml --config vector-siem-sinks.toml`).
+  An active `decisions_ocsf` remap transform reshapes `route._unmatched` into the
+  same OCSF Authorize Session shape as the Rust `to_ocsf` (verified by eye against
+  the golden fixture), plus commented copy-paste **Kafka**, **Splunk-HEC**, and
+  **S3 data-lake** sink blocks (uncomment + set env, like the WORM block). Sinks
+  point `inputs` at `decisions_ocsf` (OCSF) or `route._unmatched` (raw NDJSON).
+  CEF is deferred to the native connector (slice 3) — Vector's encoders don't
+  emit CEF. README gained a "SIEM export" section + the file listing. TOML
+  syntax validated (no Vector binary in CI; operators run `vector validate`).
+
+**Landed (slice 3):**
+- New **`audit:export`** scope (`auth/scopes.rs`, all 4 sites + separation-of-duties
+  test) — a connector is a standing exfiltration path, so it's not conferred by
+  `org:admin`.
+- Migration `026_siem_connectors.sql` / `0019_siem_connectors.sql` (`siem_connectors`
+  table) + `AuditConnectorRepository` (`db/repositories/audit_connector.rs`):
+  `ConnectorType {splunk_hec, http}`, format reuses `policy_engine::ExportFormat`,
+  CRUD + `record_export` accounting, tenant-scoped.
+- `ConnectorDeliveryService` (`src/siem/mod.rs`) generalised from
+  `WebhookDeliveryService`: async reqwest, exponential-backoff retries,
+  5xx/timeout classification. Splunk-HEC token auth + `{"event":…}` wrapping;
+  generic-HTTP NDJSON body + optional HMAC-SHA-256 signature. Transport only —
+  takes shaped lines.
+- `api/connectors.rs` (`audit:export`-gated, audited): CRUD
+  (`/orgs/{org}/audit/connectors[/{id}]`), `POST …/{id}/test` (synthetic record),
+  and the **push-export** `POST …/{id}/export` — reads a decision range from
+  `DecisionStore`, reconstructs `DecisionLogEntry`, shapes via
+  `entry.export(format)`, delivers. Fully typed DTOs + ProblemDetails → the
+  api_contract publishability gate passes (the `/orgs/{org}/audit/` prefix is a
+  typed group, so every endpoint is hard-checked). Secrets never returned
+  (`ConnectorSummary.has_secret`). New audit actions
+  `audit.connector_{create,update,delete,export}` + `ResourceType::Connector`.
+- Tests: 4 siem unit tests (HEC/HTTP body shaping, empty-batch no-op), scope
+  separation test, integration `siem_connector_repo_crud_round_trips` (CRUD +
+  export accounting + tenant isolation).
+
+---
+
 ## What already exists (reuse, don't rebuild)
 
 - **Decision record + capture-time redaction**: `DecisionLogEntry`
@@ -62,19 +134,22 @@ Home for the push API: **reaper-management**, not the agent — the central stor
 has full history and the authenticated, OpenAPI-contracted, multi-tenant surface.
 
 ## Work breakdown (sliced by PR)
-**Slice 1 — OCSF field mapping.** A `to_ocsf()` (and `to_cef()`) over
-`DecisionLogEntry` in `policy-engine`, with a fixed OCSF class mapping
-(Authorization Activity), unit-tested against golden fixtures. No transport yet.
+**Slice 1 — OCSF field mapping.** *(LANDED — see STATUS.)* A `to_ocsf()` (and
+`to_cef()`) over `DecisionLogEntry` in `policy-engine`, with a fixed OCSF class
+mapping (Authorize Session 3003), unit-tested against golden fixtures. No
+transport yet.
 
-**Slice 2 — Vector sink configs.** Documented Kafka / Splunk-HEC / S3 sink blocks
-in `deploy/decision-logs/`, wired to the existing routes; a `--format ocsf`
-transform option. Config-only, no service change.
+**Slice 2 — Vector sink configs.** *(LANDED — see STATUS.)* Documented Kafka /
+Splunk-HEC / S3 sink blocks in `deploy/decision-logs/vector-siem-sinks.toml`,
+wired to the existing routes; a `decisions_ocsf` (`--format ocsf`) transform.
+Config-only, no service change.
 
-**Slice 3 — native push connector + API.** `api/connectors.rs` (CRUD for per-org
-connector subscriptions: type = splunk_hec | http, endpoint, secret, format),
-a `ConnectorDeliveryService` generalised from `WebhookDeliveryService`, a new
-`audit:export` scope (4 sites in `scopes.rs`), reading shaped records from
-`DecisionStore`. Retry/signing/delivery-result tracking reused.
+**Slice 3 — native push connector + API.** *(LANDED — see STATUS.)*
+`api/connectors.rs` (CRUD for per-org connector subscriptions: type = splunk_hec |
+http, endpoint, secret, format), a `ConnectorDeliveryService` generalised from
+`WebhookDeliveryService`, a new `audit:export` scope (4 sites in `scopes.rs`),
+reading shaped records from `DecisionStore`. Retry/signing/delivery-result
+tracking reused.
 
 **Slice 4 (optional) — agent streaming sink.** Extend `WriterSinks` fan-out for
 low-latency in-agent push where the central-store hop is too slow.

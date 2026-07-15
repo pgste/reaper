@@ -177,6 +177,36 @@ you know exactly which policy logic ran.
   HIPAA's 6y dominates). Dedup by `decision_id` via `ReplacingMergeTree` (exactly-
   once *results* without exactly-once delivery, which is a myth).
 
+## SIEM export (OCSF / Kafka / Splunk-HEC / data lake)
+
+For SOC onboarding, fan the decision stream out to a SIEM in a format it ingests
+with **zero custom parsers**. Two altitudes, use either or both:
+
+**Config-only (Vector)** — `vector-siem-sinks.toml` is an overlay loaded next to
+the main pipeline:
+
+```bash
+vector validate --config vector.toml --config vector-siem-sinks.toml
+vector --config vector.toml --config vector-siem-sinks.toml
+```
+
+It adds a `decisions_ocsf` transform that reshapes each decision into **OCSF
+Authorize Session** (`class_uid` 3003, schema 1.1.0 — native to Amazon Security
+Lake / Splunk / Snowflake), plus commented, copy-paste **Kafka**, **Splunk-HEC**,
+and **S3 data-lake** sink blocks (uncomment + set env vars, like the WORM block).
+Point a sink's `inputs` at `decisions_ocsf` for OCSF or `route._unmatched` for raw
+Reaper NDJSON. Allow/deny rides the OCSF `status_id` axis; Reaper-specific fields
+are preserved under the schema's `unmapped` object.
+
+**Native push (control plane)** — for a per-tenant, authenticated **push-export
+API** (Splunk-HEC / generic HTTP, OCSF **or** CEF) reading the full history from
+the central store, see the connectors API *(slice 3, in progress)*. CEF is emitted
+there rather than in Vector (Vector's encoders don't produce CEF).
+
+The OCSF shape is defined once in `policy-engine`
+(`DecisionLogEntry::to_ocsf`, golden fixture `src/testdata/decision_ocsf.json`);
+the Vector transform mirrors it so both paths emit identical records.
+
 ## Immutable audit anchor (WORM) — tamper-evidence you can prove
 
 ClickHouse is the queryable path, but anyone with ClickHouse write access can
@@ -216,4 +246,6 @@ existing hardware.
   codecs, monthly partitions, TTL-to-S3) + per-minute rollup MV.
 - `vector.toml` — agent NDJSON → ClickHouse (+ S3 Object-Lock WORM branch,
   commented for dev; uncomment + set `S3_WORM_BUCKET` for production).
+- `vector-siem-sinks.toml` — SIEM export overlay (OCSF transform + commented
+  Kafka / Splunk-HEC / S3 data-lake sinks); load alongside `vector.toml`.
 - `docker-compose.yml` — runnable ClickHouse + Vector (+ optional MinIO).

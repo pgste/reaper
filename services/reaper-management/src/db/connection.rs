@@ -108,6 +108,11 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "subject_erasure",
         include_str!("migrations_pg/0018_subject_erasure.sql"),
     ),
+    (
+        19,
+        "siem_connectors",
+        include_str!("migrations_pg/0019_siem_connectors.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -415,6 +420,7 @@ impl Database {
             include_str!("migrations/023_rollout_supervisor.sql"),
             include_str!("migrations/024_policy_row_version.sql"),
             include_str!("migrations/025_subject_erasure.sql"),
+            include_str!("migrations/026_siem_connectors.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

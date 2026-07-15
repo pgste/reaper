@@ -67,6 +67,14 @@ pub enum Scope {
     #[serde(rename = "audit:erase")]
     AuditErase,
 
+    /// Manage SIEM export connectors and push decision-log exports (round-2 E1).
+    /// Kept **separate** from `org:admin` under separation-of-duties: a connector
+    /// is a standing data-exfiltration path, so the authority to wire one up (or
+    /// trigger a push) is a dedicated grant distinct from general org
+    /// administration. (`admin` still covers it.)
+    #[serde(rename = "audit:export")]
+    AuditExport,
+
     // Full admin access
     #[serde(rename = "admin")]
     Admin,
@@ -92,6 +100,7 @@ impl Scope {
             Self::ApiKeyRead => "apikey:read",
             Self::ApiKeyWrite => "apikey:write",
             Self::AuditErase => "audit:erase",
+            Self::AuditExport => "audit:export",
             Self::Admin => "admin",
         }
     }
@@ -115,6 +124,7 @@ impl Scope {
             "apikey:read" => Some(Self::ApiKeyRead),
             "apikey:write" => Some(Self::ApiKeyWrite),
             "audit:erase" => Some(Self::AuditErase),
+            "audit:export" => Some(Self::AuditExport),
             "admin" => Some(Self::Admin),
             _ => None,
         }
@@ -139,6 +149,7 @@ impl Scope {
             Self::ApiKeyRead,
             Self::ApiKeyWrite,
             Self::AuditErase,
+            Self::AuditExport,
             Self::Admin,
         ]
     }
@@ -310,6 +321,24 @@ mod tests {
 
         // The global platform admin still covers erasure.
         assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::AuditErase));
+    }
+
+    #[test]
+    fn test_audit_export_is_separate_from_org_admin() {
+        // Separation of duties: a SIEM connector is a standing exfiltration path,
+        // so wiring one up is a distinct authority — it round-trips and is NOT
+        // conferred by org:admin.
+        assert_eq!(Scope::parse("audit:export"), Some(Scope::AuditExport));
+        assert_eq!(Scope::AuditExport.as_str(), "audit:export");
+
+        let org_admin = Permission::from_scopes(vec![Scope::OrgAdmin]);
+        assert!(!org_admin.has(Scope::AuditExport));
+
+        let exporter = Permission::from_scopes(vec![Scope::AuditExport]);
+        assert!(!exporter.has(Scope::OrgAdmin));
+
+        // The global platform admin still covers export.
+        assert!(Permission::from_scopes(vec![Scope::Admin]).has(Scope::AuditExport));
     }
 
     #[test]

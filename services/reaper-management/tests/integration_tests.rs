@@ -8619,3 +8619,101 @@ async fn subject_erasure_history_records_and_lists() {
         .unwrap();
     assert!(repo.list_for_org(other.id, None).await.unwrap().is_empty());
 }
+
+/// E1 slice 3: the SIEM connector table round-trips through the repository
+/// (create/list/get/update/delete + export accounting), tenant-scoped.
+#[tokio::test]
+async fn siem_connector_repo_crud_round_trips() {
+    use policy_engine::ExportFormat;
+    use reaper_management::db::repositories::{
+        AuditConnectorRepository, ConnectorPatch, ConnectorType, NewConnector,
+    };
+
+    let env = setup_test_env().await;
+    let org = OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "SIEM Org".to_string(),
+            slug: "siem-org".to_string(),
+            display_name: None,
+            description: None,
+            settings: json!({}),
+        })
+        .await
+        .unwrap();
+
+    let repo = AuditConnectorRepository::new(&env.db);
+    let created = repo
+        .create(
+            org.id,
+            NewConnector {
+                name: "splunk-prod",
+                connector_type: ConnectorType::SplunkHec,
+                endpoint: "https://splunk.example/services/collector/event",
+                secret: Some("hec-token"),
+                format: ExportFormat::Ocsf,
+                created_by: Some("dpo-1"),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.connector_type, ConnectorType::SplunkHec);
+    assert_eq!(created.format, ExportFormat::Ocsf);
+    assert!(created.enabled);
+
+    // get + list see it.
+    let got = repo.get(org.id, created.id).await.unwrap().unwrap();
+    assert_eq!(got.name, "splunk-prod");
+    assert_eq!(got.secret.as_deref(), Some("hec-token"));
+    assert_eq!(repo.list_for_org(org.id).await.unwrap().len(), 1);
+
+    // Patch format + disable.
+    let patched = repo
+        .update(
+            org.id,
+            created.id,
+            ConnectorPatch {
+                format: Some(ExportFormat::Cef),
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(patched.format, ExportFormat::Cef);
+    assert!(!patched.enabled);
+
+    // Export accounting: a failure bumps the counter.
+    repo.record_export(created.id, false).await.unwrap();
+    assert_eq!(
+        repo.get(org.id, created.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .failure_count,
+        1
+    );
+    repo.record_export(created.id, true).await.unwrap();
+    let after = repo.get(org.id, created.id).await.unwrap().unwrap();
+    assert_eq!(after.failure_count, 0, "success resets the counter");
+    assert!(after.last_export_at.is_some());
+
+    // Tenant isolation: another org sees nothing and cannot fetch by id.
+    let other = OrganizationRepository::new(&env.db)
+        .create(CreateOrganization {
+            name: "Other SIEM".to_string(),
+            slug: "other-siem".to_string(),
+            display_name: None,
+            description: None,
+            settings: json!({}),
+        })
+        .await
+        .unwrap();
+    assert!(repo.list_for_org(other.id).await.unwrap().is_empty());
+    assert!(repo.get(other.id, created.id).await.unwrap().is_none());
+
+    // Delete is tenant-scoped and idempotent-safe.
+    assert!(!repo.delete(other.id, created.id).await.unwrap());
+    assert!(repo.delete(org.id, created.id).await.unwrap());
+    assert!(repo.get(org.id, created.id).await.unwrap().is_none());
+}
