@@ -10,9 +10,32 @@ use uuid::Uuid;
 
 use crate::{
     api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
-    db::repositories::OrganizationRepository, deployment::DeploymentService,
-    domain::deployment::CreateVersionPin, state::AppState,
+    db::repositories::{AgentRepository, OrganizationRepository},
+    deployment::DeploymentService, domain::deployment::CreateVersionPin, state::AppState,
 };
+
+/// Resource-org recheck for by-id pin mutations (round-3 SEC P1-b).
+///
+/// A pin is addressed by `agent_id` (a global UUID); `authorize_deploy` only
+/// bound the caller to the *path* org. Without this an operator in org A could
+/// pin/unpin an agent in org B by id. Returns `404` (not `403`) so a foreign
+/// agent id is not an existence oracle. Recognised by the tenant-authz fitness
+/// function via `.org_id != org_id`.
+async fn ensure_agent_in_org(
+    state: &AppState,
+    agent_id: Uuid,
+    org_id: Uuid,
+) -> Result<(), ApiError> {
+    let agent = AgentRepository::new(&state.db)
+        .get_by_id(agent_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Agent not found".to_string()))?;
+    if agent.org_id != org_id {
+        return Err(ApiError::NotFound("Agent not found".to_string()));
+    }
+    Ok(())
+}
 
 use super::types::{CreatePinRequest, PinResponse};
 
@@ -37,7 +60,8 @@ pub async fn create_pin(
     Path((org, agent_id)): Path<(String, Uuid)>,
     Json(request): Json<CreatePinRequest>,
 ) -> Result<(StatusCode, Json<PinResponse>), ApiError> {
-    let _organization = super::authorize_deploy(&state, &user, &org, "create version pins").await?;
+    let organization = super::authorize_deploy(&state, &user, &org, "create version pins").await?;
+    ensure_agent_in_org(&state, agent_id, organization.id).await?;
 
     let input = CreateVersionPin {
         bundle_id: request.bundle_id,
@@ -93,6 +117,7 @@ pub async fn get_pin(
             "Cannot access pins for other organizations".to_string(),
         ));
     }
+    ensure_agent_in_org(&state, agent_id, organization.id).await?;
 
     let service = DeploymentService::new(state.db.clone());
     let pin = service
@@ -123,7 +148,8 @@ pub async fn delete_pin(
     RequireAuth(user): RequireAuth,
     Path((org, agent_id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    let _organization = super::authorize_deploy(&state, &user, &org, "delete version pins").await?;
+    let organization = super::authorize_deploy(&state, &user, &org, "delete version pins").await?;
+    ensure_agent_in_org(&state, agent_id, organization.id).await?;
 
     let service = DeploymentService::new(state.db.clone());
     service.delete_pin(agent_id).await.map_err(|e| match e {
