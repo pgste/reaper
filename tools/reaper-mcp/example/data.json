@@ -1,0 +1,4 @@
+{"entities":[
+  {"id":"user_alice","type":"User","attributes":{"role":"engineer","department":"platform"}},
+  {"id":"agent_claude","type":"Agent","attributes":{"kind":"agent","model":"claude","trusted":true}}
+]}

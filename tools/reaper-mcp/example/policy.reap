@@ -1,0 +1,43 @@
+// MCP tool gate — the end-to-end F1 example policy.
+//
+// Three tiers, showing the agentic-authz stack working together:
+//   1. Read-only tools: any bound agent actor may call them.
+//   2. Mutating tools: only with an approval that is PLATFORM-trusted —
+//      taint::trusted() means an approval the model merely asserted
+//      (llm trust) can never satisfy this rule. The reaper-mcp adapter
+//      labels everything the caller supplies as llm, so only context the
+//      platform itself injected can pass.
+//   3. Everything else: default deny.
+//
+// The adapter always sets context "mcp.tool" (platform-trusted) to the tool
+// being authorized; chained attribute access (context.mcp.tool) addresses it.
+policy mcp_tool_gate {
+    default: deny,
+
+    // Tier 1 — read-only tools for any agent actor bound to the request.
+    rule agent_readonly_read_file {
+        allow if {
+            actor.kind == "agent" &&
+            context.mcp.tool == "read_file"
+        }
+    }
+
+    rule agent_readonly_search {
+        allow if {
+            actor.kind == "agent" &&
+            context.mcp.tool == "search"
+        }
+    }
+
+    // Tier 2 — delete_file needs a platform-trusted approval: the approval
+    // key must equal "yes" AND carry platform/verified provenance. An
+    // LLM-asserted {"approved": "yes"} (llm trust) fails taint::trusted.
+    rule agent_delete_with_trusted_approval {
+        allow if {
+            actor.kind == "agent" &&
+            context.mcp.tool == "delete_file" &&
+            context.approved == "yes" &&
+            taint::trusted("approved")
+        }
+    }
+}

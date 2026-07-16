@@ -141,7 +141,8 @@ reaper/
 │   ├── reaper-management/  # Multi-tenant management server
 │   └── reaper-sync/        # Policy synchronization client
 ├── tools/
-│   └── reaper-cli/         # CLI management tool
+│   ├── reaper-cli/         # CLI management tool
+│   └── reaper-mcp/         # Stdio MCP server gating tool calls via the agent
 ├── deploy/
 │   ├── kubernetes/         # Raw K8s manifests
 │   └── helm/reaper/        # Helm chart
@@ -504,6 +505,7 @@ tests:
     - OPERATIONS_GUIDE.md - Production operations (health, metrics, troubleshooting)
     - DEPLOYMENT_PATTERNS.md - Standalone, Integrated, Embedded patterns
     - SIDECAR_DEPLOYMENT.md - Sidecar deployment guide
+    - MCP_ADAPTER.md - reaper-mcp stdio gate for MCP tool-calling agents
   - **performance/** - Performance optimization documentation
     - PERFORMANCE_ANALYSIS.md - Benchmarks and analysis
     - OPTIMIZATION_ANALYSIS.md - Optimization strategies
