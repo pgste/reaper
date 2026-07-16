@@ -107,7 +107,7 @@ impl PolicyBundle {
                 reason: format!("Failed to deserialize bundle: {}", e),
             })?;
 
-        // Version check
+        // Wire-format version check.
         if bundle.metadata.version > Self::FORMAT_VERSION {
             return Err(ReaperError::InvalidPolicy {
                 reason: format!(
@@ -116,6 +116,22 @@ impl PolicyBundle {
                     Self::FORMAT_VERSION
                 ),
             });
+        }
+
+        // DSL language-version check (round-3 Plan 04): the language version
+        // rides in the compiled policy's metadata. A bundle whose policy targets
+        // a newer language than this engine implements is rejected — fail closed,
+        // same posture as the wire-format check above — never misinterpreted.
+        if let Some(raw) = bundle.policy.metadata.get("language_version") {
+            let got = raw.parse::<u32>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!("bundle policy declares a malformed language_version {raw:?}"),
+            })?;
+            if got > crate::reap::CURRENT_LANGUAGE_VERSION {
+                return Err(ReaperError::LanguageVersionUnsupported {
+                    got,
+                    supported: crate::reap::CURRENT_LANGUAGE_VERSION,
+                });
+            }
         }
 
         Ok(bundle)

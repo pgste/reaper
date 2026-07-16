@@ -189,12 +189,58 @@ impl ReaperPolicy {
     }
 }
 
+/// The `.reap` DSL language version this engine implements.
+///
+/// A policy may declare its target version with a `language_version: "N"`
+/// metadata field. A policy declaring a NEWER version than this is rejected
+/// (fail-closed), the same posture the bundle wire format takes one layer down
+/// (`reap/bundle.rs`) — an old engine must never silently misinterpret a policy
+/// written against a newer language. A policy that declares no version is
+/// treated as this current (implicit) version. Bump this only alongside a
+/// documented, frozen-corpus-gated language change (see
+/// `docs/reference/DSL_COMPATIBILITY.md`).
+pub const CURRENT_LANGUAGE_VERSION: u32 = 2;
+
 impl FromStr for ReaperPolicy {
     type Err = ReaperError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let ast = ReapParser::parse(s)?;
-        Ok(Self { ast })
+        let policy = Self { ast };
+        policy.check_language_version()?;
+        Ok(policy)
+    }
+}
+
+impl ReaperPolicy {
+    /// The DSL language version this policy targets — its declared
+    /// `language_version`, or [`CURRENT_LANGUAGE_VERSION`] if it declares none.
+    pub fn language_version(&self) -> u32 {
+        self.ast
+            .metadata
+            .get("language_version")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(CURRENT_LANGUAGE_VERSION)
+    }
+
+    /// Fail closed if the policy declares a language version this engine does
+    /// not implement (newer than [`CURRENT_LANGUAGE_VERSION`]), or a malformed
+    /// one. Never down-levels or best-effort parses a newer policy.
+    pub(crate) fn check_language_version(&self) -> Result<(), ReaperError> {
+        if let Some(raw) = self.ast.metadata.get("language_version") {
+            let got = raw.parse::<u32>().map_err(|_| ReaperError::InvalidPolicy {
+                reason: format!(
+                    "malformed language_version {raw:?}: expected an integer like \"2\""
+                ),
+            })?;
+            if got > CURRENT_LANGUAGE_VERSION {
+                return Err(ReaperError::LanguageVersionUnsupported {
+                    got,
+                    supported: CURRENT_LANGUAGE_VERSION,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -228,5 +274,52 @@ mod tests {
 
         let policy = ReaperPolicy::from_str(policy_text).unwrap();
         assert_eq!(policy.version(), Some("1.0.0"));
+    }
+
+    // --- DSL language versioning (round-3 Plan 04, Step 2) ---
+
+    #[test]
+    fn headerless_policy_is_current_language_version() {
+        let policy = ReaperPolicy::from_str(
+            r#"policy p { default: deny, rule r { allow if user.role == "admin" } }"#,
+        )
+        .expect("headerless policy must still parse (back-compat)");
+        assert_eq!(policy.language_version(), CURRENT_LANGUAGE_VERSION);
+    }
+
+    #[test]
+    fn declared_current_language_version_parses() {
+        let src = format!(
+            r#"policy p {{ language_version: "{CURRENT_LANGUAGE_VERSION}", default: deny,
+               rule r {{ allow if user.role == "admin" }} }}"#
+        );
+        let policy = ReaperPolicy::from_str(&src).expect("current version must parse");
+        assert_eq!(policy.language_version(), CURRENT_LANGUAGE_VERSION);
+    }
+
+    #[test]
+    fn newer_language_version_fails_closed() {
+        let src = r#"policy p { language_version: "999", default: deny,
+                     rule r { allow if user.role == "admin" } }"#;
+        match ReaperPolicy::from_str(src) {
+            Err(ReaperError::LanguageVersionUnsupported { got, supported }) => {
+                assert_eq!(got, 999);
+                assert_eq!(supported, CURRENT_LANGUAGE_VERSION);
+            }
+            Ok(_) => {
+                panic!("a policy targeting a newer language must be rejected, not down-levelled")
+            }
+            Err(other) => panic!("expected LanguageVersionUnsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_language_version_rejected() {
+        let src = r#"policy p { language_version: "two", default: deny,
+                     rule r { allow if user.role == "admin" } }"#;
+        assert!(matches!(
+            ReaperPolicy::from_str(src),
+            Err(ReaperError::InvalidPolicy { .. })
+        ));
     }
 }
