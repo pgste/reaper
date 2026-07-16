@@ -4,6 +4,34 @@ Strategic bet (`reviews/round-2/06-future-architecture.md` §"AI / LLM-era
 authorization", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
 remediation. **Status: F1-s1 + s2 LANDED (capability core, request shape, DSL actor + taint); s3–s5 pending.**
 
+## STATUS (2026-07-16) — F1-s5 MCP adapter (LANDED on branch) — F1 COMPLETE
+
+- **`tools/reaper-mcp`**: stdio MCP server (newline-delimited JSON-RPC 2.0;
+  initialize/ping/tools/list/tools/call; protocol revisions 2025-06-18,
+  2025-03-26, 2024-11-05) with ZERO new dependencies — the loop is plain
+  serde_json + tokio, so the supply-chain gates stay quiet. Tools:
+  `authorize_tool_call` (→ POST /api/v1/messages via reaper-sdk, HTTP or
+  UDS) and `explain_decision` (→ GET /api/v1/decisions/{id}).
+- **Reference taint edge**: everything the caller supplies (tool args
+  flattened as `arg.<key>`, extra context) is labeled `llm`; only
+  adapter-derived `mcp.tool`/`mcp.server` are `platform`, overwriting
+  spoof attempts; provenance always attached → taint mode unconditionally
+  on. Capability forwarded verbatim (per-call arg or
+  REAPER_MCP_CAPABILITY_FILE). Config via REAPER_MCP_* envs.
+- Tests (12): taint-labeling units, mock-agent integration (handshake,
+  allow/deny, wire contract asserted on captured requests, explain 404 +
+  path-injection, unreachable-agent), stdio smoke driving the real binary.
+- **Verified live end-to-end** (real agent + adapter binaries, example
+  policy): read_file → allow via named rule `agent_readonly_read_file`;
+  delete_file with LLM-asserted approved=yes → default_deny
+  (taint::trusted blocks); explain_decision returns default-on actor
+  input_data snapshot; same approval with platform provenance via
+  operator channel → allow via `agent_delete_with_trusted_approval`.
+- Docs: docs/deployment/MCP_ADAPTER.md + runnable
+  tools/reaper-mcp/example/ (policy.reap, data.json, README walkthrough
+  with real transcripts).
+- **F1 slices s1–s5 all landed. Workstream complete.**
+
 ## STATUS (2026-07-16) — F1-s4 allow-path explainability (LANDED on branch)
 
 - **Engine**: `PolicyEvaluator::evaluate_named` → `NamedOutcome { decision,

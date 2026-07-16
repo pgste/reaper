@@ -12,6 +12,7 @@ members = [
     "services/reaper-management",
     "services/reaper-bench",
     "tools/reaper-cli",
+    "tools/reaper-mcp",
     "tests/e2e",
 ]
 exclude = [
