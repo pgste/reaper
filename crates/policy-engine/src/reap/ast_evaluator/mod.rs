@@ -83,6 +83,18 @@ impl ReapAstEvaluator {
         request: &PolicyRequest,
         input: Option<&serde_json::Value>,
     ) -> Result<PolicyAction, ReaperError> {
+        self.evaluate_with_input_named(request, input)
+            .map(|(action, _)| action)
+    }
+
+    /// Like [`Self::evaluate_with_input`], additionally naming the rule that
+    /// decided (allow-path explainability, F1-s4). `None` = the per-policy
+    /// default decided.
+    pub fn evaluate_with_input_named(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<(PolicyAction, Option<&str>), ReaperError> {
         // One evaluation = one ReBAC traversal budget, shared across every
         // condition this policy checks (Plan 08 Phase E).
         crate::data::relationships::reset_traversal_budget();
@@ -131,7 +143,7 @@ impl ReapAstEvaluator {
                 && self.evaluate_condition(&rule.condition, &mut context)?
             {
                 // Explicit deny - return immediately, no allow can override this
-                return Ok(PolicyAction::Deny);
+                return Ok((PolicyAction::Deny, Some(rule.name.as_str())));
             }
         }
 
@@ -140,12 +152,12 @@ impl ReapAstEvaluator {
             if matches!(rule.decision, super::ast::Decision::Allow)
                 && self.evaluate_condition(&rule.condition, &mut context)?
             {
-                return Ok(PolicyAction::Allow);
+                return Ok((PolicyAction::Allow, Some(rule.name.as_str())));
             }
         }
 
         // Phase 3: No rule matched - return default decision
-        Ok(self.policy.default_decision.clone().into())
+        Ok((self.policy.default_decision.clone().into(), None))
     }
 
     /// Check-mode evaluation (the conftest/gatekeeper driver): evaluate EVERY
@@ -334,6 +346,22 @@ impl crate::evaluators::PolicyEvaluator for ReapAstEvaluator {
 
     fn evaluator_type(&self) -> &str {
         "ReapAstEvaluator"
+    }
+
+    /// Allow-path explainability (F1-s4). `matched` stays `true` for every
+    /// outcome — the AST evaluator has always used the trait's default
+    /// (always-decisive) `evaluate_matched`, and set-combination semantics
+    /// for AST-fallback policies must not change under a naming feature.
+    fn evaluate_named(
+        &self,
+        request: &crate::PolicyRequest,
+    ) -> Result<crate::evaluators::NamedOutcome<'_>, reaper_core::ReaperError> {
+        let (decision, rule_name) = self.evaluate_with_input_named(request, None)?;
+        Ok(crate::evaluators::NamedOutcome {
+            decision,
+            matched: true,
+            rule_name,
+        })
     }
 
     // D2 secondary: AST-side resource extraction is a follow-up. AST-fallback
