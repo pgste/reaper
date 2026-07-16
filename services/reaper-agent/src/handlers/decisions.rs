@@ -199,6 +199,9 @@ pub async fn get_decision_stats(
         "flush_count": stats.flush_count,
         "allow_count": stats.allow_count,
         "deny_count": stats.deny_count,
+        // Decision-quality signal (round-3 Plan 03): served requests that could
+        // not be evaluated as intended, counted separately from legitimate denies.
+        "eval_errors": state.stats.eval_errors.load(std::sync::atomic::Ordering::Relaxed),
         "audit_required": buffer.audit_required(),
         "audit_compromised": stats.audit_compromised,
         "config": buffer.config()

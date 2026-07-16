@@ -44,6 +44,7 @@ pub async fn health_check(State(state): State<Arc<AgentState>>) -> Result<Json<V
         "total_evaluations": state.stats.requests_processed.load(Ordering::Relaxed),
         "decisions_allow": state.stats.decisions_allow.load(Ordering::Relaxed),
         "decisions_deny": state.stats.decisions_deny.load(Ordering::Relaxed),
+        "eval_errors": state.stats.eval_errors.load(Ordering::Relaxed),
         "cache_hits": state.stats.decision_cache_hits.load(Ordering::Relaxed),
         "cache_misses": state.stats.decision_cache_misses.load(Ordering::Relaxed),
         "capabilities": [
