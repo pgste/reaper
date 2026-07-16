@@ -4,6 +4,31 @@ Strategic bet (`reviews/round-2/06-future-architecture.md` §"AI / LLM-era
 authorization", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
 remediation. **Status: F1-s1 + s2 LANDED (capability core, request shape, DSL actor + taint); s3–s5 pending.**
 
+## STATUS (2026-07-16) — F1-s4 allow-path explainability (LANDED on branch)
+
+- **Engine**: `PolicyEvaluator::evaluate_named` → `NamedOutcome { decision,
+  matched, rule_name: Option<&str> }` — the deciding rule's name, BORROWED
+  from the evaluator (zero eval-loop allocation; the engine clones once for
+  the single decisive policy, same discipline as policy-name attribution).
+  Compiled + AST evaluators both surface it and name the same rule for the
+  same request (pinned). AST keeps its always-decisive `matched` semantics.
+  `SetEvalOutcome`/`PolicyDecision` gain `matched_rule_name` (additive).
+- **Agent**: `matched_rule` in responses and decision logs now carries the
+  REAL rule name for allows and denies (index form kept for Simple;
+  "default_deny" for no-match). `capture_input_data` includes the ACTOR's
+  attributes. `should_capture_input(is_allow, has_actor)`: actor-carrying
+  requests capture the explain snapshot DEFAULT-ON once decision logging is
+  enabled (`input_data_actor_requests`, default true,
+  REAPER_DECISION_LOG_INPUT_DATA_ACTOR_REQUESTS=false to disable); plain
+  traffic keeps the opt-in denies-only posture. Replay blobs carry
+  actor + context_provenance for faithful counterfactuals. All log-path
+  only; the SLA histogram behavior is unchanged (sla_histogram tests green).
+- Tests: rule_name_explain_tests (5, engine incl. compiled/AST name
+  parity), allow_explain_tests (5, agent incl. default-on capture, opt-out,
+  plain-traffic posture). Engine 960 + agent 247 green; workspace clippy
+  -D; fmt; wasm32 engine + reaper-wasm; wasm parity (3).
+- Remaining F1: s5 MCP adapter.
+
 ## STATUS (2026-07-16) — F1-s3 agent enforcement + issuance (LANDED on branch)
 
 - **Slice 1 (core)**: `RevocationList.revoked_capability_ids` on the signed

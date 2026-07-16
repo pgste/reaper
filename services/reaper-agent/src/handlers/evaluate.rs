@@ -53,6 +53,7 @@ fn capture_input_data(
     data_store: &policy_engine::DataStore,
     principal: &str,
     resource: &str,
+    actor: Option<&str>,
 ) -> Option<Value> {
     let mut input = serde_json::Map::new();
     if let Some(p) = data_store.entity_attributes_json(principal) {
@@ -60,6 +61,11 @@ fn capture_input_data(
     }
     if let Some(r) = data_store.entity_attributes_json(resource) {
         input.insert("resource".to_string(), r);
+    }
+    // F1-s4: the actor's attributes are exactly what an agentic allow
+    // branched on — capture them whenever an actor is bound.
+    if let Some(a) = actor.and_then(|a| data_store.entity_attributes_json(a)) {
+        input.insert("actor".to_string(), a);
     }
     (!input.is_empty()).then_some(Value::Object(input))
 }
@@ -466,9 +472,13 @@ pub async fn evaluate_policy(
         ERRORS_TOTAL.with_label_values(&["evaluation_error"]).inc();
         format!("evaluation_error: {}", e)
     } else {
+        // Allow-path explainability (F1-s4): the deciding rule's NAME when
+        // the language has named rules (Reaper DSL); the legacy index form
+        // for Simple policies; the default marker when nothing matched.
         outcome
-            .matched_rule
-            .map(|idx| format!("rule_{}", idx))
+            .matched_rule_name
+            .clone()
+            .or_else(|| outcome.matched_rule.map(|idx| format!("rule_{}", idx)))
             .unwrap_or_else(|| "default_deny".to_string())
     };
 
@@ -590,9 +600,13 @@ pub async fn evaluate_policy(
             // "Explain" tier (opt-in, typically denies-only): snapshot the
             // resolved principal/resource attributes the decision branched on.
             // Gated + off the eval path.
-            if buffer.should_capture_input(decision_str == "allow") {
-                entry.input_data =
-                    capture_input_data(&state.data_store, &payload.principal, &payload.resource);
+            if buffer.should_capture_input(decision_str == "allow", request.actor.is_some()) {
+                entry.input_data = capture_input_data(
+                    &state.data_store,
+                    &payload.principal,
+                    &payload.resource,
+                    request.actor.as_deref(),
+                );
             }
 
             // Replayable-capture tier (opt-in): the full resolved request as a
@@ -600,12 +614,21 @@ pub async fn evaluate_policy(
             // re-evaluate this decision under a different policy/data version.
             // Protection (mask/hash/encrypt) applies in buffer.log().
             if buffer.should_capture_replay(decision_str == "allow") {
-                entry.replay_input = Some(serde_json::json!({
+                let mut replay = serde_json::json!({
                     "principal": payload.principal,
                     "action": payload.action,
                     "resource": payload.resource,
                     "context": payload.context.clone().unwrap_or_default(),
-                }));
+                });
+                // Agentic fields ride along so a counterfactual replay sees
+                // the same actor bindings and taint labels (F1-s4).
+                if let Some(actor) = &request.actor {
+                    replay["actor"] = serde_json::json!(actor);
+                }
+                if let Some(prov) = &request.context_provenance {
+                    replay["context_provenance"] = serde_json::json!(prov);
+                }
+                entry.replay_input = Some(replay);
             }
 
             // Use the same decision_id across response, logs, and audit trail
@@ -920,6 +943,12 @@ async fn fast_evaluate_policy_plain(
     let matched_policy_id = outcome.policy_id;
     let matched_policy_version = outcome.policy_version;
     let matched_rule: Option<usize> = outcome.matched_rule;
+    // F1-s4: prefer the deciding rule's name; fall back to the index form.
+    let matched_rule_rendered: String = outcome
+        .matched_rule_name
+        .clone()
+        .or_else(|| matched_rule.map(|r| format!("rule_{}", r)))
+        .unwrap_or_default();
     let total_eval_time_ns = outcome.total_eval_time_ns;
     if policy_name_resolved.is_empty() && !outcome.policy_name.is_empty() {
         policy_name_resolved = outcome.policy_name;
@@ -976,16 +1005,14 @@ async fn fast_evaluate_policy_plain(
             .with_cache_hit(false)
             .with_agent_id(state.agent_id.clone())
             .with_policy_version(matched_policy_version.to_string())
-            .with_matched_rule(
-                matched_rule
-                    .map(|r| format!("rule_{}", r))
-                    .unwrap_or_default(),
-            );
+            .with_matched_rule(matched_rule_rendered.clone());
             let (data_version, data_checksum) = state.data_sync.provenance();
             entry = entry
                 .with_data_sync(data_version, data_checksum, state.data_sync.flag_stale())
                 .with_model_version(state.data_sync.model_provenance());
-            if buffer.should_capture_input(decision_str == "allow") {
+            // The plain fast lane never carries an actor (agentic requests
+            // dispatch to the standard handler), so has_actor is false here.
+            if buffer.should_capture_input(decision_str == "allow", false) {
                 entry.input_data = capture_input_data(
                     &state.data_store,
                     &request
@@ -994,6 +1021,7 @@ async fn fast_evaluate_policy_plain(
                         .cloned()
                         .unwrap_or_default(),
                     &request.resource,
+                    None,
                 );
             }
             // Replayable-capture tier: the full resolved request (see the
@@ -1036,9 +1064,7 @@ async fn fast_evaluate_policy_plain(
     let policy_id_str: &str = matched_policy_id
         .as_hyphenated()
         .encode_lower(&mut policy_id_buf);
-    let matched_rule_str = matched_rule
-        .map(|r| format!("rule_{}", r))
-        .unwrap_or_default();
+    let matched_rule_str = matched_rule_rendered;
 
     let resp_body = sonic_rs::to_vec(&EvalResponse {
         decision_id,
