@@ -157,6 +157,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+      # Keyless cosign blob signing of the CLI tarball (round-3 CICD C4/ADR-2).
+      id-token: write
 
     strategy:
       matrix:
@@ -178,7 +180,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -189,7 +191,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build CLI
-        run: cargo build --release --target ${{ matrix.target }} -p reaper-cli
+        run: cargo build --release --locked --target ${{ matrix.target }} -p reaper-cli
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -199,7 +201,29 @@ jobs:
           cp target/${{ matrix.target }}/release/reaper-cli dist/reaper-cli-${{ matrix.suffix }}
           cd dist && tar -czvf reaper-cli-${{ matrix.suffix }}.tar.gz reaper-cli-${{ matrix.suffix }}
 
-      - name: Upload Release Asset
+      - name: Checksum
+        run: |
+          cd dist
+          shasum -a 256 reaper-cli-${{ matrix.suffix }}.tar.gz > reaper-cli-${{ matrix.suffix }}.tar.gz.sha256
+          cat reaper-cli-${{ matrix.suffix }}.tar.gz.sha256
+
+      # Keyless blob signature so the CLI tarball carries the same provenance
+      # story as the images (round-3 CICD C4). Verify with:
+      #   cosign verify-blob --certificate <.pem> --signature <.sig> \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     --certificate-identity-regexp '.*/\.github/workflows/release\.yml@.*' <tarball>
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign binary (keyless OIDC)
+        run: |
+          cd dist
+          cosign sign-blob --yes \
+            --output-signature reaper-cli-${{ matrix.suffix }}.tar.gz.sig \
+            --output-certificate reaper-cli-${{ matrix.suffix }}.tar.gz.pem \
+            reaper-cli-${{ matrix.suffix }}.tar.gz
+
+      - name: Upload Release Asset (tarball)
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -208,6 +232,36 @@ jobs:
           asset_path: dist/reaper-cli-${{ matrix.suffix }}.tar.gz
           asset_name: reaper-cli-${{ matrix.suffix }}.tar.gz
           asset_content_type: application/gzip
+
+      - name: Upload Release Asset (checksum)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: dist/reaper-cli-${{ matrix.suffix }}.tar.gz.sha256
+          asset_name: reaper-cli-${{ matrix.suffix }}.tar.gz.sha256
+          asset_content_type: text/plain
+
+      - name: Upload Release Asset (signature)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: dist/reaper-cli-${{ matrix.suffix }}.tar.gz.sig
+          asset_name: reaper-cli-${{ matrix.suffix }}.tar.gz.sig
+          asset_content_type: text/plain
+
+      - name: Upload Release Asset (certificate)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: dist/reaper-cli-${{ matrix.suffix }}.tar.gz.pem
+          asset_name: reaper-cli-${{ matrix.suffix }}.tar.gz.pem
+          asset_content_type: application/x-pem-file
 
   # ==========================================================================
   # Publish Helm Chart
