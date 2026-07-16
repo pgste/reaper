@@ -390,8 +390,8 @@ impl<'a> AgentRepository<'a> {
                 agent_id, requests_total, requests_per_second,
                 latency_p50_us, latency_p99_us, decisions_allow, decisions_deny,
                 memory_bytes, current_bundle_id, current_bundle_version, updated_at,
-                data_version, data_applied_seq, data_stale
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                data_version, data_applied_seq, data_stale, eval_errors
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT(agent_id) DO UPDATE SET
                 requests_total = excluded.requests_total,
                 requests_per_second = excluded.requests_per_second,
@@ -405,7 +405,8 @@ impl<'a> AgentRepository<'a> {
                 updated_at = excluded.updated_at,
                 data_version = excluded.data_version,
                 data_applied_seq = excluded.data_applied_seq,
-                data_stale = excluded.data_stale
+                data_stale = excluded.data_stale,
+                eval_errors = excluded.eval_errors
         "#;
 
         sqlx::query(sql)
@@ -423,6 +424,7 @@ impl<'a> AgentRepository<'a> {
             .bind(metrics.data_version)
             .bind(metrics.data_applied_seq)
             .bind(metrics.data_stale.map(|b| b as i64))
+            .bind(metrics.eval_errors as i64)
             .execute(pool)
             .await?;
 
@@ -443,7 +445,7 @@ impl<'a> AgentRepository<'a> {
             SELECT requests_total, requests_per_second, latency_p50_us, latency_p99_us,
                    decisions_allow, decisions_deny, memory_bytes,
                    current_bundle_id, current_bundle_version,
-                   data_version, data_applied_seq, data_stale
+                   data_version, data_applied_seq, data_stale, eval_errors
             FROM agent_metrics_latest
             WHERE agent_id = $1
         "#;
@@ -465,6 +467,7 @@ impl<'a> AgentRepository<'a> {
                 cpu_percent: 0.0, // Not stored
                 decisions_allow: r.get::<i64, _>("decisions_allow") as u64,
                 decisions_deny: r.get::<i64, _>("decisions_deny") as u64,
+                eval_errors: r.get::<i64, _>("eval_errors") as u64,
                 uptime_seconds: 0, // Not stored
                 current_bundle_id: current_bundle_id.and_then(|s| Uuid::parse_str(&s).ok()),
                 current_bundle_version: r.get("current_bundle_version"),

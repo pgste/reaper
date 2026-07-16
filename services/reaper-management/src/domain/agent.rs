@@ -123,6 +123,10 @@ pub struct AgentMetrics {
     pub decisions_allow: u64,
     /// Total deny decisions
     pub decisions_deny: u64,
+    /// Total eval-errors: served requests that could not be evaluated as
+    /// intended. Decision-quality signal for auto-rollback (round-3 Plan 03),
+    /// distinct from a legitimate deny.
+    pub eval_errors: u64,
     /// Agent uptime in seconds
     pub uptime_seconds: u64,
     /// Current bundle ID

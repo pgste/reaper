@@ -452,9 +452,10 @@ impl SyncService {
         // Get CPU usage from sysinfo (cross-platform)
         let cpu_percent = self.stats.get_cpu_percent();
 
-        // Get real allow/deny decision counts
+        // Get real allow/deny decision counts + eval-errors (decision-quality)
         let decisions_allow = self.stats.decisions_allow.load(Ordering::Relaxed);
         let decisions_deny = self.stats.decisions_deny.load(Ordering::Relaxed);
+        let eval_errors = self.stats.eval_errors.load(Ordering::Relaxed);
 
         // Get current bundle info from client
         let (current_bundle_id, current_bundle_version) = self.client.get_current_bundle_sync();
@@ -470,6 +471,7 @@ impl SyncService {
             cpu_percent,
             decisions_allow,
             decisions_deny,
+            eval_errors,
             uptime_seconds,
             current_bundle_id,
             current_bundle_version,
