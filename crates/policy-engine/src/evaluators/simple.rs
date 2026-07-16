@@ -1,19 +1,19 @@
-//! Simple Rule-Based Policy Evaluator
+//! Simple Rule-Based Policy Evaluator — the basic starting-point tier.
 //!
-//! # DEPRECATED — scheduled for removal
+//! This is the entry-level policy format: it matches a request's **resource**
+//! against a rule's resource pattern (`matches_rule`) and returns that rule's
+//! allow/deny. It is intentionally minimal — by design it considers only the
+//! resource, not the request action, principal/context, or a rule's
+//! `conditions` — so it expresses "allow/deny by resource pattern" and nothing
+//! more. That makes it a fast on-ramp and a reasonable default, **not** an
+//! RBAC/ABAC/ReBAC engine: a rule here applies to every principal and action
+//! that hits the matching resource.
 //!
-//! This evaluator matches **only** the request resource against a rule's
-//! resource pattern (`matches_rule`). It ignores the request action, the
-//! principal/context, and the rule's `conditions` entirely, so it cannot
-//! express RBAC or ABAC — a rule that should apply to one principal/action
-//! applies to all of them. Its "sub-microsecond" speed comes from doing almost
-//! no work.
-//!
-//! Real policies must use the Reaper DSL (`PolicyLanguage::ReaperDsl`), which is
-//! now the first-class, correctness-checked evaluator. This type and
-//! `PolicyLanguage::Simple` are retained only until the DSL migration path for
-//! JSON-rule deployments lands, after which they will be removed. Do not build
-//! new functionality on it, and do not benchmark it as an RBAC/ABAC engine.
+//! For real authorization — per-principal roles (RBAC), attributes (ABAC), or
+//! relationships (ReBAC) — graduate to the Reaper `.reap` DSL, which is the main
+//! path: the compiled `reap` `ReaperDSLEvaluator` (primary) with the AST
+//! `ReapAstEvaluator` as fallback and differential oracle. Reach for
+//! `Simple` only when resource-pattern allow/deny is genuinely all you need.
 
 use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::optimizer::{DecisionTree, DecisionTreeBuilder};

@@ -18,12 +18,15 @@ pub mod simple;
 #[cfg(feature = "cedar")]
 pub use cedar::CedarPolicyEvaluator;
 pub use simple::SimplePolicyEvaluator;
-// The `.reap` DSL is served by two INTENTIONALLY co-existing surfaces (tiered
-// compilation, round-3 Plan 04 / E-02): the compiled `ReaperDSLEvaluator` is the
-// primary path, with the AST `ReapAstEvaluator` as fallback AND as the compiler's
-// differential oracle (`reap::ReaperPolicy::build_preferred`). They are pinned
-// identical by a blocking differential — do not converge them. `SimplePolicyEvaluator`
-// is deprecated and unsafe (resource-only match; see docs/reference/DSL_COMPATIBILITY.md).
+// Policy-language tiers (round-3 Plan 04 / E-02):
+//   * `SimplePolicyEvaluator` — the BASIC STARTING POINT: allow/deny by resource
+//     pattern only (no principal/action/conditions). A quick on-ramp, not RBAC/ABAC.
+//   * `.reap` DSL — the MAIN REAL PATH, served by two intentionally co-existing
+//     surfaces (tiered compilation): the compiled `ReaperDSLEvaluator` is primary,
+//     with the AST `ReapAstEvaluator` as FALLBACK and as the compiler's differential
+//     oracle (`reap::ReaperPolicy::build_preferred`). They are pinned identical by a
+//     blocking differential — do not converge them.
+// See docs/reference/DSL_COMPATIBILITY.md for the tier guidance.
 
 /// Outcome of [`PolicyEvaluator::evaluate_named`]: the decision, whether a
 /// rule actually matched (vs the per-policy default), and — when the policy

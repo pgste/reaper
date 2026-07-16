@@ -86,10 +86,26 @@ version it bumped to, and the frozen cases affected.
 |------|----|------------------|----------------------|--------|
 | _(none yet — the frozen corpus is at its initial baseline)_ | | | | |
 
-## Deprecated surfaces
+## Policy language tiers
 
-- **`Simple` policy language** — deprecated and unsafe by design (it matches on
-  resource only, ignoring the request action, principal/context, and a rule's
-  conditions). It is **not** a co-equal authorization language and should not be
-  used for new policies; author policies in the `.reap` DSL. Removal is tracked
-  with the JSON-rule migration.
+Reaper has one authorization language — the `.reap` DSL — with a simpler
+starting-point format beneath it. Pick the tier that matches what you need:
+
+1. **`Simple` — the basic starting point.** Allow/deny by **resource pattern
+   only**. It does not consider the request action, principal/context, or a
+   rule's conditions, so a rule applies to every principal and action that hits
+   the matching resource. Use it for quick, resource-scoped allow/deny; it is a
+   fast on-ramp, not an RBAC/ABAC/ReBAC engine — reach for `.reap` the moment a
+   decision needs to depend on *who* or *what action*.
+2. **`.reap` DSL — the main, real path.** Expresses RBAC, ABAC, and ReBAC with
+   principals, actions, attributes, relationships, and builtins. This is what
+   production policies should be written in. It is served by two intentionally
+   co-existing evaluator surfaces (tiered compilation):
+   - the **compiled** `ReaperDSLEvaluator` — the **primary** path;
+   - the **AST** `ReapAstEvaluator` — the **fallback**, and the compiler's
+     differential oracle (the two are pinned identical by a blocking
+     differential test, so the fallback can never disagree with the compiled
+     path).
+
+Both tiers carry a language version and are covered by the frozen decision
+corpus, so neither can silently change a decision.
