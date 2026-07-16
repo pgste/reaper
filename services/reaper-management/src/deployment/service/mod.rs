@@ -477,6 +477,11 @@ impl DeploymentService {
             "Rollout created"
         );
 
+        // Snapshot the pre-rollout decision-quality baseline (round-3 Plan 03),
+        // so the decision-quality arm measures this rollout's SHIFT rather than
+        // an absolute deny rate. Best-effort — never fails the rollout.
+        self.capture_rollout_baseline(org_id, rollout.id).await;
+
         // Create waves based on strategy
         let waves = self
             .create_waves_for_strategy(&deploy_repo, &rollout, &strategy, &target_agents)
@@ -577,35 +582,35 @@ impl DeploymentService {
             });
         }
 
-        // Failure rate across the rollout's agent deployments.
+        // --- Arm 1: deploy-apply failure rate across the rollout's agents. ---
         let deployment_repo = AgentDeploymentRepository::new(&self.db);
         let summary = deployment_repo.get_summary(rollout.id).await?;
         let completed_count = summary.deployed + summary.failed;
-
-        // Not enough completed deployments to make a call yet.
-        if completed_count < config.min_requests {
-            return Ok(RollbackTriggerEvaluation {
-                enabled: true,
-                mode: config.mode,
-                should_rollback: false,
-                current_error_rate: summary.failure_rate(),
-                threshold: config.error_rate_threshold,
-                completed_count,
-                min_requests: config.min_requests,
-                reason: format!(
-                    "Minimum requests not met ({} < {})",
-                    completed_count, config.min_requests
-                ),
-            });
-        }
-
         let error_rate = summary.failure_rate();
-        let should_rollback = error_rate > config.error_rate_threshold;
+        let deploy_apply_trip =
+            completed_count >= config.min_requests && error_rate > config.error_rate_threshold;
 
-        let reason = if should_rollback {
+        // --- Arm 2: decision quality (round-3 Plan 03). A policy can install on
+        // every agent (deploy_apply_trip == false) yet error or deny wrongly at
+        // runtime. Off unless a threshold is set, so today's behaviour is
+        // unchanged for existing configs. ---
+        let (dq_trip, dq_reason) = self
+            .evaluate_decision_quality(org_id, rollout, &config)
+            .await?;
+
+        let should_rollback = deploy_apply_trip || dq_trip;
+
+        let reason = if dq_trip {
+            dq_reason
+        } else if deploy_apply_trip {
             format!(
                 "Error rate {:.2}% exceeds threshold {:.2}%",
                 error_rate, config.error_rate_threshold
+            )
+        } else if completed_count < config.min_requests {
+            format!(
+                "Minimum requests not met ({} < {})",
+                completed_count, config.min_requests
             )
         } else {
             format!(
@@ -624,6 +629,127 @@ impl DeploymentService {
             min_requests: config.min_requests,
             reason,
         })
+    }
+
+    /// The decision-quality arm of the rollback trigger (round-3 Plan 03).
+    /// Returns `(tripped, reason)`. Reads the org's live decision metrics from
+    /// the heartbeat-fed `agent_metrics_latest` and trips when, gated by
+    /// `min_decisions`:
+    /// - the eval-error rate exceeds its absolute threshold (an eval-error is
+    ///   never an intended outcome), OR
+    /// - the fleet p99 eval latency exceeds its absolute SLO, OR
+    /// - the deny rate has risen more than `denial_delta_threshold` ABOVE the
+    ///   rollout's pre-rollout baseline (delta, so a legitimate policy change
+    ///   that deliberately moves denies is not punished).
+    async fn evaluate_decision_quality(
+        &self,
+        org_id: Uuid,
+        rollout: &Rollout,
+        config: &RollbackConfig,
+    ) -> Result<(bool, String), DeploymentError> {
+        let configured = config.eval_error_rate_threshold.is_some()
+            || config.denial_delta_threshold.is_some()
+            || config.latency_p99_slo_us.is_some();
+        if !configured {
+            return Ok((false, String::new()));
+        }
+
+        let dq = AgentRepository::new(&self.db)
+            .aggregate_org_decision_metrics(org_id)
+            .await?;
+
+        // Thin traffic: never trip on too few decisions.
+        if dq.total_decisions() < config.min_decisions as u64 {
+            return Ok((false, String::new()));
+        }
+
+        if let Some(threshold) = config.eval_error_rate_threshold {
+            if dq.eval_error_rate() > threshold {
+                return Ok((
+                    true,
+                    format!(
+                        "decision-quality: eval-error rate {:.2}% exceeds {:.2}%",
+                        dq.eval_error_rate(),
+                        threshold
+                    ),
+                ));
+            }
+        }
+
+        if let Some(slo) = config.latency_p99_slo_us {
+            if dq.p99_latency_us > slo {
+                return Ok((
+                    true,
+                    format!(
+                        "decision-quality: p99 latency {:.0}µs exceeds SLO {:.0}µs",
+                        dq.p99_latency_us, slo
+                    ),
+                ));
+            }
+        }
+
+        if let Some(delta) = config.denial_delta_threshold {
+            // No baseline (no prior traffic) ⇒ use the current rate, so the
+            // first observation can never trip on a delta of zero.
+            let baseline = self
+                .rollout_baseline_denial_rate(rollout.id)
+                .await?
+                .unwrap_or_else(|| dq.denial_rate());
+            let shift = dq.denial_rate() - baseline;
+            if shift > delta {
+                return Ok((
+                    true,
+                    format!(
+                        "decision-quality: deny rate {:.2}% is {:.2}pp above baseline {:.2}% (> {:.2}pp)",
+                        dq.denial_rate(),
+                        shift,
+                        baseline,
+                        delta
+                    ),
+                ));
+            }
+        }
+
+        Ok((false, String::new()))
+    }
+
+    /// Read the pre-rollout denial-rate baseline captured at `start_rollout`.
+    async fn rollout_baseline_denial_rate(
+        &self,
+        rollout_id: Uuid,
+    ) -> Result<Option<f64>, DeploymentError> {
+        let pool = self.db.any_pool().ok_or_else(|| {
+            DeploymentError::Database(crate::db::DatabaseError::Config(
+                "No database pool".to_string(),
+            ))
+        })?;
+        let row: Option<(Option<f64>,)> =
+            sqlx::query_as("SELECT baseline_denial_rate FROM rollouts WHERE id = $1")
+                .bind(rollout_id.to_string())
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| DeploymentError::Database(e.into()))?;
+        Ok(row.and_then(|r| r.0))
+    }
+
+    /// Capture the org's current deny rate as this rollout's decision-quality
+    /// baseline (round-3 Plan 03). Best-effort: a metrics hiccup must not fail
+    /// the rollout — the arm falls back to the current rate when absent.
+    async fn capture_rollout_baseline(&self, org_id: Uuid, rollout_id: Uuid) {
+        let denial_rate = match AgentRepository::new(&self.db)
+            .aggregate_org_decision_metrics(org_id)
+            .await
+        {
+            Ok(dq) if dq.total_decisions() > 0 => dq.denial_rate(),
+            _ => return,
+        };
+        if let Some(pool) = self.db.any_pool() {
+            let _ = sqlx::query("UPDATE rollouts SET baseline_denial_rate = $1 WHERE id = $2")
+                .bind(denial_rate)
+                .bind(rollout_id.to_string())
+                .execute(pool)
+                .await;
+        }
     }
 
     /// Approve and proceed with next wave
@@ -1165,6 +1291,127 @@ mod tests {
         assert_eq!(eval.threshold, 50.0);
         assert_eq!(eval.mode, RollbackMode::Enforce);
         assert!(eval.reason.contains("exceeds threshold"));
+    }
+
+    /// Round-3 Plan 03 DoD headline: a policy that installs cleanly on every
+    /// agent (deploy-apply failure rate 0%) but then ERRORS on a large share of
+    /// requests must trip the decision-quality arm and auto-revert — the exact
+    /// failure the deploy-apply-only trigger missed.
+    #[tokio::test]
+    async fn test_decision_quality_rollback_on_eval_errors() {
+        use crate::domain::agent::AgentMetrics;
+        use crate::domain::agent_deployment::RollbackMode;
+        let (_temp_dir, db, state) = setup().await;
+        let org_id = create_test_org(&db).await;
+        let bundle_id = create_test_bundle(&db, org_id).await;
+        let agents = create_test_agents(&db, org_id, 3).await;
+        let service = DeploymentService::new(db.clone());
+
+        let result = service
+            .start_rollout(
+                org_id,
+                &StartRollout {
+                    bundle_id,
+                    strategy_id: None,
+                    namespace_id: None,
+                    triggered_by: None,
+                },
+                &state,
+            )
+            .await
+            .unwrap();
+        let rollout = result.rollout;
+
+        // Clean apply: every agent deployed, zero failures → the deploy-apply
+        // arm can never trip (its whole blind spot).
+        let dep_repo = AgentDeploymentRepository::new(&db);
+        for d in dep_repo.get_by_rollout(rollout.id).await.unwrap() {
+            dep_repo
+                .update_status(d.id, AgentDeploymentStatus::Deployed, None)
+                .await
+                .unwrap();
+        }
+
+        // Deploy-apply threshold high (won't trip); decision-quality arm trips at
+        // eval-error rate > 10%, enforce.
+        let mut config = RollbackConfig::new(org_id, None);
+        config.is_enabled = true;
+        config.error_rate_threshold = 99.0;
+        config.min_requests = 1;
+        config.mode = RollbackMode::Enforce;
+        config.eval_error_rate_threshold = Some(10.0);
+        config.min_decisions = 10;
+        RollbackConfigRepository::new(&db)
+            .upsert(&config)
+            .await
+            .unwrap();
+
+        let agent_repo = AgentRepository::new(&db);
+        let set_metrics = |allow: u64, deny: u64, errs: u64| AgentMetrics {
+            decisions_allow: allow,
+            decisions_deny: deny,
+            eval_errors: errs,
+            ..Default::default()
+        };
+
+        // Healthy: no eval-errors → no trip, even though the policy is live.
+        for a in &agents {
+            agent_repo
+                .update_metrics(*a, &set_metrics(90, 10, 0))
+                .await
+                .unwrap();
+        }
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(
+            !eval.should_rollback,
+            "healthy decisions must not trip: {}",
+            eval.reason
+        );
+
+        // The deployed policy now errors on 40% of requests fleet-wide.
+        for a in &agents {
+            agent_repo
+                .update_metrics(*a, &set_metrics(50, 10, 40))
+                .await
+                .unwrap();
+        }
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(
+            eval.should_rollback,
+            "an eval-error spike on a cleanly-applied policy must trip"
+        );
+        assert_eq!(
+            eval.current_error_rate, 0.0,
+            "deploy-apply failure rate is still zero — the clean-apply blind spot"
+        );
+        assert!(
+            eval.reason.contains("eval-error rate"),
+            "reason must name the decision-quality trip: {}",
+            eval.reason
+        );
+        assert_eq!(eval.mode, RollbackMode::Enforce);
+
+        // Thin traffic (9 decisions < min_decisions 10) must never trip.
+        for a in &agents {
+            agent_repo
+                .update_metrics(*a, &set_metrics(1, 0, 2))
+                .await
+                .unwrap();
+        }
+        let eval = service
+            .evaluate_rollback_trigger(org_id, &rollout)
+            .await
+            .unwrap();
+        assert!(
+            !eval.should_rollback,
+            "below min_decisions must not trip (anti-storm guardrail)"
+        );
     }
 
     #[tokio::test]

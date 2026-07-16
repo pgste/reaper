@@ -478,6 +478,26 @@ impl<'a> AgentRepository<'a> {
         }))
     }
 
+    /// Aggregate the latest decision-quality metrics across an org's agents
+    /// (round-3 Plan 03): sum eval-errors/allow/deny and take the worst-case
+    /// p99 latency. Built on `list_with_metrics` so it reads the same
+    /// `agent_metrics_latest` rows the heartbeat writes.
+    pub async fn aggregate_org_decision_metrics(
+        &self,
+        org_id: Uuid,
+    ) -> Result<crate::domain::agent::OrgDecisionMetrics, DatabaseError> {
+        let mut agg = crate::domain::agent::OrgDecisionMetrics::default();
+        for (_agent, metrics) in self.list_with_metrics(org_id).await? {
+            if let Some(m) = metrics {
+                agg.eval_errors += m.eval_errors;
+                agg.decisions_allow += m.decisions_allow;
+                agg.decisions_deny += m.decisions_deny;
+                agg.p99_latency_us = agg.p99_latency_us.max(m.p99_latency_us);
+            }
+        }
+        Ok(agg)
+    }
+
     /// Get all agents with their latest metrics for an organization
     pub async fn list_with_metrics(
         &self,

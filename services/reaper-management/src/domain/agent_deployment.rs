@@ -207,6 +207,19 @@ pub struct RollbackConfig {
     pub min_requests: u32,
     /// monitor (dry run, default) vs enforce (supervisor acts)
     pub mode: RollbackMode,
+    // ---- Decision-quality arm (round-3 Plan 03). All `None`/0 by default, so
+    // the trigger keeps its deploy-apply-only behaviour until an operator sets a
+    // threshold. Rates are percentages (0-100) to match `error_rate_threshold`.
+    /// Trip when the eval-error rate exceeds this (absolute — an eval-error is
+    /// never an intended outcome).
+    pub eval_error_rate_threshold: Option<f64>,
+    /// Trip when the deny rate rises more than this ABOVE the rollout's
+    /// pre-rollout baseline (delta — a legitimate policy change may move denies).
+    pub denial_delta_threshold: Option<f64>,
+    /// Trip when the fleet p99 eval latency (µs) exceeds this SLO (absolute).
+    pub latency_p99_slo_us: Option<f64>,
+    /// Minimum observed decisions before the decision-quality arm may fire.
+    pub min_decisions: u32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -223,6 +236,11 @@ impl RollbackConfig {
             window_seconds: 300,
             min_requests: 100,
             mode: RollbackMode::Monitor,
+            // Decision-quality arm dark by default.
+            eval_error_rate_threshold: None,
+            denial_delta_threshold: None,
+            latency_p99_slo_us: None,
+            min_decisions: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
