@@ -15,8 +15,10 @@ use uuid::Uuid;
 
 use crate::{
     api::error::{ApiError, ApiResult},
-    api::orgs::resolve_org,
-    db::repositories::{OrganizationRepository, WebhookRepository},
+    api::orgs::authorize_org,
+    auth::middleware::RequireAuth,
+    auth::scopes::Scope,
+    db::repositories::WebhookRepository,
     domain::webhook::{
         CreateWebhookSubscription, UpdateWebhookSubscription, WebhookDeliveryResult,
         WebhookEventType, WebhookSubscription,
@@ -133,10 +135,10 @@ impl From<WebhookDeliveryResult> for TestWebhookResponse {
 async fn list_webhooks(
     State(state): State<Arc<AppState>>,
     Path(org): Path<String>,
+    RequireAuth(user): RequireAuth,
     Query(query): Query<ListWebhooksQuery>,
 ) -> ApiResult<Json<ListWebhooksResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let webhook_repo = WebhookRepository::new(&state.db);
     let webhooks = webhook_repo
@@ -168,6 +170,7 @@ async fn list_webhooks(
 async fn create_webhook(
     State(state): State<Arc<AppState>>,
     Path(org): Path<String>,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<CreateWebhookRequest>,
 ) -> ApiResult<(StatusCode, Json<WebhookSummary>)> {
     // Validate request
@@ -192,8 +195,7 @@ async fn create_webhook(
         ));
     }
 
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let webhook_repo = WebhookRepository::new(&state.db);
 
@@ -238,9 +240,9 @@ async fn create_webhook(
 async fn get_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
+    RequireAuth(user): RequireAuth,
 ) -> ApiResult<Json<WebhookSummary>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let webhook_repo = WebhookRepository::new(&state.db);
     let webhook = resolve_webhook(&webhook_repo, organization.id, &webhook_ref).await?;
@@ -265,10 +267,10 @@ async fn get_webhook(
 async fn update_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<UpdateWebhookRequest>,
 ) -> ApiResult<Json<WebhookSummary>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let webhook_repo = WebhookRepository::new(&state.db);
     let existing = resolve_webhook(&webhook_repo, organization.id, &webhook_ref).await?;
@@ -324,9 +326,9 @@ async fn update_webhook(
 async fn delete_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
+    RequireAuth(user): RequireAuth,
 ) -> ApiResult<StatusCode> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let webhook_repo = WebhookRepository::new(&state.db);
     let existing = resolve_webhook(&webhook_repo, organization.id, &webhook_ref).await?;
@@ -357,9 +359,9 @@ async fn delete_webhook(
 async fn test_webhook(
     State(state): State<Arc<AppState>>,
     Path((org, webhook_ref)): Path<(String, String)>,
+    RequireAuth(user): RequireAuth,
 ) -> ApiResult<Json<TestWebhookResponse>> {
-    let org_repo = OrganizationRepository::new(&state.db);
-    let organization = resolve_org(&org_repo, &org).await?;
+    let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
     let webhook_repo = WebhookRepository::new(&state.db);
     let webhook = resolve_webhook(&webhook_repo, organization.id, &webhook_ref).await?;

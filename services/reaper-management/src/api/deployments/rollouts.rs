@@ -319,10 +319,11 @@ pub async fn approve_wave(
     RequireAuth(user): RequireAuth,
     Path((org, rollout_id)): Path<(String, Uuid)>,
 ) -> Result<Json<RolloutResponse>, ApiError> {
-    let _organization =
+    let organization =
         super::authorize_deploy(&state, &user, &org, "approve rollout waves").await?;
 
     let service = DeploymentService::new(state.db.clone());
+    ensure_rollout_in_org(&state, &service, rollout_id, organization.id).await?;
     let rollout = service
         .approve_wave(rollout_id, &state)
         .await
@@ -358,9 +359,10 @@ pub async fn cancel_rollout(
     Path((org, rollout_id)): Path<(String, Uuid)>,
     Json(request): Json<CancelRequest>,
 ) -> Result<Json<RolloutResponse>, ApiError> {
-    let _organization = super::authorize_deploy(&state, &user, &org, "cancel rollouts").await?;
+    let organization = super::authorize_deploy(&state, &user, &org, "cancel rollouts").await?;
 
     let service = DeploymentService::new(state.db.clone());
+    ensure_rollout_in_org(&state, &service, rollout_id, organization.id).await?;
     let rollout = service
         .cancel_rollout(rollout_id, &request.reason, &state)
         .await
@@ -480,4 +482,34 @@ pub async fn rollback_org(
             target_agent_count: result.target_agents.len(),
         }),
     ))
+}
+
+/// Resource-org recheck for by-id rollout mutations (round-3 SEC P1-b).
+///
+/// `authorize_deploy` binds the caller to the *path* org, but rollout ids are
+/// global UUIDs — without this a `deployment:write` holder in org A could drive
+/// org B's rollout by id. Returns `404` (not `403`) so a foreign UUID is not an
+/// existence oracle. Recognised by the tenant-authz fitness function.
+async fn ensure_rollout_in_org(
+    state: &AppState,
+    service: &DeploymentService,
+    rollout_id: Uuid,
+    org_id: Uuid,
+) -> Result<(), ApiError> {
+    let rollout = service.get_rollout(rollout_id).await.map_err(|e| match e {
+        crate::deployment::DeploymentError::RolloutNotFound(_) => {
+            ApiError::NotFound("Rollout not found".to_string())
+        }
+        e => ApiError::Internal(e.to_string()),
+    })?;
+    // A rollout inherits its tenant from the bundle it deploys.
+    let bundle = crate::db::repositories::BundleRepository::new(&state.db)
+        .get_by_id(rollout.bundle_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("Rollout not found".to_string()))?;
+    if bundle.org_id != org_id {
+        return Err(ApiError::NotFound("Rollout not found".to_string()));
+    }
+    Ok(())
 }

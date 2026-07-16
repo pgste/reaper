@@ -56,22 +56,36 @@ pub async fn establish_session(
 ) -> Result<EstablishedSession, UserError> {
     let role = map_groups_to_role(config, &identity.groups);
     let users = UserRepository::new(db);
+    let memberships = UserOrgRepository::new(db);
 
     // Resolve the user: by IdP subject first (stable), else adopt a pre-existing
-    // verified-email account, else provision a fresh SSO user.
+    // account by email, else provision a fresh SSO user.
     let user = match users
         .find_by_idp_identity(&identity.issuer, &identity.subject)
         .await?
     {
         Some(u) => u,
         None => match users.find_by_email(&identity.email).await? {
-            Some(u) => {
+            // SECURITY (round-3 SEC P0-1): adopt a pre-existing account by email
+            // ONLY when that account is already a member of THIS org and the IdP
+            // asserts the email is verified. `SsoConfig` is per-org and
+            // tenant-self-served, so a global email match is NOT a trust
+            // signal: an attacker who owns their own org can point its IdP at a
+            // key they control and assert a victim's email. Binding adoption to
+            // existing membership in the authenticating org confines it to
+            // identities the org already vouched for (e.g. an invited user);
+            // everyone else provisions a DISTINCT SSO user keyed by
+            // (issuer, subject), so no cross-tenant account is ever linked.
+            Some(u)
+                if identity.email_verified
+                    && memberships.get_role(u.id, org_id).await?.is_some() =>
+            {
                 users
                     .link_idp_identity(u.id, &identity.issuer, &identity.subject)
                     .await?;
                 u
             }
-            None => {
+            _ => {
                 let u = User::external(identity.email.clone(), identity.email_verified);
                 users
                     .create_external(&u, &identity.issuer, &identity.subject)
@@ -82,7 +96,6 @@ pub async fn establish_session(
     };
 
     // Reconcile org membership + role drift from the IdP on every login.
-    let memberships = UserOrgRepository::new(db);
     match memberships.get_role(user.id, org_id).await? {
         Some(existing) if existing == role => {}
         Some(_) => memberships.update_role(user.id, org_id, role).await?,

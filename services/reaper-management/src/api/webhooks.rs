@@ -149,24 +149,37 @@ async fn process_bundle_webhook(
         .bundle_url_config()
         .ok_or_else(|| ApiError::Internal("Failed to parse BundleUrl config".to_string()))?;
 
-    // Validate webhook signature if configured
-    if config.webhook_secret.is_some() {
-        let signature = headers
-            .get("x-webhook-signature")
-            .or_else(|| headers.get("x-hub-signature-256"))
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| ApiError::Unauthorized("Missing webhook signature".to_string()))?;
+    // Verify the webhook signature UNCONDITIONALLY. This endpoint is public
+    // (unauthenticated), so the HMAC signature is the *only* thing binding the
+    // caller to the source's owner. A source with no configured secret is a
+    // misconfiguration that must fail CLOSED — never fall through and fetch an
+    // attacker-supplied URL (round-3 SEC P0-4: fail-open signature + SSRF /
+    // credential-exfil). Mirrors the fail-closed git webhook (webhooks_git.rs).
+    let secret_configured = config
+        .webhook_secret
+        .as_deref()
+        .is_some_and(|s| !s.is_empty());
+    if !secret_configured {
+        return Err(ApiError::Unauthorized(
+            "bundle-update webhook requires a configured webhook secret on the source".to_string(),
+        ));
+    }
 
-        let syncer = BundleUrlSyncer::default();
-        let valid = syncer
-            .validate_webhook_signature(&config, body, signature)
-            .map_err(|e| ApiError::Unauthorized(format!("Signature validation failed: {}", e)))?;
+    let signature = headers
+        .get("x-webhook-signature")
+        .or_else(|| headers.get("x-hub-signature-256"))
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| ApiError::Unauthorized("Missing webhook signature".to_string()))?;
 
-        if !valid {
-            return Err(ApiError::Unauthorized(
-                "Invalid webhook signature".to_string(),
-            ));
-        }
+    let syncer = BundleUrlSyncer::default();
+    let valid = syncer
+        .validate_webhook_signature(&config, body, signature)
+        .map_err(|e| ApiError::Unauthorized(format!("Signature validation failed: {}", e)))?;
+
+    if !valid {
+        return Err(ApiError::Unauthorized(
+            "Invalid webhook signature".to_string(),
+        ));
     }
 
     // Create a syncer and fetch the bundle
