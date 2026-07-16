@@ -8782,3 +8782,252 @@ async fn quota_enforcement_counts_and_refuses_over_limit() {
         .await
         .expect("override lifts the cap");
 }
+
+// =============================================================================
+// Capability issuance / attenuation / revocation — F1-s3 agentic authz
+// =============================================================================
+
+#[tokio::test]
+async fn test_capability_issue_attenuate_revoke_lifecycle() {
+    use reaper_core::bundle_signing::{SigAlgorithm, SigningKey, VerifyingKey};
+    use reaper_core::capability::Capability;
+    use reaper_core::revocation::SignedRevocationList;
+    use std::collections::HashSet;
+
+    let temp_dir = TempDir::new().unwrap();
+    let storage_path = temp_dir.path().join("storage");
+    std::fs::create_dir_all(&storage_path).unwrap();
+    let db_config = reaper_management::db::ephemeral_test_config(temp_dir.path()).await;
+    let db = Arc::new(Database::new(&db_config).await.unwrap());
+    db.run_migrations().await.unwrap();
+    let storage = Arc::new(FilesystemStorage::new(&storage_path).unwrap())
+        as Arc<dyn reaper_management::storage::BundleStorage>;
+
+    let signing_key = SigningKey::generate(SigAlgorithm::Ed25519Sha256);
+    let pub_hex = signing_key.public_key_hex();
+    let config = Config {
+        auth: AuthConfig {
+            jwt_secret: Some("test-secret-key-for-testing-only".to_string()),
+            ..AuthConfig::default()
+        },
+        bundles: reaper_management::config::BundlesConfig {
+            signing_key: Some(signing_key.private_key_hex()),
+            signing_key_id: "k1".to_string(),
+            signing_algorithm: reaper_core::bundle_signing::ALG_ED25519.to_string(),
+            ..Default::default()
+        },
+        ..Config::default()
+    };
+    let state = AppState::new(db.clone(), config, storage);
+    let app = build_served_router().with_state(Arc::new(state));
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/orgs",
+            Some(json!({"name": "Cap Org", "slug": "cap-org"})),
+        ))
+        .await
+        .unwrap();
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&db, org_id).await;
+    let vk = VerifyingKey::from_hex(SigAlgorithm::Ed25519Sha256, &pub_hex).unwrap();
+    let now = chrono::Utc::now().timestamp();
+
+    // ---- Issue a root capability and verify it end-to-end. ----
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities",
+            Some(json!({
+                "subject": "alice",
+                "actor": "agent-1",
+                "grants": [{"action": "read", "resource": "/doc/*"}],
+                "ttl_secs": 300
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let root: Capability =
+        serde_json::from_value(parse_body(response).await["capability"].clone()).unwrap();
+    root.verify_at(&vk, "k1", now, &HashSet::new())
+        .expect("issued capability verifies against the bundle trust anchor");
+    assert!(root.authorizes("read", "/doc/x"));
+    assert!(!root.authorizes("write", "/doc/x"));
+    assert_eq!(root.subject, "alice");
+    assert_eq!(root.actor, "agent-1");
+
+    // ---- Attenuate to a narrower grant for a sub-agent. ----
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities/attenuate",
+            Some(json!({
+                "parent": root,
+                "actor": "agent-2",
+                "grants": [{"action": "read", "resource": "/doc/a*"}],
+                "ttl_secs": 60
+            })),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let child: Capability =
+        serde_json::from_value(parse_body(response).await["capability"].clone()).unwrap();
+    child
+        .verify_at(&vk, "k1", now, &HashSet::new())
+        .expect("attenuated capability verifies");
+    assert_eq!(
+        child.subject, "alice",
+        "subject is inherited, never changed"
+    );
+    assert_eq!(child.actor, "agent-2");
+    assert!(child.ancestry.contains(&root.id), "ancestry chains to root");
+    assert!(child.authorizes("read", "/doc/abc"));
+    assert!(
+        !child.authorizes("read", "/doc/zzz"),
+        "narrower than parent"
+    );
+
+    // ---- Widening attempts are rejected. ----
+    for body in [
+        json!({"parent": root, "actor": "agent-2",
+               "grants": [{"action": "write", "resource": "/doc/*"}], "ttl_secs": 60}),
+        json!({"parent": root, "actor": "agent-2",
+               "grants": [{"action": "read", "resource": "*"}], "ttl_secs": 60}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(authed_request(
+                "POST",
+                "/orgs/cap-org/capabilities/attenuate",
+                Some(body),
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "widened grant must be rejected"
+        );
+    }
+
+    // ---- A tampered parent cannot be attenuated (forged parent dies). ----
+    let mut forged = root.clone();
+    forged.grants[0].resource = "*".to_string();
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities/attenuate",
+            Some(json!({"parent": forged, "actor": "agent-2",
+                        "grants": [{"action": "read", "resource": "/doc/a*"}], "ttl_secs": 60})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // ---- TTL ceiling. ----
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities",
+            Some(json!({"subject": "alice", "actor": "agent-1",
+                        "grants": [{"action": "read", "resource": "*"}],
+                        "ttl_secs": 900000})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // ---- Revoke the ROOT with a capability:revoke-scoped key; the child
+    //      dies with it (ancestry cascade) via the served signed list. ----
+    let revoke_key = create_scoped_api_key(&db, org_id, &["capability:revoke"]).await;
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities/revoke",
+            Some(json!({"capability_id": root.id, "reason": "compromised orchestrator"})),
+            &revoke_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let list_key = create_scoped_api_key(&db, org_id, &["agent:read"]).await;
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "GET",
+            "/orgs/cap-org/revocations",
+            None,
+            &list_key,
+        ))
+        .await
+        .unwrap();
+    let signed: SignedRevocationList = serde_json::from_value(parse_body(response).await).unwrap();
+    let list = signed
+        .verify(&vk, Some("k1"))
+        .expect("signed list verifies");
+    assert!(list.revoked_capability_ids.contains(&root.id));
+
+    let revoked: HashSet<String> = list.revoked_capability_ids.iter().cloned().collect();
+    assert!(
+        matches!(
+            root.verify_at(&vk, "k1", now, &revoked),
+            Err(reaper_core::capability::CapabilityError::Revoked { .. })
+        ),
+        "root is dead"
+    );
+    assert!(
+        matches!(
+            child.verify_at(&vk, "k1", now, &revoked),
+            Err(reaper_core::capability::CapabilityError::Revoked { .. })
+        ),
+        "child dies with its ancestor"
+    );
+
+    // ---- A revoked parent cannot mint fresh authority via attenuation. ----
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities/attenuate",
+            Some(json!({"parent": root, "actor": "agent-3",
+                        "grants": [{"action": "read", "resource": "/doc/a*"}], "ttl_secs": 60})),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // ---- Scope enforcement: a read-only key cannot issue. ----
+    let weak_key = create_scoped_api_key(&db, org_id, &["agent:read"]).await;
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/orgs/cap-org/capabilities",
+            Some(json!({"subject": "alice", "actor": "agent-1",
+                        "grants": [{"action": "read", "resource": "*"}], "ttl_secs": 60})),
+            &weak_key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

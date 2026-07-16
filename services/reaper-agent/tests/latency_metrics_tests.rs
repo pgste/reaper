@@ -82,6 +82,9 @@ async fn standard_endpoint_feeds_total_and_engine_series_and_they_differ() {
             resource: "/doc".to_string(),
             action: "read".to_string(),
             context: None,
+            actor: None,
+            context_provenance: None,
+            capability: None,
         }),
     )
     .await

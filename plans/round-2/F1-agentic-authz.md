@@ -4,6 +4,39 @@ Strategic bet (`reviews/round-2/06-future-architecture.md` §"AI / LLM-era
 authorization", backlog `plans/round-2/00-NEXT-BACKLOG.md` Workstream F). Not
 remediation. **Status: F1-s1 + s2 LANDED (capability core, request shape, DSL actor + taint); s3–s5 pending.**
 
+## STATUS (2026-07-16) — F1-s3 agent enforcement + issuance (LANDED on branch)
+
+- **Slice 1 (core)**: `RevocationList.revoked_capability_ids` on the signed
+  list-pull channel; canonical bytes append the segment only when non-empty
+  (existing signed lists verify byte-for-byte — pinned test; a pre-F1 agent
+  receiving a capability-bearing list fails signature and keeps last-good:
+  fail closed both directions).
+- **Slice 2 (agent)**: pre-eval gate on the served path.
+  `BundleVerifier::verify_capability` = same trust anchor as bundles +
+  revocation snapshot (staleness policy applies). `capability_gate::enforce`
+  binds subject==principal / actor==actor (absent actor inherits the
+  capability's), checks grant coverage; denials serve as decision:"deny"
+  with reason in matched_rule. EvaluateRequest/BatchRequestItem gained
+  actor/context_provenance/capability; the agent finally threads actor+taint
+  into the engine PolicyRequest. Decision-cache fingerprint now folds actor
+  + provenance (cross-actor cache poisoning fix, regression-tested). Fast
+  path dispatches agentic requests to the standard lane (memmem probe,
+  false positives only cost the fast lane); batch enforces per item.
+  Opt-in `auth.require_actor_capability` / REAPER_REQUIRE_ACTOR_CAPABILITY.
+  12-case integration suite.
+- **Slice 3 (management)**: `capability:issue` / `capability:revoke` scopes
+  (Owner role confers both); POST /orgs/{org}/capabilities (+ /attenuate,
+  + /revoke). Issuance signs with the SAME bundle signing key agents pin —
+  zero new key distribution. Attenuation verifies the parent's signature
+  and revocation state first; widened grants/windows are rejected by the
+  core; ttl ceiling 86400s. Revocation writes the org revocation list
+  (kind="capability", no migration) — agents pick it up on the existing
+  sync cadence. api_contract green; full lifecycle integration test
+  (issue → verify → attenuate → widen-reject → forged-parent-reject →
+  revoke root → child dies via ancestry → revoked-parent can't attenuate →
+  scope enforcement).
+- Remaining F1: s4 allow-path explainability, s5 MCP adapter.
+
 ## STATUS (2026-07-15) — F1-s2c compiled-path actor (slices A+B)
 
 - **Slice A (EntityBindings)**: the compiled evaluator's 85

@@ -129,6 +129,34 @@ impl BundleVerifier {
         }
     }
 
+    /// Verify a capability token against the SAME trust anchor as bundles
+    /// (management signs both with its bundle signing key) and the current
+    /// signed revocation snapshot. Fail closed on every leg:
+    /// - no pinned verification key → the capability cannot be trusted;
+    /// - stale revocation list under `Enforce` → refuse;
+    /// - then the pure `Capability::verify_at` (version, key pin, algorithm,
+    ///   signature, window, self+ancestor revocation).
+    ///
+    /// Grant coverage and subject/actor binding are the caller's checks —
+    /// they need the request, which this layer deliberately never sees.
+    pub fn verify_capability(
+        &self,
+        cap: &reaper_core::capability::Capability,
+        now: i64,
+    ) -> Result<(), String> {
+        let Some(key) = &self.key else {
+            return Err("capability presented but no trust anchor is configured \
+                 (management.bundle_public_key): cannot verify, refusing"
+                .to_string());
+        };
+        let revoked = self.revocation.capability_revocations(now)?;
+        // With no explicit key-id pin, the capability's own key_id is used —
+        // the signature must still verify against OUR pinned key either way.
+        let expected_key_id = self.key_id_pin.as_deref().unwrap_or(&cap.key_id);
+        cap.verify_at(key, expected_key_id, now, &revoked)
+            .map_err(|e| format!("capability rejected: {e}"))
+    }
+
     /// Verify a **managed** (pulled) bundle before apply. Fail closed.
     pub fn verify_managed(
         &self,

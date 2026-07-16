@@ -70,6 +70,7 @@ async fn get_revocations(
         next_update,
         revoked_bundle_hashes: set.hashes,
         revoked_key_ids: set.key_ids,
+        revoked_capability_ids: set.capability_ids,
     };
 
     match state.bundle_service.sign_revocation_list(list) {
@@ -84,7 +85,10 @@ async fn get_revocations(
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct RevokeRequest {
-    /// "hash" (bundle-bytes sha256, lowercase hex) or "key_id".
+    /// "hash" (bundle-bytes sha256, lowercase hex), "key_id", or
+    /// "capability" (capability id — but prefer the dedicated
+    /// `/orgs/{org}/capabilities/revoke` endpoint, which needs only
+    /// `capability:revoke`, not org admin).
     kind: String,
     value: String,
     reason: Option<String>,
@@ -109,8 +113,9 @@ async fn add_revocation(
     Json(req): Json<RevokeRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
-    let kind = RevocationKind::parse(&req.kind)
-        .ok_or_else(|| ApiError::BadRequest("kind must be 'hash' or 'key_id'".to_string()))?;
+    let kind = RevocationKind::parse(&req.kind).ok_or_else(|| {
+        ApiError::BadRequest("kind must be 'hash', 'key_id', or 'capability'".to_string())
+    })?;
     if req.value.trim().is_empty() {
         return Err(ApiError::BadRequest("value is required".to_string()));
     }
@@ -157,8 +162,9 @@ async fn remove_revocation(
     Json(req): Json<UnrevokeRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
-    let kind = RevocationKind::parse(&req.kind)
-        .ok_or_else(|| ApiError::BadRequest("kind must be 'hash' or 'key_id'".to_string()))?;
+    let kind = RevocationKind::parse(&req.kind).ok_or_else(|| {
+        ApiError::BadRequest("kind must be 'hash', 'key_id', or 'capability'".to_string())
+    })?;
     let serial = RevocationRepository::new(&state.db)
         .remove(organization.id, kind, req.value.trim())
         .await?;

@@ -543,6 +543,11 @@ pub(crate) fn role_to_scopes(role: super::users::OrgRole) -> Vec<String> {
             "org:admin".to_string(),
             "org:read".to_string(),
             "org:write".to_string(),
+            // Capability minting/killing for agentic actors is org-owner
+            // authority (delegating a subset of the org's own access);
+            // narrower delegation is a dedicated API key with just these.
+            "capability:issue".to_string(),
+            "capability:revoke".to_string(),
             "agent:register".to_string(),
             "agent:read".to_string(),
             "agent:write".to_string(),

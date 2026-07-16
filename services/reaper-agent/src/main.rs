@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod bootstrap;
 mod cache;
+mod capability_gate;
 mod decision_stream;
 mod handlers;
 mod management;

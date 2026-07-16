@@ -83,6 +83,9 @@ fn eval_request(policy_id: Option<&str>, resource: &str) -> EvaluateRequest {
         resource: resource.to_string(),
         action: "read".to_string(),
         context: None,
+        actor: None,
+        context_provenance: None,
+        capability: None,
     }
 }
 
