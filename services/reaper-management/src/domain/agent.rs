@@ -123,6 +123,10 @@ pub struct AgentMetrics {
     pub decisions_allow: u64,
     /// Total deny decisions
     pub decisions_deny: u64,
+    /// Total eval-errors: served requests that could not be evaluated as
+    /// intended. Decision-quality signal for auto-rollback (round-3 Plan 03),
+    /// distinct from a legitimate deny.
+    pub eval_errors: u64,
     /// Agent uptime in seconds
     pub uptime_seconds: u64,
     /// Current bundle ID
@@ -138,6 +142,45 @@ pub struct AgentMetrics {
     pub data_applied_seq: Option<i64>,
     #[serde(default)]
     pub data_stale: Option<bool>,
+}
+
+/// Aggregate runtime decision quality across an org's agents, used by the
+/// decision-quality auto-rollback arm (round-3 Plan 03).
+#[derive(Debug, Clone, Default)]
+pub struct OrgDecisionMetrics {
+    pub eval_errors: u64,
+    pub decisions_allow: u64,
+    pub decisions_deny: u64,
+    /// Worst (max) p99 eval latency across the fleet, microseconds.
+    pub p99_latency_us: f64,
+}
+
+impl OrgDecisionMetrics {
+    /// Served decisions observed (allow + deny + eval-error).
+    pub fn total_decisions(&self) -> u64 {
+        self.eval_errors + self.decisions_allow + self.decisions_deny
+    }
+
+    /// Eval-error rate as a percentage of all served decisions.
+    pub fn eval_error_rate(&self) -> f64 {
+        let total = self.total_decisions();
+        if total == 0 {
+            0.0
+        } else {
+            self.eval_errors as f64 / total as f64 * 100.0
+        }
+    }
+
+    /// Deny rate as a percentage of allow+deny (eval-errors excluded — they are
+    /// a separate signal, not a policy deny).
+    pub fn denial_rate(&self) -> f64 {
+        let ad = self.decisions_allow + self.decisions_deny;
+        if ad == 0 {
+            0.0
+        } else {
+            self.decisions_deny as f64 / ad as f64 * 100.0
+        }
+    }
 }
 
 impl Agent {

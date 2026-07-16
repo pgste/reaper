@@ -136,12 +136,26 @@ fn audit_gate(state: &AgentState) -> Result<(), StatusCode> {
 /// single constant policy label keeps the histogram's cardinality bounded (the
 /// same pattern as the "cached" label on the cache-hit path).
 #[inline]
-fn observe_early_return(state: &AgentState, start_time: std::time::Instant) {
+fn observe_served_deny(state: &AgentState, start_time: std::time::Instant) {
     state
         .decision_metrics
         .for_policy("early_deny")
         .duration
         .observe(start_time.elapsed().as_secs_f64());
+}
+
+/// Observe an eval-ERROR early return: a served request that could not be
+/// evaluated as intended (`policy_not_found`, `evaluate_all_disabled`,
+/// `no_policies_loaded`, `candidate_cap_exceeded`, fast-path `parse_error`).
+/// Records the decision-quality `eval_errors` signal (round-3 Plan 03) in
+/// addition to the served-latency histogram. The fail-closed operational denies
+/// (`data_stale`, `capability_rejected`, and the audit-gate 503) are intended
+/// outcomes, NOT eval-errors — they call [`observe_served_deny`] instead so they
+/// never inflate the decision-quality signal.
+#[inline]
+fn observe_early_return(state: &AgentState, start_time: std::time::Instant) {
+    state.stats.record_eval_error();
+    observe_served_deny(state, start_time);
 }
 
 #[utoipa::path(
@@ -162,7 +176,7 @@ pub async fn evaluate_policy(
     let start_time = std::time::Instant::now();
 
     if let Err(status) = audit_gate(&state) {
-        observe_early_return(&state, start_time);
+        observe_served_deny(&state, start_time);
         return Err(status);
     }
     // Track concurrent evaluations
@@ -196,7 +210,7 @@ pub async fn evaluate_policy(
             cache_hit: false,
         })
         .unwrap_or_default();
-        observe_early_return(&state, start_time);
+        observe_served_deny(&state, start_time);
         return Ok(([(header::CONTENT_TYPE, "application/json")], body));
     }
 
@@ -229,7 +243,7 @@ pub async fn evaluate_policy(
             cache_hit: false,
         })
         .unwrap_or_default();
-        observe_early_return(&state, start_time);
+        observe_served_deny(&state, start_time);
         return Ok(([(header::CONTENT_TYPE, "application/json")], body));
     }
 
@@ -761,7 +775,7 @@ async fn fast_evaluate_policy_plain(
     let start_time = std::time::Instant::now();
 
     if let Err(status) = audit_gate(&state) {
-        observe_early_return(&state, start_time);
+        observe_served_deny(&state, start_time);
         return Err(status);
     }
     // Track concurrent evaluations
@@ -1139,6 +1153,7 @@ pub async fn batch_evaluate_policy(
             Some(p) => p,
             None => {
                 ERRORS_TOTAL.with_label_values(&["policy_not_found"]).inc();
+                state.stats.record_eval_error();
                 return Ok(Json(json!({
                     "error": "Policy not found",
                     "policy_name": name
@@ -1150,6 +1165,7 @@ pub async fn batch_evaluate_policy(
         let policies = state.policy_engine.list_policies();
         if policies.is_empty() {
             ERRORS_TOTAL.with_label_values(&["no_policies"]).inc();
+            state.stats.record_eval_error();
             return Ok(Json(json!({
                 "error": "No policies loaded"
             })));

@@ -113,6 +113,16 @@ const PG_MIGRATIONS: &[(i64, &str, &str)] = &[
         "siem_connectors",
         include_str!("migrations_pg/0019_siem_connectors.sql"),
     ),
+    (
+        20,
+        "agent_decision_quality",
+        include_str!("migrations_pg/0020_agent_decision_quality.sql"),
+    ),
+    (
+        21,
+        "decision_quality_rollback",
+        include_str!("migrations_pg/0021_decision_quality_rollback.sql"),
+    ),
 ];
 
 static INSTALL_DRIVERS: Once = Once::new();
@@ -421,6 +431,8 @@ impl Database {
             include_str!("migrations/024_policy_row_version.sql"),
             include_str!("migrations/025_subject_erasure.sql"),
             include_str!("migrations/026_siem_connectors.sql"),
+            include_str!("migrations/027_agent_decision_quality.sql"),
+            include_str!("migrations/028_decision_quality_rollback.sql"),
         ];
 
         for (idx, migration_sql) in migrations.iter().enumerate() {

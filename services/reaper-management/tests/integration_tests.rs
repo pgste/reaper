@@ -824,6 +824,7 @@ async fn test_heartbeat_stores_metrics() {
                 "cpu_percent": 25.5,
                 "decisions_allow": 48000,
                 "decisions_deny": 2000,
+                "eval_errors": 137,
                 "uptime_seconds": 3600,
                 "current_bundle_id": null,
                 "current_bundle_version": null
@@ -846,6 +847,9 @@ async fn test_heartbeat_stores_metrics() {
     assert!((stored_metrics.requests_per_second - 1250.5).abs() < 0.01);
     assert_eq!(stored_metrics.decisions_allow, 48000);
     assert_eq!(stored_metrics.decisions_deny, 2000);
+    // Round-3 Plan 03: the decision-quality eval-error count rides the heartbeat
+    // into agent_metrics_latest (migration 027) and reads back via get_metrics.
+    assert_eq!(stored_metrics.eval_errors, 137);
     assert_eq!(stored_metrics.memory_bytes, 52428800);
 }
 

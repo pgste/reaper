@@ -277,6 +277,14 @@ pub struct AgentStats {
     pub decisions_allow: AtomicU64,
     /// Count of deny decisions
     pub decisions_deny: AtomicU64,
+    /// Count of eval-errors: served requests that could not be evaluated as
+    /// intended (`policy_not_found`, `evaluate_all_disabled`, `no_policies_loaded`,
+    /// `candidate_cap_exceeded`, fast-path `parse_error`). An eval-error is never
+    /// an intended policy outcome, so this is a decision-QUALITY signal distinct
+    /// from a legitimate deny — the control plane keys decision-quality
+    /// auto-rollback on it (round-3 Plan 03). The fail-closed `data_stale` deny
+    /// and the audit-gate 503 are NOT eval-errors and are excluded.
+    pub eval_errors: AtomicU64,
     /// Whether enhanced metrics (histogram, CPU, memory) are enabled
     enhanced_metrics_enabled: bool,
     /// HDR histogram for accurate latency percentiles (nanoseconds)
@@ -304,6 +312,7 @@ impl AgentStats {
             decision_cache_misses: AtomicU64::new(0),
             decisions_allow: AtomicU64::new(0),
             decisions_deny: AtomicU64::new(0),
+            eval_errors: AtomicU64::new(0),
             enhanced_metrics_enabled,
             // Histogram: 1ns to 1s range, 3 significant figures
             latency_histogram: Mutex::new(
@@ -338,6 +347,14 @@ impl AgentStats {
     /// Record a deny decision.
     pub fn record_deny(&self) {
         self.decisions_deny.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an eval-error: a served request that could not be evaluated as
+    /// intended (see the `eval_errors` field). Decision-quality signal for
+    /// auto-rollback (round-3 Plan 03); NOT called for the fail-closed
+    /// `data_stale` deny or the audit-gate 503, which are intended outcomes.
+    pub fn record_eval_error(&self) {
+        self.eval_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a policy cache hit.
@@ -523,6 +540,19 @@ mod tests {
         stats.record_deny();
 
         assert_eq!(stats.decisions_allow.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.decisions_deny.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_record_eval_error_is_distinct_from_deny() {
+        let stats = AgentStats::new(false);
+        stats.record_deny();
+        stats.record_eval_error();
+        stats.record_eval_error();
+
+        // Eval-errors are a separate decision-QUALITY signal (round-3 Plan 03):
+        // an eval-error must not be conflated with a legitimate policy deny.
+        assert_eq!(stats.eval_errors.load(Ordering::Relaxed), 2);
         assert_eq!(stats.decisions_deny.load(Ordering::Relaxed), 1);
     }
 

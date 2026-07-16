@@ -336,10 +336,14 @@ impl<'a> RollbackConfigRepository<'a> {
             String,
             String,
             String,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            i32,
         )> = if let Some(ns_id) = namespace_id {
             sqlx::query_as(
                 r#"
-                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at, mode
+                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at, mode, eval_error_rate_threshold, denial_delta_threshold, latency_p99_slo_us, min_decisions
                 FROM rollback_configs WHERE org_id = $1 AND namespace_id = $2
                 "#,
             )
@@ -350,7 +354,7 @@ impl<'a> RollbackConfigRepository<'a> {
         } else {
             sqlx::query_as(
                 r#"
-                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at, mode
+                SELECT id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, created_at, updated_at, mode, eval_error_rate_threshold, denial_delta_threshold, latency_p99_slo_us, min_decisions
                 FROM rollback_configs WHERE org_id = $1 AND namespace_id IS NULL
                 "#,
             )
@@ -379,15 +383,19 @@ impl<'a> RollbackConfigRepository<'a> {
         sqlx::query(
             r#"
             INSERT INTO rollback_configs
-                (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, mode, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                (id, org_id, namespace_id, is_enabled, error_rate_threshold, window_seconds, min_requests, mode, created_at, updated_at, eval_error_rate_threshold, denial_delta_threshold, latency_p99_slo_us, min_decisions)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT(id) DO UPDATE SET
                 is_enabled = excluded.is_enabled,
                 error_rate_threshold = excluded.error_rate_threshold,
                 window_seconds = excluded.window_seconds,
                 min_requests = excluded.min_requests,
                 mode = excluded.mode,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                eval_error_rate_threshold = excluded.eval_error_rate_threshold,
+                denial_delta_threshold = excluded.denial_delta_threshold,
+                latency_p99_slo_us = excluded.latency_p99_slo_us,
+                min_decisions = excluded.min_decisions
             "#,
         )
         .bind(config.id.to_string())
@@ -400,6 +408,10 @@ impl<'a> RollbackConfigRepository<'a> {
         .bind(config.mode.to_string())
         .bind(config.created_at.to_rfc3339())
         .bind(config.updated_at.to_rfc3339())
+        .bind(config.eval_error_rate_threshold)
+        .bind(config.denial_delta_threshold)
+        .bind(config.latency_p99_slo_us)
+        .bind(config.min_decisions as i32)
         .execute(pool)
         .await?;
 
@@ -419,6 +431,10 @@ impl<'a> RollbackConfigRepository<'a> {
             String,
             String,
             String,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            i32,
         ),
     ) -> Result<RollbackConfig, DatabaseError> {
         Ok(RollbackConfig {
@@ -436,6 +452,10 @@ impl<'a> RollbackConfigRepository<'a> {
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| DatabaseError::Config(e.to_string()))?,
             mode: row.9.parse().map_err(DatabaseError::Config)?,
+            eval_error_rate_threshold: row.10,
+            denial_delta_threshold: row.11,
+            latency_p99_slo_us: row.12,
+            min_decisions: row.13 as u32,
         })
     }
 }
