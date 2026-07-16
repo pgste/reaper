@@ -1,0 +1,12 @@
+{"entities":[
+  {"id":"dr-adams","type":"User","attributes":{"role":"doctor","department":"oncology","clearance":4}},
+  {"id":"dr-brown","type":"User","attributes":{"role":"doctor","department":"cardiology","clearance":5}},
+  {"id":"nurse-kim","type":"User","attributes":{"role":"nurse","department":"oncology","clearance":2},
+   "relationships":{"member_of":["team-onc-a"]}},
+  {"id":"aud-lee","type":"User","attributes":{"role":"auditor","department":"compliance","clearance":5}},
+  {"id":"team-onc-a","type":"Group","attributes":{}},
+  {"id":"record-101","type":"Record","attributes":{"department":"oncology","sensitivity":3,"consent":"granted"},
+   "relationships":{"treating_physician":["dr-adams"],"care_team":["team-onc-a"]}},
+  {"id":"record-999","type":"Record","attributes":{"department":"oncology","sensitivity":3,"consent":"revoked"},
+   "relationships":{"treating_physician":["dr-adams"]}}
+]}

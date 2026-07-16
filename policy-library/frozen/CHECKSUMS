@@ -1,0 +1,16 @@
+c438b0bb3c6bc295b90d70598b8d83e1c7dc76fabe38af9a39608c14eda58d39  ./banking-accounts/README.md
+cc41b6f575591722cbd57adb6e3752575beb5537ba0d5d8f849e7c4e26257401  ./banking-accounts/data.json
+56ba8b878833a90beaa6fac3140f2145e2aeb1997202a0bbdb396593139e3bb0  ./banking-accounts/manifest.json
+aedd5f852d8be07310024c4ccef73210144cb9b30a9ed151e4f64ae70d26d290  ./banking-accounts/policy.reap
+d54284b9ddcdb30e9ace8c9b3a3009ca72ff76421b7ad5f6bba8155f4cdf03d4  ./document-sharing/README.md
+466ff69ff471d6bcc1be4131ad7b47b0f83542e78cc1a1444bb47474c6c80265  ./document-sharing/data.json
+c85c58c7cd735c360b911248bc5326de0c55a6209d9be882524d5dc07afdda67  ./document-sharing/manifest.json
+6cab63da548ee190ca832759df09c73526f19d67d170fc53dd41fa087d7279d3  ./document-sharing/policy.reap
+9c410aa70838ee729efde5df693b9c32443b5f010f88b3dcbb16ff1eeff6ac9d  ./healthcare-records/README.md
+5ac2749f588b906764fbb2cf975a0ad2859e51fa8d579299af74421f141daad6  ./healthcare-records/data.json
+1c688ba23acfe15e17effb59b88f9e00f4d2a780dc7c5cb743d7c9283001181f  ./healthcare-records/manifest.json
+b98bb4069f1b2f681b2fd2ed9c0942d3e9c2d4487523fd53c0860344f5d36dca  ./healthcare-records/policy.reap
+7c6a9d62f66b3baa29bae61a7598400405f8c5a65700f13febaa186ddbe38473  ./role-based-access/README.md
+ced27747d88ebda008609192bc3d0cd14d54805495d5e120da3923c627eb3982  ./role-based-access/data.json
+a21d206da06321175d4180e5584e932c9861251448f4152c15ab05f87a9164ca  ./role-based-access/manifest.json
+3bd69d069ded1229b03968e122a4793394b4cbf60813a20ed54f9bab0af08c10  ./role-based-access/policy.reap

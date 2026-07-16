@@ -1070,6 +1070,14 @@ jobs:
         run: |
           cargo test -p policy-engine --test policy_library_tests 2>&1 | tee integration-reports/policy-library.txt
 
+      # DSL semantic-stability fitness function (round-3 Plan 04): frozen
+      # decisions must never change silently, guarded by a checksum-immutability
+      # gate. A shared operator/builtin change that flips a frozen decision (which
+      # the compiled-vs-AST differential cannot catch) turns this red.
+      - name: Run Frozen Decision Corpus (semantic stability)
+        run: |
+          cargo test -p policy-engine --test frozen_decision_corpus_tests 2>&1 | tee integration-reports/frozen-corpus.txt
+
       # TRUE end-to-end: real management + agent binaries as processes,
       # replicated by the real sync engine over real HTTP (snapshot, deltas
       # with cascade, kill/respawn self-heal). This is the layer that caught

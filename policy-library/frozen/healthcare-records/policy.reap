@@ -1,0 +1,44 @@
+// The flagship: RBAC + ABAC + ReBAC in single rules. Doctors read records of
+// patients they TREAT (relationship), only within their department
+// (attribute), unless the record is flagged restricted and their clearance is
+// too low (attribute); auditors (role) read anything but modify nothing;
+// patient consent revocation denies everyone below admin.
+policy healthcare_records {
+    default: deny,
+
+    // consent revoked -> hard deny for non-admins (deny wins over allows)
+    rule consent_revoked {
+        deny if {
+            resource.consent == "revoked" &&
+            user.role != "admin"
+        }
+    }
+
+    // RBAC (role) + ReBAC (treating relationship) + ABAC (department match,
+    // clearance vs sensitivity) in ONE condition:
+    rule treating_physician_reads {
+        allow if {
+            user.role == "doctor" &&
+            user.department == resource.department &&
+            user.clearance >= resource.sensitivity &&
+            rebac::related(user, "treating_physician", resource)
+        }
+    }
+
+    // care-team access through team membership (ReBAC group expansion)
+    rule care_team_reads {
+        allow if {
+            context.action == "read" &&
+            user.role == "nurse" &&
+            rebac::reachable(user, "care_team", resource, "member_of", 2)
+        }
+    }
+
+    // RBAC-only: auditors read everything
+    rule auditors_read_all {
+        allow if {
+            context.action == "read" &&
+            user.role == "auditor"
+        }
+    }
+}

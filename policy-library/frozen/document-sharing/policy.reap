@@ -1,0 +1,32 @@
+// ReBAC — Google-Drive-style sharing (the Zanzibar model). OPA/Rego needs
+// hand-written recursive graph walks for this; Reaper has native, bounded,
+// cycle-safe traversal builtins that run on the compiled fast path.
+policy document_sharing {
+    default: deny,
+
+    // doc#owner@user — direct edge
+    rule owner_full_access {
+        allow if rebac::related(user, "owner", resource)
+    }
+
+    // doc#editor@group, user member_of group (nested up to 3 hops)
+    rule editor_can_write {
+        allow if {
+            (context.action == "write" || context.action == "read") &&
+            rebac::reachable(user, "editor", resource, "member_of", 3)
+        }
+    }
+
+    // doc#viewer@group — read only
+    rule viewer_can_read {
+        allow if {
+            context.action == "read" &&
+            rebac::reachable(user, "viewer", resource, "member_of", 3)
+        }
+    }
+
+    // permission inherited from ancestor folders (doc --parent--> folder ...)
+    rule folder_owner_inherits {
+        allow if rebac::inherited(user, "owner", resource, "parent", 4)
+    }
+}
