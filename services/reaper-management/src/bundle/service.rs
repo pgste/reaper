@@ -136,6 +136,71 @@ impl BundleService {
         })
     }
 
+    /// Issue a root capability (F1 agentic authz) with the SAME signing key
+    /// agents already pin for bundles — no new key distribution. `None` when
+    /// signing is disabled.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_capability(
+        &self,
+        subject: &str,
+        actor: &str,
+        grants: Vec<reaper_core::capability::Grant>,
+        not_before: i64,
+        expires_at: i64,
+    ) -> Option<Result<reaper_core::capability::Capability, reaper_core::capability::CapabilityError>>
+    {
+        self.signer.as_ref().map(|signer| {
+            reaper_core::capability::issue(
+                &signer.key,
+                &signer.key_id,
+                subject,
+                actor,
+                grants,
+                not_before,
+                expires_at,
+            )
+        })
+    }
+
+    /// Attenuate `parent` into a strictly-narrower capability (issuer-side
+    /// re-issuance). The PARENT'S SIGNATURE IS VERIFIED FIRST against our own
+    /// key — an attenuation request carrying a forged parent must die here,
+    /// not mint a fresh valid token. `None` when signing is disabled.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attenuate_capability(
+        &self,
+        parent: &reaper_core::capability::Capability,
+        actor: &str,
+        grants: Vec<reaper_core::capability::Grant>,
+        not_before: i64,
+        expires_at: i64,
+        revoked_ids: &std::collections::HashSet<String>,
+        now: i64,
+    ) -> Option<Result<reaper_core::capability::Capability, reaper_core::capability::CapabilityError>>
+    {
+        let signer = self.signer.as_ref()?;
+        let verifying = reaper_core::bundle_signing::VerifyingKey::from_hex(
+            signer.key.algorithm(),
+            &signer.key.public_key_hex(),
+        )
+        .ok()?;
+        Some(
+            parent
+                .verify_at(&verifying, &parent.key_id, now, revoked_ids)
+                .and_then(|()| {
+                    reaper_core::capability::attenuate(
+                        parent,
+                        &signer.key,
+                        &signer.key_id,
+                        actor,
+                        grants,
+                        not_before,
+                        expires_at,
+                    )
+                }),
+        )
+    }
+
     /// Create a new bundle
     pub async fn create(&self, org_id: Uuid, input: &CreateBundle) -> Result<Bundle, BundleError> {
         let repo = BundleRepository::new(&self.db);

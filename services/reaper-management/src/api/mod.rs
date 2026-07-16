@@ -7,6 +7,7 @@ pub mod audit;
 pub mod auth;
 pub mod billing;
 pub mod bundles;
+pub mod capabilities;
 pub mod change_requests;
 pub mod connectors;
 pub mod datastore;
@@ -84,6 +85,7 @@ pub fn build_openapi_router() -> OpenApiRouter<Arc<AppState>> {
         .merge(landscape::routes())
         .merge(billing::routes())
         .merge(revocations::routes())
+        .merge(capabilities::routes())
         .merge(scim::routes())
 }
 

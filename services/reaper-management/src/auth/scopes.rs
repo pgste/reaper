@@ -75,6 +75,14 @@ pub enum Scope {
     #[serde(rename = "audit:export")]
     AuditExport,
 
+    // Capability issuance / revocation (F1 agentic authz): mint short-lived
+    // signed capabilities for non-human actors, and kill them via the signed
+    // revocation list. Issuance is the more privileged of the two.
+    #[serde(rename = "capability:issue")]
+    CapabilityIssue,
+    #[serde(rename = "capability:revoke")]
+    CapabilityRevoke,
+
     // Full admin access
     #[serde(rename = "admin")]
     Admin,
@@ -101,6 +109,8 @@ impl Scope {
             Self::ApiKeyWrite => "apikey:write",
             Self::AuditErase => "audit:erase",
             Self::AuditExport => "audit:export",
+            Self::CapabilityIssue => "capability:issue",
+            Self::CapabilityRevoke => "capability:revoke",
             Self::Admin => "admin",
         }
     }
@@ -125,6 +135,8 @@ impl Scope {
             "apikey:write" => Some(Self::ApiKeyWrite),
             "audit:erase" => Some(Self::AuditErase),
             "audit:export" => Some(Self::AuditExport),
+            "capability:issue" => Some(Self::CapabilityIssue),
+            "capability:revoke" => Some(Self::CapabilityRevoke),
             "admin" => Some(Self::Admin),
             _ => None,
         }
@@ -150,6 +162,8 @@ impl Scope {
             Self::ApiKeyWrite,
             Self::AuditErase,
             Self::AuditExport,
+            Self::CapabilityIssue,
+            Self::CapabilityRevoke,
             Self::Admin,
         ]
     }

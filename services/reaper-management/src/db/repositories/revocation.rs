@@ -21,6 +21,9 @@ pub struct RevocationEntry {
 pub enum RevocationKind {
     Hash,
     KeyId,
+    /// Revoked capability id (F1 agentic authz). Same table, same serial —
+    /// the kind column is free-form text, so no migration.
+    Capability,
 }
 
 impl RevocationKind {
@@ -28,12 +31,14 @@ impl RevocationKind {
         match self {
             RevocationKind::Hash => "hash",
             RevocationKind::KeyId => "key_id",
+            RevocationKind::Capability => "capability",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "hash" => Some(RevocationKind::Hash),
             "key_id" => Some(RevocationKind::KeyId),
+            "capability" => Some(RevocationKind::Capability),
             _ => None,
         }
     }
@@ -46,6 +51,7 @@ pub struct RevocationSet {
     pub updated_at: Option<String>,
     pub hashes: Vec<String>,
     pub key_ids: Vec<String>,
+    pub capability_ids: Vec<String>,
 }
 
 pub struct RevocationRepository<'a> {
@@ -152,6 +158,7 @@ impl<'a> RevocationRepository<'a> {
             match RevocationKind::parse(&kind) {
                 Some(RevocationKind::Hash) => set.hashes.push(value),
                 Some(RevocationKind::KeyId) => set.key_ids.push(value),
+                Some(RevocationKind::Capability) => set.capability_ids.push(value),
                 None => {}
             }
         }
