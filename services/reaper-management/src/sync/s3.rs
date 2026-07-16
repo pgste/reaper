@@ -53,6 +53,9 @@ impl S3Syncer {
             cache_path: cache_path.as_ref().to_path_buf(),
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
+                // No redirect-following: keep an S3 endpoint fetch from being
+                // bounced to an internal address (round-3 SEC R3-5 hardening).
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
         }

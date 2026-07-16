@@ -28,12 +28,26 @@ pub struct ApiSyncer {
     client: reqwest::Client,
 }
 
+/// SSRF pre-flight for a user-configured API source URL: require https to a
+/// public address (round-3 SEC R3-5). Rejection is a configuration error.
+async fn guard_api_url(url: &str) -> Result<(), ApiSyncError> {
+    crate::url_guard::validate_public_https_url(url)
+        .await
+        .map_err(|crate::url_guard::UrlGuardError::NotAllowed(reason)| {
+            ApiSyncError::Config(format!("API source URL blocked: {reason}"))
+        })
+}
+
 impl ApiSyncer {
     /// Create a new API syncer
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
+                // Never follow redirects: a public host that passes the SSRF
+                // pre-flight guard could otherwise 302 to an internal address /
+                // cloud metadata (round-3 SEC R3-5).
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
         }
@@ -46,6 +60,12 @@ impl ApiSyncer {
         let config = source
             .api_config()
             .ok_or_else(|| ApiSyncError::Config("Invalid API configuration".to_string()))?;
+
+        // SSRF guard: the API URL and its auth header are user-configured, so an
+        // unguarded fetch probes the internal network / cloud metadata and leaks
+        // the api_key to it (round-3 SEC R3-5). Require https to a public address
+        // before any bytes — combined with the no-redirect client above.
+        guard_api_url(&config.url).await?;
 
         // Build the request
         let mut request = match config.method.to_uppercase().as_str() {
@@ -217,6 +237,9 @@ impl ApiSyncer {
             .api_config()
             .ok_or_else(|| ApiSyncError::Config("Invalid API configuration".to_string()))?;
 
+        // SSRF guard (round-3 SEC R3-5) — see `sync()`.
+        guard_api_url(&config.url).await?;
+
         // Build the request
         let mut request = match config.method.to_uppercase().as_str() {
             "GET" => self.client.get(&config.url),
@@ -283,6 +306,18 @@ pub struct ApiPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn api_url_guard_blocks_internal_and_non_https() {
+        // http, cloud metadata, and private ranges are refused (round-3 R3-5)…
+        assert!(guard_api_url("http://example.com/policies").await.is_err());
+        assert!(guard_api_url("https://169.254.169.254/latest/meta-data/")
+            .await
+            .is_err());
+        assert!(guard_api_url("https://10.0.0.5/policies").await.is_err());
+        // …while a public https endpoint is allowed (IP literal: no DNS needed).
+        assert!(guard_api_url("https://1.1.1.1/policies").await.is_ok());
+    }
 
     #[test]
     fn test_parse_policy_minimal() {
