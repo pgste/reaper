@@ -119,6 +119,7 @@ impl DecisionTree {
             policy_version,
             evaluation_time_ns,
             matched_rule,
+            matched_rule_name: None,
         })
     }
 

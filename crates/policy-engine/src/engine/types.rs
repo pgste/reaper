@@ -270,6 +270,12 @@ pub struct PolicyDecision {
     pub policy_version: u64,
     pub evaluation_time_ns: u64,
     pub matched_rule: Option<usize>,
+    /// Name of the rule that decided (allow-path explainability, F1-s4).
+    /// Populated for languages with named rules (Reaper DSL); `None` for
+    /// Simple/Cedar or when the per-policy default decided. Additive and
+    /// skipped when absent — wire-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_rule_name: Option<String>,
 }
 
 /// Outcome of evaluating one request against a SET of policies with the
@@ -282,6 +288,10 @@ pub struct SetEvalOutcome {
     pub policy_name: String,
     pub policy_version: u64,
     pub matched_rule: Option<usize>,
+    /// Name of the deciding rule (allow-path explainability, F1-s4). Cloned
+    /// once, only for the single decisive policy — same discipline as
+    /// `policy_name`.
+    pub matched_rule_name: Option<String>,
     /// Sum of per-policy evaluation times.
     pub total_eval_time_ns: u64,
     /// Set when an evaluation errored (the decision is then Deny — fail closed).

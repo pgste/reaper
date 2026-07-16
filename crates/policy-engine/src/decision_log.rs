@@ -1116,6 +1116,14 @@ pub struct DecisionLogConfig {
     #[serde(default = "default_true")]
     pub input_data_denies_only: bool,
 
+    /// F1-s4 allow-path explainability: capture the input-data snapshot for
+    /// every ACTOR-CARRYING request (allow and deny), regardless of the two
+    /// flags above. Agentic allows are the decisions that need explaining;
+    /// this makes them explainable by default once decision logging is on.
+    /// Default true; disable with
+    /// `REAPER_DECISION_LOG_INPUT_DATA_ACTOR_REQUESTS=false`.
+    pub input_data_actor_requests: bool,
+
     /// Replayable-capture tier (Plan 04 step 7): snapshot the FULL resolved
     /// request into `replay_input` so decisions can be re-evaluated under a
     /// different policy/data version (counterfactual replay). Off by default —
@@ -1324,6 +1332,7 @@ impl Default for DecisionLogConfig {
             include_context: true,
             include_input_data: false,
             input_data_denies_only: true,
+            input_data_actor_requests: true,
             include_replay_input: false,
             replay_input_denies_only: false,
             capture_shards: 0,
@@ -1380,6 +1389,11 @@ impl DecisionLogConfig {
             include_context: std::env::var("REAPER_DECISION_LOG_CONTEXT")
                 .map(|v| v.to_lowercase() != "false")
                 .unwrap_or(true),
+            input_data_actor_requests: std::env::var(
+                "REAPER_DECISION_LOG_INPUT_DATA_ACTOR_REQUESTS",
+            )
+            .map(|v| v.to_lowercase() != "false" && v != "0")
+            .unwrap_or(true),
             include_input_data: std::env::var("REAPER_DECISION_LOG_INPUT_DATA")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),

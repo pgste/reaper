@@ -21,6 +21,17 @@ pub use simple::SimplePolicyEvaluator;
 // Note: datastore_to_cedar_entities and ReaperDSLEvaluator are not yet used
 // but kept as internal implementations for future features
 
+/// Outcome of [`PolicyEvaluator::evaluate_named`]: the decision, whether a
+/// rule actually matched (vs the per-policy default), and — when the policy
+/// language has named rules — the deciding rule's name, borrowed from the
+/// evaluator so the eval loop allocates nothing.
+#[derive(Debug, Clone)]
+pub struct NamedOutcome<'a> {
+    pub decision: PolicyAction,
+    pub matched: bool,
+    pub rule_name: Option<&'a str>,
+}
+
 /// Core trait for policy evaluation across different languages
 ///
 /// This trait enables pluggable policy languages while maintaining
@@ -66,6 +77,28 @@ pub trait PolicyEvaluator: Send + Sync + Debug {
         request: &PolicyRequest,
     ) -> Result<(PolicyAction, bool), ReaperError> {
         Ok((self.evaluate(request)?, true))
+    }
+
+    /// Like [`Self::evaluate_matched`], additionally naming the rule that
+    /// decided (allow-path explainability, F1-s4): for AI-actor traffic the
+    /// ALLOWS are the dangerous decisions, and "which rule allowed this"
+    /// must be answerable without replaying the request.
+    ///
+    /// The name is borrowed from the evaluator (rule names live in the
+    /// compiled policy), so the hot path allocates nothing; the engine
+    /// clones it once, only for the single decisive policy — the same
+    /// discipline as policy-name attribution. `None` = the language has no
+    /// named rules (Simple/Cedar) or the per-policy default decided.
+    ///
+    /// The default implementation preserves each evaluator's existing
+    /// `evaluate_matched` semantics exactly and reports no name.
+    fn evaluate_named(&self, request: &PolicyRequest) -> Result<NamedOutcome<'_>, ReaperError> {
+        let (decision, matched) = self.evaluate_matched(request)?;
+        Ok(NamedOutcome {
+            decision,
+            matched,
+            rule_name: None,
+        })
     }
 
     /// Validate the policy before deployment

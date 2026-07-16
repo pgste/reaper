@@ -109,6 +109,7 @@ impl PolicyEngine {
                     policy_version: policy.version,
                     evaluation_time_ns: eval_time,
                     matched_rule: None,
+                    matched_rule_name: None,
                 };
 
                 // Security-first: any deny = overall deny

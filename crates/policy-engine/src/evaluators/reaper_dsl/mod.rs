@@ -1553,7 +1553,7 @@ impl ReaperDSLEvaluator {
     pub(crate) fn evaluate_with_match(
         &self,
         request: &PolicyRequest,
-    ) -> Result<(PolicyAction, bool), reaper_core::ReaperError> {
+    ) -> Result<(PolicyAction, bool, Option<&str>), reaper_core::ReaperError> {
         // One evaluation = one ReBAC traversal budget, shared across every
         // condition this policy checks (Plan 08 Phase E).
         crate::data::relationships::reset_traversal_budget();
@@ -1711,7 +1711,7 @@ impl ReaperDSLEvaluator {
                 &mut variables,
             ) {
                 // Explicit deny - return immediately, no allow can override this
-                return Ok((PolicyAction::Deny, true));
+                return Ok((PolicyAction::Deny, true, Some(rule.name.as_str())));
             }
             // Clear variables between rules (each rule has independent scope)
             variables.clear();
@@ -1732,7 +1732,7 @@ impl ReaperDSLEvaluator {
                     action = %request.action,
                     "Rule matched - returning Allow"
                 );
-                return Ok((PolicyAction::Allow, true));
+                return Ok((PolicyAction::Allow, true, Some(rule.name.as_str())));
             }
             // Clear variables between rules (each rule has independent scope)
             variables.clear();
@@ -1743,13 +1743,13 @@ impl ReaperDSLEvaluator {
             default_decision = ?self.default_decision,
             "No rules matched - returning default"
         );
-        Ok((self.default_decision.clone(), false))
+        Ok((self.default_decision.clone(), false, None))
     }
 }
 
 impl PolicyEvaluator for ReaperDSLEvaluator {
     fn evaluate(&self, request: &PolicyRequest) -> Result<PolicyAction, reaper_core::ReaperError> {
-        self.evaluate_with_match(request).map(|(action, _)| action)
+        self.evaluate_with_match(request).map(|(action, ..)| action)
     }
 
     fn evaluate_matched(
@@ -1757,6 +1757,21 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         request: &PolicyRequest,
     ) -> Result<(PolicyAction, bool), reaper_core::ReaperError> {
         self.evaluate_with_match(request)
+            .map(|(action, matched, _)| (action, matched))
+    }
+
+    /// Allow-path explainability (F1-s4): surface the deciding rule's name,
+    /// borrowed from the compiled rule — zero allocation on the eval loop.
+    fn evaluate_named(
+        &self,
+        request: &PolicyRequest,
+    ) -> Result<crate::evaluators::NamedOutcome<'_>, reaper_core::ReaperError> {
+        let (decision, matched, rule_name) = self.evaluate_with_match(request)?;
+        Ok(crate::evaluators::NamedOutcome {
+            decision,
+            matched,
+            rule_name,
+        })
     }
 
     fn validate(&self) -> Result<(), reaper_core::ReaperError> {

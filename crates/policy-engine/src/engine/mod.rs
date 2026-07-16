@@ -448,7 +448,9 @@ impl PolicyEngine {
             None
         };
 
-        let decision = evaluator.evaluate(request)?;
+        let named = evaluator.evaluate_named(request)?;
+        let matched_rule_name = named.rule_name.map(str::to_string);
+        let decision = named.decision;
         let evaluation_time_ns = start_time.elapsed_ns();
 
         // Trace-level logging gated behind level check — zero cost at info/debug level
@@ -469,6 +471,7 @@ impl PolicyEngine {
             policy_version: policy.version,
             evaluation_time_ns,
             matched_rule,
+            matched_rule_name,
         })
     }
 
@@ -498,6 +501,7 @@ impl PolicyEngine {
             policy_name: String::new(),
             policy_version: 0,
             matched_rule: None,
+            matched_rule_name: None,
             total_eval_time_ns: 0,
             error: None,
         };
@@ -526,25 +530,27 @@ impl PolicyEngine {
             };
 
             let start = crate::clock::Stopwatch::start();
-            let result = evaluator.evaluate_matched(request);
+            let result = evaluator.evaluate_named(request);
             outcome.total_eval_time_ns += start.elapsed_ns();
 
             match result {
                 // Nothing matched: non-decisive, this policy is silent.
-                Ok((_, false)) => continue,
-                Ok((PolicyAction::Deny, true)) => {
-                    outcome.decision = PolicyAction::Deny;
-                    Self::attribute(&mut outcome, &policy, request);
-                    return outcome;
-                }
-                Ok((PolicyAction::Allow, true)) => {
-                    if !any_allow {
-                        any_allow = true;
-                        outcome.decision = PolicyAction::Allow;
-                        Self::attribute(&mut outcome, &policy, request);
+                Ok(named) if !named.matched => continue,
+                Ok(named) => match named.decision {
+                    PolicyAction::Deny => {
+                        outcome.decision = PolicyAction::Deny;
+                        Self::attribute(&mut outcome, &policy, request, named.rule_name);
+                        return outcome;
                     }
-                }
-                Ok((PolicyAction::Log, true)) => {}
+                    PolicyAction::Allow => {
+                        if !any_allow {
+                            any_allow = true;
+                            outcome.decision = PolicyAction::Allow;
+                            Self::attribute(&mut outcome, &policy, request, named.rule_name);
+                        }
+                    }
+                    PolicyAction::Log => {}
+                },
                 Err(e) => {
                     outcome.decision = PolicyAction::Deny;
                     outcome.error = Some(e.to_string());
@@ -559,10 +565,18 @@ impl PolicyEngine {
     /// Record `policy` as the deciding policy on `outcome`. The `policy.name`
     /// clone happens only here — once, for the single decisive policy — not on
     /// every non-matching candidate (Perf P3-2).
-    fn attribute(outcome: &mut SetEvalOutcome, policy: &EnhancedPolicy, request: &PolicyRequest) {
+    fn attribute(
+        outcome: &mut SetEvalOutcome,
+        policy: &EnhancedPolicy,
+        request: &PolicyRequest,
+        rule_name: Option<&str>,
+    ) {
         outcome.policy_id = policy.id;
         outcome.policy_name = policy.name.clone();
         outcome.policy_version = policy.version;
+        // Allow-path explainability (F1-s4): the deciding rule's name, cloned
+        // once here for the single decisive policy only.
+        outcome.matched_rule_name = rule_name.map(str::to_string);
         // matched_rule is only meaningful for Simple policies; mirror the
         // per-policy `evaluate` scan so audit output is unchanged.
         outcome.matched_rule = if policy.language == PolicyLanguage::Simple {

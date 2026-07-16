@@ -751,9 +751,16 @@ impl DecisionBuffer {
     /// decision. Cheap boolean check; the (heavier) snapshot itself is only done
     /// by the caller when this returns true. When the explain tier is off
     /// (default) this is always false → zero extra work.
+    ///
+    /// F1-s4: actor-carrying requests are DEFAULT-ON — for agentic traffic
+    /// the allows are the dangerous decisions and explaining them must not
+    /// require an opt-in that nobody set before the incident. Operators can
+    /// switch this off with `input_data_actor_requests = false`
+    /// (`REAPER_DECISION_LOG_INPUT_DATA_ACTOR_REQUESTS=false`).
     #[inline]
-    pub fn should_capture_input(&self, is_allow: bool) -> bool {
-        self.config.include_input_data && (!self.config.input_data_denies_only || !is_allow)
+    pub fn should_capture_input(&self, is_allow: bool, has_actor: bool) -> bool {
+        (self.config.include_input_data && (!self.config.input_data_denies_only || !is_allow))
+            || (self.config.input_data_actor_requests && has_actor)
     }
 
     /// Whether the replayable-capture snapshot (the full resolved request)
