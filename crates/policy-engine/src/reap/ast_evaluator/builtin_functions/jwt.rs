@@ -98,6 +98,46 @@ mod tests {
         assert!(matches!(decode(&token).unwrap(), EvalValue::Object(_)));
     }
 
+    /// Round-3 Plan 04 Step 3: pins the SECURITY CONTRACT that `jwt::decode` does
+    /// NOT verify the signature (OPA `io.jwt.decode` parity) — a policy author
+    /// must verify at the trust boundary. A token with an entirely bogus
+    /// signature still decodes its claims; this is intended, and pinning it as a
+    /// test stops a future "decode also verifies" assumption from creeping in.
+    #[test]
+    fn decode_does_not_verify_signature() {
+        let claims = r#"{"sub":"attacker","scope":"admin"}"#;
+        let forged = format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#),
+            URL_SAFE_NO_PAD.encode(claims),
+            URL_SAFE_NO_PAD.encode("totally-forged-signature-bytes"),
+        );
+        let EvalValue::Object(map) = decode(&forged).unwrap() else {
+            panic!("decode returns claims regardless of signature (it does not verify)")
+        };
+        assert_eq!(map.get("sub"), Some(&EvalValue::String("attacker".into())));
+    }
+
+    #[test]
+    fn malformed_tokens_yield_null_not_a_spurious_claim() {
+        // `jwt::decode` fails SOFT (OPA parity): a garbage token yields Null, so
+        // a policy navigating claims (`jwt::decode(t).sub == "admin"`) naturally
+        // DENIES rather than erroring. The contract we pin: malformed input must
+        // never yield a spurious non-null claim object.
+        for bad in [
+            "only.two",                    // not 3 segments
+            "",                            // empty
+            "not-a-jwt",                   // single segment
+            "aGVhZGVy.!!!not base64!!!.s", // 3 segments, payload not base64url
+        ] {
+            assert_eq!(
+                decode(bad).unwrap(),
+                EvalValue::Null,
+                "malformed token {bad:?} must decode to Null, never a claim"
+            );
+        }
+    }
+
     #[test]
     fn malformed_tokens_decode_to_null_not_error() {
         for bad in [

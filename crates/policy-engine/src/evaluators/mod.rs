@@ -18,8 +18,12 @@ pub mod simple;
 #[cfg(feature = "cedar")]
 pub use cedar::CedarPolicyEvaluator;
 pub use simple::SimplePolicyEvaluator;
-// Note: datastore_to_cedar_entities and ReaperDSLEvaluator are not yet used
-// but kept as internal implementations for future features
+// The `.reap` DSL is served by two INTENTIONALLY co-existing surfaces (tiered
+// compilation, round-3 Plan 04 / E-02): the compiled `ReaperDSLEvaluator` is the
+// primary path, with the AST `ReapAstEvaluator` as fallback AND as the compiler's
+// differential oracle (`reap::ReaperPolicy::build_preferred`). They are pinned
+// identical by a blocking differential — do not converge them. `SimplePolicyEvaluator`
+// is deprecated and unsafe (resource-only match; see docs/reference/DSL_COMPATIBILITY.md).
 
 /// Outcome of [`PolicyEvaluator::evaluate_named`]: the decision, whether a
 /// rule actually matched (vs the per-policy default), and — when the policy
