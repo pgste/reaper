@@ -148,6 +148,10 @@ impl JwksValidator {
         Self {
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
+                // The JWKS URL is pre-flighted by url_guard; refusing redirects
+                // stops a 302 to an internal address from bypassing it
+                // (round-3 SEC R3-5 hardening).
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("Failed to create HTTP client"),
             cache: DashMap::new(),
