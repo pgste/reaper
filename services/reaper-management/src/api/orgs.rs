@@ -346,6 +346,37 @@ pub async fn authorize_org(
     Ok(organization)
 }
 
+/// Authorize `user` for a resource that was fetched by a **global** id.
+///
+/// Composes [`authorize_org`] (scope + org membership) with the resource-org
+/// recheck that id-addressed handlers must perform: the already-fetched
+/// resource's owning org (`resource_org_id`) must match the authorized org.
+///
+/// Returns **`404` (not `403`)** on a cross-tenant resource so that a foreign
+/// UUID is not turned into an existence oracle — mirroring the hand-rolled
+/// recheck in `deployments/strategies.rs`. Slug-addressed routes should keep
+/// using [`authorize_org`] (which returns `403`), because an org's existence is
+/// not secret; a by-id resource's existence is.
+///
+/// This is the single call site the tenant-authz fitness function
+/// (`tests/tenant_authz.rs`) recognises for by-id mutations, alongside
+/// org-scoped repository reads.
+pub async fn authorize_resource(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    org_ref: &str,
+    resource_org_id: Uuid,
+    required: &[Scope],
+) -> ApiResult<Organization> {
+    let organization = authorize_org(state, user, org_ref, required).await?;
+
+    if resource_org_id != organization.id {
+        return Err(ApiError::NotFound("Resource not found".to_string()));
+    }
+
+    Ok(organization)
+}
+
 /// Resolve organization by ID or slug
 pub async fn resolve_org(
     repo: &OrganizationRepository<'_>,

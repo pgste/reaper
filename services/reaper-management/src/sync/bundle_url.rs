@@ -67,6 +67,10 @@ impl BundleUrlSyncer {
             storage_path: storage_path.as_ref().to_path_buf(),
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
+                // Never follow redirects: a public host that passes the SSRF
+                // pre-flight guard could otherwise 302 → 169.254.169.254 and
+                // reach cloud metadata / internal services (round-3 SEC P0-4/R3-5).
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
         }
@@ -85,6 +89,17 @@ impl BundleUrlSyncer {
         let config = source.bundle_url_config().ok_or_else(|| {
             BundleUrlSyncError::Config("Invalid BundleUrl configuration".to_string())
         })?;
+
+        // SSRF guard: this URL is caller-supplied (webhook body) and we attach the
+        // source's auth_token to the request, so an unguarded fetch is credential
+        // exfiltration + internal-network probing (round-3 SEC P0-4/R3-5). Require
+        // https to a public address before any bytes — combined with the
+        // no-redirect client policy above so a 302 cannot bypass this check.
+        crate::url_guard::validate_public_https_url(bundle_url)
+            .await
+            .map_err(|crate::url_guard::UrlGuardError::NotAllowed(reason)| {
+                BundleUrlSyncError::Download(format!("bundle URL blocked: {reason}"))
+            })?;
 
         // Build the request
         let mut request = self.client.get(bundle_url);

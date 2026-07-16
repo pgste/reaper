@@ -582,6 +582,20 @@ fn validate_source_config(
                     "Git source requires 'url' in config".to_string(),
                 ));
             }
+            // GitHub-App identity is SERVER-resolved and bound to the caller's org.
+            // Accepting installation_id / repo_full_name from the client config blob
+            // is a confused-deputy: the single shared App would mint a *victim
+            // tenant's* installation token and clone their private repos into the
+            // attacker's org (round-3 SEC P0-3). These fields must come from the
+            // GitHub connection flow (POST /orgs/{org}/sources/github), never here.
+            if config.get("installation_id").is_some() || config.get("repo_full_name").is_some() {
+                return Err(ApiError::Validation(
+                    "installation_id/repo_full_name are server-resolved; connect the \
+                     repository via the GitHub flow (POST /orgs/{org}/sources/github) \
+                     instead of supplying them in the source config"
+                        .to_string(),
+                ));
+            }
         }
         SourceType::Api => {
             // Must have a URL
