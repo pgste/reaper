@@ -155,7 +155,10 @@ async fn process_bundle_webhook(
     // misconfiguration that must fail CLOSED — never fall through and fetch an
     // attacker-supplied URL (round-3 SEC P0-4: fail-open signature + SSRF /
     // credential-exfil). Mirrors the fail-closed git webhook (webhooks_git.rs).
-    let secret_configured = config.webhook_secret.as_deref().is_some_and(|s| !s.is_empty());
+    let secret_configured = config
+        .webhook_secret
+        .as_deref()
+        .is_some_and(|s| !s.is_empty());
     if !secret_configured {
         return Err(ApiError::Unauthorized(
             "bundle-update webhook requires a configured webhook secret on the source".to_string(),

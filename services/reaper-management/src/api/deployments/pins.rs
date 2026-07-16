@@ -9,9 +9,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api::error::ApiError, api::orgs::resolve_org, auth::middleware::RequireAuth,
+    api::error::ApiError,
+    api::orgs::resolve_org,
+    auth::middleware::RequireAuth,
     db::repositories::{AgentRepository, OrganizationRepository},
-    deployment::DeploymentService, domain::deployment::CreateVersionPin, state::AppState,
+    deployment::DeploymentService,
+    domain::deployment::CreateVersionPin,
+    state::AppState,
 };
 
 /// Resource-org recheck for by-id pin mutations (round-3 SEC P1-b).
