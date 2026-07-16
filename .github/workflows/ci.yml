@@ -1078,6 +1078,14 @@ jobs:
         run: |
           cargo test -p policy-engine --test frozen_decision_corpus_tests 2>&1 | tee integration-reports/frozen-corpus.txt
 
+      # Docs-can't-drift gate (round-3 Plan 04): every ```reap example in the
+      # customer-facing language reference must parse under the current grammar.
+      # A grammar change that leaves the reference documenting dead syntax turns
+      # this red.
+      - name: Run Reference Examples Parse Gate (docs match grammar)
+        run: |
+          cargo test -p policy-engine --test reference_examples_parse_tests 2>&1 | tee integration-reports/reference-examples.txt
+
       # TRUE end-to-end: real management + agent binaries as processes,
       # replicated by the real sync engine over real HTTP (snapshot, deltas
       # with cascade, kill/respawn self-heal). This is the layer that caught

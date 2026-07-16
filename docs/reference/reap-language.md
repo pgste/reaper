@@ -2,162 +2,212 @@
 
 A high-performance, declarative policy language for the Reaper policy engine.
 
+> **Every `.reap` example in this document is checked to parse under the current
+> grammar** by `crates/policy-engine/tests/reference_examples_parse_tests.rs`
+> (blocking in CI). If the language changes and this reference is not updated,
+> the build fails — so the examples here can never drift out of sync with the
+> engine.
+
 ## Design Goals
 
-1. **Familiar syntax** - Similar to Rego but simpler
-2. **Sub-microsecond evaluation** - Compiles to optimized Rust
-3. **Type-safe** - Strong typing with compile-time validation
-4. **Composable** - Build complex policies from simple rules
+1. **Familiar syntax** - Rust-like, simpler than Rego
+2. **Sub-microsecond evaluation** - Compiles to an optimized decision path
+3. **Total & terminating** - Every policy decides in bounded time and stack
+4. **Composable** - Build complex policies from simple, named rules
 5. **Production-ready** - Bundle compilation for zero-overhead deployment
 
 ## File Format
 
 ### Basic Structure
 
+A `.reap` file is a single `policy NAME { ... }` block containing optional
+metadata fields, a required `default:` decision, and any number of named rules:
+
 ```reap
-package document_access
+policy document_access {
+    // Metadata fields (optional) — each value is a quoted string.
+    name: "Document Access Control",
+    version: "1.0.0",
+    description: "Controls access to documents based on roles and departments",
 
-# Policy metadata (optional)
-metadata {
-    name: "Document Access Control"
-    version: "1.0.0"
-    description: "Controls access to documents based on roles and departments"
-}
+    // Default decision (required): applied when no rule matches.
+    default: deny,
 
-# Default decision (required)
-default deny
-
-# Rules (evaluated in order, first match wins)
-rule admin_access {
-    allow
-    when {
-        user.role == "admin"
+    rule admin_access {
+        allow if "admin" in user.roles
     }
-}
 
-rule department_access {
-    allow
-    when {
-        user.department == resource.department
-        resource.classification != "secret"
+    rule department_access {
+        allow if {
+            user.department == resource.department &&
+            resource.classification != "secret"
+        }
     }
-}
 
-rule clearance_check {
-    deny
-    when {
-        resource.clearance_required > user.clearance
+    rule clearance_check {
+        deny if resource.clearance_required > user.clearance
     }
 }
 ```
+
+### Evaluation Semantics
+
+Reaper is **deny-overrides**, not plain first-match:
+
+1. **All `deny` rules are evaluated first.** If any matches, the decision is
+   `deny` and evaluation stops — no `allow` can override an explicit `deny`.
+2. **Then `allow` rules are evaluated,** in order. The first matching `allow`
+   decides.
+3. **If no rule matches,** the policy's `default:` decision applies.
+
+Write allows as the common case and reserve `deny` rules for hard overrides
+(suspension, consent revocation, kill-switches) that must win regardless of
+order.
 
 ## Syntax Reference
 
-### Package Declaration
+### Policy Declaration
 
-Every .reap file must start with a package declaration:
-
-```reap
-package my_policy_name
-```
-
-### Metadata Block (Optional)
+Every file is exactly one policy block, named with an identifier:
 
 ```reap
-metadata {
-    name: "Human-readable name"
-    version: "1.0.0"
-    description: "Policy description"
-    author: "Team name"
+policy my_policy_name {
+    default: deny,
 }
 ```
+
+### Metadata Fields (Optional)
+
+Metadata is expressed as `key: "value",` fields inside the policy body. Values
+are always quoted strings:
+
+```reap
+policy documented {
+    name: "Human-readable name",
+    version: "1.0.0",
+    description: "Policy description",
+    author: "Team name",
+    default: deny,
+}
+```
+
+`language_version` is a reserved metadata field that pins the `.reap` language
+version a policy targets; see
+[DSL_COMPATIBILITY.md](./DSL_COMPATIBILITY.md).
 
 ### Default Decision (Required)
 
 ```reap
-default allow   # or
-default deny
+policy defaulted {
+    default: allow,
+}
 ```
+
+`default: deny,` is the safe posture and what production policies should use.
 
 ### Rules
 
-Rules are evaluated in order. First matching rule wins.
+Each rule names a decision (`allow` or `deny`) and a condition. The condition
+follows `if`, either as a single expression or wrapped in braces:
 
 ```reap
-rule rule_name {
-    allow          # Decision: allow or deny
-    when {         # Condition block
-        # conditions...
+policy rule_forms {
+    default: deny,
+
+    // Single-expression condition.
+    rule short_form {
+        allow if user.role == "admin"
+    }
+
+    // Braced condition (idiomatic for multi-term conditions).
+    rule block_form {
+        allow if {
+            user.role == "admin" &&
+            user.status == "active"
+        }
     }
 }
 ```
 
 ### Conditions
 
-#### Equality Checks
+Conditions are boolean expressions over the request entities. Terms combine
+with `&&` (and), `||` (or), `!` (not), and parentheses. There is no implicit
+AND — join terms explicitly with `&&`.
+
+#### Equality
 
 ```reap
-# User attribute equals literal
 user.role == "admin"
-user.department == "engineering"
+```
 
-# Resource attribute equals literal
-resource.type == "document"
-resource.classification == "public"
+Compare an attribute against another attribute (cross-entity):
 
-# User attribute equals resource attribute
+```reap
 user.department == resource.department
-user.clearance == resource.required_clearance
 ```
 
 #### Comparison Operators
 
-```reap
-# Integer comparisons
-user.clearance > resource.clearance_required
-user.age >= 18
-resource.size < 1000
+Ordered comparisons on numbers (`>`, `>=`, `<`, `<=`):
 
-# String inequality
+```reap
+user.clearance >= resource.clearance_required
+```
+
+Inequality (`!=`):
+
+```reap
 resource.classification != "secret"
-user.status != "suspended"
+```
+
+#### Membership (`in`)
+
+Test whether a value is a member of a list-valued attribute:
+
+```reap
+"admin" in user.roles
 ```
 
 #### Boolean Logic
 
+AND — every term must hold:
+
 ```reap
-# AND (implicit - multiple conditions)
-when {
-    user.role == "admin"
-    user.status == "active"
-}
+user.role == "admin" && user.status == "active"
+```
 
-# OR (explicit)
-when {
-    user.role == "admin" || user.role == "super_admin"
-}
+OR — any term may hold:
 
-# NOT (prefix operator)
-when {
-    !user.suspended
-    user.role != "guest"
-}
+```reap
+user.role == "admin" || user.role == "super_admin"
+```
 
-# Complex expressions
-when {
-    (user.role == "admin" || user.role == "moderator")
-    user.department == resource.department
-    !resource.archived
-}
+NOT — prefix negation of a parenthesised expression:
+
+```reap
+!(user.role == "guest")
+```
+
+Negation applies to a boolean *expression*, not a bare attribute: to test a
+boolean attribute, compare it explicitly — `user.suspended == false` rather than
+`!user.suspended`.
+
+Grouping with parentheses:
+
+```reap
+(user.role == "admin" || user.role == "moderator") && resource.archived != true
 ```
 
 #### Always True
 
+A rule that always matches uses the boolean literal `true`:
+
 ```reap
-rule allow_all {
-    allow
-    when {
-        true
+policy allow_all {
+    default: deny,
+    rule everything {
+        allow if true
     }
 }
 ```
@@ -193,84 +243,89 @@ accommodate pathologically deep policies.
 
 ### Supported Types
 
-- **String**: `"value"` or `'value'`
+- **String**: `"value"`
 - **Integer**: `42`, `-10`, `1000`
 - **Float**: `3.14`, `-0.5`
 - **Boolean**: `true`, `false`
 - **Null**: `null`
 
-### Type Coercion
+### Type Strictness
 
-Reaper is strongly typed. Comparisons between incompatible types evaluate to false:
+Reaper is strongly typed. A comparison between incompatible types evaluates to
+`false` rather than coercing — so compare like against like:
 
 ```reap
-# This is false if user.age is integer and "18" is string
-user.age == "18"
-
-# Correct:
 user.age == 18
 ```
 
+Writing `user.age == "18"` (integer attribute against a string literal) is
+`false`, because the integer `18` and the string `"18"` are different types.
+This strictness is a frozen part of the language contract
+([DSL_COMPATIBILITY.md](./DSL_COMPATIBILITY.md)).
+
 ## Entity References
 
-### User Entity
+Conditions read attributes from the request entities, addressed as
+`entity.attribute`:
+
+- `user.<attr>` — the principal's attributes (roles, department, clearance…).
+- `resource.<attr>` — the target resource's attributes.
+- `context.<attr>` — request context. Notably `context.action` (the action
+  being attempted) and `context.principal` (the principal identifier).
+- `actor.<attr>` — the acting identity, when it differs from `user`
+  (delegation / on-behalf-of).
+
+A complete policy putting these together:
 
 ```reap
-user.attribute_name
-```
+policy entity_reference_demo {
+    default: deny,
 
-### Resource Entity
+    rule owner_reads_own {
+        allow if {
+            context.action == "read" &&
+            context.principal == resource.owner
+        }
+    }
 
-```reap
-resource.attribute_name
-```
-
-### Context Variables (Future)
-
-```reap
-context.ip_address
-context.timestamp
+    rule same_department_active {
+        allow if {
+            user.department == resource.department &&
+            user.status == "active"
+        }
+    }
+}
 ```
 
 ## Advanced Features
 
-### Multiple Rules
+### Multiple Rules & Explicit Denies
+
+Because deny rules are evaluated before allow rules, an explicit `deny` acts as
+a hard override no matter where it appears textually:
 
 ```reap
-package access_control
+policy access_control {
+    default: deny,
 
-default deny
-
-# Rule 1: Admins can do anything
-rule admin_full_access {
-    allow
-    when {
-        user.role == "admin"
+    // Hard override: suspended users are denied regardless of any allow.
+    rule deny_suspended {
+        deny if user.status == "suspended"
     }
-}
 
-# Rule 2: Same department access
-rule department_access {
-    allow
-    when {
-        user.department == resource.department
-        resource.classification != "secret"
+    rule admin_full_access {
+        allow if "admin" in user.roles
     }
-}
 
-# Rule 3: Owner can always access
-rule owner_access {
-    allow
-    when {
-        user.id == resource.owner_id
+    rule department_access {
+        allow if {
+            user.department == resource.department &&
+            resource.classification != "secret"
+        }
     }
-}
 
-# Rule 4: Explicit denies (evaluated first if ordered)
-rule deny_suspended {
-    deny
-    when {
-        user.status == "suspended"
+    rule owner_access {
+        allow if user.id == resource.owner_id
     }
 }
 ```
@@ -278,58 +333,61 @@ rule deny_suspended {
 ### Complex ABAC Policies
 
 ```reap
-package document_abac
+policy document_abac {
+    name: "Enterprise Document Access",
+    version: "2.0.0",
+    default: deny,
 
-metadata {
-    name: "Enterprise Document Access"
-    version: "2.0.0"
-}
+    // Deny suspended users immediately (deny-overrides).
+    rule deny_suspended_users {
+        deny if user.suspended == true
+    }
 
-default deny
+    // Allow if clearance sufficient and same department.
+    rule clearance_check {
+        allow if {
+            user.clearance >= resource.clearance_required &&
+            user.department == resource.department &&
+            resource.archived != true
+        }
+    }
 
-# Deny suspended users immediately
-rule deny_suspended_users {
-    deny
-    when {
-        user.suspended == true
+    // Owners are always allowed while active.
+    rule owner_override {
+        allow if {
+            user.id == resource.owner_id &&
+            user.status == "active"
+        }
     }
 }
+```
 
-# Allow if clearance sufficient
-rule clearance_check {
-    allow
-    when {
-        user.clearance >= resource.clearance_required
-        user.department == resource.department
-        resource.archived != true
-    }
-}
+### Violation Messages (Check Mode)
 
-# Special case: document owners always allowed
-rule owner_override {
-    allow
-    when {
-        user.id == resource.owner_id
-        user.status == "active"
+A `deny` rule may carry a human-readable `with message` clause, surfaced when
+the rule fires in check/lint mode (e.g. scanning configuration for violations):
+
+```reap
+policy bucket_guard {
+    default: allow,
+    rule no_public_buckets {
+        deny with message "bucket must not be public" if resource.public == true
     }
 }
 ```
 
 ## Bundle Format (.rbb)
 
-Reaper compiles .reap files into binary bundles for maximum performance.
+Reaper compiles `.reap` files into binary bundles for maximum performance.
 
 ### Creating a Bundle
 
 ```bash
-# Compile single policy
+# Compile a single policy
 reaper compile policy.reap -o policy.rbb
 
 # Compile multiple policies
 reaper compile policies/*.reap -o bundle.rbb
-
-# Compile with optimization
-reaper compile policy.reap -o policy.rbb --optimize
 ```
 
 ### Bundle Structure
@@ -337,235 +395,132 @@ reaper compile policy.reap -o policy.rbb --optimize
 ```
 .rbb (Reaper Binary Bundle)
 ├── Metadata
-│   ├── Version
+│   ├── Language version
 │   ├── Compilation timestamp
 │   └── Source checksums
 ├── Interned Strings
 │   └── All strings pre-interned for zero-cost lookups
 ├── Compiled Rules
-│   └── Optimized Condition trees
+│   └── Optimized condition trees
 └── Index
     └── Fast rule lookup
 ```
 
-### Loading Bundles
-
-```rust
-// Load bundle into memory
-let evaluator = ReaperDSLEvaluator::from_bundle("policy.rbb", store)?;
-
-// Or from bytes (embedded)
-let bundle_bytes = include_bytes!("policy.rbb");
-let evaluator = ReaperDSLEvaluator::from_bundle_bytes(bundle_bytes, store)?;
-```
+A bundle records the `.reap` language version it was compiled against; an older
+engine **fails closed** on a newer-versioned bundle rather than
+misinterpreting it (see [DSL_COMPATIBILITY.md](./DSL_COMPATIBILITY.md)).
 
 ## CLI Usage
 
-### Evaluate Policy
+### Evaluate a Policy
 
 ```bash
-# Evaluate with .reap file
 reaper eval \
     --policy policy.reap \
     --data data.json \
     --principal alice \
     --action read \
     --resource document-1
-
-# Evaluate with bundle
-reaper eval \
-    --bundle policy.rbb \
-    --data data.json \
-    --principal alice \
-    --action read \
-    --resource document-1
 ```
 
-### Compile to Bundle
+### Compile to a Bundle
 
 ```bash
-# Basic compilation
 reaper compile policy.reap -o policy.rbb
-
-# With optimization
-reaper compile policy.reap -o policy.rbb --optimize
-
-# Multiple files
-reaper compile policy1.reap policy2.reap -o bundle.rbb
-
-# From directory
-reaper compile policies/ -o bundle.rbb
 ```
 
-### Validate Policy
+### Validate a Policy
 
 ```bash
-# Check syntax and semantics
 reaper validate policy.reap
-
-# Validate with data
 reaper validate policy.reap --data data.json
 ```
 
-### Test Policy
+### Test a Policy
 
 ```bash
-# Run test cases
-reaper test policy.reap --test-data tests.json
-
-# With coverage
-reaper test policy.reap --test-data tests.json --coverage
+reaper test policy.reap \
+    --data data.json \
+    --principal alice --action read --resource document-1 \
+    --expect allow
 ```
-
-## Performance Characteristics
-
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| **Parse .reap file** | ~1-5 ms | One-time cost |
-| **Compile to bundle** | ~5-20 ms | One-time cost |
-| **Load bundle** | ~100-500 µs | Startup cost |
-| **Evaluate (simple)** | **200 ns** | Runtime cost |
-| **Evaluate (complex)** | **500 ns** | Runtime cost |
-
-### Comparison to Other Engines
-
-| Engine | Simple Policy | Complex ABAC | Advantage |
-|--------|---------------|--------------|-----------|
-| **Reaper** | 200 ns | 500 ns | **Baseline** |
-| Cedar | 48,000 ns | 48,000 ns | 240x slower |
-| OPA | 100,000 ns | 500,000 ns | 500-1000x slower |
 
 ## Best Practices
 
-### 1. Order Rules by Frequency
-
-Place most common rules first:
+### 1. Default deny, allow explicitly
 
 ```reap
-# ✅ Good: Common case first
-rule public_documents {
-    allow
-    when {
-        resource.classification == "public"
-    }
-}
-
-rule admin_access {
-    allow
-    when {
-        user.role == "admin"
+policy least_privilege {
+    default: deny,
+    rule allow_access {
+        allow if user.clearance >= resource.clearance_required
     }
 }
 ```
 
-### 2. Use Explicit Denies Sparingly
+### 2. Use explicit denies only for hard overrides
 
-Denies are powerful but can be confusing:
+Deny rules win over every allow, so reserve them for conditions that must never
+be overridden — suspension, revoked consent, fraud kill-switches:
 
 ```reap
-# ✅ Prefer default deny with explicit allows
-default deny
-
-rule allow_access {
-    allow
-    when {
-        user.clearance >= resource.clearance
+policy fraud_guard {
+    default: deny,
+    rule block_high_fraud_score {
+        deny if context.fraud_score > 0.9
     }
-}
-
-# ⚠️ Use explicit denies only when necessary
-rule deny_suspicious {
-    deny
-    when {
-        context.fraud_score > 0.9
+    rule normal_access {
+        allow if user.clearance >= resource.clearance_required
     }
 }
 ```
 
-### 3. Keep Conditions Simple
+### 3. Keep conditions simple
 
-Complex boolean logic hurts readability:
+Prefer several small, clearly-named rules over one deeply-nested condition:
 
 ```reap
-# ✅ Good: Simple, clear conditions
-rule department_access {
-    allow
-    when {
-        user.department == resource.department
-        user.status == "active"
-        resource.archived != true
-    }
-}
-
-# ❌ Avoid: Overly complex
-rule complex_rule {
-    allow
-    when {
-        ((user.role == "admin" || user.role == "moderator") &&
-         (user.department == resource.department || user.clearance > 5)) ||
-        (user.id == resource.owner_id && !resource.archived)
+policy readable {
+    default: deny,
+    rule department_access {
+        allow if {
+            user.department == resource.department &&
+            user.status == "active" &&
+            resource.archived != true
+        }
     }
 }
 ```
 
-### 4. Use Comments Liberally
+### 4. Comment the business intent
 
 ```reap
-# Business rule: All employees can access public resources
-rule employee_public_access {
-    allow
-    when {
-        user.type == "employee"
-        resource.classification == "public"
+policy commented {
+    default: deny,
+    // Business rule: all employees can read public resources.
+    rule employee_public_access {
+        allow if {
+            user.type == "employee" &&
+            resource.classification == "public"
+        }
     }
-}
-```
-
-### 5. Test Policies Thoroughly
-
-Create comprehensive test cases:
-
-```json
-{
-  "tests": [
-    {
-      "name": "admin_can_access_all",
-      "principal": "alice",
-      "action": "read",
-      "resource": "secret-doc",
-      "expected": "allow"
-    },
-    {
-      "name": "guest_denied_secret",
-      "principal": "bob",
-      "action": "read",
-      "resource": "secret-doc",
-      "expected": "deny"
-    }
-  ]
 }
 ```
 
 ## Examples
 
-### Example 1: Simple Role-Based Access
+### Example 1: Role-Based Access (RBAC)
 
 ```reap
-package rbac_simple
+policy rbac_simple {
+    default: deny,
 
-default deny
-
-rule admin_access {
-    allow
-    when {
-        user.role == "admin"
+    rule admin_access {
+        allow if "admin" in user.roles
     }
-}
 
-rule user_own_resources {
-    allow
-    when {
-        user.id == resource.owner_id
+    rule user_own_resources {
+        allow if user.id == resource.owner_id
     }
 }
 ```
@@ -573,29 +528,24 @@ rule user_own_resources {
 ### Example 2: Department-Based ABAC
 
 ```reap
-package department_abac
+policy department_abac {
+    name: "Department Access Control",
+    version: "1.0.0",
+    default: deny,
 
-metadata {
-    name: "Department Access Control"
-    version: "1.0.0"
-}
-
-default deny
-
-rule same_department {
-    allow
-    when {
-        user.department == resource.department
-        user.status == "active"
-        resource.archived != true
+    rule same_department {
+        allow if {
+            user.department == resource.department &&
+            user.status == "active" &&
+            resource.archived != true
+        }
     }
-}
 
-rule cross_department_with_clearance {
-    allow
-    when {
-        user.clearance >= resource.clearance_required
-        user.status == "active"
+    rule cross_department_with_clearance {
+        allow if {
+            user.clearance >= resource.clearance_required &&
+            user.status == "active"
+        }
     }
 }
 ```
@@ -603,37 +553,25 @@ rule cross_department_with_clearance {
 ### Example 3: Clearance-Based Security
 
 ```reap
-package clearance_control
+policy clearance_control {
+    default: deny,
 
-default deny
-
-rule sufficient_clearance {
-    allow
-    when {
-        user.clearance >= resource.clearance_required
-        user.background_check == true
-        !user.access_revoked
+    rule sufficient_clearance {
+        allow if {
+            user.clearance >= resource.clearance_required &&
+            user.background_check == true &&
+            user.access_revoked != true
+        }
     }
-}
 
-rule owner_override {
-    allow
-    when {
-        user.id == resource.owner_id
-        user.clearance >= 1
+    rule owner_override {
+        allow if {
+            user.id == resource.owner_id &&
+            user.clearance >= 1
+        }
     }
 }
 ```
-
-## Future Enhancements
-
-1. **Functions** - Custom functions for complex logic
-2. **Imports** - Reuse rules across policies
-3. **Sets & Lists** - Advanced data structures
-4. **Time-based rules** - Temporal policies
-5. **Regex matching** - Pattern-based rules
-6. **HTTP calls** - External data fetching
-7. **Schemas** - Type validation for entities
 
 ## Migration from Other Engines
 
@@ -650,16 +588,13 @@ allow {
 }
 ```
 
+Becomes:
+
 ```reap
-# Reaper
-package example
-
-default deny
-
-rule admin_access {
-    allow
-    when {
-        user.role == "admin"
+policy example {
+    default: deny,
+    rule admin_access {
+        allow if user.role == "admin"
     }
 }
 ```
@@ -673,11 +608,24 @@ when {
 };
 ```
 
+Becomes:
+
 ```reap
-rule admin_access {
-    allow
-    when {
-        user.role == "admin"
+policy example_from_cedar {
+    default: deny,
+    rule admin_access {
+        allow if user.role == "admin"
     }
 }
 ```
+
+## Future Enhancements
+
+1. **Imports** - Reuse rules across policies
+2. **Schemas** - Type validation for entities
+3. **Additional builtins** - Growing the standard library (regex, time, JWT and
+   ReBAC traversal builtins already ship; see the policy library for usage)
+
+Any change that alters an existing policy's decision is a breaking change gated
+behind a language-version bump and the frozen decision corpus — see
+[DSL_COMPATIBILITY.md](./DSL_COMPATIBILITY.md).
