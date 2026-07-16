@@ -1,7 +1,25 @@
 # Tenant Isolation & Authorization Backstop
 
-> **STATUS (2026-07-16): NOT STARTED** — round-3 remediation planning. This plan
-> is the critical path for round 3. Nothing external ships until it lands.
+> **STATUS (2026-07-16): CORE SHIPPED — all four P0s + P1-b + the structural
+> backstop landed on `claude/reaper-enterprise-review-mlwzsk`.** Delivered:
+> Phase A1 `authorize_resource` guard (`api/orgs.rs`); Phase A2 the tenant-authz
+> **fitness function** (`tests/tenant_authz.rs`) — green, with a canary
+> meta-test proving it fires on an unguarded route and a ratcheted exemption
+> allowlist (1 documented dead stub); Phase B P0-2 (webhook-subscription authz);
+> Phase C P0-3 (installation_id rejection); Phase D P0-4 (fail-closed webhook
+> signature + bundle-URL SSRF guard + no-redirect client); Phase E P0-1 (OIDC
+> email-adoption scoped to org membership + verified email); Phase A3 P1-b
+> (rollout/pin resource-org rechecks). 313 lib tests + the OpenAPI contract gate
+> + the tenant-authz gate all green; clippy clean.
+>
+> **Follow-up (not yet done):** behavioural cross-tenant *integration* tests
+> (§6 — need the DB + mock-IdP harness; the static fitness function currently
+> carries the structural proof); P0-1 E2 session→org binding (defense-in-depth,
+> schema); P0-3 C2 sync-time installation assertion (defense-in-depth); D2
+> remainder — SSRF guard + `redirect(none)` on the API-source/other sync clients
+> (finding R3-5). These are hardening on top of closed P0s, not open P0s.
+>
+> This plan is the critical path for round 3. Nothing external ships until it lands.
 >
 > **Round-3 gate:** the security review (`reviews/round-3/02-security.md`) returns
 > **NOT READY** on four independent P0 cross-tenant / account-takeover defects and
