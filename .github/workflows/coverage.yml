@@ -1,32 +1,38 @@
-# Test coverage measurement (round-3 Plan 05 §4.9, Testing T5).
+# Test coverage gate (round-3 Plan 05 §4.9, Testing T5).
 #
-# Plan 05 §4.9 has two halves: MEASURE coverage, and FAIL below a per-module
-# floor. This workflow does the first now and is wired to do the second the
-# moment a baseline exists — the floor cannot be set honestly before the first
-# run reports real numbers (a guessed floor either false-reds or is toothless,
-# the same reason the mutation budget is deferred).
+# Blocks a PR when workspace library coverage falls below a committed floor.
 #
-# Report-only by design: schedule/dispatch (never on the PR critical path — a
-# full-workspace tarpaulin run is slow) and `continue-on-error` so a tooling
-# hiccup never blocks anyone. The Cobertura XML + HTML are uploaded as artifacts
-# for trend analysis and for reading off the initial per-module numbers.
+# WHAT THE NUMBER MEANS (read before raising it): this measures `--lib`
+# coverage only — unit tests compiled into each crate. It DELIBERATELY excludes
+# integration tests (which spawn binaries or need a DB), so modules whose tests
+# live in `tests/*.rs` read LOW here even when they are thoroughly covered — e.g.
+# `api/orgs.rs` (tenant scoping) shows ~6% under --lib but is exercised
+# end-to-end by `tenant_isolation_tests`, and much of `reap/compiler/**` and
+# `evaluators/reaper_dsl/**` is covered by the differential/parity integration
+# suites. The floor is therefore a GLOBAL "don't fall off a cliff" guard, not a
+# per-module target — a per-module floor on these --lib numbers would enshrine
+# misleading lows. Baseline measured on main @ #83: 35.14% (13683/38938 lines).
 #
-# ── HOW TO TURN THE FLOOR ON once a baseline is measured ───────────────────
-#   1. Read the first run's per-file coverage from the uploaded cobertura.xml
-#      (or the HTML report) for the critical modules:
-#        crates/policy-engine/src/evaluators/**, reap/compiler/**,
-#        decision_log.rs, decision_buffer.rs, data/loader.rs, and
-#        services/reaper-management/src/api/orgs.rs (tenant scoping).
-#   2. Commit those measured numbers as the floor (e.g. tarpaulin.toml `fail-under`
-#      for the global floor, or a small check script for per-module floors).
-#   3. Drop `continue-on-error` so the job blocks, and add it to required checks.
-#   The floor ratchets only UP — a drop is the signal, never lowered silently.
+# The floor ratchets only UP. To raise it: read the latest run's total, and bump
+# COVERAGE_FLOOR below to just under the new measured value (a point or two of
+# slack absorbs run-to-run noise). To make it per-module or more representative,
+# switch the measurement to `--tests --exclude reaper-e2e-tests` (includes the
+# integration suites; validate it is stable first, some suites are heavier under
+# instrumentation) and gate on cobertura.xml per file.
+#
+# Deadlock-free as a required check: it triggers on EVERY pull_request with no
+# path filter, so it always reports a status on the PR head commit. (A required
+# check that is path-filtered never reports on an unrelated PR and blocks it
+# forever — do not add `paths:` here while this is a required check.)
 
 name: Coverage
 
 on:
+  pull_request: {}
+  push:
+    branches: [main]
   schedule:
-    - cron: "31 5 * * 1" # weekly, Monday 05:31 UTC
+    - cron: "31 5 * * 1" # weekly, Monday 05:31 UTC — trend line
   workflow_dispatch: {}
 
 permissions:
@@ -34,6 +40,9 @@ permissions:
 
 env:
   GIT_LFS_SKIP_SMUDGE: "1"
+  # Global --lib coverage floor (percent). Baseline 35.14% on main @ #83;
+  # floored to 34 for ~1pt of run-to-run slack. Ratchet UP only.
+  COVERAGE_FLOOR: "34"
 
 concurrency:
   group: coverage-${{ github.ref }}
@@ -41,12 +50,9 @@ concurrency:
 
 jobs:
   coverage:
-    name: Tarpaulin (report-only until a floor is committed)
+    name: Coverage floor (--lib, fail-under)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # Report-only: a tarpaulin/tooling failure must never block. Remove this
-    # (and add a fail-under floor) once the baseline numbers are committed.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -62,19 +68,18 @@ jobs:
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
 
-      - name: Measure coverage (workspace libs)
+      - name: Measure coverage + enforce floor (blocking)
         run: |
-          # Library coverage across the workspace. Integration tests that spawn
-          # binaries or need external services are excluded (--lib) so the number
-          # is stable and attributable; the critical modules the floor will guard
-          # (evaluators, compiler, decision log/buffer, data loader, tenant
-          # scoping) are all library code covered here.
+          # --fail-under exits non-zero when total line coverage < the floor, so
+          # this step (and the job) go red on a coverage cliff. Integration tests
+          # are excluded (--lib) to keep the number stable and attributable; see
+          # the header for why that undercounts integration-tested modules.
+          mkdir -p coverage
           cargo tarpaulin --workspace --lib \
             --out Xml --out Html --output-dir coverage \
             --timeout 300 --engine llvm \
-            2>&1 | tee coverage/tarpaulin.log || true
-          echo "---"
-          echo "Per-module numbers for the future floor are in coverage/cobertura.xml"
+            --fail-under "${COVERAGE_FLOOR}" \
+            2>&1 | tee coverage/tarpaulin.log
 
       - name: Upload coverage report
         if: always()
