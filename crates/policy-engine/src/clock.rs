@@ -7,35 +7,43 @@
 //! directly, so the same policy source evaluates on both targets.
 //!
 //! Semantics per target:
-//! - **Native**: thin wrappers over `Instant`/`SystemTime`; behavior is
-//!   byte-identical to the previous direct calls.
+//! - **Native**: reads `SystemTime` unless a clock has been pinned via
+//!   [`set_injected_now_unix_ns`]. Pinning is the deterministic-replay /
+//!   test seam (evaluate a policy "as of" a fixed instant); when nothing is
+//!   injected (the production default) behavior is byte-identical to a direct
+//!   `SystemTime::now()`.
 //! - **wasm32**: wall-clock reads come from a host-injected epoch
 //!   ([`set_injected_now_unix_ns`]) so embeddings can pin evaluation time and
 //!   stay deterministic/replayable. When nothing is injected, we fall back to
 //!   `chrono::Utc::now()` (JS `Date.now()` via chrono's `wasmbind`, matching
 //!   the JS-first packaging decision in `plans/round-2/F2-wasm-target.md`).
-//!   [`Stopwatch`] measures elapsed wall time between such readings — under a
-//!   pinned clock it reports 0. It feeds latency *metrics only* and is never
-//!   an authorization input.
+//!
+//! The injected clock is a single process-global (`0` = not injected, the
+//! production default on every target). [`Stopwatch`] measures elapsed wall
+//! time between readings — under a pinned clock it reports 0. It feeds latency
+//! *metrics only* and is never an authorization input.
 
-#[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicI64, Ordering};
 
-/// Host-injected evaluation clock, unix nanoseconds. 0 = not injected.
-#[cfg(target_arch = "wasm32")]
+/// Host-injected evaluation clock, unix nanoseconds. 0 = not injected (the
+/// production default). Available on every target so that deterministic replay
+/// and the `time::*` / jwt-expiry differential oracle can pin evaluation time
+/// without racing the wall clock.
 static INJECTED_NOW_UNIX_NS: AtomicI64 = AtomicI64::new(0);
 
-/// Pin the wasm evaluation clock to a fixed unix-epoch timestamp
-/// (nanoseconds). All subsequent `time::*` builtin reads use this value until
-/// it is changed or [`clear_injected_now`] is called. Injecting time makes an
-/// embedding's decisions deterministic and replayable.
-#[cfg(target_arch = "wasm32")]
+/// Pin the evaluation clock to a fixed unix-epoch timestamp (nanoseconds). All
+/// subsequent `time::*` builtin reads (and any code reading [`now_unix_ns`])
+/// use this value until it is changed or [`clear_injected_now`] is called.
+/// Injecting time makes decisions deterministic and replayable — the same
+/// policy `(policy, data, request)` at a pinned instant always decides the same.
+///
+/// Production code never calls this; it is the replay/test seam. `0` is
+/// reserved to mean "not injected", so pinning to the epoch is a no-op.
 pub fn set_injected_now_unix_ns(unix_ns: i64) {
     INJECTED_NOW_UNIX_NS.store(unix_ns, Ordering::Relaxed);
 }
 
-/// Unpin the wasm evaluation clock; reads fall back to the JS host clock.
-#[cfg(target_arch = "wasm32")]
+/// Unpin the evaluation clock; reads fall back to the target's real clock.
 pub fn clear_injected_now() {
     INJECTED_NOW_UNIX_NS.store(0, Ordering::Relaxed);
 }
@@ -45,6 +53,11 @@ pub fn clear_injected_now() {
 /// value of 0) on `None` — never substitute a silent wrong time.
 #[inline]
 pub fn now_unix_ns() -> Option<i64> {
+    // A pinned clock wins on every target (replay / deterministic tests).
+    let injected = INJECTED_NOW_UNIX_NS.load(Ordering::Relaxed);
+    if injected != 0 {
+        return Some(injected);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::time::SystemTime::now()
@@ -54,10 +67,6 @@ pub fn now_unix_ns() -> Option<i64> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let injected = INJECTED_NOW_UNIX_NS.load(Ordering::Relaxed);
-        if injected != 0 {
-            return Some(injected);
-        }
         chrono::Utc::now().timestamp_nanos_opt()
     }
 }

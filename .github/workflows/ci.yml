@@ -314,6 +314,16 @@ jobs:
           cargo test -p policy-engine --test compiled_ast_equivalence_tests 2>&1 | tee equivalence-results.txt
           echo "EQUIV_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run builtin differential oracle (jwt/regex/time)
+        run: |
+          # Round-3 Plan 05 §4.2 (Testing T2): the authz-relevant builtins under
+          # a property oracle — compiled-vs-AST-vs an INDEPENDENT naive oracle
+          # (the regex crate, base64+serde_json, a pinned-clock integer compare)
+          # over generated/boundary inputs. Covers jwt forged-signature and
+          # expiry-boundary deny cases the curated suite could not reach.
+          cargo test -p policy-engine --test builtin_differential_tests 2>&1 | tee builtin-oracle-results.txt
+          echo "BUILTIN_ORACLE_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
       - name: Run context interner-leak regression
         run: |
           # Eval-path guard: context.* comparisons must not intern per-request
@@ -383,7 +393,7 @@ jobs:
       - name: Fail if any unit/integration/equivalence tests failed
         if: always()
         run: |
-          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} + ${{ env.TENANT_ISO_EXIT_CODE }} ))
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} + ${{ env.TENANT_ISO_EXIT_CODE }} + ${{ env.BUILTIN_ORACLE_EXIT_CODE }} ))
           exit $rc
 
   # Stage 2b: Management tests against REAL PostgreSQL (BLOCKS pipeline).
