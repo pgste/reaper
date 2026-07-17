@@ -67,3 +67,44 @@ pub fn split_uncached(text: &str, pattern: &str) -> Result<Vec<String>, ReaperEr
     })?;
     Ok(re.split(text).map(|s| s.to_string()).collect())
 }
+
+#[cfg(test)]
+mod oracle_tests {
+    //! Round-3 Plan 04 Step 3: the `regex::matches` builtin is checked against
+    //! the `regex` crate used directly — catching any anchoring / plumbing bug
+    //! in the builtin wrapper (a miscompiled `regex::matches` in a deny rule is
+    //! a real authz-bypass surface, T2).
+    use super::*;
+
+    #[test]
+    fn matches_agrees_with_regex_crate() {
+        let cases: &[(&str, &str)] = &[
+            ("hello world", "wor"),
+            ("hello world", "^hello"),
+            ("hello world", "world$"),
+            ("user@example.com", r"^[\w.]+@[\w.]+$"),
+            ("abc123", r"\d+"),
+            ("ABC", r"[a-z]+"),
+            ("v2.10.3", r"^v\d+\.\d+\.\d+$"),
+            ("no digits here", r"\d"),
+            ("", r".*"),
+        ];
+        for (text, pat) in cases {
+            let ours = matches_uncached(text, pat).unwrap();
+            let oracle = regex::Regex::new(pat).unwrap().is_match(text);
+            assert_eq!(
+                ours, oracle,
+                "regex::matches({text:?}, {pat:?}) diverged from the regex crate"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_pattern_errors_never_silently_matches() {
+        assert!(!is_valid_pattern("("));
+        assert!(
+            matches_uncached("anything", "(").is_err(),
+            "an invalid pattern must error, never silently match (fail-closed)"
+        );
+    }
+}

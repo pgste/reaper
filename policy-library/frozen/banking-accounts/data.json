@@ -1,0 +1,7 @@
+{"entities":[
+  {"id":"tina","type":"User","attributes":{"title":"teller","branch":"north","seniority":2}},
+  {"id":"sam","type":"User","attributes":{"title":"manager","branch":"south","seniority":7}},
+  {"id":"carla","type":"User","attributes":{"title":"customer","branch":"north","seniority":0}},
+  {"id":"acct-north-1","type":"Account","attributes":{"branch":"north","owner":"carla","balance":5000}},
+  {"id":"acct-south-9","type":"Account","attributes":{"branch":"south","owner":"other","balance":250000}}
+]}

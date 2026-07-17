@@ -15,6 +15,13 @@ pub enum ReaperError {
     #[error("Invalid policy definition: {reason}")]
     InvalidPolicy { reason: String },
 
+    /// The policy targets a newer DSL language version than this engine
+    /// implements. Fail closed (round-3 Plan 04) — an old engine must never
+    /// silently misinterpret a newer policy, mirroring the bundle format's
+    /// newer-version reject.
+    #[error("Unsupported policy language version: got {got}, this engine implements {supported}")]
+    LanguageVersionUnsupported { got: u32, supported: u32 },
+
     #[error("Policy evaluation failed: {reason}")]
     EvaluationError { reason: String },
 

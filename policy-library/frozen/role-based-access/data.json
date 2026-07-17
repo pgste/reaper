@@ -1,0 +1,7 @@
+{"entities":[
+  {"id":"alice","type":"User","attributes":{"roles":["engineering"],"status":"active"}},
+  {"id":"bob","type":"User","attributes":{"roles":["webdev"],"status":"active"}},
+  {"id":"root","type":"User","attributes":{"roles":["admin"],"status":"active"}},
+  {"id":"mallory","type":"User","attributes":{"roles":["admin"],"status":"suspended"}},
+  {"id":"server-1","type":"Resource","attributes":{"kind":"server"}}
+]}

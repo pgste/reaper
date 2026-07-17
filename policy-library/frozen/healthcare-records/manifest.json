@@ -1,0 +1,15 @@
+{
+  "name": "Healthcare records (RBAC + ABAC + ReBAC combined)",
+  "source": "HL7/consent authorization patterns; OPA healthcare talks",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {"name": "treating physician reads own patient", "principal": "dr-adams", "action": "read", "resource": "record-101", "expect": "allow"},
+    {"name": "other-department doctor denied despite clearance", "principal": "dr-brown", "action": "read", "resource": "record-101", "expect": "deny"},
+    {"name": "care-team nurse reads via group", "principal": "nurse-kim", "action": "read", "resource": "record-101", "expect": "allow"},
+    {"name": "nurse cannot write", "principal": "nurse-kim", "action": "write", "resource": "record-101", "expect": "deny"},
+    {"name": "auditor reads anything", "principal": "aud-lee", "action": "read", "resource": "record-101", "expect": "allow"},
+    {"name": "revoked consent blocks even treating physician", "principal": "dr-adams", "action": "read", "resource": "record-999", "expect": "deny"},
+    {"name": "revoked consent blocks auditor too", "principal": "aud-lee", "action": "read", "resource": "record-999", "expect": "deny"}
+  ]
+}

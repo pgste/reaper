@@ -1,0 +1,37 @@
+// ABAC — adapted from the OPA docs ABAC tutorial: decisions from attributes
+// of the subject and the resource, no role enumeration. Tellers read accounts
+// in their own branch; senior staff read any; owners read their own account;
+// high-value accounts require senior clearance for withdrawals.
+policy abac_banking {
+    default: deny,
+
+    rule owner_reads_own_account {
+        allow if {
+            context.action == "read" &&
+            context.principal == resource.owner
+        }
+    }
+
+    rule teller_reads_own_branch {
+        allow if {
+            context.action == "read" &&
+            user.title == "teller" &&
+            user.branch == resource.branch
+        }
+    }
+
+    rule senior_reads_all {
+        allow if {
+            context.action == "read" &&
+            user.seniority >= 5
+        }
+    }
+
+    rule senior_withdraws_high_value {
+        allow if {
+            context.action == "withdraw" &&
+            user.seniority >= 5 &&
+            resource.balance >= 100000
+        }
+    }
+}

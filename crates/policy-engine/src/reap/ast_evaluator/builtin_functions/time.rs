@@ -214,3 +214,63 @@ pub fn is_between(
 
     Ok(EvalValue::Boolean(ts >= ts_start && ts <= ts_end))
 }
+
+#[cfg(test)]
+mod oracle_tests {
+    //! Round-3 Plan 04 Step 3: time builtins checked against an INDEPENDENT
+    //! oracle (chrono / integer ordering), so a miscompiled `time::*` in a deny
+    //! rule can't ship past example tests.
+    use super::*;
+
+    #[test]
+    fn parse_rfc3339_matches_chrono() {
+        for s in [
+            "2024-01-15T10:30:00Z",
+            "1970-01-01T00:00:00+00:00",
+            "2038-01-19T03:14:07Z",
+            "2024-06-30T23:59:59.500Z",
+        ] {
+            let ours = match parse_rfc3339(&EvalValue::String(s.to_string())).unwrap() {
+                EvalValue::Integer(n) => n,
+                v => panic!("expected Integer, got {v:?}"),
+            };
+            let oracle = chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .timestamp_nanos_opt()
+                .unwrap();
+            assert_eq!(ours, oracle, "parse_rfc3339({s}) diverged from chrono");
+        }
+    }
+
+    #[test]
+    fn parse_rfc3339_rejects_malformed() {
+        for bad in ["not a date", "2024-13-01T00:00:00Z", ""] {
+            assert!(
+                parse_rfc3339(&EvalValue::String(bad.to_string())).is_err(),
+                "malformed timestamp {bad:?} must be rejected, not coerced"
+            );
+        }
+    }
+
+    #[test]
+    fn is_before_after_are_consistent_with_ordering() {
+        for (a, b) in [(1i64, 2i64), (2, 1), (5, 5), (i64::MIN, i64::MAX)] {
+            let before = matches!(
+                is_before(&EvalValue::Integer(a), &EvalValue::Integer(b)).unwrap(),
+                EvalValue::Boolean(true)
+            );
+            let after = matches!(
+                is_after(&EvalValue::Integer(a), &EvalValue::Integer(b)).unwrap(),
+                EvalValue::Boolean(true)
+            );
+            assert_eq!(before, a < b, "is_before({a},{b})");
+            assert_eq!(after, a > b, "is_after({a},{b})");
+            if a == b {
+                assert!(
+                    !before && !after,
+                    "equal timestamps: neither before nor after"
+                );
+            }
+        }
+    }
+}

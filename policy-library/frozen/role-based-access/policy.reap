@@ -1,0 +1,28 @@
+// RBAC — adapted from the OPA docs RBAC tutorial: users hold roles, roles
+// grant actions. Roles live on the user entity; grants are expressed as
+// per-role rules (first-match, deny wins, default deny).
+policy rbac_roles {
+    default: deny,
+
+    rule admins_do_anything {
+        allow if "admin" in user.roles
+    }
+
+    rule engineers_read_and_deploy {
+        allow if {
+            "engineering" in user.roles &&
+            (context.action == "read" || context.action == "deploy")
+        }
+    }
+
+    rule webdev_reads {
+        allow if {
+            "webdev" in user.roles &&
+            context.action == "read"
+        }
+    }
+
+    rule suspended_never {
+        deny if user.status == "suspended"
+    }
+}
