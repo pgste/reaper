@@ -1,0 +1,14 @@
+// CLI integration fixture: minimal RBAC with deny-overrides.
+// alice = active admin (allow), bob = active viewer (deny),
+// mallory = suspended admin (deny wins over the admin allow).
+policy cli_rbac {
+    default: deny,
+
+    rule suspended_never {
+        deny if user.status == "suspended"
+    }
+
+    rule admins_allowed {
+        allow if "admin" in user.roles
+    }
+}

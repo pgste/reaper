@@ -1,0 +1,18 @@
+# CLI integration fixture: second case has a wrong expectation, so the
+# suite must exit non-zero and name the failing test.
+tests:
+  - name: "admin allowed"
+    policy: "rbac.reap"
+    data: "entities.json"
+    principal: "alice"
+    action: "read"
+    resource: "doc-1"
+    expect: allow
+
+  - name: "viewer wrongly expected to be allowed"
+    policy: "rbac.reap"
+    data: "entities.json"
+    principal: "bob"
+    action: "read"
+    resource: "doc-1"
+    expect: allow

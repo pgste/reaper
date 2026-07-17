@@ -1,0 +1,6 @@
+{"entities":[
+  {"id":"alice","type":"User","attributes":{"roles":["admin"],"status":"active"}},
+  {"id":"bob","type":"User","attributes":{"roles":["viewer"],"status":"active"}},
+  {"id":"mallory","type":"User","attributes":{"roles":["admin"],"status":"suspended"}},
+  {"id":"doc-1","type":"Resource","attributes":{"kind":"document"}}
+]}

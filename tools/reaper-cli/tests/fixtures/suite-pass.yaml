@@ -1,0 +1,26 @@
+# CLI integration fixture: every case passes (paths relative to this dir;
+# the test runs the CLI with cwd = fixtures/).
+tests:
+  - name: "admin allowed"
+    policy: "rbac.reap"
+    data: "entities.json"
+    principal: "alice"
+    action: "read"
+    resource: "doc-1"
+    expect: allow
+
+  - name: "viewer denied"
+    policy: "rbac.reap"
+    data: "entities.json"
+    principal: "bob"
+    action: "read"
+    resource: "doc-1"
+    expect: deny
+
+  - name: "suspended admin denied (deny wins)"
+    policy: "rbac.reap"
+    data: "entities.json"
+    principal: "mallory"
+    action: "read"
+    resource: "doc-1"
+    expect: deny
