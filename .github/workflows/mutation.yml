@@ -6,10 +6,20 @@
 # catch — the direct measure of whether the correctness program
 # (docs/development/CORRECTNESS.md) actually has teeth.
 #
-# Scope: both evaluators, the reap compiler, and the ReBAC graph —
-# ~2,000 mutants, sharded 4 ways. Runs the fast high-signal suites per
-# mutant: unit tests + the differential/oracle property suites + the
+# Scope: both evaluators, the reap compiler, the ReBAC graph, the delta-sync
+# data loader, and the AUDIT plane (decision log hash-chain + bounded buffer) —
+# sharded 4 ways. Runs the fast high-signal suites per mutant: unit tests +
+# the differential/oracle property suites (incl. the builtin oracle) + the
 # policy library golden corpus.
+#
+# Round-3 Plan 05 §4.1 / ADR-1: this scope widening (audit + loader) and the
+# builtin-oracle suite are in place now. Promoting this nightly from advisory
+# (exit 2 tolerated) to a BLOCKING ratcheting budget requires a first measured
+# run to seed a committed per-shard `mutation-budget.json` — until that baseline
+# exists, seeding an arbitrary budget would either false-red the nightly or be
+# toothless, so the gate stays advisory and surfaces the burn-down in the
+# summary + artifact. The mechanism to promote: read the budget, fail the shard
+# when `missed > budget[shard]`, ratchet only down.
 
 name: Mutation Testing (nightly)
 
@@ -53,6 +63,9 @@ jobs:
             -f "crates/policy-engine/src/reap/ast_evaluator/**/*.rs" \
             -f "crates/policy-engine/src/reap/compiler/**/*.rs" \
             -f "crates/policy-engine/src/data/relationships.rs" \
+            -f "crates/policy-engine/src/data/loader.rs" \
+            -f "crates/policy-engine/src/decision_log.rs" \
+            -f "crates/policy-engine/src/decision_buffer.rs" \
             --shard ${{ matrix.shard }}/4 \
             --timeout 120 \
             -j 2 \
@@ -60,7 +73,9 @@ jobs:
             -- --lib \
                --test differential_parity_tests \
                --test check_mode_differential_tests \
+               --test builtin_differential_tests \
                --test policy_library_tests \
+               --test frozen_decision_corpus_tests \
                --test compiled_evaluator_tests \
                --test comprehension_tests \
                --test rebac_tests \
