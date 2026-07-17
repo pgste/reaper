@@ -1,0 +1,180 @@
+# Dedicated-hardware SLO gate (round-3 Plan 05 §4.6, ADR-3) — DORMANT until
+# you have isolated perf hardware, then flipped on with two repo variables.
+#
+# The shared-runner story is already covered elsewhere and needs no hardware:
+#   * perf-gate.yml   — paired A/B p99 + p999 (variance-cancelled), blocks PRs.
+#   * slo-harness.yml — nightly absolute SLO at a loose multiplier (~250x).
+#   * perf-gate.yml cold-start — unwarmed first-request thresholds.
+#
+# This workflow is the ONE thing a shared runner cannot honestly do: assert the
+# ABSOLUTE §3 SLA (multiplier 1.0 — single-digit-µs p50/p99/p999 from
+# benchmarks/reaper-vs-opa/slo.yaml) AND a throughput floor, blocking. A bare
+# TCP-loopback round trip already costs tens of µs, so multiplier 1.0 is only
+# meaningful on a pinned, isolated agent.
+#
+# ── HOW TO TURN IT ON when the hardware arrives ────────────────────────────
+#   Set these repository variables (Settings → Secrets and variables →
+#   Actions → Variables):
+#     PERF_HARDWARE_ENABLED = true          # arms every job below
+#     PERF_RUNNER           = <your self-hosted runner label>   # e.g. perf-metal
+#   Optional overrides (sensible defaults if unset):
+#     PERF_SLO_MULTIPLIER   = 1             # 1.0 = the real SLA
+#     PERF_MIN_RPS          = 20000         # throughput floor asserted per scenario
+#     PERF_REQUESTS         = 200000        # measured requests per scenario
+#     PERF_CONCURRENCY      = 64
+#   Nothing else changes: until PERF_HARDWARE_ENABLED == 'true' every job is
+#   skipped (green, non-blocking), so this file is inert on shared CI. Once the
+#   variables are set, add this workflow's jobs to the branch protection
+#   required checks to make the absolute SLA a merge gate.
+#
+# Manual dry run any time: Actions → "Perf Hardware Gate" → Run workflow. When
+# the gate is not armed the run no-ops with a note explaining which variables to
+# set.
+
+name: Perf Hardware Gate
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "41 4 * * *" # nightly; jobs self-skip unless armed
+
+permissions:
+  contents: read
+
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+
+concurrency:
+  group: perf-hardware-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Visible breadcrumb so a manual run explains itself when the gate is dormant.
+  status:
+    name: Gate status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report arm state
+        run: |
+          if [ "${{ vars.PERF_HARDWARE_ENABLED }}" = "true" ]; then
+            echo "Perf hardware gate is ARMED (runner: ${{ vars.PERF_RUNNER || 'UNSET — set PERF_RUNNER!' }})."
+          else
+            echo "Perf hardware gate is DORMANT."
+            echo "To arm: set repo variables PERF_HARDWARE_ENABLED=true and PERF_RUNNER=<self-hosted label>."
+            echo "See the header of .github/workflows/perf-hardware-gate.yml."
+          fi
+
+  absolute-slo:
+    name: Absolute SLA (multiplier 1.0, p50/p99/p999 + throughput floor)
+    needs: status
+    if: vars.PERF_HARDWARE_ENABLED == 'true'
+    runs-on: ${{ vars.PERF_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-perf-hw"
+          cache-on-failure: true
+          workspaces: |
+            .
+            benchmarks/reaper-vs-opa
+
+      - name: Build release agent
+        run: cargo build --release --bin reaper-agent
+
+      - name: Build SLO harness + data generator
+        working-directory: benchmarks/reaper-vs-opa
+        run: cargo build --release --bin slo-harness --bin generate-data
+
+      - name: Generate SLO policy sets (N=10k)
+        working-directory: benchmarks/reaper-vs-opa
+        run: |
+          ./target/release/generate-data --count 10000 \
+            --output "$RUNNER_TEMP/slo-simple-10k.json" \
+            policy-set --language simple --resource-prefix /slo/eval
+          ./target/release/generate-data --count 10000 \
+            --output "$RUNNER_TEMP/slo-dsl-10k.json" \
+            policy-set --language dsl --resource-prefix /slo/targeted
+
+      - name: Run absolute SLA scenarios (multiplier 1.0) + throughput floor
+        working-directory: benchmarks/reaper-vs-opa
+        env:
+          SLO_MULTIPLIER: ${{ vars.PERF_SLO_MULTIPLIER || '1' }}
+          REQUESTS: ${{ vars.PERF_REQUESTS || '200000' }}
+          CONCURRENCY: ${{ vars.PERF_CONCURRENCY || '64' }}
+          MIN_RPS: ${{ vars.PERF_MIN_RPS || '20000' }}
+        run: |
+          set -uo pipefail
+          AGENT=../../target/release/reaper-agent
+          HARNESS=./target/release/slo-harness
+          mkdir -p "$RUNNER_TEMP/hw-results"
+          FAILED=0
+
+          start_agent() {
+            env $1 RUST_LOG=warn "$AGENT" > "$RUNNER_TEMP/agent-$SCENARIO.log" 2>&1 &
+            AGENT_PID=$!
+            for _ in $(seq 1 30); do
+              curl -sf http://localhost:8080/health > /dev/null && return 0
+              sleep 1
+            done
+            echo "agent failed to become healthy"; cat "$RUNNER_TEMP/agent-$SCENARIO.log"; return 1
+          }
+          stop_agent() { kill "$AGENT_PID" 2>/dev/null || true; wait "$AGENT_PID" 2>/dev/null || true; }
+
+          # Assert an absolute throughput floor from the saved HDR JSON — the
+          # plan wants throughput asserted, not just reported.
+          assert_rps() { # $1 = saved json
+            rps=$(jq -r '.[0].throughput_rps // .throughput_rps' "$1")
+            awk -v got="$rps" -v floor="$MIN_RPS" 'BEGIN {
+              if (got+0 < floor+0) { printf "FAIL: throughput %.0f rps below floor %s\n", got, floor; exit 1 }
+              printf "OK: throughput %.0f rps >= floor %s\n", got, floor
+            }' || return 1
+          }
+
+          run_scenario() { # $1 scenario, $2 agent env, $3.. harness args
+            SCENARIO="$1"; AGENT_ENV="$2"; shift 2
+            local out="$RUNNER_TEMP/hw-results/${RESULT_LABEL:-$SCENARIO}.json"
+            echo "::group::$SCENARIO"
+            start_agent "$AGENT_ENV" || { FAILED=1; echo "::endgroup::"; return; }
+            if ! "$HARNESS" --scenario "$SCENARIO" \
+                --requests "$REQUESTS" --concurrency "$CONCURRENCY" \
+                --assert-slo slo.yaml --slo-multiplier "$SLO_MULTIPLIER" \
+                --save "$out" "$@"; then
+              FAILED=1
+            fi
+            stop_agent
+            # Throughput floor (skip for batch: its rps semantics are per-call).
+            if [ "$SCENARIO" != "slo-batch" ]; then
+              assert_rps "$out" || FAILED=1
+            fi
+            echo "::endgroup::"
+          }
+
+          run_scenario slo-targeted "" --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
+          run_scenario slo-evaluate-all "REAPER_ALLOW_EVALUATE_ALL=true" \
+            --evaluate-all-policy-set "$RUNNER_TEMP/slo-simple-10k.json"
+          run_scenario slo-rebac "" \
+            --rebac-policy policies/reaper/rebac.reap \
+            --rebac-data data/10k/rebac.json
+          run_scenario slo-batch "" --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
+
+          exit $FAILED
+
+      - name: Cold-start at SLA thresholds (tightened)
+        env:
+          COLD_START_BUNDLE_LOAD_MS_MAX: ${{ vars.PERF_COLD_BUNDLE_MS || '10' }}
+          COLD_START_FIRST_EVAL_MS_MAX: ${{ vars.PERF_COLD_EVAL_MS || '100' }}
+        run: cargo run -p policy-engine --release --example cold_start_bench
+
+      - name: Upload HDR result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-hardware-slo-results
+          path: ${{ runner.temp }}/hw-results/

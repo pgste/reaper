@@ -1,0 +1,85 @@
+# Test coverage measurement (round-3 Plan 05 §4.9, Testing T5).
+#
+# Plan 05 §4.9 has two halves: MEASURE coverage, and FAIL below a per-module
+# floor. This workflow does the first now and is wired to do the second the
+# moment a baseline exists — the floor cannot be set honestly before the first
+# run reports real numbers (a guessed floor either false-reds or is toothless,
+# the same reason the mutation budget is deferred).
+#
+# Report-only by design: schedule/dispatch (never on the PR critical path — a
+# full-workspace tarpaulin run is slow) and `continue-on-error` so a tooling
+# hiccup never blocks anyone. The Cobertura XML + HTML are uploaded as artifacts
+# for trend analysis and for reading off the initial per-module numbers.
+#
+# ── HOW TO TURN THE FLOOR ON once a baseline is measured ───────────────────
+#   1. Read the first run's per-file coverage from the uploaded cobertura.xml
+#      (or the HTML report) for the critical modules:
+#        crates/policy-engine/src/evaluators/**, reap/compiler/**,
+#        decision_log.rs, decision_buffer.rs, data/loader.rs, and
+#        services/reaper-management/src/api/orgs.rs (tenant scoping).
+#   2. Commit those measured numbers as the floor (e.g. tarpaulin.toml `fail-under`
+#      for the global floor, or a small check script for per-module floors).
+#   3. Drop `continue-on-error` so the job blocks, and add it to required checks.
+#   The floor ratchets only UP — a drop is the signal, never lowered silently.
+
+name: Coverage
+
+on:
+  schedule:
+    - cron: "31 5 * * 1" # weekly, Monday 05:31 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Tarpaulin (report-only until a floor is committed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Report-only: a tarpaulin/tooling failure must never block. Remove this
+    # (and add a fail-under floor) once the baseline numbers are committed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-coverage"
+          cache-on-failure: true
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Measure coverage (workspace libs)
+        run: |
+          # Library coverage across the workspace. Integration tests that spawn
+          # binaries or need external services are excluded (--lib) so the number
+          # is stable and attributable; the critical modules the floor will guard
+          # (evaluators, compiler, decision log/buffer, data loader, tenant
+          # scoping) are all library code covered here.
+          cargo tarpaulin --workspace --lib \
+            --out Xml --out Html --output-dir coverage \
+            --timeout 300 --engine llvm \
+            2>&1 | tee coverage/tarpaulin.log || true
+          echo "---"
+          echo "Per-module numbers for the future floor are in coverage/cobertura.xml"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
