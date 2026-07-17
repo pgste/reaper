@@ -408,3 +408,92 @@ async fn data_plane_replication_end_to_end() {
     assert_eq!(ready["data_version"], 1, "gate opened by the v1 snapshot");
     drop(agent);
 }
+
+/// Full-journey policy → decision (round-3 Plan 05 §4.7).
+///
+/// The management-side journey (org → policy → bundle → compile → stage →
+/// promote → download) is covered by `e2e_tests::test_e2e_full_policy_deployment`;
+/// the data-plane replication journey is covered above. This test closes the
+/// LAST link the plan names: a deployed policy actually changes the agent's
+/// served DECISION, asserted deterministically so breaking any stage (deploy
+/// not applied, eval reading the wrong policy) fails the final assert.
+///
+/// Self-contained: spawns a real agent binary, deploys a policy over the real
+/// `/api/v1/policies/deploy` endpoint, and evaluates over `/api/v1/messages`.
+/// Skips (does not fail) when the agent binary is not built.
+#[tokio::test]
+async fn full_journey_policy_reaches_the_served_decision() {
+    let Some(_) = bin("reaper-agent") else {
+        eprintln!("SKIP: build reaper-agent first (cargo build -p reaper-agent)");
+        return;
+    };
+
+    let port = free_port();
+    let agent = spawn_agent(port);
+    let agent_url = format!("http://127.0.0.1:{port}");
+    let client = Client::new();
+    assert!(wait_healthy(&client, &agent_url).await, "agent up");
+
+    // Deploy a policy that ALLOWS exactly one resource. The Simple evaluator
+    // matches by resource pattern, so this gives a deterministic allow/deny
+    // split we can assert with teeth.
+    let deploy = client
+        .post(format!("{agent_url}/api/v1/policies/deploy"))
+        .json(&json!({
+            "policy_id": uuid::Uuid::new_v4().to_string(),
+            "name": "full-journey",
+            "description": "",
+            "rules": [
+                {"action": "allow", "resource": "/admin/dashboard", "conditions": null}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(deploy.status().is_success(), "policy deploy must succeed");
+
+    // A request against the allowed resource → the deployed policy decides ALLOW.
+    let allowed: Value = client
+        .post(format!("{agent_url}/api/v1/messages"))
+        .json(&json!({
+            "policy_name": "full-journey",
+            "principal": "admin",
+            "action": "access",
+            "resource": "/admin/dashboard"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        allowed["decision"], "allow",
+        "the deployed policy must make its resource ALLOW: {allowed}"
+    );
+
+    // A request against a resource NO rule covers → default deny. This is the
+    // teeth: if deploy were a no-op (agent served some other/empty policy) the
+    // allow above could still pass by accident, but a policy that allows
+    // everything would fail HERE.
+    let denied: Value = client
+        .post(format!("{agent_url}/api/v1/messages"))
+        .json(&json!({
+            "policy_name": "full-journey",
+            "principal": "admin",
+            "action": "access",
+            "resource": "/not/covered"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        denied["decision"], "deny",
+        "an uncovered resource must default-DENY under the deployed policy: {denied}"
+    );
+
+    drop(agent);
+}
