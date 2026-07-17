@@ -1,0 +1,11 @@
+// Deliberately invalid: v1 syntax the current grammar rejects.
+package old_style
+
+default deny
+
+rule admin_access {
+    allow
+    when {
+        user.role == "admin"
+    }
+}

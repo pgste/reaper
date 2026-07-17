@@ -319,6 +319,29 @@ jobs:
           cargo test -p policy-engine --test pruning_index_tests 2>&1 | tee pruning-index-results.txt
           echo "PRUNING_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run interner-bounding suites (memory invariants)
+        run: |
+          # Round-3 Plan 05 §4.8: the memory invariants behind the "~60% memory
+          # reduction" claim. These suites existed but were never named in CI —
+          # eval-path result churn, ReBAC edge churn, and mass-rename migrations
+          # must all leave the string interner bounded (no unbounded growth).
+          cargo test -p policy-engine \
+            --test eval_interner_bounding_tests \
+            --test rebac_interner_bounding_tests \
+            --test migration_rename_interner_tests 2>&1 | tee interner-bounding-results.txt
+          echo "INTERNER_BOUND_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Run CLI integration suite (customer CI/CD contract)
+        run: |
+          # Round-3 Plan 05 §4.5 (Testing T3): reaper-cli is the customer CI/CD
+          # entry point — pipelines gate on `reaper test --expect deny` exit
+          # codes. This suite spawns the REAL binary over fixtures and asserts
+          # exit codes + stable stdout markers for test/test-suite/eval/
+          # validate/compile/bundle. Also the only PR-CI step that builds the
+          # CLI binary at all (release.yml cross-builds it, but not on PRs).
+          cargo test -p reaper-cli --test cli_integration 2>&1 | tee cli-integration-results.txt
+          echo "CLI_INTEG_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
       - name: Generate unit test summary
         if: always()
         run: |
@@ -348,7 +371,7 @@ jobs:
       - name: Fail if any unit/integration/equivalence tests failed
         if: always()
         run: |
-          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} ))
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} ))
           exit $rc
 
   # Stage 2b: Management tests against REAL PostgreSQL (BLOCKS pipeline).

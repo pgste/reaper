@@ -23,10 +23,10 @@ tabled = "0.21"
 [target.'cfg(target_os = "linux")'.dependencies]
 reaper-ebpf = { path = "../../crates/reaper-ebpf" }
 
+# The CLI integration suite (tests/cli_integration.rs) spawns the real binary
+# via Cargo's CARGO_BIN_EXE_ — deliberately zero extra dev-dependencies.
 [dev-dependencies]
 criterion = { workspace = true }
-cucumber = { workspace = true }
-async-trait = { workspace = true }
 
 [[bench]]
 name = "cli_bench"
