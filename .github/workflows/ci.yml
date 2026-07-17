@@ -324,6 +324,15 @@ jobs:
           cargo test -p policy-engine --test builtin_differential_tests 2>&1 | tee builtin-oracle-results.txt
           echo "BUILTIN_ORACLE_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run audit-completeness invariants
+        run: |
+          # Round-3 Plan 05 §4.4 (Testing T7): a served decision is never
+          # silently lost — every decision is retained OR counted (evicted /
+          # sampled-out), and retained + counted-loss reconciles to served.
+          # Drives the real DecisionBuffer under saturation + sampling.
+          cargo test -p policy-engine --test audit_invariant_tests 2>&1 | tee audit-invariant-results.txt
+          echo "AUDIT_INVARIANT_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
       - name: Run context interner-leak regression
         run: |
           # Eval-path guard: context.* comparisons must not intern per-request
@@ -393,7 +402,7 @@ jobs:
       - name: Fail if any unit/integration/equivalence tests failed
         if: always()
         run: |
-          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} + ${{ env.TENANT_ISO_EXIT_CODE }} + ${{ env.BUILTIN_ORACLE_EXIT_CODE }} ))
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} + ${{ env.TENANT_ISO_EXIT_CODE }} + ${{ env.BUILTIN_ORACLE_EXIT_CODE }} + ${{ env.AUDIT_INVARIANT_EXIT_CODE }} ))
           exit $rc
 
   # Stage 2b: Management tests against REAL PostgreSQL (BLOCKS pipeline).
