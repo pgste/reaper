@@ -5,6 +5,7 @@ mod cache;
 mod capability_gate;
 mod decision_stream;
 mod handlers;
+mod http;
 mod management;
 mod metrics_cache;
 mod observability;

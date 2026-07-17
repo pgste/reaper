@@ -150,8 +150,13 @@ impl SseClient {
         url: &str,
         shutdown_rx: &mut watch::Receiver<bool>,
     ) -> Result<SseResult, SseError> {
-        // Build request with authentication
-        let request = reqwest::Client::new()
+        // Build request with authentication. A streaming client: connect
+        // timeout only — a total request timeout would abort the long-lived SSE
+        // stream (round-3 Plan 06 §4.1, R3-01).
+        let client = crate::http::streaming_client_builder()
+            .build()
+            .map_err(|e| SseError::Stream(format!("HTTP client build failed: {e}")))?;
+        let request = client
             .get(url)
             .header("Authorization", format!("Bearer {}", self.config.token))
             .header("Accept", "text/event-stream");

@@ -121,7 +121,8 @@ pub(super) async fn github_callback(
         .ok_or_else(|| ApiError::Internal("GitHub OAuth not configured".to_string()))?;
 
     // Exchange code for access token
-    let client = reqwest::Client::new();
+    let client = crate::http::http_client_default()
+        .map_err(|e| ApiError::Internal(format!("HTTP client build failed: {e}")))?;
     let token_response: GitHubTokenResponse = client
         .post("https://github.com/login/oauth/access_token")
         .header("Accept", "application/json")
@@ -409,7 +410,8 @@ pub(super) async fn list_github_repos(
     let token = get_github_token(&state, organization.id).await?;
 
     // Fetch repos from GitHub
-    let client = reqwest::Client::new();
+    let client = crate::http::http_client_default()
+        .map_err(|e| ApiError::Internal(format!("HTTP client build failed: {e}")))?;
     let repos: Vec<GitHubRepo> = client
         .get("https://api.github.com/user/repos?per_page=100&sort=updated")
         .header("Authorization", format!("Bearer {}", token))

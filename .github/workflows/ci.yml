@@ -93,6 +93,22 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Ban unbounded outbound HTTP clients (Plan 06 R3-01)
+        run: |
+          # No outbound reqwest client may be built without a timeout: a bare
+          # `reqwest::Client::new()` (and the old `…build().unwrap_or_else(|_|
+          # Client::new())` degrade) has no deadline, so a wedged upstream parks
+          # the awaiting task forever. Construct clients through the per-service
+          # `http.rs` timeout helpers instead. Test code and the helpers
+          # themselves (which reference the banned call in docs) are exempt.
+          if grep -rn --include='*.rs' 'reqwest::Client::new()' services/ crates/ tools/ \
+               | grep -v '/tests/' \
+               | grep -v '/http.rs:'; then
+            echo "::error::bare reqwest::Client::new() found — build via the http.rs timeout helper"
+            exit 1
+          fi
+          echo "OK: no unbounded reqwest clients in non-test code"
+
       - name: Run Clippy
         run: |
           # pipefail is REQUIRED: without it the pipeline's exit code is tee's

@@ -42,14 +42,13 @@ impl ApiSyncer {
     /// Create a new API syncer
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                // Never follow redirects: a public host that passes the SSRF
-                // pre-flight guard could otherwise 302 to an internal address /
-                // cloud metadata (round-3 SEC R3-5).
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            client: crate::http::build_or_default(
+                crate::http::http_client_builder(std::time::Duration::from_secs(30))
+                    // Never follow redirects: a public host that passes the SSRF
+                    // pre-flight guard could otherwise 302 to an internal address /
+                    // cloud metadata (round-3 SEC R3-5).
+                    .redirect(reqwest::redirect::Policy::none()),
+            ),
         }
     }
 
