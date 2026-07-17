@@ -196,3 +196,42 @@ jobs:
             --base-json "$RUNNER_TEMP/base-runs.json" \
             --head-json "$RUNNER_TEMP/head-runs.json" \
             --metric p99_us --http-threshold 1.25
+
+      - name: Compare request-total p999 (blocking, tail)
+        run: |
+          # Round-3 Plan 05 §4.6: the tail (p999) is where a served-path
+          # regression hides from p99. The paired A/B cancels runner variance by
+          # construction (base+head on the SAME runner, interleaved), so a tail
+          # gate is meaningful even on shared runners. The threshold is looser
+          # than p99's (1.5x vs 1.25x) because the tail is intrinsically noisier;
+          # the slo_harness already serializes p999_us for this saved JSON.
+          python3 scripts/perf_ab_gate.py --http-ab \
+            --base-json "$RUNNER_TEMP/base-runs.json" \
+            --head-json "$RUNNER_TEMP/head-runs.json" \
+            --metric p999_us --http-threshold 1.5
+
+  # Cold-start gate (round-3 Plan 05 §4.6c, Testing T4 / ADR-4). Every other
+  # latency path warms up first, so the documented <100ms cold-start / <10ms
+  # bundle-load claims were unfalsified. This measures the UNWARMED first
+  # bundle-load + first eval in a fresh process and fails past a committed
+  # threshold. Thresholds are generous on shared runners (a huge-headroom
+  # regression guard); a dedicated-hardware run tightens them via the
+  # COLD_START_* env toward the real SLA.
+  cold-start:
+    name: Cold-start gate (unwarmed first request)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "reaper-bench"
+          cache-on-failure: true
+
+      - name: Measure cold start (blocking)
+        run: cargo run -p policy-engine --release --example cold_start_bench
