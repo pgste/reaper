@@ -446,6 +446,225 @@ async fn oidc_login_does_not_adopt_account_across_tenant() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plan 05 §4.3 — cross-tenant behavioural corpus.
+//
+// The `tenant_authz.rs` fitness function proves *structurally* that every
+// org-scoped route references a tenant guard; this sweep proves it
+// *behaviourally* across every resource family. A fully authenticated attacker
+// (org:admin in ITS OWN org) drives every read+mutate verb against the victim
+// org's slug and gets refused: `authorize_org` checks org membership before any
+// resource lookup, so a slug-addressed route refuses (403) whether or not the
+// sub-resource exists. Deleting a `WHERE org_id = $` clause or dropping an
+// `authorize_org` call turns a row here red.
+//
+// (Webhook subscriptions have their own dedicated test above; this corpus
+// covers the remaining families the plan names: policies, namespaces/datastore,
+// decisions, change-requests, sources, environments, bundles, agents, audit.)
+// ---------------------------------------------------------------------------
+
+/// One probe: an HTTP verb + a path under the victim org, and the status an
+/// attacker (bound to a different org) must receive.
+struct Probe {
+    method: &'static str,
+    path: &'static str,
+    body: Option<Value>,
+}
+
+/// Every resource scope EXCEPT platform `admin`. The point of the corpus is to
+/// isolate the *tenant* dimension: with all resource scopes granted, the scope
+/// check in every handler passes, so the ONLY thing that can refuse the caller
+/// is the org-membership (tenant) guard. `admin` is deliberately excluded — it
+/// bypasses the tenant guard by design (`user.org_id != org && !has(Admin)`).
+const ALL_RESOURCE_SCOPES: &[&str] = &[
+    "policy:read",
+    "policy:write",
+    "bundle:read",
+    "bundle:write",
+    "bundle:promote",
+    "bundle:approve",
+    "agent:register",
+    "agent:read",
+    "agent:write",
+    "deployment:write",
+    "org:read",
+    "org:write",
+    "org:admin",
+    "apikey:read",
+    "apikey:write",
+    "audit:erase",
+    "audit:export",
+    "capability:issue",
+    "capability:revoke",
+];
+
+fn probe(method: &'static str, path: &'static str) -> Probe {
+    Probe {
+        method,
+        path,
+        body: None,
+    }
+}
+
+fn probe_body(method: &'static str, path: &'static str, body: Value) -> Probe {
+    Probe {
+        method,
+        path,
+        body: Some(body),
+    }
+}
+
+#[tokio::test]
+async fn cross_tenant_corpus_refuses_every_resource_family() {
+    let env = setup().await;
+    // Attacker holds EVERY resource scope in its own org (so a refusal can only
+    // be the tenant guard, never a missing scope) — but not platform `admin`,
+    // which bypasses tenancy by design.
+    let attacker = make_org(&env.db, "attacker", "Attacker Inc").await;
+    let _victim = make_org(&env.db, "victim", "Victim Corp").await;
+    let attacker_key = scoped_key(&env.db, attacker.id, ALL_RESOURCE_SCOPES).await;
+
+    // GET/DELETE probes need no body and hit `authorize_org` before any resource
+    // lookup, so they exercise the guard whether or not the sub-resource exists.
+    // A representative UUID stands in for by-id sub-resources (the org guard
+    // fires first, so the id need not resolve).
+    let dead = "00000000-0000-0000-0000-000000000000";
+    let mut probes = vec![
+        // policies
+        probe("GET", "/orgs/victim/policies"),
+        probe_body(
+            "POST",
+            "/orgs/victim/policies",
+            json!({"name":"p","content":"policy p { default: deny, }"}),
+        ),
+        probe("GET", "/orgs/victim/policies/p"),
+        probe_body("PUT", "/orgs/victim/policies/p", json!({"name":"p2"})),
+        probe("DELETE", "/orgs/victim/policies/p"),
+        probe("GET", "/orgs/victim/policies/p/versions"),
+        // namespaces + datastore (ABAC/ReBAC tuple store)
+        probe("GET", "/orgs/victim/namespaces"),
+        probe_body("POST", "/orgs/victim/namespaces", json!({"slug":"ns-x"})),
+        probe("GET", "/orgs/victim/namespaces/default/datastore/entities"),
+        probe_body(
+            "POST",
+            "/orgs/victim/namespaces/default/datastore/entities",
+            json!({"entity_type":"User","entity_id":"e1","attributes":{}}),
+        ),
+        probe("GET", "/orgs/victim/namespaces/default/datastore/tuples"),
+        // decisions (the audit read plane)
+        probe("GET", "/orgs/victim/decisions"),
+        probe("GET", "/orgs/victim/decisions/stats"),
+        probe(
+            "GET",
+            "/orgs/victim/decisions/00000000-0000-0000-0000-000000000000",
+        ),
+        // change-requests / promotions (dual-control). The collection list is
+        // GET /change-requests; the create is POST /promotions.
+        probe("GET", "/orgs/victim/change-requests"),
+        probe("GET", "/orgs/victim/promotions"),
+        // sources
+        probe("GET", "/orgs/victim/sources"),
+        probe_body(
+            "POST",
+            "/orgs/victim/sources",
+            json!({"name":"s","source_type":"git","config":{"url":"https://x.example/r.git"}}),
+        ),
+        // environments
+        probe("GET", "/orgs/victim/environments"),
+        // bundles
+        probe("GET", "/orgs/victim/bundles"),
+        probe_body("POST", "/orgs/victim/bundles", json!({"name":"b"})),
+        // agents (enforcement fleet)
+        probe("GET", "/orgs/victim/agents"),
+        // audit configuration
+        probe("GET", "/orgs/victim/audit/connectors"),
+    ];
+    // by-id sub-resources: same guard, refused regardless of the id.
+    probes.push(probe(
+        "GET",
+        Box::leak(format!("/orgs/victim/bundles/{dead}").into_boxed_str()),
+    ));
+
+    for p in &probes {
+        let status = status_of(
+            &env.app,
+            authed(p.method, p.path, p.body.clone(), &attacker_key),
+        )
+        .await;
+        assert!(
+            status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+            "attacker {} {} must be refused (403/404), got {}",
+            p.method,
+            p.path,
+            status
+        );
+        // Crucially it must NOT be a success or a mere validation error — those
+        // would mean the request reached past the tenant guard.
+        assert!(
+            !status.is_success(),
+            "attacker {} {} leaked past the tenant guard with {}",
+            p.method,
+            p.path,
+            status
+        );
+    }
+
+    // Anonymous callers never even reach a handler.
+    for p in &probes {
+        assert_eq!(
+            status_of(&env.app, anon(p.method, p.path, p.body.clone())).await,
+            StatusCode::UNAUTHORIZED,
+            "anonymous {} {} must be 401 at the gateway",
+            p.method,
+            p.path
+        );
+    }
+}
+
+/// The positive control for the corpus: the SAME verbs the attacker was refused
+/// succeed for the resource's real owner. Without this, the corpus could pass
+/// by refusing *everyone* (e.g. a route that is simply broken) — this proves the
+/// refusals above are tenant-scoped, not blanket failures.
+#[tokio::test]
+async fn cross_tenant_corpus_owner_positive_control() {
+    let env = setup().await;
+    let owner = make_org(&env.db, "owner", "Owner Corp").await;
+    let key = scoped_key(&env.db, owner.id, ALL_RESOURCE_SCOPES).await;
+
+    // Reads the attacker was refused succeed for the owner. (Decisions is
+    // omitted here: its store is unconfigured in the test env and returns 503
+    // *after* the tenant check — the attacker corpus still exercises its guard,
+    // which fires first.)
+    for uri in [
+        "/orgs/owner/policies",
+        "/orgs/owner/bundles",
+        "/orgs/owner/agents",
+        "/orgs/owner/namespaces",
+    ] {
+        assert_eq!(
+            status_of(&env.app, authed("GET", uri, None, &key)).await,
+            StatusCode::OK,
+            "owner GET {uri} must succeed (proves the corpus refusals are tenant-scoped)"
+        );
+    }
+
+    // A create the attacker was refused succeeds for the owner.
+    assert_eq!(
+        status_of(
+            &env.app,
+            authed(
+                "POST",
+                "/orgs/owner/policies",
+                Some(json!({"name":"ok","content":"policy ok { default: deny, }"})),
+                &key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+        "owner can create its own policy"
+    );
+}
+
 fn sso_config(org_id: Uuid, issuer: &str) -> SsoConfig {
     let now = chrono::Utc::now();
     SsoConfig {

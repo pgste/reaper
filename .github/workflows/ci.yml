@@ -296,6 +296,18 @@ jobs:
           cargo test -p reaper-management --test integration_tests 2>&1 | tee mgmt-integration-results.txt
           echo "MGMT_INTEG_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      - name: Run tenant-isolation suites (structural + behavioural)
+        run: |
+          # Round-3 Plan 01 + Plan 05 §4.3: tenant isolation is defended two ways
+          # and BOTH gate here. `tenant_authz` is the structural fitness function
+          # (static scan: no org-scoped mutating route without a tenant guard);
+          # `tenant_isolation_tests` is the behavioural corpus (a fully-authed
+          # attacker in org A is refused every read+mutate verb against org B).
+          cargo test -p reaper-management \
+            --test tenant_authz \
+            --test tenant_isolation_tests 2>&1 | tee tenant-isolation-results.txt
+          echo "TENANT_ISO_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
       - name: Run compiled-vs-AST equivalence suite
         run: |
           # DSL v2 differential: every function's compiled path must agree with AST.
@@ -371,7 +383,7 @@ jobs:
       - name: Fail if any unit/integration/equivalence tests failed
         if: always()
         run: |
-          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} ))
+          rc=$(( ${{ env.UNIT_TEST_EXIT_CODE }} + ${{ env.MGMT_INTEG_EXIT_CODE }} + ${{ env.EQUIV_EXIT_CODE }} + ${{ env.CTX_LEAK_EXIT_CODE }} + ${{ env.PRUNING_EXIT_CODE }} + ${{ env.INTERNER_BOUND_EXIT_CODE }} + ${{ env.CLI_INTEG_EXIT_CODE }} + ${{ env.TENANT_ISO_EXIT_CODE }} ))
           exit $rc
 
   # Stage 2b: Management tests against REAL PostgreSQL (BLOCKS pipeline).
