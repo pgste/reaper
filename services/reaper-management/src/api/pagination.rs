@@ -51,6 +51,36 @@ impl PageQuery {
     }
 }
 
+/// Default and hard-max caps for BOUNDED config lists (round-3 Plan 06 §4.2,
+/// R3-02). These lists are small and naturally ordered (deployment tiers,
+/// per-org webhooks/strategies), so they take a defensive `LIMIT` cap rather
+/// than a cursor — the plan's "add a LIMIT to each repo query" — keeping their
+/// presentation order. Generous vs the keyset default because there is no next
+/// page to fall back to.
+pub const BOUNDED_LIST_DEFAULT: i64 = 200;
+pub const BOUNDED_LIST_MAX: i64 = 500;
+
+/// A query carrying only an optional `limit` (no cursor): the shape of a
+/// bounded config-list endpoint.
+#[derive(Debug, Default, Deserialize)]
+pub struct LimitQuery {
+    pub limit: Option<i64>,
+}
+
+impl LimitQuery {
+    /// Resolve the cap: default [`BOUNDED_LIST_DEFAULT`], hard max
+    /// [`BOUNDED_LIST_MAX`], 400 (problem+json) when out of range.
+    pub fn cap(self) -> ApiResult<i64> {
+        let limit = self.limit.unwrap_or(BOUNDED_LIST_DEFAULT);
+        if !(1..=BOUNDED_LIST_MAX).contains(&limit) {
+            return Err(ApiError::BadRequest(format!(
+                "limit must be between 1 and {BOUNDED_LIST_MAX} (got {limit})"
+            )));
+        }
+        Ok(limit)
+    }
+}
+
 /// The uniform list envelope: one page of items plus the cursor that resumes
 /// the walk (`null` on the last page).
 #[derive(Debug, Serialize, ToSchema)]

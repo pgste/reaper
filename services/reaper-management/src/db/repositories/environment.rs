@@ -108,7 +108,13 @@ impl<'a> EnvironmentRepository<'a> {
         row.map(|r| self.row_to_env(r)).transpose()
     }
 
-    pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<Environment>, DatabaseError> {
+    /// List an org's environments, tier-ordered, bounded by `limit` (round-3
+    /// Plan 06 §4.2, R3-02: a defensive cap so the list is never unbounded).
+    pub async fn list_by_org(
+        &self,
+        org_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<Environment>, DatabaseError> {
         let pool = self
             .db
             .any_pool()
@@ -120,9 +126,11 @@ impl<'a> EnvironmentRepository<'a> {
             FROM environments
             WHERE org_id = $1
             ORDER BY tier_order ASC, name ASC
+            LIMIT $2
             "#,
         )
         .bind(org_id.to_string())
+        .bind(limit)
         .fetch_all(pool)
         .await?;
         rows.into_iter().map(|r| self.row_to_env(r)).collect()

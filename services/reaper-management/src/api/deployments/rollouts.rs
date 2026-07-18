@@ -173,8 +173,11 @@ async fn enforce_promotion_path(
     namespace_id: Option<Uuid>,
     user: &crate::auth::middleware::AuthenticatedUser,
 ) -> Result<(), ApiError> {
+    // Enforcement needs the COMPLETE set of environments to find a blocking
+    // gate, so it is not capped like the user-facing list endpoint (environments
+    // are single-digit deployment tiers).
     let envs = EnvironmentRepository::new(&state.db)
-        .list_by_org(org_id)
+        .list_by_org(org_id, i64::MAX)
         .await?;
     let blocking = envs.iter().find(|e| {
         e.is_active

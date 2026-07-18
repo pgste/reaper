@@ -39,6 +39,9 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
 #[derive(Debug, Deserialize, Default)]
 pub struct ListWebhooksQuery {
     pub active_only: Option<bool>,
+    /// Max subscriptions to return (default 200, max 500) — a bounded cap so the
+    /// list is never unbounded (round-3 Plan 06 §4.2, R3-02).
+    pub limit: Option<i64>,
 }
 
 /// Response for listing webhooks
@@ -125,7 +128,9 @@ impl From<WebhookDeliveryResult> for TestWebhookResponse {
     path = "/orgs/{org}/webhooks",
     tag = "webhooks",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("active_only" = Option<bool>, Query, description = "Only active subscriptions"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "List of webhook subscriptions")
@@ -140,9 +145,10 @@ async fn list_webhooks(
 ) -> ApiResult<Json<ListWebhooksResponse>> {
     let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
 
+    let limit = crate::api::pagination::LimitQuery { limit: query.limit }.cap()?;
     let webhook_repo = WebhookRepository::new(&state.db);
     let webhooks = webhook_repo
-        .list_by_org(organization.id, query.active_only.unwrap_or(false))
+        .list_by_org(organization.id, query.active_only.unwrap_or(false), limit)
         .await?;
 
     let total = webhooks.len();

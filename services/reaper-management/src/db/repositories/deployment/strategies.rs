@@ -84,22 +84,26 @@ impl<'a> StrategyOps<'a> {
         &self,
         org_id: Uuid,
         namespace_id: Option<Uuid>,
+        limit: i64,
     ) -> Result<Vec<DeploymentStrategy>, DatabaseError> {
         let pool = self
             .db
             .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
+        // Bounded cap so the list is never unbounded (round-3 Plan 06 §4.2).
         let rows = if let Some(ns_id) = namespace_id {
             let sql = r#"
                 SELECT id, org_id, namespace_id, name, strategy_type, config, is_default, created_at, updated_at
                 FROM deployment_strategies
                 WHERE org_id = $1 AND (namespace_id = $2 OR namespace_id IS NULL)
                 ORDER BY is_default DESC, name ASC
+                LIMIT $3
             "#;
             sqlx::query(sql)
                 .bind(org_id.to_string())
                 .bind(ns_id.to_string())
+                .bind(limit)
                 .fetch_all(pool)
                 .await?
         } else {
@@ -108,9 +112,11 @@ impl<'a> StrategyOps<'a> {
                 FROM deployment_strategies
                 WHERE org_id = $1
                 ORDER BY is_default DESC, name ASC
+                LIMIT $2
             "#;
             sqlx::query(sql)
                 .bind(org_id.to_string())
+                .bind(limit)
                 .fetch_all(pool)
                 .await?
         };

@@ -232,9 +232,10 @@ impl DeploymentService {
         &self,
         org_id: Uuid,
         namespace_id: Option<Uuid>,
+        limit: i64,
     ) -> Result<Vec<DeploymentStrategy>, DeploymentError> {
         let repo = DeploymentRepository::new(&self.db);
-        Ok(repo.list_strategies(org_id, namespace_id).await?)
+        Ok(repo.list_strategies(org_id, namespace_id, limit).await?)
     }
 
     /// Delete a deployment strategy

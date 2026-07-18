@@ -22,7 +22,9 @@ use super::types::{CreateStrategyRequest, StrategiesQuery, StrategyResponse};
     path = "/orgs/{org}/deployment-strategies",
     tag = "deployments",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace_id" = Option<Uuid>, Query, description = "Filter by namespace"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "List of deployment strategies")
@@ -47,9 +49,10 @@ pub async fn list_strategies(
         ));
     }
 
+    let limit = crate::api::pagination::LimitQuery { limit: query.limit }.cap()?;
     let service = DeploymentService::new(state.db.clone());
     let strategies = service
-        .list_strategies(organization.id, query.namespace_id)
+        .list_strategies(organization.id, query.namespace_id, limit)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 

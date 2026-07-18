@@ -60,8 +60,9 @@ impl<'a> DeploymentRepository<'a> {
         &self,
         org_id: Uuid,
         namespace_id: Option<Uuid>,
+        limit: i64,
     ) -> Result<Vec<DeploymentStrategy>, DatabaseError> {
-        self.strategies().list(org_id, namespace_id).await
+        self.strategies().list(org_id, namespace_id, limit).await
     }
 
     /// Get the default strategy for a namespace (or org-wide)
@@ -392,7 +393,7 @@ mod tests {
         .await
         .unwrap();
 
-        let strategies = repo.list_strategies(org_id, None).await.unwrap();
+        let strategies = repo.list_strategies(org_id, None, 100).await.unwrap();
         assert_eq!(strategies.len(), 2);
     }
 
