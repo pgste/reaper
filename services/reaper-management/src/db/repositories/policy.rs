@@ -486,7 +486,15 @@ impl<'a> PolicyRepository<'a> {
     }
 
     /// Get all versions for a policy
-    pub async fn get_versions(&self, policy_id: Uuid) -> Result<Vec<PolicyVersion>, DatabaseError> {
+    /// The most recent `limit` versions of a policy, newest first (round-3
+    /// Plan 06 §4.2, R3-02: version history grows with every edit, so the
+    /// management view is bounded). Rollback fetches a specific version by
+    /// number ([`Self::get_version`]), never this list, so the cap is safe.
+    pub async fn get_versions(
+        &self,
+        policy_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<PolicyVersion>, DatabaseError> {
         let pool = self
             .db
             .any_pool()
@@ -498,9 +506,11 @@ impl<'a> PolicyRepository<'a> {
             FROM policy_versions
             WHERE policy_id = $1
             ORDER BY version DESC
+            LIMIT $2
             "#,
         )
         .bind(policy_id.to_string())
+        .bind(limit)
         .fetch_all(pool)
         .await?;
 
@@ -741,7 +751,7 @@ mod tests {
         let err = repo.update(policy.id, stale, Some(1)).await.unwrap_err();
         assert!(matches!(err, crate::db::DatabaseError::VersionConflict(_)));
 
-        let versions = repo.get_versions(policy.id).await.unwrap();
+        let versions = repo.get_versions(policy.id, 100).await.unwrap();
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].version, 2);
         assert_eq!(versions[1].version, 1);

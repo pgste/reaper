@@ -245,7 +245,7 @@ async fn git_sync_materializes_policies_and_compiled_bundle_idempotently() {
         .unwrap()
         .unwrap();
     assert_eq!(bundle_again, bundle_id);
-    let versions = policy_repo.get_versions(allow.id).await.unwrap();
+    let versions = policy_repo.get_versions(allow.id, 100).await.unwrap();
     assert_eq!(
         versions.len(),
         1,

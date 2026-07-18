@@ -1,7 +1,7 @@
 //! API key and token management handlers.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -77,7 +77,8 @@ pub async fn refresh_token(
     path = "/orgs/{org}/api-keys",
     tag = "auth",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "List of API keys", body = ListApiKeysResponse)
@@ -88,6 +89,7 @@ pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<ListApiKeysResponse>> {
     // Check permissions
     if !user.has_permission(Scope::ApiKeyRead) && !user.has_permission(Scope::OrgAdmin) {
@@ -104,8 +106,9 @@ pub async fn list_api_keys(
         ));
     }
 
+    let limit = page.cap()?;
     let api_key_repo = ApiKeyRepository::new(&state.db);
-    let keys = api_key_repo.list_by_org(organization.id).await?;
+    let keys = api_key_repo.list_by_org(organization.id, limit).await?;
 
     let summaries: Vec<ApiKeySummary> = keys.into_iter().map(|k| k.into()).collect();
 

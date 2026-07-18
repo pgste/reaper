@@ -424,7 +424,8 @@ async fn delete_policy(
     tag = "policies",
     params(
         ("org" = String, Path, description = "Organization ID or slug"),
-        ("policy" = String, Path, description = "Policy ID or name")
+        ("policy" = String, Path, description = "Policy ID or name"),
+        ("limit" = Option<i64>, Query, description = "Max versions to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "List of policy versions", body = ListVersionsResponse)
@@ -435,13 +436,14 @@ async fn list_versions(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path((org, policy_ref)): Path<(String, String)>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<ListVersionsResponse>> {
     let organization = authorize_org(&state, &user, &org, &[Scope::PolicyRead]).await?;
 
     let policy_repo = PolicyRepository::new(&state.db);
     let policy = resolve_policy(&policy_repo, organization.id, &policy_ref).await?;
 
-    let versions = policy_repo.get_versions(policy.id).await?;
+    let versions = policy_repo.get_versions(policy.id, page.cap()?).await?;
 
     let summaries: Vec<PolicyVersionSummary> = versions
         .into_iter()

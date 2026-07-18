@@ -135,12 +135,16 @@ impl<'a> ScimTokenStore<'a> {
     }
 
     /// List an org's tokens (metadata only; hashes never leave the store).
-    pub async fn list(&self, org_id: Uuid) -> Result<Vec<ScimToken>, UserError> {
+    pub async fn list(&self, org_id: Uuid, limit: i64) -> Result<Vec<ScimToken>, UserError> {
         let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
-        let sql =
-            format!("SELECT {COLS} FROM scim_tokens WHERE org_id = $1 ORDER BY created_at DESC");
+        // Bounded cap (round-3 Plan 06 §4.2, R3-02). Token AUTH validates a
+        // single token by hash, never via this list, so the cap is display-only.
+        let sql = format!(
+            "SELECT {COLS} FROM scim_tokens WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2"
+        );
         let rows: Vec<Row> = sqlx::query_as(&sql)
             .bind(org_id.to_string())
+            .bind(limit)
             .fetch_all(pool)
             .await?;
         rows.into_iter().map(Self::row_to_token).collect()

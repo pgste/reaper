@@ -470,21 +470,27 @@ impl<'a> JwksConfigRepository<'a> {
     pub async fn list_all(
         &self,
         org_id: Uuid,
+        limit: i64,
     ) -> Result<Vec<JwksConfig>, crate::db::DatabaseError> {
         let pool = self
             .db
             .any_pool()
             .ok_or_else(|| crate::db::DatabaseError::Config("No database pool".to_string()))?;
 
+        // Bounded cap (round-3 Plan 06 §4.2, R3-02): the management list is
+        // never unbounded. Token validation resolves a config by issuer, not
+        // via this list, so the cap is display-only.
         let sql = r#"
             SELECT id, org_id, name, jwks_url, issuer, audience, is_active, cache_ttl_secs, created_at, updated_at
             FROM jwks_configs
             WHERE org_id = $1
             ORDER BY name ASC
+            LIMIT $2
         "#;
 
         let rows = sqlx::query(sql)
             .bind(org_id.to_string())
+            .bind(limit)
             .fetch_all(pool)
             .await?;
 

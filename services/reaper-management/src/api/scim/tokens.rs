@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -80,7 +80,8 @@ pub async fn create_token(
     path = "/orgs/{org}/scim/tokens",
     tag = "scim",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "List of SCIM token metadata")
@@ -91,9 +92,12 @@ pub async fn list_tokens(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     let organization = authorize_org(&state, &user, &org, &[Scope::OrgAdmin]).await?;
-    let tokens = ScimTokenStore::new(&state.db).list(organization.id).await?;
+    let tokens = ScimTokenStore::new(&state.db)
+        .list(organization.id, page.cap()?)
+        .await?;
     let out = tokens
         .into_iter()
         .map(|t| {

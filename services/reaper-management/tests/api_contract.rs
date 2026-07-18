@@ -412,7 +412,10 @@ fn contract_is_publishable() {
 // Phase B-2 migrates them, each with a reason.
 // ===========================================================================
 
-/// `Some(reason)` if this list operationId is intentionally not keyset-paginated.
+/// `Some(reason)` if this list operationId is intentionally not bounded by a
+/// `limit`/`cursor`. Every remaining entry is justified: either a bounded
+/// catalog / external passthrough, or a COMPLETE SET consumed for enforcement
+/// where a cap would be a correctness/security bug — never a plain "TODO".
 fn unpaginated_list_reason(op_id: &str) -> Option<&'static str> {
     match op_id {
         // Bounded catalogs / external passthroughs — never fleet-scale.
@@ -420,34 +423,26 @@ fn unpaginated_list_reason(op_id: &str) -> Option<&'static str> {
         "list_github_repos" | "list_repos" | "list_org_repos" => {
             Some("proxy to the GitHub API (server-side per_page bound)")
         }
-        // Complete sets consumed for ENFORCEMENT — must never be truncated, so a
-        // page/cap would be a correctness bug, not a fix. Bounded by design.
+        // COMPLETE SETS consumed for enforcement/validation — truncating any of
+        // these is a correctness or security bug, so they must NOT be capped:
         "list_agent_subscriptions" => {
-            Some("complete per-agent namespace subscription set (bounded by namespace count)")
+            Some("complete per-agent namespace subscription set the agent enforces")
         }
+        "list_certificates" => {
+            Some("complete mTLS trust set (auth/mtls.rs validates against it) — must not truncate")
+        }
+        "list_deployment_status" | "list_agent_deployments" => {
+            Some("shares get_by_rollout, the complete agent-deployment set rollout completion depends on")
+        }
+        // Org membership is consumed as a COMPLETE SET by SCIM directory sync
+        // (scim/users.rs, scim/groups.rs via get_org_members); SCIM has its own
+        // startIndex/count paging. A shared cap would truncate directory sync.
+        "list_org_members" => Some("complete member set consumed by SCIM directory sync"),
+        "list_groups" | "list_users" => Some("SCIM directory; SCIM-native startIndex/count paging"),
         // Genuinely bounded config lists (small, fixed per-tenant/per-namespace).
         "list_migrations" => Some("bounded: datastore migration history per namespace"),
-        "list_jwks_configs" => Some("bounded: SSO JWKS configs per org"),
-        "list_certificates" => Some("bounded: auth certificates per org"),
         "list_connectors" => Some("bounded: audit connectors per org"),
         "list_connections" => Some("bounded: OAuth connections per org"),
-        "list_tokens" | "list_scim_tokens" => Some("bounded: SCIM provisioning tokens per org"),
-        // Can grow — keyset migration pending (a later increment). Kept visible
-        // so a NEW unpaginated list can't hide among them.
-        "list_api_keys" => Some("TODO: API keys per org"),
-        "list_holds" => Some("TODO: legal holds (compliance) can accumulate"),
-        "list_org_members" => Some("TODO: org membership can be large"),
-        "list_versions" => Some("TODO: policy version history grows"),
-        "list_rollouts" => Some("TODO: agent-cardinality"),
-        "list_deployment_status" | "list_agent_deployments" => Some("TODO: agent-cardinality"),
-        "list_change_requests" | "list_promotion_change_requests" => {
-            Some("TODO: change-record trail")
-        }
-        // SCIM directory — potentially large (enterprise directory sync); SCIM
-        // has its own startIndex/count paging (a later increment aligns it with
-        // the keyset envelope).
-        "list_groups" => Some("TODO: SCIM directory; SCIM startIndex/count paging"),
-        "list_users" => Some("TODO: SCIM directory; SCIM startIndex/count paging"),
         _ => None,
     }
 }

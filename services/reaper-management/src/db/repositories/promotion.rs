@@ -108,14 +108,21 @@ impl<'a> PromotionChangeRepository<'a> {
     }
 
     /// List an org's change requests, newest first.
-    pub async fn list(&self, org_id: Uuid) -> Result<Vec<PromotionChangeRequest>, DatabaseError> {
+    pub async fn list(
+        &self,
+        org_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<PromotionChangeRequest>, DatabaseError> {
         let pool = self.pool()?;
+        // Bounded cap so the change-request list is never unbounded (round-3
+        // Plan 06 §4.2, R3-02).
         let sql = format!(
-            "SELECT {} FROM promotion_change_requests WHERE org_id = $1 ORDER BY created_at DESC",
+            "SELECT {} FROM promotion_change_requests WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2",
             Self::COLS
         );
         let rows = sqlx::query(&sql)
             .bind(org_id.to_string())
+            .bind(limit)
             .fetch_all(pool)
             .await?;
         rows.iter().map(Self::row_to_cr).collect()
