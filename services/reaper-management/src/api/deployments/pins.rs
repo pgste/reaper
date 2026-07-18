@@ -1,7 +1,7 @@
 //! Version pin handlers.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::{
     api::error::ApiError,
     api::orgs::resolve_org,
+    api::pagination::{PageQuery, Paginated},
     auth::middleware::RequireAuth,
     db::repositories::{AgentRepository, OrganizationRepository},
     deployment::DeploymentService,
@@ -166,16 +167,21 @@ pub async fn delete_pin(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// List all version pins
+/// List version pins for an organization (keyset-paginated: round-3 Plan 06
+/// §4.2, R3-02). Pins are fleet-cardinality, so an unbounded list returned the
+/// whole set in one array at scale.
 #[utoipa::path(
     get,
     path = "/orgs/{org}/pins",
     tag = "deployments",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "List of version pins")
+        (status = 200, description = "One page of version pins with a next_cursor to resume"),
+        (status = 400, description = "limit out of range or cursor invalid")
     ),
     security(("bearer_jwt" = []))
 )]
@@ -183,7 +189,8 @@ pub async fn list_pins(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
-) -> Result<Json<Vec<PinResponse>>, ApiError> {
+    Query(query): Query<PageQuery>,
+) -> Result<Json<Paginated<PinResponse>>, ApiError> {
     let org_repo = OrganizationRepository::new(&state.db);
     let organization = resolve_org(&org_repo, &org).await?;
 
@@ -195,11 +202,16 @@ pub async fn list_pins(
         ));
     }
 
+    let page = query.validate()?;
+
     let service = DeploymentService::new(state.db.clone());
     let pins = service
-        .list_pins(organization.id)
+        .list_pins_page(organization.id, page.limit + 1, page.after.as_ref())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    Ok(Json(pins.into_iter().map(Into::into).collect()))
+    let items: Vec<PinResponse> = pins.into_iter().map(Into::into).collect();
+    Ok(Json(Paginated::from_rows(items, &page, |p| {
+        (p.created_at.to_rfc3339(), p.agent_id.to_string())
+    })))
 }

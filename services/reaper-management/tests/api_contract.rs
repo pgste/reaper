@@ -399,3 +399,98 @@ fn contract_is_publishable() {
         &untyped_success,
     );
 }
+
+// ===========================================================================
+// List-endpoint pagination fitness function (round-3 Plan 06 §4.2, R3-02).
+//
+// Every collection GET must be keyset-paginated (a `limit`/`cursor` query
+// param) so no endpoint returns an unbounded array at fleet scale. This
+// enumerates the served spec and fails on any `list_*` operation that neither
+// paginates nor is explicitly allowlisted — so a NEW unpaginated list is a red
+// build. The allowlist is the ratchet surface (ADR-6): bounded catalogs /
+// external passthroughs stay forever; the config-cardinality lists stay until
+// Phase B-2 migrates them, each with a reason.
+// ===========================================================================
+
+/// `Some(reason)` if this list operationId is intentionally not keyset-paginated.
+fn unpaginated_list_reason(op_id: &str) -> Option<&'static str> {
+    match op_id {
+        // Bounded catalogs / external passthroughs — never fleet-scale.
+        "list_plans" | "list_billing_plans" => Some("static plan catalog, fixed cardinality"),
+        "list_github_repos" | "list_repos" | "list_org_repos" => {
+            Some("proxy to the GitHub API (server-side per_page bound)")
+        }
+        // Config-cardinality lists — small today, keyset migration pending
+        // (Phase B-2). Listed so a NEW list can't hide among them.
+        "list_environments" => Some("Phase B-2: config-cardinality"),
+        "list_webhooks" | "list_webhook_subscriptions" => Some("Phase B-2: config-cardinality"),
+        "list_strategies" | "list_deployment_strategies" => Some("Phase B-2: config-cardinality"),
+        "list_agent_subscriptions" => Some("Phase B-2: config-cardinality"),
+        "list_capabilities" => Some("Phase B-2: config-cardinality"),
+        "list_revocations" => Some("Phase B-2: config-cardinality"),
+        "list_rollouts" => Some("Phase B-2: agent-cardinality"),
+        "list_deployment_status" | "list_agent_deployments" => Some("Phase B-2: agent-cardinality"),
+        "list_change_requests" | "list_promotion_change_requests" => {
+            Some("Phase B-2: change-record trail")
+        }
+        "list_scim_tokens" | "list_tokens" => Some("Phase B-2: config-cardinality"),
+        // Genuinely bounded config lists (small, fixed per-tenant/per-namespace).
+        "list_migrations" => Some("bounded: datastore migration history per namespace"),
+        "list_jwks_configs" => Some("bounded: SSO JWKS configs per org"),
+        "list_certificates" => Some("bounded: auth certificates per org"),
+        "list_connectors" => Some("bounded: audit connectors per org"),
+        "list_connections" => Some("bounded: OAuth connections per org"),
+        // Can grow — keyset migration pending (Phase B-2).
+        "list_api_keys" => Some("Phase B-2: API keys per org"),
+        "list_holds" => Some("Phase B-2: legal holds (compliance) can accumulate"),
+        "list_org_members" => Some("Phase B-2: org membership can be large"),
+        "list_versions" => Some("Phase B-2: policy version history grows"),
+        // SCIM directory — potentially large (enterprise directory sync); the
+        // SCIM protocol has its own startIndex/count paging (Phase B-2 aligns it
+        // with the keyset envelope).
+        "list_groups" => Some("Phase B-2: SCIM directory; SCIM startIndex/count paging"),
+        "list_users" => Some("Phase B-2: SCIM directory; SCIM startIndex/count paging"),
+        _ => None,
+    }
+}
+
+#[test]
+fn every_collection_list_is_paginated_or_allowlisted() {
+    let spec = reaper_management::api::build_openapi();
+    let json = spec.to_json().expect("serialize openapi to json");
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    let paths = doc["paths"].as_object().expect("spec has a paths object");
+
+    let mut offenders: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for (path, item) in paths {
+        let Some(get) = item.get("get") else { continue };
+        let op_id = get["operationId"].as_str().unwrap_or("");
+        // Heuristic: a "list" endpoint is a GET whose handler is named list_*.
+        if !op_id.starts_with("list") {
+            continue;
+        }
+        checked += 1;
+        let paginated = get["parameters"].as_array().is_some_and(|ps| {
+            ps.iter().any(|p| {
+                p["in"] == "query" && matches!(p["name"].as_str(), Some("limit") | Some("cursor"))
+            })
+        });
+        if paginated || unpaginated_list_reason(op_id).is_some() {
+            continue;
+        }
+        offenders.push(format!("{op_id}  ({path})"));
+    }
+
+    assert!(
+        checked >= 5,
+        "expected several list_* operations, found {checked}"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these collection GETs are neither keyset-paginated nor allowlisted \
+         (add a `limit`/`cursor` param, or an entry to unpaginated_list_reason \
+         with a justification):\n  {}",
+        offenders.join("\n  ")
+    );
+}

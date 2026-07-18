@@ -930,6 +930,17 @@ impl DeploymentService {
         Ok(repo.list_pins(org_id).await?)
     }
 
+    /// One keyset page of pins for an org (round-3 Plan 06 §4.2, R3-02).
+    pub async fn list_pins_page(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<VersionPin>, DeploymentError> {
+        let repo = DeploymentRepository::new(&self.db);
+        Ok(repo.list_pins_page(org_id, fetch, after).await?)
+    }
+
     /// Remove a version pin
     pub async fn delete_pin(&self, agent_id: Uuid) -> Result<(), DeploymentError> {
         let repo = DeploymentRepository::new(&self.db);
