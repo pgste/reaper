@@ -21,6 +21,7 @@ pub mod cache;
 pub mod capability_gate;
 pub mod decision_stream;
 pub mod handlers;
+pub mod http;
 pub mod management;
 pub mod metrics_cache;
 pub mod observability;

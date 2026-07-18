@@ -252,7 +252,12 @@ impl DecisionStore {
     pub fn new(config: DecisionStoreConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            // Audit queries can be large, so allow a generous total timeout —
+            // but a bounded one: a wedged ClickHouse must never park a
+            // decision-query task forever (round-3 Plan 06 §4.1, R3-01).
+            client: crate::http::build_or_default(crate::http::http_client_builder(
+                std::time::Duration::from_secs(60),
+            )),
         }
     }
 
@@ -292,7 +297,10 @@ impl DecisionStore {
             req = req.header("X-ClickHouse-Key", password);
         }
 
+        // Per-request deadline as well as the client-level timeout
+        // (defense-in-depth: neither alone can hang the audit-query path).
         let resp = req
+            .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
             .map_err(|e| DecisionStoreError::Http(e.to_string()))?;

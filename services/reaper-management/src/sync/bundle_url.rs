@@ -65,14 +65,13 @@ impl BundleUrlSyncer {
     pub fn new(storage_path: impl AsRef<Path>) -> Self {
         Self {
             storage_path: storage_path.as_ref().to_path_buf(),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                // Never follow redirects: a public host that passes the SSRF
-                // pre-flight guard could otherwise 302 → 169.254.169.254 and
-                // reach cloud metadata / internal services (round-3 SEC P0-4/R3-5).
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            client: crate::http::build_or_default(
+                crate::http::http_client_builder(std::time::Duration::from_secs(120))
+                    // Never follow redirects: a public host that passes the SSRF
+                    // pre-flight guard could otherwise 302 → 169.254.169.254 and
+                    // reach cloud metadata / internal services (round-3 SEC P0-4/R3-5).
+                    .redirect(reqwest::redirect::Policy::none()),
+            ),
         }
     }
 

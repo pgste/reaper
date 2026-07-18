@@ -116,7 +116,8 @@ impl GitHubAppClient {
             self.api_base, installation_id
         );
 
-        let resp = reqwest::Client::new()
+        let resp = crate::http::http_client_default()
+            .map_err(|e| GitHubAppError::Api(format!("HTTP client build failed: {e}")))?
             .post(&url)
             .header("Authorization", format!("Bearer {jwt}"))
             .header("Accept", "application/vnd.github+json")

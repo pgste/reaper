@@ -66,11 +66,10 @@ impl ConnectorDeliveryService {
     }
 
     pub fn with_config(config: ConnectorConfig) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
-            .user_agent("Reaper-SIEM/1.0")
-            .build()
-            .unwrap_or_else(|_| Client::new());
+        let client = crate::http::build_or_default(
+            crate::http::http_client_builder(Duration::from_secs(config.timeout_seconds))
+                .user_agent("Reaper-SIEM/1.0"),
+        );
         Self { client, config }
     }
 

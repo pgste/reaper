@@ -1646,7 +1646,12 @@ fn handle_test_suite(suite_path: &str, verbose: bool, fail_fast: bool) -> anyhow
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let client = Client::new();
+    // Bounded timeouts so a wedged platform/agent never hangs the CLI
+    // (round-3 Plan 06 §4.1, R3-01).
+    let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
 
     match cli.command {
         Commands::Eval {
