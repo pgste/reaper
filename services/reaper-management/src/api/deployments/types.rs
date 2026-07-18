@@ -29,6 +29,9 @@ pub struct CreateStrategyRequest {
 #[derive(Debug, Deserialize)]
 pub struct StrategiesQuery {
     pub namespace_id: Option<Uuid>,
+    /// Max strategies to return (default 200, max 500) — bounded cap
+    /// (round-3 Plan 06 §4.2, R3-02).
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

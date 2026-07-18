@@ -125,12 +125,14 @@ impl<'a> WebhookRepository<'a> {
         &self,
         org_id: Uuid,
         active_only: bool,
+        limit: i64,
     ) -> Result<Vec<WebhookSubscription>, DatabaseError> {
         let pool = self
             .db
             .any_pool()
             .ok_or_else(|| DatabaseError::Connection(sqlx::Error::PoolClosed))?;
 
+        // Bounded cap so the list is never unbounded (round-3 Plan 06 §4.2).
         let query = if active_only {
             r#"
             SELECT id, org_id, name, url, secret, events, is_active,
@@ -138,6 +140,7 @@ impl<'a> WebhookRepository<'a> {
             FROM webhook_subscriptions
             WHERE org_id = $1 AND is_active = 1
             ORDER BY name
+            LIMIT $2
             "#
         } else {
             r#"
@@ -146,11 +149,13 @@ impl<'a> WebhookRepository<'a> {
             FROM webhook_subscriptions
             WHERE org_id = $1
             ORDER BY name
+            LIMIT $2
             "#
         };
 
         let rows: Vec<WebhookRow> = sqlx::query_as(query)
             .bind(org_id.to_string())
+            .bind(limit)
             .fetch_all(pool)
             .await?;
 

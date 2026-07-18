@@ -60,8 +60,9 @@ impl<'a> DeploymentRepository<'a> {
         &self,
         org_id: Uuid,
         namespace_id: Option<Uuid>,
+        limit: i64,
     ) -> Result<Vec<DeploymentStrategy>, DatabaseError> {
-        self.strategies().list(org_id, namespace_id).await
+        self.strategies().list(org_id, namespace_id, limit).await
     }
 
     /// Get the default strategy for a namespace (or org-wide)
@@ -229,6 +230,16 @@ impl<'a> DeploymentRepository<'a> {
         self.pins().list(org_id).await
     }
 
+    /// One keyset page of pins for an org (round-3 Plan 06 §4.2, R3-02).
+    pub async fn list_pins_page(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<VersionPin>, DatabaseError> {
+        self.pins().list_page_by_org(org_id, fetch, after).await
+    }
+
     /// Delete a version pin
     pub async fn delete_pin(&self, agent_id: Uuid) -> Result<(), DatabaseError> {
         self.pins().delete(agent_id).await
@@ -382,7 +393,7 @@ mod tests {
         .await
         .unwrap();
 
-        let strategies = repo.list_strategies(org_id, None).await.unwrap();
+        let strategies = repo.list_strategies(org_id, None, 100).await.unwrap();
         assert_eq!(strategies.len(), 2);
     }
 

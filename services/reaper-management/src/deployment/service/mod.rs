@@ -232,9 +232,10 @@ impl DeploymentService {
         &self,
         org_id: Uuid,
         namespace_id: Option<Uuid>,
+        limit: i64,
     ) -> Result<Vec<DeploymentStrategy>, DeploymentError> {
         let repo = DeploymentRepository::new(&self.db);
-        Ok(repo.list_strategies(org_id, namespace_id).await?)
+        Ok(repo.list_strategies(org_id, namespace_id, limit).await?)
     }
 
     /// Delete a deployment strategy
@@ -928,6 +929,17 @@ impl DeploymentService {
     pub async fn list_pins(&self, org_id: Uuid) -> Result<Vec<VersionPin>, DeploymentError> {
         let repo = DeploymentRepository::new(&self.db);
         Ok(repo.list_pins(org_id).await?)
+    }
+
+    /// One keyset page of pins for an org (round-3 Plan 06 §4.2, R3-02).
+    pub async fn list_pins_page(
+        &self,
+        org_id: Uuid,
+        fetch: i64,
+        after: Option<&(String, String)>,
+    ) -> Result<Vec<VersionPin>, DeploymentError> {
+        let repo = DeploymentRepository::new(&self.db);
+        Ok(repo.list_pins_page(org_id, fetch, after).await?)
     }
 
     /// Remove a version pin

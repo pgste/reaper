@@ -5,7 +5,7 @@
 //! `user.org_id == org.id` (or `Admin`) on every handler.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -37,7 +37,10 @@ pub fn routes() -> OpenApiRouter<Arc<AppState>> {
     get,
     path = "/orgs/{org}/environments",
     tag = "environments",
-    params(("org" = String, Path, description = "Organization ID or slug")),
+    params(
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Max environments to return (default 200, max 500)")
+    ),
     responses((status = 200, description = "Environments", body = [Environment])),
     security(("bearer_jwt" = []))
 )]
@@ -45,10 +48,12 @@ async fn list_environments(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<Vec<Environment>>> {
     let organization = read_authorized(&state, &user, &org).await?;
+    let limit = page.cap()?;
     let envs = EnvironmentRepository::new(&state.db)
-        .list_by_org(organization.id)
+        .list_by_org(organization.id, limit)
         .await?;
     Ok(Json(envs))
 }
