@@ -339,8 +339,14 @@ pub async fn evaluate_policy(
 
         // Prune to candidate policies for this resource instead of cloning the
         // whole set (ADR-1). The linear scan remains available as the fallback.
+        // The resource's `type` attribute is resolved from the SAME DataStore
+        // the evaluators read, so the type-tier prefilter (R3-P2-1) agrees
+        // with what `resource.type == "…"` conditions would evaluate to.
         let candidate_ids: Vec<Uuid> = if perf.use_pruning_index {
-            state.policy_engine.candidate_policy_ids(&payload.resource)
+            let resource_type = state.data_store.resource_type_attr(&payload.resource);
+            state
+                .policy_engine
+                .candidate_policy_ids(&payload.resource, resource_type.as_deref())
         } else {
             state
                 .policy_engine
@@ -899,7 +905,11 @@ async fn fast_evaluate_policy_plain(
         }
 
         let candidate_ids: Vec<Uuid> = if perf.use_pruning_index {
-            state.policy_engine.candidate_policy_ids(resource)
+            // Same-store type resolution as the standard endpoint (R3-P2-1).
+            let resource_type = state.data_store.resource_type_attr(resource);
+            state
+                .policy_engine
+                .candidate_policy_ids(resource, resource_type.as_deref())
         } else {
             state
                 .policy_engine

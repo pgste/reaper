@@ -67,7 +67,7 @@ fn main() {
     // Correctness first: both paths must reach a real Allow (pruning changes
     // cost, never the decision). If the candidate path can't produce the allow,
     // the whole measurement is meaningless — assert it up front.
-    let candidate_ids = engine.candidate_policy_ids(target);
+    let candidate_ids = engine.candidate_policy_ids(target, None);
     let full_allow = all_ids
         .iter()
         .filter_map(|id| engine.evaluate(id, &request).ok())
@@ -110,7 +110,7 @@ fn main() {
     let t1 = Instant::now();
     let mut sink2 = 0u64;
     for _ in 0..ITERS {
-        for id in engine.candidate_policy_ids(target) {
+        for id in engine.candidate_policy_ids(target, None) {
             if let Ok(d) = engine.evaluate(&id, &request) {
                 sink2 += d.evaluation_time_ns;
             }

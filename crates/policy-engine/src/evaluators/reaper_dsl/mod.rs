@@ -1795,6 +1795,13 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         self.compiled_resource_index_terms()
     }
 
+    /// R3-P2-1: two-tier prunability. Delegates to the compiled-condition walk
+    /// so ABAC/ReBAC policies bounded by `resource.type == "…"` become
+    /// prunable, not only literal-id policies.
+    fn resource_pruning(&self) -> crate::evaluators::ResourcePruning {
+        self.compiled_resource_pruning()
+    }
+
     fn metadata(&self) -> Option<EvaluatorMetadata> {
         let mut extra = std::collections::HashMap::new();
         extra.insert(
@@ -1810,108 +1817,208 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
     }
 }
 
+/// A *disjunctive superset bound* on the requests one compiled condition can be
+/// true for (R3-P2-1): the condition is provably false for every request whose
+/// resource id is outside `ids` AND whose resource entity `type` attribute is
+/// outside `types`. This is exactly the shape of the engine's two-tier
+/// candidate lookup (id bucket ∪ type bucket), so bounds compose into the
+/// index without translation. `Option<ResourceBound>`: `None` = unbounded.
+#[derive(Debug, Clone, Default)]
+struct ResourceBound {
+    ids: Vec<String>,
+    types: Vec<String>,
+}
+
+impl ResourceBound {
+    fn is_pure_ids(&self) -> bool {
+        self.types.is_empty()
+    }
+    fn is_pure_types(&self) -> bool {
+        self.ids.is_empty()
+    }
+}
+
 impl ReaperDSLEvaluator {
-    /// D2 (PRIMARY path): the finite set of request-resource strings this
-    /// compiled policy can match, or `None` (unprunable) when its match set is
-    /// unbounded. Walks the COMPILED conditions, not the AST.
+    /// D2 backward-compatible projection: `Some(ids)` iff the policy is bounded
+    /// purely by resource-id literals (the original single-tier promise);
+    /// type-bounded or unbounded policies return `None`.
+    fn compiled_resource_index_terms(&self) -> Option<Vec<String>> {
+        match self.compiled_resource_pruning() {
+            crate::evaluators::ResourcePruning::Bounded { ids, types } if types.is_empty() => {
+                Some(ids)
+            }
+            _ => None,
+        }
+    }
+
+    /// D2 + R3-P2-1 (PRIMARY path): the two-tier prunability bound of this
+    /// compiled policy. Walks the COMPILED conditions, not the AST.
     ///
     /// ## Soundness rule
-    /// The ONLY compiled leaf that ties the *request resource identity* to a
-    /// concrete string is [`CompiledCondition::ResourceIdEquals`], which is true
-    /// iff `request.resource == value` (see `evaluate_compiled_condition`). Every
-    /// other leaf — attribute compares (`resource.type == …`), action/time/rebac/
-    /// string/variable predicates — says nothing about the request resource
-    /// identity and is therefore treated as unbounded. From that single bounded
-    /// leaf we compose:
-    /// - `ResourceIdEquals(L)` → bounded to `{L}`.
-    /// - `And(children)`: true only if all children true, so if ANY child bounds
-    ///   the resource the `And` is bounded to the **intersection** of the bounded
-    ///   children (unbounded only if no child bounds it).
-    /// - `Or(children)`: true if any child true, so bounded to the **union** iff
-    ///   EVERY child is bounded; a single unbounded child makes the `Or`
+    /// Exactly TWO compiled leaves tie a request to a concrete term (see
+    /// `evaluate_compiled_condition`):
+    /// - [`CompiledCondition::ResourceIdEquals`], true iff
+    ///   `request.resource == value` → bounded to ids `{value}`.
+    /// - `AttributeCompare { entity: Resource, attribute: "type", op: ==,
+    ///   target: LiteralString(T) }`, true iff the `DataStore` entity for
+    ///   `request.resource` has a string attribute `type` equal to `T`
+    ///   (`eval_attribute_comparison`: a missing entity binds a synthesized
+    ///   attribute-less entity and a missing/other-typed attribute compares
+    ///   false, never an error) → bounded to types `{T}`. Only the *exact*
+    ///   simple attribute `type` with `==` against a string literal qualifies;
+    ///   `!=`, ordering ops, dotted paths, and non-string literals stay
     ///   unbounded.
-    /// - `Not(Always)` (i.e. `false`) → bounded to `{}` (never matches);
-    ///   any other `Not(_)` → unbounded (conservative).
-    /// - `Always` → unbounded (matches every resource).
     ///
-    /// The policy's terms are the UNION over every rule (deny + allow); if ANY
-    /// rule is unbounded the whole policy is `None`. Because each returned set is
-    /// a *superset* of the resources for which its rule can fire, the union is a
-    /// superset of every resource the policy can decide — so a resource absent
-    /// from the union provably makes every rule non-matching (the set combiner
-    /// treats that as non-decisive), and pruning it is safe. It can never fail
-    /// open: an unrecognized shape yields `None`, never a spurious `Some`.
-    fn compiled_resource_index_terms(&self) -> Option<Vec<String>> {
+    /// Every other leaf — action/time/rebac/string/variable predicates — says
+    /// nothing usable about the request and is unbounded. Composition over a
+    /// disjunctive bound `{ids} ∪ {types}`:
+    /// - `And(children)`: any single bounded child is a valid bound for the
+    ///   conjunction. Prefer intersecting the pure-id children (most
+    ///   selective), else intersect the pure-type children, else take the
+    ///   first mixed bound. (Field-wise intersection of *mixed* bounds is NOT
+    ///   sound — `(id=A) ∧ (type=T)` can fire even though `ids ∩ ids' = ∅` —
+    ///   so mixed bounds are never intersected.)
+    /// - `Or(children)`: bounded iff EVERY child is bounded, to the field-wise
+    ///   union (a disjunction of disjunctive bounds is their union).
+    /// - `Not(Always)` (i.e. `false`) → bounded to `{} ∪ {}` (never matches);
+    ///   any other `Not(_)` → unbounded (conservative — including
+    ///   `Not(ResourceIdEquals)` and `resource.type != …`).
+    /// - `Always` → unbounded (matches every request).
+    ///
+    /// The policy's bound is the field-wise UNION over every rule (deny +
+    /// allow); if ANY rule is unbounded the whole policy is `Unprunable`.
+    /// Because each rule's bound is a *superset* of the requests for which
+    /// that rule can fire, a request outside both unions provably makes every
+    /// rule non-matching (the set combiner treats that as non-decisive), so
+    /// pruning it is safe. It can never fail open: an unrecognized shape
+    /// yields unbounded, never a spurious bound.
+    fn compiled_resource_pruning(&self) -> crate::evaluators::ResourcePruning {
         let interner = self.store.interner();
-        let mut terms: Vec<String> = Vec::new();
+        let mut ids: Vec<String> = Vec::new();
+        let mut types: Vec<String> = Vec::new();
         for rule in self
             .compiled_deny_rules
             .iter()
             .chain(self.compiled_allow_rules.iter())
         {
-            // Any rule that can match an unbounded resource set makes the whole
-            // policy a candidate for every request — `?` propagates that `None`.
-            let set = Self::condition_resource_constraint(&rule.condition, interner)?;
-            terms.extend(set);
+            // Any rule that can match an unbounded request set makes the whole
+            // policy a candidate for every request.
+            let Some(bound) = Self::condition_resource_bound(&rule.condition, interner) else {
+                return crate::evaluators::ResourcePruning::Unprunable;
+            };
+            ids.extend(bound.ids);
+            types.extend(bound.types);
         }
-        terms.sort();
-        terms.dedup();
-        Some(terms)
+        ids.sort();
+        ids.dedup();
+        types.sort();
+        types.dedup();
+        crate::evaluators::ResourcePruning::Bounded { ids, types }
     }
 
-    /// Resource-literal constraint of one compiled condition. `None` = unbounded
-    /// (may be true for an unrestricted set of resources); `Some(set)` = a
-    /// SUPERSET of the resources for which this condition can be true (it is
-    /// provably false for every resource outside `set`). See
-    /// [`Self::compiled_resource_index_terms`] for the composition rules.
-    fn condition_resource_constraint(
+    /// Disjunctive bound of one compiled condition, or `None` when unbounded.
+    /// See [`Self::compiled_resource_pruning`] for the leaf and composition
+    /// soundness rules.
+    fn condition_resource_bound(
         cond: &CompiledCondition,
         interner: &StringInterner,
-    ) -> Option<Vec<String>> {
+    ) -> Option<ResourceBound> {
         match cond {
             // `resource == "literal"`: true iff request.resource == value.
             CompiledCondition::ResourceIdEquals { value } => {
                 // A literal that cannot be resolved back to a string is treated
                 // as unbounded (fail safe, never fail open).
-                interner.resolve(*value).map(|s| vec![s.to_string()])
+                interner.resolve(*value).map(|s| ResourceBound {
+                    ids: vec![s.to_string()],
+                    types: Vec::new(),
+                })
             }
-            // Always-true rule matches every resource.
+            // `resource.type == "T"`: true iff the resource entity's `type`
+            // attribute is the string T. Guarded to exactly that shape; any
+            // other entity/attribute/op/target falls through to unbounded.
+            CompiledCondition::AttributeCompare(comp)
+                if matches!(comp.entity_type, EntityType::Resource)
+                    && matches!(comp.op, NumericOp::Equal) =>
+            {
+                let is_type_attr = interner
+                    .resolve(comp.attribute)
+                    .is_some_and(|name| &*name == "type");
+                match (&comp.target, is_type_attr) {
+                    (CompiledCompareTarget::LiteralString(t), true) => {
+                        interner.resolve(*t).map(|s| ResourceBound {
+                            ids: Vec::new(),
+                            types: vec![s.to_string()],
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            // Always-true rule matches every request.
             CompiledCondition::Always => None,
             // `false` compiles to Not(Always) and matches nothing; any other
             // negation is treated conservatively as unbounded.
             CompiledCondition::Not(inner) => {
                 if matches!(**inner, CompiledCondition::Always) {
-                    Some(Vec::new())
+                    Some(ResourceBound::default())
                 } else {
                     None
                 }
             }
             CompiledCondition::And(children) => {
-                // Intersection over the bounded children; unbounded only if no
-                // child constrains the resource.
-                let mut acc: Option<Vec<String>> = None;
-                for child in children {
-                    if let Some(set) = Self::condition_resource_constraint(child, interner) {
-                        acc = Some(match acc {
-                            None => set,
-                            Some(prev) => prev.into_iter().filter(|x| set.contains(x)).collect(),
-                        });
-                    }
+                // Any single bounded child bounds the conjunction. Prefer the
+                // intersection of the pure-id children, else pure-type, else
+                // the first mixed bound — mixed bounds must NOT be intersected
+                // field-wise (see compiled_resource_pruning).
+                let bounds: Vec<ResourceBound> = children
+                    .iter()
+                    .filter_map(|c| Self::condition_resource_bound(c, interner))
+                    .collect();
+                if bounds.is_empty() {
+                    return None;
                 }
-                acc
+                let intersect = |mut acc: Vec<String>, next: &[String]| -> Vec<String> {
+                    acc.retain(|x| next.contains(x));
+                    acc
+                };
+                if bounds.iter().any(|b| b.is_pure_ids()) {
+                    let ids = bounds
+                        .iter()
+                        .filter(|b| b.is_pure_ids())
+                        .map(|b| b.ids.clone())
+                        .reduce(|acc, next| intersect(acc, &next))
+                        .unwrap_or_default();
+                    Some(ResourceBound {
+                        ids,
+                        types: Vec::new(),
+                    })
+                } else if bounds.iter().any(|b| b.is_pure_types()) {
+                    let types = bounds
+                        .iter()
+                        .filter(|b| b.is_pure_types())
+                        .map(|b| b.types.clone())
+                        .reduce(|acc, next| intersect(acc, &next))
+                        .unwrap_or_default();
+                    Some(ResourceBound {
+                        ids: Vec::new(),
+                        types,
+                    })
+                } else {
+                    bounds.into_iter().next()
+                }
             }
             CompiledCondition::Or(children) => {
-                // Union over children; a single unbounded child (`?` → None)
-                // makes the whole disjunction unbounded.
-                let mut union = Vec::new();
+                // Field-wise union over children; a single unbounded child
+                // (`?` → None) makes the whole disjunction unbounded.
+                let mut union = ResourceBound::default();
                 for child in children {
-                    let set = Self::condition_resource_constraint(child, interner)?;
-                    union.extend(set);
+                    let bound = Self::condition_resource_bound(child, interner)?;
+                    union.ids.extend(bound.ids);
+                    union.types.extend(bound.types);
                 }
                 Some(union)
             }
-            // Every other leaf constrains action/attributes/relationships/etc.,
-            // never the request resource identity -> unbounded.
+            // Every other leaf constrains action/attributes/relationships/etc.
+            // in ways the index cannot key on -> unbounded.
             _ => None,
         }
     }

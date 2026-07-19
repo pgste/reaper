@@ -390,6 +390,9 @@ pub struct PolicyEngineStats {
 pub struct PruningIndexStats {
     /// Number of distinct resource buckets (concrete resource strings indexed).
     pub resource_buckets: usize,
+    /// Number of distinct resource-*type* buckets (R3-P2-1 type tier).
+    #[serde(default)]
+    pub type_buckets: usize,
     /// Total (resource, policy) entries across all buckets.
     pub indexed_entries: usize,
     /// Policies always evaluated regardless of resource (wildcards / DSL / Cedar).

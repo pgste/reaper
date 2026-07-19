@@ -87,7 +87,7 @@ fn candidate_set_is_bounded_by_matches_not_total() {
     );
 
     // The served path evaluates exactly the candidates for the request resource.
-    let candidates = engine.candidate_policy_ids(target);
+    let candidates = engine.candidate_policy_ids(target, None);
     assert_eq!(
         candidates.len(),
         3,
@@ -96,7 +96,7 @@ fn candidate_set_is_bounded_by_matches_not_total() {
     );
 
     // A resource nobody references yields zero candidates (default deny, no evals).
-    assert_eq!(engine.candidate_policy_ids("/nobody/here").len(), 0);
+    assert_eq!(engine.candidate_policy_ids("/nobody/here", None).len(), 0);
 }
 
 /// Build a compiled Reaper-DSL policy with a single rule body.
@@ -144,8 +144,8 @@ fn dsl_policies_are_prunable_by_resource_literal() {
             .unwrap();
     }
 
-    // Two DSL policies whose rules constrain an attribute / the user, not the
-    // request resource identity — these must be unprunable.
+    // A resource-TYPE-bounded policy (R3-P2-1: now prunable on the type tier,
+    // no longer unprunable) and a user-predicate policy (still unprunable).
     engine
         .deploy_policy(dsl_policy("attr", "allow if resource.type == \"invoice\""))
         .unwrap();
@@ -156,27 +156,40 @@ fn dsl_policies_are_prunable_by_resource_literal() {
     let stats = engine.get_index_stats();
     assert_eq!(stats.total_policies, N + 3 + 2);
     assert_eq!(
-        stats.unprunable_policies, 2,
-        "only the attribute/user-predicate DSL policies are unprunable"
+        stats.unprunable_policies, 1,
+        "only the user-predicate DSL policy is unprunable; the type-bounded \
+         policy sits in the type tier (R3-P2-1)"
     );
     assert_eq!(
         stats.resource_buckets,
         N + 1,
         "N distinct resources + the shared target bucket"
     );
+    assert_eq!(stats.type_buckets, 1, "one `invoice` type bucket");
 
-    // The served path evaluates only the 3 literal matches + the 2 unprunable —
-    // not all N+5.
-    let candidates = engine.candidate_policy_ids(target);
+    // The served path evaluates only the 3 literal matches + the 1 unprunable —
+    // not all N+5. (No resolved resource type, so the type bucket is skipped —
+    // sound: without an `invoice`-typed entity, `resource.type == "invoice"`
+    // is false.)
+    let candidates = engine.candidate_policy_ids(target, None);
     assert_eq!(
         candidates.len(),
-        3 + 2,
-        "candidate set must be 3 literal matches + 2 unprunable, not all {}",
+        3 + 1,
+        "candidate set must be 3 literal matches + 1 unprunable, not all {}",
         N + 5
     );
 
-    // A resource nobody references literally: only the 2 unprunable are candidates.
-    assert_eq!(engine.candidate_policy_ids("/nobody/here").len(), 2);
+    // A resource nobody references literally: only the 1 unprunable candidate.
+    assert_eq!(engine.candidate_policy_ids("/nobody/here", None).len(), 1);
+
+    // With a resolved `invoice` resource type, the type-bounded policy joins.
+    assert_eq!(
+        engine
+            .candidate_policy_ids("/nobody/here", Some("invoice"))
+            .len(),
+        2,
+        "type bucket + unprunable"
+    );
 
     // candidate_policy_ids stays sorted + deduped.
     let mut sorted = candidates.clone();
@@ -195,9 +208,9 @@ fn dsl_or_of_literals_buckets_both() {
     engine.deploy_policy(p).unwrap();
 
     assert_eq!(engine.get_index_stats().unprunable_policies, 0);
-    assert_eq!(engine.candidate_policy_ids("/x"), vec![id]);
-    assert_eq!(engine.candidate_policy_ids("/y"), vec![id]);
-    assert!(engine.candidate_policy_ids("/z").is_empty());
+    assert_eq!(engine.candidate_policy_ids("/x", None), vec![id]);
+    assert_eq!(engine.candidate_policy_ids("/y", None), vec![id]);
+    assert!(engine.candidate_policy_ids("/z", None).is_empty());
 }
 
 /// Wildcard (and, by extension, DSL/Cedar) policies are unprunable — always
@@ -220,13 +233,13 @@ fn wildcard_policies_are_always_candidates() {
     assert_eq!(stats.unprunable_policies, 1, "the `*` policy is unprunable");
 
     // For ANY resource the wildcard policy is a candidate.
-    let for_a = engine.candidate_policy_ids("/a");
+    let for_a = engine.candidate_policy_ids("/a", None);
     assert_eq!(for_a.len(), 2, "specific + wildcard both candidates for /a");
-    let for_b = engine.candidate_policy_ids("/b");
+    let for_b = engine.candidate_policy_ids("/b", None);
     assert_eq!(for_b.len(), 1, "only the wildcard is a candidate for /b");
 
     // And the wildcard deny actually decides via the pruned set.
-    let out = engine.evaluate_set(&engine.candidate_policy_ids("/b"), &request("/b"));
+    let out = engine.evaluate_set(&engine.candidate_policy_ids("/b", None), &request("/b"));
     assert_eq!(out.decision, PolicyAction::Deny);
     assert_eq!(out.policy_name, "global-deny");
 }
@@ -291,7 +304,7 @@ fn differential_pruned_vs_linear_over_corpus() {
     for res in corpus {
         let req = request(res);
         let linear = engine.evaluate_set(&all_ids, &req);
-        let pruned = engine.evaluate_set(&engine.candidate_policy_ids(res), &req);
+        let pruned = engine.evaluate_set(&engine.candidate_policy_ids(res, None), &req);
         assert_eq!(
             linear.decision, pruned.decision,
             "decision diverged for resource {res:?}: linear={:?} pruned={:?}",
@@ -445,7 +458,7 @@ fn dsl_differential_pruned_vs_linear_over_corpus() {
     for (res, action) in corpus {
         let req = dsl_request(res, action);
         let linear = engine.evaluate_set(&all_ids, &req);
-        let pruned = engine.evaluate_set(&engine.candidate_policy_ids(res), &req);
+        let pruned = engine.evaluate_set(&engine.candidate_policy_ids(res, None), &req);
         // No corpus request may error during evaluation (a stray Err short-
         // circuits evaluate_set to Deny and would falsely pass/fail the
         // differential). The linear scan touches every policy, so a clean
@@ -485,7 +498,7 @@ fn index_consistent_across_mutations() {
     let mut p = simple_policy("mover", vec![(PolicyAction::Allow, "/old")]);
     let id = p.id;
     engine.deploy_policy(p.clone()).unwrap();
-    assert_eq!(engine.candidate_policy_ids("/old"), vec![id]);
+    assert_eq!(engine.candidate_policy_ids("/old", None), vec![id]);
 
     // Redeploy the SAME id pointing at a new resource — old bucket must clear.
     // `update_rules` rebuilds the evaluator (the match authority the index now
@@ -498,14 +511,14 @@ fn index_consistent_across_mutations() {
     }]);
     engine.deploy_policy(p.clone()).unwrap();
     assert!(
-        engine.candidate_policy_ids("/old").is_empty(),
+        engine.candidate_policy_ids("/old", None).is_empty(),
         "stale /old bucket not cleared on redeploy"
     );
-    assert_eq!(engine.candidate_policy_ids("/new"), vec![id]);
+    assert_eq!(engine.candidate_policy_ids("/new", None), vec![id]);
 
     // Remove — bucket empties and is pruned.
     engine.remove_policy(&id).unwrap();
-    assert!(engine.candidate_policy_ids("/new").is_empty());
+    assert!(engine.candidate_policy_ids("/new", None).is_empty());
     assert_eq!(engine.get_index_stats().resource_buckets, 0);
 
     // Full replace rebuilds the index atomically.
@@ -517,11 +530,11 @@ fn index_consistent_across_mutations() {
     assert_eq!(stats.total_policies, 2);
     assert_eq!(stats.unprunable_policies, 1);
     // /x matches the specific policy AND the unprunable wildcard.
-    let for_x = engine.candidate_policy_ids("/x");
+    let for_x = engine.candidate_policy_ids("/x", None);
     assert_eq!(for_x.len(), 2);
     assert!(for_x.contains(&aid) && for_x.contains(&bid));
     // /y matches only the wildcard.
-    assert_eq!(engine.candidate_policy_ids("/y"), vec![bid]);
+    assert_eq!(engine.candidate_policy_ids("/y", None), vec![bid]);
 }
 
 /// Non-matching policies are non-decisive (the semantic fix that makes pruning
@@ -599,7 +612,7 @@ fn candidates_stay_sorted_and_deduped_across_category_transitions() {
     }
 
     let assert_matches_reference = |resource: &str| {
-        let got = engine.candidate_policy_ids(resource);
+        let got = engine.candidate_policy_ids(resource, None);
         assert!(
             got.windows(2).all(|w| w[0] < w[1]),
             "candidates for {resource:?} not strictly sorted (sorted + deduped)"
@@ -624,7 +637,9 @@ fn candidates_stay_sorted_and_deduped_across_category_transitions() {
         conditions: vec![],
     }]);
     engine.deploy_policy(mover.clone()).unwrap();
-    assert!(engine.candidate_policy_ids("/absent").contains(&mover_id));
+    assert!(engine
+        .candidate_policy_ids("/absent", None)
+        .contains(&mover_id));
     assert_matches_reference("/shared");
     assert_matches_reference("/only-here");
 
@@ -636,7 +651,9 @@ fn candidates_stay_sorted_and_deduped_across_category_transitions() {
     }]);
     engine.deploy_policy(mover).unwrap();
     assert!(
-        !engine.candidate_policy_ids("/absent").contains(&mover_id),
+        !engine
+            .candidate_policy_ids("/absent", None)
+            .contains(&mover_id),
         "mover left the unprunable set but its id is still served from the sorted mirror"
     );
     assert_matches_reference("/only-here");
@@ -649,7 +666,9 @@ fn candidates_stay_sorted_and_deduped_across_category_transitions() {
         .map(|p| p.id)
         .unwrap();
     engine.remove_policy(&wild_id).unwrap();
-    assert!(!engine.candidate_policy_ids("/absent").contains(&wild_id));
+    assert!(!engine
+        .candidate_policy_ids("/absent", None)
+        .contains(&wild_id));
     assert_matches_reference("/shared");
     assert_matches_reference("/absent");
 
@@ -659,4 +678,310 @@ fn candidates_stay_sorted_and_deduped_across_category_transitions() {
     engine.replace_all_policies(vec![a, w]).unwrap();
     assert_matches_reference("/x");
     assert_matches_reference("/y");
+}
+
+// ===========================================================================
+// R3-P2-1: resource-type tier — ABAC/ReBAC-shaped DSL policies are prunable
+// ===========================================================================
+
+/// A shared `DataStore` with the principal `alice` (role=admin) and typed
+/// resource entities — the store both the evaluators and the request-time type
+/// resolution (`resource_type_attr`) read, as in the agent.
+fn typed_store() -> Arc<DataStore> {
+    let store = Arc::new(DataStore::new());
+    let interner = store.interner();
+    let alice = interner.intern_counted("alice");
+    let user_type = interner.intern("User");
+    let role_key = interner.intern("role");
+    let admin = interner.intern("admin");
+    store.insert(
+        EntityBuilder::new(alice, user_type)
+            .with_string(role_key, admin)
+            .build(),
+    );
+    let res_type = interner.intern("Resource");
+    let type_key = interner.intern("type");
+    for (rid, rtype) in [
+        ("inv1", "invoice"),
+        ("inv2", "invoice"),
+        ("rep1", "report"),
+        ("doc1", "document"),
+    ] {
+        let rid_i = interner.intern(rid);
+        let rtype_i = interner.intern(rtype);
+        store.insert(
+            EntityBuilder::new(rid_i, res_type)
+                .with_string(type_key, rtype_i)
+                .build(),
+        );
+    }
+    store
+}
+
+/// The engine-level candidate lookup exactly as the agent serves it: type
+/// resolved from the same store the evaluators read.
+fn typed_candidates(engine: &PolicyEngine, store: &DataStore, resource: &str) -> Vec<Uuid> {
+    engine.candidate_policy_ids(resource, store.resource_type_attr(resource).as_deref())
+}
+
+/// Type-bounded DSL policies land in the type tier, are candidates exactly for
+/// resources of their type, and survive redeploy/remove/replace transitions.
+#[test]
+fn type_bounded_policies_use_type_tier() {
+    let engine = PolicyEngine::new();
+    let store = typed_store();
+
+    let inv = dsl_policy_with_store("inv", "allow if resource.type == \"invoice\"", &store);
+    let rep = dsl_policy_with_store("rep", "deny if resource.type == \"report\"", &store);
+    let (inv_id, rep_id) = (inv.id, rep.id);
+    engine.deploy_policy(inv).unwrap();
+    engine.deploy_policy(rep).unwrap();
+
+    let stats = engine.get_index_stats();
+    assert_eq!(stats.unprunable_policies, 0);
+    assert_eq!(stats.resource_buckets, 0);
+    assert_eq!(stats.type_buckets, 2);
+
+    // Candidates follow the resolved type; typeless resources get none.
+    assert_eq!(typed_candidates(&engine, &store, "inv1"), vec![inv_id]);
+    assert_eq!(typed_candidates(&engine, &store, "inv2"), vec![inv_id]);
+    assert_eq!(typed_candidates(&engine, &store, "rep1"), vec![rep_id]);
+    assert!(typed_candidates(&engine, &store, "doc1").is_empty());
+    assert!(typed_candidates(&engine, &store, "/no-entity").is_empty());
+
+    // And the pruned sets actually decide correctly.
+    let out = engine.evaluate_set(
+        &typed_candidates(&engine, &store, "inv1"),
+        &dsl_request("inv1", "read"),
+    );
+    assert_eq!(out.decision, PolicyAction::Allow);
+    assert_eq!(out.policy_name, "inv");
+    let out = engine.evaluate_set(
+        &typed_candidates(&engine, &store, "rep1"),
+        &dsl_request("rep1", "read"),
+    );
+    assert_eq!(out.decision, PolicyAction::Deny);
+    assert_eq!(out.policy_name, "rep");
+
+    // Redeploy type-bounded -> id-bounded: the type bucket must clear.
+    let moved =
+        dsl_policy_with_store_and_id("inv", "allow if resource == \"doc1\"", &store, inv_id);
+    engine.deploy_policy(moved).unwrap();
+    assert!(
+        typed_candidates(&engine, &store, "inv1").is_empty(),
+        "stale invoice type bucket not cleared on redeploy"
+    );
+    assert_eq!(typed_candidates(&engine, &store, "doc1"), vec![inv_id]);
+    assert_eq!(engine.get_index_stats().type_buckets, 1);
+
+    // Remove the remaining type-bounded policy: its bucket is pruned.
+    engine.remove_policy(&rep_id).unwrap();
+    assert!(typed_candidates(&engine, &store, "rep1").is_empty());
+    assert_eq!(engine.get_index_stats().type_buckets, 0);
+
+    // Full replace rebuilds the type tier atomically.
+    let a = dsl_policy_with_store("a", "allow if resource.type == \"document\"", &store);
+    let aid = a.id;
+    engine.replace_all_policies(vec![a]).unwrap();
+    assert_eq!(typed_candidates(&engine, &store, "doc1"), vec![aid]);
+    assert!(typed_candidates(&engine, &store, "inv1").is_empty());
+}
+
+/// Rebuild a policy with a FIXED id (redeploy-in-place), evaluator bound to
+/// `store`. Mirrors `dsl_policy_with_store` but keeps the identity so the
+/// engine treats it as a redeploy of the same policy.
+fn dsl_policy_with_store_and_id(
+    name: &str,
+    rule_body: &str,
+    store: &Arc<DataStore>,
+    id: Uuid,
+) -> EnhancedPolicy {
+    let mut p = dsl_policy_with_store(name, rule_body, store);
+    p.id = id;
+    p
+}
+
+/// DoD (R3-P2-1): differential correctness for the TYPE tier — for a corpus
+/// mixing id-bounded, type-bounded (ABAC shape), mixed-Or, and unprunable DSL
+/// policies over typed entities, the pruned candidate set (with same-store
+/// type resolution, exactly as the agent serves it) yields the identical
+/// decision as the full linear scan. This is the superset-property merge gate:
+/// a type-tier extraction bug that pruned a policy that could match would
+/// flip a decision here.
+#[test]
+fn type_tier_differential_pruned_vs_linear_over_corpus() {
+    let engine = PolicyEngine::new();
+    let store = typed_store();
+
+    // Deny-override on a type: invoices are readable unless action == delete.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "inv_read",
+            "allow if resource.type == \"invoice\"",
+            &store,
+        ))
+        .unwrap();
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "inv_no_delete",
+            "deny if resource.type == \"invoice\" && action == \"delete\"",
+            &store,
+        ))
+        .unwrap();
+    // The canonical ABAC shape: type conjunct + principal attribute.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "rep_admin",
+            "allow if resource.type == \"report\" && user.role == \"admin\"",
+            &store,
+        ))
+        .unwrap();
+    // Mixed dimensions in one rule: id literal OR type.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "doc_or_rep",
+            "allow if resource == \"doc1\" || resource.type == \"report\"",
+            &store,
+        ))
+        .unwrap();
+    // Id-bounded policy on a TYPED resource (both tiers in play for inv1).
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "inv1_direct",
+            "deny if resource == \"inv1\" && action == \"purge\"",
+            &store,
+        ))
+        .unwrap();
+    // Unprunable: action-only predicate, always a candidate.
+    engine
+        .deploy_policy(dsl_policy_with_store(
+            "admin_action",
+            "allow if action == \"admin\"",
+            &store,
+        ))
+        .unwrap();
+    // Noise on both tiers.
+    for i in 0..100 {
+        engine
+            .deploy_policy(dsl_policy_with_store(
+                &format!("noise_id{i}"),
+                &format!("allow if resource == \"/noise/{i}\""),
+                &store,
+            ))
+            .unwrap();
+        engine
+            .deploy_policy(dsl_policy_with_store(
+                &format!("noise_ty{i}"),
+                &format!("allow if resource.type == \"kind{i}\""),
+                &store,
+            ))
+            .unwrap();
+    }
+
+    assert_eq!(engine.get_index_stats().unprunable_policies, 1);
+
+    // Sorted like the pruned candidate set, so first-allow-wins attribution is
+    // comparable between the two paths (both scan in ascending id order).
+    let mut all_ids: Vec<Uuid> = engine.list_policies().into_iter().map(|p| p.id).collect();
+    all_ids.sort();
+
+    // (resource, action) corpus: typed entities under every policy shape,
+    // deny-override actions, entity-less resources, id/type collisions.
+    let corpus = [
+        ("inv1", "read"),
+        ("inv1", "delete"),
+        ("inv1", "purge"),
+        ("inv2", "read"),
+        ("inv2", "delete"),
+        ("rep1", "read"),
+        ("doc1", "read"),
+        ("doc1", "admin"),
+        ("invoice", "read"),
+        ("/noise/42", "read"),
+        ("/no-entity", "read"),
+        ("/no-entity", "admin"),
+        ("", "read"),
+    ];
+
+    for (res, action) in corpus {
+        let req = dsl_request(res, action);
+        let linear = engine.evaluate_set(&all_ids, &req);
+        let pruned = engine.evaluate_set(&typed_candidates(&engine, &store, res), &req);
+        assert!(
+            linear.error.is_none(),
+            "linear scan errored for {res:?}/{action:?}: {:?}",
+            linear.error
+        );
+        assert!(
+            pruned.error.is_none(),
+            "pruned scan errored for {res:?}/{action:?}: {:?}",
+            pruned.error
+        );
+        assert_eq!(
+            linear.decision, pruned.decision,
+            "decision diverged for {res:?}/{action:?}"
+        );
+        assert_eq!(
+            linear.policy_id, pruned.policy_id,
+            "attribution diverged for {res:?}/{action:?}"
+        );
+    }
+
+    // Pin intended decisions so both paths agreeing on the WRONG answer is
+    // still caught.
+    let expect = |res: &str, action: &str| engine.evaluate_set(&all_ids, &dsl_request(res, action));
+    assert_eq!(expect("inv1", "read").decision, PolicyAction::Allow);
+    assert_eq!(expect("inv1", "delete").decision, PolicyAction::Deny); // type deny-override
+    assert_eq!(expect("inv1", "purge").decision, PolicyAction::Deny); // id-tier deny on typed resource
+    assert_eq!(expect("rep1", "read").decision, PolicyAction::Allow); // ABAC shape
+    assert_eq!(expect("doc1", "read").decision, PolicyAction::Allow); // mixed-Or id branch
+    assert_eq!(expect("/no-entity", "read").decision, PolicyAction::Deny); // default deny
+    assert_eq!(expect("/no-entity", "admin").decision, PolicyAction::Allow); // unprunable
+}
+
+/// DoD scale row (R3-P2-1): with 10k ABAC-shaped (attribute/type) policies and
+/// evaluate-all, the candidate set for a typed resource is its type bucket +
+/// unprunable — NOT all 10k. Before the type tier every one of these policies
+/// was unprunable and every request fanned out to 10k evaluations (and the
+/// agent's default `max_candidate_policies = 256` blanket-denied).
+#[test]
+fn ten_k_abac_policies_prune_to_type_bucket() {
+    let engine = PolicyEngine::new();
+    let store = typed_store();
+
+    const N: usize = 10_000;
+    const TYPES: usize = 100;
+    for i in 0..N {
+        engine
+            .deploy_policy(dsl_policy_with_store(
+                &format!("abac{i}"),
+                &format!(
+                    "allow if resource.type == \"kind{}\" && user.role == \"admin\"",
+                    i % TYPES
+                ),
+                &store,
+            ))
+            .unwrap();
+    }
+
+    let stats = engine.get_index_stats();
+    assert_eq!(stats.total_policies, N);
+    assert_eq!(
+        stats.unprunable_policies, 0,
+        "ABAC-shaped policies must all be prunable on the type tier"
+    );
+    assert_eq!(stats.type_buckets, TYPES);
+
+    // A typed resource evaluates only its type's bucket.
+    let candidates = engine.candidate_policy_ids("some-res", Some("kind7"));
+    assert_eq!(
+        candidates.len(),
+        N / TYPES,
+        "candidate set must be the type bucket, not all {N}"
+    );
+    // Within the agent's default candidate cap (256) — no blanket deny.
+    assert!(candidates.len() <= 256);
+
+    // A typeless resource evaluates nothing at all.
+    assert!(engine.candidate_policy_ids("some-res", None).is_empty());
 }

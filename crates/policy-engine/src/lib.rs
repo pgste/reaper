@@ -28,7 +28,7 @@ pub use engine::{
 
 #[cfg(feature = "cedar")]
 pub use evaluators::CedarPolicyEvaluator;
-pub use evaluators::{EvaluatorMetadata, PolicyEvaluator, SimplePolicyEvaluator};
+pub use evaluators::{EvaluatorMetadata, PolicyEvaluator, ResourcePruning, SimplePolicyEvaluator};
 
 // Re-export reaper_dsl module for examples
 pub use evaluators::reaper_dsl;

@@ -274,6 +274,28 @@ impl DataStore {
         Some(serde_json::Value::Object(map))
     }
 
+    /// The string `type` attribute of the entity named by the request resource
+    /// `id`, resolved exactly the way a `resource.type == "…"` DSL condition
+    /// would (R3-P2-1): entity looked up by interned id, simple attribute
+    /// `type`, string values only. `None` for an unknown entity, a missing
+    /// `type` attribute, or a non-string value — precisely the cases where
+    /// every `resource.type == "…"` comparison evaluates to `false`.
+    ///
+    /// This feeds the engine's type-tier candidate lookup
+    /// (`PolicyEngine::candidate_policy_ids`); it MUST be called on the same
+    /// `DataStore` the policies' evaluators were built with, or type-bounded
+    /// policies can be pruned unsoundly. Read-only: uses `lookup`, never
+    /// interning the transient request string.
+    pub fn resource_type_attr(&self, id: &str) -> Option<String> {
+        let interned = self.interner().lookup(id)?;
+        let entity = self.get(interned)?;
+        let type_key = self.interner().lookup("type")?;
+        match entity.get_attribute(type_key)? {
+            AttributeValue::String(s) => self.interner().resolve(*s).map(|v| v.to_string()),
+            _ => None,
+        }
+    }
+
     /// Get all entities of a specific type
     ///
     /// # Performance
