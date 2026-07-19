@@ -1,0 +1,57 @@
+# Removes a closed PR's benchmark-report preview (gh-pages/pr-<n>/) — the
+# GitLab-review-apps hygiene GitHub Pages doesn't do automatically. Pairs with
+# benchmark.yml's "Publish PR preview to GitHub Pages" step.
+#
+# pull_request_target (not pull_request) so the token has contents:write even
+# when the closed PR came from a fork. Safe here because this workflow never
+# checks out or executes PR code: it checks out the gh-pages branch and
+# deletes a directory named by the PR NUMBER — a server-assigned integer, not
+# attacker-controlled text.
+name: PR Pages Cleanup
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: write
+
+# Serialize with nothing else in this workflow; pushes racing a concurrent
+# benchmark publish are handled by the rebase-and-retry loop below.
+concurrency:
+  group: pr-pages-cleanup
+  cancel-in-progress: false
+
+jobs:
+  remove-preview:
+    name: Remove PR pages preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        id: checkout
+        # No gh-pages branch yet (or Pages never used) -> nothing to clean.
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Delete the closed PR's preview directory
+        if: steps.checkout.outcome == 'success'
+        run: |
+          dir="pr-${{ github.event.number }}"
+          if [ ! -d "$dir" ]; then
+            echo "No preview at $dir — nothing to clean."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -rq "$dir"
+          git commit -m "Remove benchmark preview for closed PR #${{ github.event.number }}"
+          # A benchmark publish may land on gh-pages between our checkout and
+          # push; rebase and retry instead of failing on the race.
+          for _ in 1 2 3; do
+            git push origin gh-pages && exit 0
+            git pull --rebase origin gh-pages
+          done
+          echo "Could not push preview cleanup after 3 attempts."
+          exit 1
