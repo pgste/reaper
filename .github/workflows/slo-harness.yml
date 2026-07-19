@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   slo-harness:
-    name: Served-path SLO (6 scenario runs, absolute w/ multiplier)
+    name: Served-path SLO (7 scenario runs, absolute w/ multiplier)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -149,6 +149,15 @@ jobs:
           run_scenario slo-evaluate-all-abac "REAPER_ALLOW_EVALUATE_ALL=true" \
             --evaluate-all-policy-set "$RUNNER_TEMP/slo-abac-10k.json"
           run_scenario slo-targeted "" \
+            --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
+          # Agentic row (Plan 06 Phase D DoD): capability-per-request against
+          # the targeted set. The agent gets the harness's deterministic
+          # bench trust anchor so the capabilities verify; steady state rides
+          # the verdict cache, and the harness's tampered-capability negative
+          # probe proves the gate is actually engaged.
+          CAP_KEY=$("$HARNESS" --print-capability-public-key)
+          run_scenario slo-agentic \
+            "REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY=$CAP_KEY REAPER_MANAGEMENT_BUNDLE_KEY_ID=k1" \
             --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
           run_scenario slo-batch "" \
             --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"

@@ -12,6 +12,7 @@
 //! | `slo-evaluate-all-abac`  | POST /api/v1/messages, no policy| Evaluate-all, resource-TYPE tier |
 //! | `slo-rebac`              | POST /api/v1/messages, policy_id| ABAC/ReBAC bounded traversal     |
 //! | `slo-batch`              | POST /api/v1/batch-messages     | Batch, 100 requests/call         |
+//! | `slo-agentic`            | POST /api/v1/messages, policy_id + capability | Agentic (Plan 06 D) |
 //!
 //! Policy sets come from `generate-data policy-set` (see README "SLO
 //! harness"). `--assert-slo slo.yaml` turns the run into a gate: every
@@ -33,6 +34,13 @@
 //!   policies plus the typed resource entities the requests address, prunable
 //!   via the resource-TYPE index tier. Run it against a FRESH agent (it is
 //!   deliberately not part of `--scenario all`).
+//! - `slo-agentic` (Plan 06 Phase D DoD) is the capability-per-request row:
+//!   every request carries a real signed capability, so the gate's verdict
+//!   cache + off-reactor verify path is what's measured. The agent needs the
+//!   harness's trust anchor pinned: REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY =
+//!   `slo-harness --print-capability-public-key` and
+//!   REAPER_MANAGEMENT_BUNDLE_KEY_ID=k1. Not part of `--scenario all` (the
+//!   other legs run agents without the trust anchor).
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -56,8 +64,8 @@ struct Args {
     reaper_url: String,
 
     /// Scenario: slo-targeted | slo-evaluate-all | slo-evaluate-all-abac |
-    /// slo-rebac | slo-batch | all (all excludes the abac leg — it needs its
-    /// own fresh agent)
+    /// slo-rebac | slo-batch | slo-agentic | all (all excludes the abac and
+    /// agentic legs — they need their own fresh/anchored agents)
     #[arg(short, long, default_value = "all")]
     scenario: String,
 
@@ -121,6 +129,22 @@ struct Args {
     /// (dedicated hardware); shared CI runners need a larger, documented one.
     #[arg(long, env = "SLO_MULTIPLIER", default_value = "1.0")]
     slo_multiplier: f64,
+
+    /// Print the hex public key of the harness's (deterministic) capability
+    /// signing key and exit. The workflow passes it to the agent as
+    /// REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY before the slo-agentic run.
+    #[arg(long)]
+    print_capability_public_key: bool,
+}
+
+/// Deterministic capability signing key for the slo-agentic scenario. A fixed
+/// seed keeps the workflow simple (the public key is stable, printed via
+/// --print-capability-public-key) — this is a BENCH trust anchor, never a
+/// production one.
+fn capability_signing_key() -> reaper_core::bundle_signing::SigningKey {
+    reaper_core::bundle_signing::SigningKey::Ed25519(Box::new(
+        ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +220,11 @@ struct LoadCounts {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    if args.print_capability_public_key {
+        println!("{}", capability_signing_key().public_key_hex());
+        return Ok(());
+    }
+
     let scenarios: Vec<&str> = match args.scenario.as_str() {
         // evaluate-all FIRST: it must run before the unprunable DSL set is
         // deployed (the index would return every DSL policy as a candidate
@@ -209,10 +238,11 @@ async fn main() -> Result<()> {
         | "slo-evaluate-all"
         | "slo-evaluate-all-abac"
         | "slo-rebac"
-        | "slo-batch") => vec![s],
+        | "slo-batch"
+        | "slo-agentic") => vec![s],
         other => bail!(
-            "unknown scenario '{other}' \
-             (slo-targeted|slo-evaluate-all|slo-evaluate-all-abac|slo-rebac|slo-batch|all)"
+            "unknown scenario '{other}' (slo-targeted|slo-evaluate-all|\
+             slo-evaluate-all-abac|slo-rebac|slo-batch|slo-agentic|all)"
         ),
     };
 
@@ -264,6 +294,11 @@ async fn main() -> Result<()> {
                 run_batch(&args, &client, &specs).await?
             }
             "slo-rebac" => run_rebac(&args, &client).await?,
+            "slo-agentic" => {
+                let (specs, ids) =
+                    ensure_dsl_set(&args, &client, &mut dsl_specs, &mut dsl_ids).await?;
+                run_agentic(&args, &client, &specs, &ids).await?
+            }
             _ => unreachable!(),
         };
         eprintln!(
@@ -777,6 +812,113 @@ async fn run_rebac(args: &Args, client: &reqwest::Client) -> Result<SloResult> {
     .await?;
     Ok(build_result(
         "slo-rebac",
+        policies_loaded,
+        args,
+        None,
+        hist,
+        counts,
+        duration,
+    ))
+}
+
+/// slo-agentic (Plan 06 Phase D DoD): the targeted request shape PLUS a real
+/// signed capability on every request — measures the served path through the
+/// capability gate (verdict cache hit + window/revocation check in steady
+/// state; ed25519 only on first sight of each capability). One capability per
+/// principal (the steady-state agentic pattern: a session reuses its derived
+/// credential), minted with the product's own issuance code.
+async fn run_agentic(
+    args: &Args,
+    client: &reqwest::Client,
+    specs: &[PolicySpec],
+    ids: &[String],
+) -> Result<SloResult> {
+    use reaper_core::capability::{issue, Grant};
+
+    let key = capability_signing_key();
+    let now = chrono::Utc::now().timestamp();
+    let n = specs.len();
+
+    // One capability per pooled principal, actor "bench-agent", read on
+    // everything (the grant breadth is irrelevant to gate cost — coverage is
+    // a pattern match either way).
+    let pool = PRINCIPAL_POOL.min(args.requests.max(1));
+    let caps: Vec<serde_json::Value> = (0..pool)
+        .map(|i| {
+            let cap = issue(
+                &key,
+                "k1",
+                &format!("slo_user_{i}"),
+                "bench-agent",
+                vec![Grant::new("read", "*")],
+                now - 300,
+                now + 7200,
+            )
+            .expect("issue bench capability");
+            serde_json::to_value(cap).expect("serialize capability")
+        })
+        .collect();
+
+    let payloads: Vec<String> = (0..n.min(args.requests.max(1)))
+        .map(|i| {
+            json!({
+                "policy_id": ids[i % n],
+                "principal": format!("slo_user_{}", i % pool),
+                "actor": "bench-agent",
+                "resource": specs[i % n].resource,
+                "action": "read",
+                "capability": caps[i % pool],
+            })
+            .to_string()
+        })
+        .collect();
+
+    // Positive probe: the capability path must actually ALLOW — a missing
+    // trust anchor or a broken gate would otherwise be benchmarked as denies.
+    let probe: serde_json::Value = client
+        .post(format!("{}/api/v1/messages", args.reaper_url))
+        .body(payloads[0].clone())
+        .header("content-type", "application/json")
+        .send()
+        .await?
+        .json()
+        .await?;
+    if probe.get("decision").and_then(|d| d.as_str()) != Some("allow") {
+        bail!(
+            "slo-agentic probe was not allowed: {probe} — is the agent running with \
+             REAPER_MANAGEMENT_BUNDLE_PUBLIC_KEY=$(slo-harness --print-capability-public-key) \
+             and REAPER_MANAGEMENT_BUNDLE_KEY_ID=k1?"
+        );
+    }
+    // Negative probe: a tampered capability must DENY — proves the gate is
+    // engaged and the run is not silently measuring the un-gated path.
+    let mut tampered: serde_json::Value =
+        serde_json::from_str(&payloads[0]).expect("payload is json");
+    tampered["capability"]["subject"] = json!("someone-else");
+    tampered["principal"] = json!("someone-else");
+    let neg: serde_json::Value = client
+        .post(format!("{}/api/v1/messages", args.reaper_url))
+        .json(&tampered)
+        .send()
+        .await?
+        .json()
+        .await?;
+    if neg.get("decision").and_then(|d| d.as_str()) != Some("deny") {
+        bail!("slo-agentic negative probe (tampered capability) was not denied: {neg}");
+    }
+
+    let policies_loaded = agent_policies_loaded(client, &args.reaper_url).await;
+    let (hist, counts, duration) = run_load(
+        client,
+        format!("{}/api/v1/messages", args.reaper_url),
+        Arc::new(payloads),
+        args.requests,
+        args.concurrency,
+        args.warmup,
+    )
+    .await?;
+    Ok(build_result(
+        "slo-agentic",
         policies_loaded,
         args,
         None,

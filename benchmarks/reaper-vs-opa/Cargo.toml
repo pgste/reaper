@@ -28,6 +28,11 @@ clap = { version = "4.0", features = ["derive", "env"] }
 chrono = "0.4"
 hdrhistogram = "7.5"
 indicatif = "0.17"
+# slo-agentic scenario (Plan 06 Phase D DoD): mint real signed capabilities
+# with the exact issuance code the product uses, so the harness can never
+# drift from the agent's verification semantics.
+reaper-core = { path = "../../crates/reaper-core" }
+ed25519-dalek = "2"
 colored = "2.1"
 tabled = "0.16"
 # Unix-domain-socket transport for the benchmark harness. Both Reaper (axum over
