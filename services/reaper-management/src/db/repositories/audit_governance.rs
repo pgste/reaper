@@ -212,13 +212,21 @@ impl<'a> AuditGovernanceRepository<'a> {
 
     /// List an org's holds, newest first (active and released — the released
     /// ones are part of the compliance record).
-    pub async fn list_holds(&self, org_id: Uuid) -> Result<Vec<LegalHold>, DatabaseError> {
+    /// List an org's legal holds (management view), bounded by `limit`
+    /// (round-3 Plan 06 §4.2, R3-02). The purge honors [`Self::active_holds`],
+    /// a separate uncapped query, so this cap is display-only and safe.
+    pub async fn list_holds(
+        &self,
+        org_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<LegalHold>, DatabaseError> {
         let pool = self.db.any_pool().ok_or(sqlx::Error::PoolClosed)?;
         let rows: Vec<HoldRow> = sqlx::query_as(&format!(
             "SELECT {HOLD_COLS} FROM audit_legal_holds WHERE org_id = $1 \
-             ORDER BY created_at DESC"
+             ORDER BY created_at DESC LIMIT $2"
         ))
         .bind(org_id.to_string())
+        .bind(limit)
         .fetch_all(pool)
         .await?;
         rows.into_iter().map(Self::row_to_hold).collect()

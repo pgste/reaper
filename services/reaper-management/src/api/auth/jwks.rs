@@ -1,7 +1,7 @@
 //! JWKS configuration management handlers.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -24,7 +24,8 @@ use super::types::{CreateJwksConfigRequest, JwksConfigSummary, ListJwksConfigsRe
     path = "/orgs/{org}/auth/jwks",
     tag = "auth",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "List of JWKS configurations", body = ListJwksConfigsResponse)
@@ -35,6 +36,7 @@ pub async fn list_jwks_configs(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<ListJwksConfigsResponse>> {
     // Require org admin permission
     if !user.has_permission(Scope::OrgAdmin) && !user.has_permission(Scope::Admin) {
@@ -52,7 +54,7 @@ pub async fn list_jwks_configs(
     }
 
     let jwks_repo = JwksConfigRepository::new(&state.db);
-    let configs = jwks_repo.list_all(organization.id).await?;
+    let configs = jwks_repo.list_all(organization.id, page.cap()?).await?;
 
     let summaries: Vec<JwksConfigSummary> = configs.into_iter().map(|c| c.into()).collect();
 

@@ -231,21 +231,30 @@ impl<'a> ApiKeyRepository<'a> {
     }
 
     /// List API keys for an organization
-    pub async fn list_by_org(&self, org_id: Uuid) -> Result<Vec<ApiKey>, DatabaseError> {
+    pub async fn list_by_org(
+        &self,
+        org_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ApiKey>, DatabaseError> {
         let pool = self
             .db
             .any_pool()
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
+        // Bounded cap so the management list is never unbounded (round-3 Plan 06
+        // §4.2, R3-02). Auth validation looks a key up by hash, never via this
+        // list, so a cap here is display-only and safe.
         let rows = sqlx::query(
             r#"
             SELECT id, org_id, name, key_prefix, scopes, expires_at, last_used_at, is_revoked, created_at, created_by
             FROM api_keys
             WHERE org_id = $1
             ORDER BY created_at DESC
+            LIMIT $2
             "#,
         )
         .bind(org_id.to_string())
+        .bind(limit)
         .fetch_all(pool)
         .await?;
 

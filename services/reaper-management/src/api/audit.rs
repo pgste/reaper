@@ -318,7 +318,8 @@ struct HoldListResponse {
     path = "/orgs/{org}/audit/legal-holds",
     tag = "audit",
     params(
-        ("org" = String, Path, description = "Organization ID")
+        ("org" = String, Path, description = "Organization ID"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "Legal holds (active and released)", body = HoldListResponse),
@@ -331,10 +332,11 @@ async fn list_holds(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<HoldListResponse>> {
     let org_id = authorize_admin(&state, &user, &org).await?;
     let holds = AuditGovernanceRepository::new(&state.db)
-        .list_holds(org_id)
+        .list_holds(org_id, page.cap()?)
         .await?;
     let active = holds.iter().filter(|h| h.is_active()).count();
     Ok(Json(HoldListResponse {

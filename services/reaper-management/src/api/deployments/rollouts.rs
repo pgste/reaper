@@ -220,7 +220,9 @@ async fn enforce_promotion_path(
     path = "/orgs/{org}/rollouts",
     tag = "deployments",
     params(
-        ("org" = String, Path, description = "Organization ID or slug")
+        ("org" = String, Path, description = "Organization ID or slug"),
+        ("namespace_id" = Option<Uuid>, Query, description = "Filter by namespace"),
+        ("limit" = Option<i32>, Query, description = "Max rollouts to return")
     ),
     responses(
         (status = 200, description = "List of rollouts")

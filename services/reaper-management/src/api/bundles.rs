@@ -671,7 +671,8 @@ async fn execute_promotion(
     path = "/orgs/{org}/change-requests",
     tag = "bundles",
     params(
-        ("org" = String, Path, description = "Organization ID")
+        ("org" = String, Path, description = "Organization ID"),
+        ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
         (status = 200, description = "Promotion change requests")
@@ -682,12 +683,13 @@ async fn list_change_requests(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(org): Path<String>,
+    Query(page): Query<crate::api::pagination::LimitQuery>,
 ) -> ApiResult<Json<Vec<PromotionChangeRequest>>> {
     let org_id = authorize_org(&state, &user, &org, &[Scope::BundleRead])
         .await?
         .id;
     let crs = PromotionChangeRepository::new(&state.db)
-        .list(org_id)
+        .list(org_id, page.cap()?)
         .await?;
     Ok(Json(crs))
 }

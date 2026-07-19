@@ -1044,7 +1044,10 @@ async fn test_jwks_config_lifecycle() {
     assert_eq!(active.len(), 1);
 
     // List all for org
-    let all = jwks_repo.list_all(org_id).await.expect("Should list all");
+    let all = jwks_repo
+        .list_all(org_id, 100)
+        .await
+        .expect("Should list all");
     assert_eq!(all.len(), 1);
 
     // Delete
