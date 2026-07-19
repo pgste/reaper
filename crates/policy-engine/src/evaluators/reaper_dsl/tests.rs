@@ -409,4 +409,298 @@ fn test_ast_fallback_policy_is_unprunable() {
         None,
         "an AST-fallback DSL policy must be unprunable so pruning can never drop it"
     );
+
+    // And the two-tier bound agrees (the default trait derivation).
+    assert_eq!(
+        evaluator.resource_pruning(),
+        crate::evaluators::ResourcePruning::Unprunable
+    );
+}
+
+// ===========================================================================
+// R3-P2-1: resource_pruning — two-tier (id + resource-type) extraction
+// ===========================================================================
+
+use crate::evaluators::ResourcePruning;
+
+fn bounded(ids: &[&str], types: &[&str]) -> ResourcePruning {
+    ResourcePruning::Bounded {
+        ids: ids.iter().map(|s| s.to_string()).collect(),
+        types: types.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[test]
+fn test_pruning_type_eq_is_type_bounded() {
+    // resource.type == "invoice" — previously unprunable, now bounded on the
+    // type tier. (Its id-only projection stays None — see
+    // test_ridx_attribute_predicate_is_unprunable.)
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule("r", resource_type_eq("invoice"))],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), bounded(&[], &["invoice"]));
+}
+
+#[test]
+fn test_pruning_id_only_matches_legacy_terms() {
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule("r", resource_eq("doc1"))],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), bounded(&["doc1"], &[]));
+}
+
+#[test]
+fn test_pruning_and_prefers_id_over_type() {
+    // resource == "doc1" && resource.type == "invoice": either dimension alone
+    // is a sound bound; the id bound is preferred (most selective bucket).
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::And(vec![resource_eq("doc1"), resource_type_eq("invoice")]),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), bounded(&["doc1"], &[]));
+}
+
+#[test]
+fn test_pruning_abac_shape_and_type_with_user_attr() {
+    // The canonical ABAC shape: resource.type == "invoice" && user.role == …
+    // The type conjunct bounds the whole conjunction.
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::And(vec![resource_type_eq("invoice"), user_role_eq("admin")]),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), bounded(&[], &["invoice"]));
+}
+
+#[test]
+fn test_pruning_or_unions_across_dimensions() {
+    // resource == "x" || resource.type == "invoice": candidate iff either side
+    // could fire — a mixed disjunctive bound.
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::Or(vec![resource_eq("x"), resource_type_eq("invoice")]),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), bounded(&["x"], &["invoice"]));
+    // The id-only projection must refuse a mixed bound.
+    assert_eq!(ev.resource_index_terms(), None);
+}
+
+#[test]
+fn test_pruning_rules_union_two_dimensions() {
+    // Rule 1 id-bounded, rule 2 type-bounded: the policy-level bound is the
+    // field-wise union.
+    let (_s, ev) = ridx_evaluator(
+        vec![
+            allow_rule("a", resource_eq("doc1")),
+            allow_rule("b", resource_type_eq("invoice")),
+        ],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), bounded(&["doc1"], &["invoice"]));
+}
+
+#[test]
+fn test_pruning_type_not_equal_is_unprunable() {
+    // resource.type != "invoice" matches every OTHER type (and typeless
+    // resources’ absence is false — but != on a present other type is true),
+    // so it must stay unbounded.
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::AttributeCompare(AttributeComparison {
+                entity_type: EntityType::Resource,
+                attribute: "type".to_string(),
+                op: NumericOp::NotEqual,
+                target: CompareTarget::LiteralString("invoice".to_string()),
+            }),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), ResourcePruning::Unprunable);
+}
+
+#[test]
+fn test_pruning_type_non_string_literal_is_unprunable() {
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::AttributeCompare(AttributeComparison {
+                entity_type: EntityType::Resource,
+                attribute: "type".to_string(),
+                op: NumericOp::Equal,
+                target: CompareTarget::LiteralNum(5.0),
+            }),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), ResourcePruning::Unprunable);
+}
+
+#[test]
+fn test_pruning_non_type_resource_attr_is_unprunable() {
+    // resource.owner == "alice" constrains an attribute the index has no tier
+    // for — unbounded.
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::AttributeCompare(AttributeComparison {
+                entity_type: EntityType::Resource,
+                attribute: "owner".to_string(),
+                op: NumericOp::Equal,
+                target: CompareTarget::LiteralString("alice".to_string()),
+            }),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), ResourcePruning::Unprunable);
+}
+
+#[test]
+fn test_pruning_user_type_attr_is_unprunable() {
+    // user.type == "Service" is about the PRINCIPAL, not the resource.
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::AttributeCompare(AttributeComparison {
+                entity_type: EntityType::User,
+                attribute: "type".to_string(),
+                op: NumericOp::Equal,
+                target: CompareTarget::LiteralString("Service".to_string()),
+            }),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), ResourcePruning::Unprunable);
+}
+
+#[test]
+fn test_pruning_negated_type_eq_is_unprunable() {
+    let (_s, ev) = ridx_evaluator(
+        vec![allow_rule(
+            "r",
+            Condition::Not(Box::new(resource_type_eq("invoice"))),
+        )],
+        PolicyAction::Deny,
+    );
+    assert_eq!(ev.resource_pruning(), ResourcePruning::Unprunable);
+}
+
+/// SOUNDNESS DIFFERENTIAL (two-tier, required): for every policy whose
+/// `resource_pruning()` is `Bounded { ids, types }`, any request whose resource
+/// is NOT in `ids` AND whose resource entity `type` attribute is NOT in `types`
+/// must make the evaluator NON-DECISIVE (`evaluate_matched(..).1 == false`).
+/// This is the promise the engine's two-tier candidate lookup relies on; a
+/// violation would be fail-open pruning.
+#[test]
+fn test_pruning_soundness_differential_two_tier() {
+    // Store: alice (principal, role=admin) + typed resource entities. The
+    // typed entities are what `resource.type == "…"` resolves against.
+    let store = Arc::new(DataStore::new());
+    let interner = store.interner();
+    let alice_id = interner.intern("alice");
+    let user_type = interner.intern("User");
+    let role_key = interner.intern("role");
+    let admin_value = interner.intern("admin");
+    store.insert(
+        EntityBuilder::new(alice_id, user_type)
+            .with_string(role_key, admin_value)
+            .build(),
+    );
+    let res_type = interner.intern("Resource");
+    let type_key = interner.intern("type");
+    for (rid, rtype) in [
+        ("inv1", "invoice"),
+        ("inv2", "invoice"),
+        ("rep1", "report"),
+        ("doc1", "document"),
+    ] {
+        let rid_i = interner.intern(rid);
+        let rtype_i = interner.intern(rtype);
+        store.insert(
+            EntityBuilder::new(rid_i, res_type)
+                .with_string(type_key, rtype_i)
+                .build(),
+        );
+    }
+
+    let policies: Vec<Vec<Rule>> = vec![
+        vec![allow_rule("t", resource_type_eq("invoice"))],
+        vec![allow_rule(
+            "abac",
+            Condition::And(vec![resource_type_eq("invoice"), user_role_eq("admin")]),
+        )],
+        vec![allow_rule(
+            "mix",
+            Condition::Or(vec![resource_eq("doc1"), resource_type_eq("report")]),
+        )],
+        vec![
+            allow_rule("a", resource_eq("inv1")),
+            allow_rule("b", resource_type_eq("report")),
+        ],
+        vec![Rule {
+            name: "block".to_string(),
+            condition: resource_type_eq("secretkind"),
+            decision: PolicyAction::Deny,
+        }],
+    ];
+
+    // Probes cover: typed entities of each kind, an entity-less resource, an
+    // empty resource, and ids that collide with type names.
+    let probes = [
+        "inv1", "inv2", "rep1", "doc1", "invoice", "report", "missing", "",
+    ];
+    let type_of = |resource: &str| store.resource_type_attr(resource);
+
+    for rules in policies {
+        let default = if rules
+            .iter()
+            .any(|r| matches!(r.decision, PolicyAction::Deny))
+        {
+            PolicyAction::Allow
+        } else {
+            PolicyAction::Deny
+        };
+        let ev = ReaperDSLEvaluator::new(store.clone(), rules, default);
+
+        let ResourcePruning::Bounded { ids, types } = ev.resource_pruning() else {
+            continue; // unprunable: no promise to check
+        };
+
+        for probe in probes {
+            let in_ids = ids.iter().any(|t| t == probe);
+            let in_types = type_of(probe).is_some_and(|t| types.contains(&t));
+            if in_ids || in_types {
+                continue; // the index would keep this policy as a candidate
+            }
+            let mut context = HashMap::new();
+            context.insert("principal".to_string(), "alice".to_string());
+            let request = PolicyRequest {
+                resource: probe.to_string(),
+                action: "read".to_string(),
+                context,
+
+                ..Default::default()
+            };
+            let (_action, matched) = ev.evaluate_matched(&request).unwrap();
+            assert!(
+                !matched,
+                "FAIL-OPEN PRUNING: resource {:?} (type {:?}) is outside bound \
+                 ids={:?} types={:?} but the evaluator matched it (decisive).",
+                probe,
+                type_of(probe),
+                ids,
+                types
+            );
+        }
+    }
 }

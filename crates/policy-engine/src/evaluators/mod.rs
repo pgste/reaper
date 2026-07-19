@@ -146,6 +146,49 @@ pub trait PolicyEvaluator: Send + Sync + Debug {
     fn resource_index_terms(&self) -> Option<Vec<String>> {
         None
     }
+
+    /// Two-tier prunability summary (round-3 Plan 06 C, R3-P2-1). Same promise
+    /// as [`resource_index_terms`](Self::resource_index_terms) but the bound is
+    /// **disjunctive across two dimensions**: the evaluator matches no request
+    /// whose resource id is outside `ids` AND whose resource entity `type`
+    /// attribute is outside `types`. A false bound is an authorization bug
+    /// (fail-open pruning); when in doubt, return
+    /// [`ResourcePruning::Unprunable`].
+    ///
+    /// The default derives from `resource_index_terms()` so evaluators that
+    /// only know id-level bounds (Simple) stay correct with no change.
+    fn resource_pruning(&self) -> ResourcePruning {
+        match self.resource_index_terms() {
+            Some(ids) => ResourcePruning::Bounded {
+                ids,
+                types: Vec::new(),
+            },
+            None => ResourcePruning::Unprunable,
+        }
+    }
+}
+
+/// How a policy participates in the engine's pruning index (R3-P2-1).
+///
+/// `Bounded { ids, types }` is a *disjunctive superset bound*: the policy can
+/// only decide a request whose resource id is in `ids` **or** whose resource
+/// entity has a string `type` attribute in `types` (resolved from the same
+/// `DataStore` the policy's evaluator reads). A request outside both sets
+/// provably makes every rule non-matching, so dropping the policy from its
+/// candidate set cannot change the set decision. Both sets empty means the
+/// policy can never match (e.g. a `false` condition) — it is indexed nowhere
+/// and is never a candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourcePruning {
+    /// Always a candidate — the match set could not be statically bounded.
+    Unprunable,
+    /// Candidate iff `request.resource ∈ ids` OR `type_of(resource) ∈ types`.
+    Bounded {
+        /// Concrete request-resource strings the policy can match.
+        ids: Vec<String>,
+        /// Resource entity `type`-attribute values the policy can match.
+        types: Vec<String>,
+    },
 }
 
 /// Metadata about a policy evaluator for monitoring and debugging

@@ -39,6 +39,7 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
+use crate::evaluators::ResourcePruning;
 use crate::reap::PolicyBundle;
 
 /// The active policy set: the id->policy map and the name->id index, held
@@ -63,6 +64,15 @@ pub(crate) struct ActiveSet {
     /// `unprunable_sorted` slice instead of sorting the concatenation per
     /// request.
     pub(crate) resource_index: DashMap<String, Vec<PolicyId>>,
+    /// Resource-**type** pruning tier (round-3 Plan 06 C, R3-P2-1): resource
+    /// entity `type`-attribute value -> ids of policies bounded to that type
+    /// (e.g. every rule carries `resource.type == "document"`). A request's
+    /// candidates are its id bucket ∪ its resolved type's bucket ∪ the
+    /// unprunable set. Buckets kept **sorted** like `resource_index`. This is
+    /// what makes attribute-based (ABAC/ReBAC-with-type-conjunct) DSL policies
+    /// prunable at all — before this tier every such policy was unprunable and
+    /// the evaluate-all fan-out was O(total policies).
+    pub(crate) type_index: DashMap<String, Vec<PolicyId>>,
     /// Policies that must be evaluated for *every* resource because their match
     /// set cannot be statically narrowed to concrete resources — a Simple
     /// policy with a `*` rule, or any non-Simple language (DSL/Cedar) whose
@@ -85,6 +95,7 @@ impl ActiveSet {
             policies: DashMap::new(),
             names: DashMap::new(),
             resource_index: DashMap::new(),
+            type_index: DashMap::new(),
             unprunable: DashMap::new(),
             unprunable_sorted: RwLock::new(Vec::new()),
         }
@@ -188,41 +199,54 @@ impl PolicyEngine {
         }
     }
 
-    /// Static resource terms for the pruning index (Plan 08 Phase A; D2).
+    /// Static prunability bound for the pruning index (Plan 08 Phase A; D2;
+    /// R3-P2-1 two-tier).
     ///
-    /// Returns `Some(resources)` — the concrete resource strings this policy is
-    /// bucketed under — when the policy's match set can be narrowed to specific
-    /// resources, or `None` when it must be treated as **unprunable** (always a
-    /// candidate). The answer is delegated to the policy's own evaluator via
-    /// [`PolicyEvaluator::resource_index_terms`], so each language decides its
-    /// own soundness next to its match semantics:
-    /// - `Simple` — exact resource literals, unprunable on any `*` rule.
-    /// - `ReaperDsl` (compiled, PRIMARY) — literal `resource == "…"` constraints
-    ///   extracted from the compiled conditions (D2); unbounded predicates
-    ///   (attributes, wildcards, dynamic ids) make the policy unprunable.
-    /// - AST-fallback DSL and Cedar — default `None` (conservatively unprunable).
+    /// Returns [`ResourcePruning::Bounded`] — the resource-id and
+    /// resource-type terms this policy is bucketed under — when the policy's
+    /// match set can be statically narrowed, or
+    /// [`ResourcePruning::Unprunable`] when it must always be a candidate. The
+    /// answer is delegated to the policy's own evaluator via
+    /// [`PolicyEvaluator::resource_pruning`], so each language decides its own
+    /// soundness next to its match semantics:
+    /// - `Simple` — exact resource literals (id tier only), unprunable on any
+    ///   `*` rule.
+    /// - `ReaperDsl` (compiled, PRIMARY) — literal `resource == "…"` id
+    ///   constraints plus `resource.type == "…"` type constraints extracted
+    ///   from the compiled conditions; any other predicate shape makes the
+    ///   policy unprunable.
+    /// - AST-fallback DSL and Cedar — default (conservatively unprunable).
     ///
     /// A policy whose evaluator is somehow not built is treated as unprunable
-    /// (`None`) — safe: pruning can never drop a policy that could have matched.
+    /// — safe: pruning can never drop a policy that could have matched.
     ///
-    /// [`PolicyEvaluator::resource_index_terms`]: crate::evaluators::PolicyEvaluator::resource_index_terms
-    fn index_terms(policy: &EnhancedPolicy) -> Option<Vec<String>> {
-        policy.get_evaluator().ok()?.resource_index_terms()
+    /// [`PolicyEvaluator::resource_pruning`]: crate::evaluators::PolicyEvaluator::resource_pruning
+    fn index_pruning(policy: &EnhancedPolicy) -> ResourcePruning {
+        match policy.get_evaluator() {
+            Ok(evaluator) => evaluator.resource_pruning(),
+            Err(_) => ResourcePruning::Unprunable,
+        }
     }
 
-    /// Add `policy_id` to `set`'s pruning index per `policy`'s terms.
+    /// Add `policy_id` to `set`'s pruning index per `policy`'s bound.
     ///
     /// Buckets and the `unprunable_sorted` mirror are maintained **sorted** on
-    /// insert so the read path can merge instead of sorting per request.
+    /// insert so the read path can merge instead of sorting per request. A
+    /// `Bounded` policy with empty ids AND empty types can never match any
+    /// request — it is indexed nowhere and is never a candidate.
     fn index_policy(set: &ActiveSet, policy_id: PolicyId, policy: &EnhancedPolicy) {
-        match Self::index_terms(policy) {
-            Some(terms) => {
-                for term in terms {
+        match Self::index_pruning(policy) {
+            ResourcePruning::Bounded { ids, types } => {
+                for term in ids {
                     let mut bucket = set.resource_index.entry(term).or_default();
                     sorted_insert(&mut bucket, policy_id);
                 }
+                for term in types {
+                    let mut bucket = set.type_index.entry(term).or_default();
+                    sorted_insert(&mut bucket, policy_id);
+                }
             }
-            None => {
+            ResourcePruning::Unprunable => {
                 set.unprunable.insert(policy_id, ());
                 sorted_insert(&mut set.unprunable_sorted.write(), policy_id);
             }
@@ -230,27 +254,34 @@ impl PolicyEngine {
     }
 
     /// Remove `policy_id`'s references from `set`'s pruning index, using
-    /// `policy`'s (its previous version's) terms so only the relevant buckets
-    /// are touched. Empty buckets are pruned so `resource_buckets` stays honest.
+    /// `policy`'s (its previous version's) bound so only the relevant buckets
+    /// are touched. Empty buckets are pruned so the stats stay honest.
     fn unindex_policy(set: &ActiveSet, policy_id: &PolicyId, policy: &EnhancedPolicy) {
-        match Self::index_terms(policy) {
-            Some(terms) => {
-                for term in terms {
-                    let now_empty = if let Some(mut bucket) = set.resource_index.get_mut(&term) {
-                        bucket.retain(|id| id != policy_id);
-                        bucket.is_empty()
-                    } else {
-                        false
-                    };
-                    // Guard dropped above before remove_if re-checks under lock
-                    // (avoids a same-shard self-deadlock); remove_if won't drop a
-                    // bucket a concurrent deploy just refilled.
-                    if now_empty {
-                        set.resource_index.remove_if(&term, |_, ids| ids.is_empty());
-                    }
+        // Remove `policy_id` from `index[term]`, dropping the bucket if empty.
+        // The guard is dropped before remove_if re-checks under lock (avoids a
+        // same-shard self-deadlock); remove_if won't drop a bucket a concurrent
+        // deploy just refilled.
+        let remove_from = |index: &DashMap<String, Vec<PolicyId>>, term: String| {
+            let now_empty = if let Some(mut bucket) = index.get_mut(&term) {
+                bucket.retain(|id| id != policy_id);
+                bucket.is_empty()
+            } else {
+                false
+            };
+            if now_empty {
+                index.remove_if(&term, |_, ids| ids.is_empty());
+            }
+        };
+        match Self::index_pruning(policy) {
+            ResourcePruning::Bounded { ids, types } => {
+                for term in ids {
+                    remove_from(&set.resource_index, term);
+                }
+                for term in types {
+                    remove_from(&set.type_index, term);
                 }
             }
-            None => {
+            ResourcePruning::Unprunable => {
                 set.unprunable.remove(policy_id);
                 sorted_remove(&mut set.unprunable_sorted.write(), policy_id);
             }
@@ -378,39 +409,70 @@ impl PolicyEngine {
             .collect()
     }
 
-    /// Candidate policy ids for a request `resource` (Plan 08 Phase A).
+    /// Candidate policy ids for a request `resource` (Plan 08 Phase A;
+    /// R3-P2-1 two-tier).
     ///
     /// Returns exactly the policies that could possibly decide a request for
-    /// `resource`: those bucketed under the concrete resource plus every
-    /// `unprunable` policy (wildcards / DSL / Cedar). Deduped and sorted for a
+    /// `resource`: those bucketed under the concrete resource id, those
+    /// bucketed under the resource's entity-`type` attribute (when the caller
+    /// resolves one), plus every `unprunable` policy. Deduped and sorted for a
     /// deterministic evaluation order. This is the served evaluate-all path's
-    /// replacement for `list_policies()` — it returns ≈ (matching + unprunable)
-    /// ids instead of the whole set, and clones only ids (not `Arc<Policy>`).
+    /// replacement for `list_policies()`.
     ///
-    /// Correctness: a Simple policy that is neither in the bucket nor unprunable
-    /// has only non-matching literal-resource rules, so it is necessarily
-    /// non-decisive (`evaluate_matched` → `false`) for this resource — dropping
-    /// it cannot change the set decision.
+    /// `resource_type` MUST be the request resource's string `type` attribute
+    /// resolved from the **same `DataStore` the policies' evaluators read**
+    /// (`None` when the resource has no entity or no string `type`
+    /// attribute there). That store is what `resource.type == "…"` conditions
+    /// evaluate against, so with a consistent store the resolution and the
+    /// evaluation agree: a type-bounded policy outside the resolved type's
+    /// bucket would evaluate every rule to `false` anyway. Passing a type from
+    /// a *different* store (or a stale one after a concurrent data reload) can
+    /// prune a policy that would have matched — an authorization bug, not a
+    /// latency bug.
+    ///
+    /// Correctness: a policy that is in no consulted bucket and not unprunable
+    /// promised (via [`PolicyEvaluator::resource_pruning`]) that every rule is
+    /// false for this request, so it is necessarily non-decisive
+    /// (`evaluate_matched` → `false`) — dropping it cannot change the set
+    /// decision.
     ///
     /// Perf (round-3 Plan 06 C, R3-P3-1): buckets and the unprunable mirror are
-    /// maintained pre-sorted on mutation, so this path is a linear two-way merge
-    /// — no per-request `O(n log n)` sort of the full candidate set.
-    pub fn candidate_policy_ids(&self, resource: &str) -> Vec<PolicyId> {
+    /// maintained pre-sorted on mutation, so this path is at most two linear
+    /// merges — no per-request `O(n log n)` sort of the full candidate set.
+    ///
+    /// [`PolicyEvaluator::resource_pruning`]: crate::evaluators::PolicyEvaluator::resource_pruning
+    pub fn candidate_policy_ids(
+        &self,
+        resource: &str,
+        resource_type: Option<&str>,
+    ) -> Vec<PolicyId> {
         let active = self.active.load();
         let unprunable = active.unprunable_sorted.read();
-        let ids = match active.resource_index.get(resource) {
-            Some(bucket) => merge_sorted_unique(bucket.value(), &unprunable),
-            None => unprunable.clone(),
-        };
-        ids
+        let id_bucket = active.resource_index.get(resource);
+        let type_bucket = resource_type.and_then(|t| active.type_index.get(t));
+        match (&id_bucket, &type_bucket) {
+            (Some(ids), Some(types)) => merge_sorted_unique(
+                &merge_sorted_unique(ids.value(), types.value()),
+                &unprunable,
+            ),
+            (Some(ids), None) => merge_sorted_unique(ids.value(), &unprunable),
+            (None, Some(types)) => merge_sorted_unique(types.value(), &unprunable),
+            (None, None) => unprunable.clone(),
+        }
     }
 
     /// Pruning-index statistics for monitoring and tests.
     pub fn get_index_stats(&self) -> PruningIndexStats {
         let active = self.active.load();
-        let indexed_entries: usize = active.resource_index.iter().map(|e| e.value().len()).sum();
+        let indexed_entries: usize = active
+            .resource_index
+            .iter()
+            .map(|e| e.value().len())
+            .chain(active.type_index.iter().map(|e| e.value().len()))
+            .sum();
         PruningIndexStats {
             resource_buckets: active.resource_index.len(),
+            type_buckets: active.type_index.len(),
             indexed_entries,
             unprunable_policies: active.unprunable.len(),
             total_policies: active.policies.len(),
