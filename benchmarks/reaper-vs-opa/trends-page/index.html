@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<!--
+  Reaper performance trends — served at <pages>/trends/ next to the Allure
+  report. Self-contained: no external scripts/fonts (hand-rolled SVG charts),
+  so the page has zero supply-chain surface and works offline.
+
+  Data contract: ./data.json, appended by benchmark.yml on every main run:
+    { "points": [ { "t": ISO8601, "sha": "abc1234", "run": 301,
+        "scenarios": { "<name>": {
+          "reaper": {"rps": N, "p50": µs, "p99": µs},
+          "opa":    {"rps": N, "p50": µs, "p99": µs},
+          "wasm":   {"rps": N, "p50": µs, "p99": µs} | null,
+          "speedup": N } } } ] }
+  All latencies are MICROSECONDS; the formatter renders ns / µs / ms / s.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Reaper · Performance Trends</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1f24; --muted: #667085; --card: #f7f8fa;
+    --grid: #e4e7ec; --accent: #0b6bcb;
+    --reaper: #0b6bcb; --opa: #d92d20; --wasm: #7a5af8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --card: #161b22;
+      --grid: #21262d; --accent: #58a6ff;
+      --reaper: #58a6ff; --opa: #ff7b72; --wasm: #bc8cff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; gap: 12px;
+           align-items: baseline; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .sub { color: var(--muted); }
+  header a { color: var(--accent); text-decoration: none; }
+  .controls { padding: 4px 24px 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .controls button, .controls select {
+    background: var(--card); color: var(--fg); border: 1px solid var(--grid);
+    border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .controls button.on { border-color: var(--accent); color: var(--accent); }
+  #cards { display: grid; gap: 16px; padding: 0 24px 32px;
+           grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--grid);
+          border-radius: 10px; padding: 14px 16px 8px; }
+  .card h2 { margin: 0 0 2px; font-size: 15px; }
+  .card .stat { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .card .stat b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .chart-title { font-size: 12px; color: var(--muted); margin: 8px 0 0 2px; }
+  svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px;
+            color: var(--muted); padding: 4px 2px 8px; }
+  .legend span::before { content: "—"; font-weight: 700; margin-right: 4px; }
+  .l-reaper::before { color: var(--reaper); } .l-opa::before { color: var(--opa); }
+  .l-wasm::before { color: var(--wasm); }
+  .tip { position: fixed; pointer-events: none; background: var(--card);
+         border: 1px solid var(--grid); border-radius: 6px; padding: 6px 9px;
+         font-size: 12px; display: none; z-index: 10; white-space: pre;
+         box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  .empty { padding: 40px 24px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Reaper performance trends</h1>
+  <span class="sub">served-path benchmark, one point per merge to main</span>
+  <span class="sub">· <a href="../">Allure report</a></span>
+</header>
+<div class="controls">
+  <select id="scenario"></select>
+  <button data-n="20">last 20</button>
+  <button data-n="50">last 50</button>
+  <button data-n="0" class="on">all</button>
+</div>
+<div id="cards"><div class="empty">Loading data…</div></div>
+<div class="tip" id="tip"></div>
+
+<script>
+"use strict";
+
+/* ---- unit formatting: values arrive in MICROSECONDS ---- */
+function fmtUs(us) {
+  if (us == null || isNaN(us)) return "—";
+  if (us < 1)        return (us * 1000).toPrecision(3) + " ns";
+  if (us < 1000)     return (+us.toPrecision(3)) + " µs";
+  if (us < 1e6)      return (us / 1000).toPrecision(3) + " ms";
+  return (us / 1e6).toPrecision(3) + " s";
+}
+function fmtRps(v) {
+  if (v == null || isNaN(v)) return "—";
+  if (v >= 1e6) return (v / 1e6).toPrecision(3) + "M";
+  if (v >= 1e3) return (v / 1e3).toPrecision(3) + "k";
+  return String(Math.round(v));
+}
+
+/* ---- tiny SVG line chart ----
+   opts: { series: [{name, color, dash, values:[y|null]}], labels:[str],
+           log:bool, fmt:fn }                                            */
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function chart(opts) {
+  const W = 460, H = 190, L = 52, R = 8, T = 10, B = 24;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}` });
+  const vals = opts.series.flatMap(s => s.values).filter(v => v != null && v > 0);
+  if (!vals.length) return svg;
+
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (opts.log) { lo = Math.pow(10, Math.floor(Math.log10(lo)));
+                  hi = Math.pow(10, Math.ceil(Math.log10(hi))); }
+  else { lo = 0; hi = hi * 1.08; }
+  if (hi === lo) hi = lo + 1;
+
+  const n = Math.max(...opts.series.map(s => s.values.length));
+  const x = i => L + (n < 2 ? 0.5 : i / (n - 1)) * (W - L - R);
+  const y = v => {
+    const f = opts.log
+      ? (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo))
+      : (v - lo) / (hi - lo);
+    return T + (1 - f) * (H - T - B);
+  };
+
+  /* gridlines + y labels */
+  const ticks = opts.log
+    ? Array.from({length: Math.round(Math.log10(hi / lo)) + 1},
+                 (_, i) => lo * Math.pow(10, i))
+    : [0, .25, .5, .75, 1].map(f => lo + f * (hi - lo));
+  const css = getComputedStyle(document.documentElement);
+  for (const tv of ticks) {
+    svg.append(el("line", { x1: L, x2: W - R, y1: y(tv), y2: y(tv),
+      stroke: css.getPropertyValue("--grid"), "stroke-width": 1 }));
+    const t = el("text", { x: L - 6, y: y(tv) + 4, "text-anchor": "end",
+      "font-size": 10, fill: css.getPropertyValue("--muted") });
+    t.textContent = opts.fmt(tv);
+    svg.append(t);
+  }
+  /* sparse x labels */
+  const step = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += step) {
+    const t = el("text", { x: x(i), y: H - 6, "text-anchor": "middle",
+      "font-size": 10, fill: css.getPropertyValue("--muted") });
+    t.textContent = opts.labels[i] || "";
+    svg.append(t);
+  }
+
+  /* series */
+  for (const s of opts.series) {
+    let d = "", pen = false;
+    s.values.forEach((v, i) => {
+      if (v == null || v <= 0) { pen = false; return; }
+      d += (pen ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1);
+      pen = true;
+    });
+    if (!d) continue;
+    svg.append(el("path", { d, fill: "none", stroke: s.color,
+      "stroke-width": 1.8, "stroke-dasharray": s.dash || "none",
+      "stroke-linejoin": "round" }));
+    s.values.forEach((v, i) => {
+      if (v == null || v <= 0) return;
+      const c = el("circle", { cx: x(i), cy: y(v), r: 2.4, fill: s.color });
+      c.dataset.tip = `${s.name}\n${opts.fmt(v)}\n${opts.labels[i] || ""} ${opts.metaLabels?.[i] || ""}`;
+      svg.append(c);
+    });
+  }
+
+  /* hover tooltips */
+  const tip = document.getElementById("tip");
+  svg.addEventListener("pointerover", e => {
+    if (e.target.dataset && e.target.dataset.tip) {
+      tip.textContent = e.target.dataset.tip;
+      tip.style.display = "block";
+    }
+  });
+  svg.addEventListener("pointermove", e => {
+    tip.style.left = (e.clientX + 12) + "px";
+    tip.style.top = (e.clientY + 12) + "px";
+  });
+  svg.addEventListener("pointerout", () => tip.style.display = "none");
+  return svg;
+}
+
+/* ---- page assembly ---- */
+let DATA = null, LIMIT = 0;
+
+function seriesFor(points, scen, side, key) {
+  return points.map(p => {
+    const s = p.scenarios && p.scenarios[scen];
+    const g = s && s[side];
+    return g && typeof g[key] === "number" ? g[key] : null;
+  });
+}
+
+function render() {
+  const cards = document.getElementById("cards");
+  cards.innerHTML = "";
+  let pts = DATA.points;
+  if (LIMIT > 0) pts = pts.slice(-LIMIT);
+  if (!pts.length) {
+    cards.innerHTML = '<div class="empty">No trend data yet — points are appended on each merge to main.</div>';
+    return;
+  }
+  const labels = pts.map(p => (p.t || "").slice(5, 10));   // MM-DD
+  const meta = pts.map(p => p.sha ? "@" + p.sha : "");
+  const names = [...new Set(pts.flatMap(p => Object.keys(p.scenarios || {})))].sort();
+  const pick = document.getElementById("scenario").value;
+  const show = pick === "all" ? names : names.filter(nm => nm === pick);
+  const css = getComputedStyle(document.documentElement);
+  const C = { reaper: css.getPropertyValue("--reaper"),
+              opa: css.getPropertyValue("--opa"),
+              wasm: css.getPropertyValue("--wasm") };
+
+  for (const nm of show) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const last = [...pts].reverse().find(p => p.scenarios && p.scenarios[nm]);
+    const cur = last ? last.scenarios[nm] : null;
+    card.innerHTML = `<h2>${nm}</h2>
+      <div class="stat">latest: reaper <b>${fmtRps(cur?.reaper?.rps)} rps</b>,
+        p50 <b>${fmtUs(cur?.reaper?.p50)}</b>, p99 <b>${fmtUs(cur?.reaper?.p99)}</b>
+        · speedup vs OPA <b>${cur?.speedup ?? "—"}×</b></div>
+      <div class="legend"><span class="l-reaper">reaper</span>
+        <span class="l-opa">opa</span><span class="l-wasm">wasm (in-proc)</span>
+        <span>solid = p50 · dashed = p99</span></div>`;
+
+    const lat = document.createElement("div");
+    lat.className = "chart-title"; lat.textContent = "latency (log scale)";
+    card.append(lat);
+    card.append(chart({
+      log: true, fmt: fmtUs, labels, metaLabels: meta,
+      series: [
+        { name: nm + " reaper p50", color: C.reaper, values: seriesFor(pts, nm, "reaper", "p50") },
+        { name: nm + " reaper p99", color: C.reaper, dash: "5 4", values: seriesFor(pts, nm, "reaper", "p99") },
+        { name: nm + " opa p50", color: C.opa, values: seriesFor(pts, nm, "opa", "p50") },
+        { name: nm + " opa p99", color: C.opa, dash: "5 4", values: seriesFor(pts, nm, "opa", "p99") },
+        { name: nm + " wasm p50", color: C.wasm, values: seriesFor(pts, nm, "wasm", "p50") },
+        { name: nm + " wasm p99", color: C.wasm, dash: "5 4", values: seriesFor(pts, nm, "wasm", "p99") },
+      ]}));
+
+    const thr = document.createElement("div");
+    thr.className = "chart-title"; thr.textContent = "throughput (requests/s)";
+    card.append(thr);
+    card.append(chart({
+      log: false, fmt: fmtRps, labels, metaLabels: meta,
+      series: [
+        { name: nm + " reaper rps", color: C.reaper, values: seriesFor(pts, nm, "reaper", "rps") },
+        { name: nm + " opa rps", color: C.opa, values: seriesFor(pts, nm, "opa", "rps") },
+        { name: nm + " wasm rps", color: C.wasm, values: seriesFor(pts, nm, "wasm", "rps") },
+      ]}));
+    cards.append(card);
+  }
+}
+
+async function main() {
+  try {
+    DATA = await (await fetch("data.json", { cache: "no-store" })).json();
+  } catch (e) {
+    document.getElementById("cards").innerHTML =
+      '<div class="empty">No data.json yet — it appears after the first main-branch benchmark run following this feature\'s merge.</div>';
+    return;
+  }
+  const names = [...new Set((DATA.points || []).flatMap(p => Object.keys(p.scenarios || {})))].sort();
+  const sel = document.getElementById("scenario");
+  sel.innerHTML = '<option value="all">all scenarios</option>' +
+    names.map(nm => `<option>${nm}</option>`).join("");
+  sel.addEventListener("change", render);
+  document.querySelectorAll(".controls button").forEach(b =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll(".controls button").forEach(x => x.classList.remove("on"));
+      b.classList.add("on");
+      LIMIT = +b.dataset.n;
+      render();
+    }));
+  render();
+}
+main();
+</script>
+</body>
+</html>
