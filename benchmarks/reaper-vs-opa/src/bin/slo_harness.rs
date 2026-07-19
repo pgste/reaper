@@ -5,12 +5,13 @@
 //! nanoseconds (client-observed: send → full response read, an upper bound on
 //! the server-side request-total the SLA is defined on):
 //!
-//! | scenario          | served path                     | SLO row                          |
-//! |-------------------|---------------------------------|----------------------------------|
-//! | `slo-targeted`    | POST /api/v1/messages, policy_id| Targeted, 10k DSL policies       |
-//! | `slo-evaluate-all`| POST /api/v1/messages, no policy| Evaluate-all via pruning index   |
-//! | `slo-rebac`       | POST /api/v1/messages, policy_id| ABAC/ReBAC bounded traversal     |
-//! | `slo-batch`       | POST /api/v1/batch-messages     | Batch, 100 requests/call         |
+//! | scenario                 | served path                     | SLO row                          |
+//! |--------------------------|---------------------------------|----------------------------------|
+//! | `slo-targeted`           | POST /api/v1/messages, policy_id| Targeted, 10k DSL policies       |
+//! | `slo-evaluate-all`       | POST /api/v1/messages, no policy| Evaluate-all, resource-ID tier   |
+//! | `slo-evaluate-all-abac`  | POST /api/v1/messages, no policy| Evaluate-all, resource-TYPE tier |
+//! | `slo-rebac`              | POST /api/v1/messages, policy_id| ABAC/ReBAC bounded traversal     |
+//! | `slo-batch`              | POST /api/v1/batch-messages     | Batch, 100 requests/call         |
 //!
 //! Policy sets come from `generate-data policy-set` (see README "SLO
 //! harness"). `--assert-slo slo.yaml` turns the run into a gate: every
@@ -27,6 +28,11 @@
 //!   extraction), so a DSL set buckets in the pruning index just like Simple.
 //!   When running `--scenario all`, evaluate-all runs FIRST against a fresh
 //!   agent so its set is the only one deployed.
+//! - `slo-evaluate-all-abac` (round-3 R3-P2-1) has the same agent
+//!   prerequisites but takes an `abac` policy set: `resource.type`-gated DSL
+//!   policies plus the typed resource entities the requests address, prunable
+//!   via the resource-TYPE index tier. Run it against a FRESH agent (it is
+//!   deliberately not part of `--scenario all`).
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -49,7 +55,9 @@ struct Args {
     #[arg(long, default_value = "http://localhost:8080")]
     reaper_url: String,
 
-    /// Scenario: slo-targeted | slo-evaluate-all | slo-rebac | slo-batch | all
+    /// Scenario: slo-targeted | slo-evaluate-all | slo-evaluate-all-abac |
+    /// slo-rebac | slo-batch | all (all excludes the abac leg — it needs its
+    /// own fresh agent)
     #[arg(short, long, default_value = "all")]
     scenario: String,
 
@@ -58,8 +66,10 @@ struct Args {
     #[arg(long)]
     policy_set: Option<String>,
 
-    /// Policy-set file for slo-evaluate-all (from `generate-data policy-set
-    /// --language simple|dsl`). Both languages are prunable since round-2 D2.
+    /// Policy-set file for slo-evaluate-all (`--language simple|dsl`, both
+    /// prunable since round-2 D2) or slo-evaluate-all-abac (`--language abac`,
+    /// prunable via the R3-P2-1 resource-type tier; carries the typed
+    /// resource entities). From `generate-data policy-set`.
     #[arg(long)]
     evaluate_all_policy_set: Option<String>,
 
@@ -121,6 +131,11 @@ struct Args {
 struct PolicySetFile {
     language: String,
     policies: Vec<PolicySpec>,
+    /// Entities the requests address (abac sets: the typed resources the
+    /// type-tier prefilter resolves against). Loaded via /api/v1/data/stream
+    /// during setup; absent/empty for dsl and simple sets.
+    #[serde(default)]
+    entities: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -185,10 +200,19 @@ async fn main() -> Result<()> {
         // evaluate-all FIRST: it must run before the unprunable DSL set is
         // deployed (the index would return every DSL policy as a candidate
         // and the cap would blanket-deny — R2-P2-1).
+        // slo-evaluate-all-abac is NOT in `all`: it needs its own fresh agent
+        // (a second 10k evaluate-all set deployed alongside the first would
+        // measure a mixed candidate population). The nightly workflow runs it
+        // as a separate scenario invocation, like the DSL evaluate-all leg.
         "all" => vec!["slo-evaluate-all", "slo-targeted", "slo-batch", "slo-rebac"],
-        s @ ("slo-targeted" | "slo-evaluate-all" | "slo-rebac" | "slo-batch") => vec![s],
+        s @ ("slo-targeted"
+        | "slo-evaluate-all"
+        | "slo-evaluate-all-abac"
+        | "slo-rebac"
+        | "slo-batch") => vec![s],
         other => bail!(
-            "unknown scenario '{other}' (slo-targeted|slo-evaluate-all|slo-rebac|slo-batch|all)"
+            "unknown scenario '{other}' \
+             (slo-targeted|slo-evaluate-all|slo-evaluate-all-abac|slo-rebac|slo-batch|all)"
         ),
     };
 
@@ -231,7 +255,9 @@ async fn main() -> Result<()> {
                     ensure_dsl_set(&args, &client, &mut dsl_specs, &mut dsl_ids).await?;
                 run_targeted(&args, &client, &specs, &ids).await?
             }
-            "slo-evaluate-all" => run_evaluate_all(&args, &client).await?,
+            "slo-evaluate-all" | "slo-evaluate-all-abac" => {
+                run_evaluate_all(&args, &client, scenario).await?
+            }
             "slo-batch" => {
                 let (specs, _ids) =
                     ensure_dsl_set(&args, &client, &mut dsl_specs, &mut dsl_ids).await?;
@@ -532,46 +558,77 @@ async fn run_targeted(
     ))
 }
 
-/// slo-evaluate-all: 10k SIMPLE policies (prunable), no policy_id in requests.
-async fn run_evaluate_all(args: &Args, client: &reqwest::Client) -> Result<SloResult> {
-    let path = args.evaluate_all_policy_set.as_ref().context(
-        "--evaluate-all-policy-set <simple policy-set file> is required for slo-evaluate-all",
-    )?;
+/// slo-evaluate-all / slo-evaluate-all-abac: 10k prunable policies, no
+/// policy_id in requests. The plain scenario takes a Simple or literal-DSL
+/// set (resource-ID index tier); the abac scenario takes an abac set —
+/// `resource.type`-gated DSL policies plus the typed resource entities —
+/// exercising the resource-TYPE index tier (R3-P2-1) end-to-end.
+async fn run_evaluate_all(
+    args: &Args,
+    client: &reqwest::Client,
+    scenario: &str,
+) -> Result<SloResult> {
+    let path = args.evaluate_all_policy_set.as_ref().with_context(|| {
+        format!("--evaluate-all-policy-set <policy-set file> is required for {scenario}")
+    })?;
     let set = load_policy_set(path)?;
-    // Both Simple and DSL sets are valid for evaluate-all. DSL became prunable
-    // in round-2 D2 (compiled resource-literal extraction), so a DSL set of
-    // literal-resource policies now buckets in the pruning index exactly like
-    // Simple — candidates ≈ matches, not N. The probe below is the end-to-end
-    // guard: if pruning did NOT engage for this set, evaluate-all returns
-    // `candidate_cap_exceeded` and the run fails loudly.
-    match set.language.as_str() {
-        "simple" | "dsl" => {}
-        other => bail!(
-            "--evaluate-all-policy-set {} has language '{}', expected 'simple' or 'dsl'",
-            path,
-            other
+    // Simple and literal-DSL sets prune via the resource-id tier (round-2 D2);
+    // abac sets prune via the resource-type tier (round-3 R3-P2-1). The probe
+    // below is the end-to-end guard either way: if pruning did NOT engage for
+    // this set, evaluate-all returns `candidate_cap_exceeded` and the run
+    // fails loudly.
+    match (scenario, set.language.as_str()) {
+        ("slo-evaluate-all", "simple" | "dsl") => {}
+        ("slo-evaluate-all-abac", "abac") => {}
+        ("slo-evaluate-all", other) => bail!(
+            "--evaluate-all-policy-set {path} has language '{other}', expected 'simple' or \
+             'dsl' (use --scenario slo-evaluate-all-abac for abac sets)"
+        ),
+        (_, other) => bail!(
+            "--evaluate-all-policy-set {path} has language '{other}', expected 'abac' \
+             (generate with: generate-data policy-set --language abac)"
         ),
     }
     if !args.skip_setup {
-        if set.language == "dsl" {
-            // The compiled DSL evaluator resolves the principal as a loaded
-            // entity, so the request principals must exist in the DataStore.
-            load_principal_entities(client, &args.reaper_url, PRINCIPAL_POOL).await?;
-            deploy_dsl_policies(
-                client,
-                &args.reaper_url,
-                &set.policies,
-                args.deploy_concurrency,
-            )
-            .await?;
-        } else {
-            deploy_simple_policies(
-                client,
-                &args.reaper_url,
-                &set.policies,
-                args.deploy_concurrency,
-            )
-            .await?;
+        match set.language.as_str() {
+            "dsl" | "abac" => {
+                // The compiled DSL evaluator resolves the principal as a loaded
+                // entity, so the request principals must exist in the DataStore.
+                load_principal_entities(client, &args.reaper_url, PRINCIPAL_POOL).await?;
+                // abac sets carry the typed resource entities the requests
+                // address — without them no request resolves a resource type,
+                // every type bucket is skipped, and the probe below denies.
+                if !set.entities.is_empty() {
+                    let resp = client
+                        .post(format!("{}/api/v1/data/stream", args.reaper_url))
+                        .json(&json!({"entities": set.entities}))
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        bail!(
+                            "policy-set entity load failed (HTTP {}): {}",
+                            resp.status(),
+                            resp.text().await.unwrap_or_default()
+                        );
+                    }
+                }
+                deploy_dsl_policies(
+                    client,
+                    &args.reaper_url,
+                    &set.policies,
+                    args.deploy_concurrency,
+                )
+                .await?;
+            }
+            _ => {
+                deploy_simple_policies(
+                    client,
+                    &args.reaper_url,
+                    &set.policies,
+                    args.deploy_concurrency,
+                )
+                .await?;
+            }
         }
     }
 
@@ -605,15 +662,17 @@ async fn run_evaluate_all(args: &Args, client: &reqwest::Client) -> Result<SloRe
         "evaluate_all_disabled" | "candidate_cap_exceeded" | "no_policies_loaded"
     ) {
         bail!(
-            "slo-evaluate-all probe denied with '{matched}'. The agent under test needs \
+            "{scenario} probe denied with '{matched}'. The agent under test needs \
              REAPER_ALLOW_EVALUATE_ALL=true (and the default REAPER_USE_PRUNING_INDEX=true); \
              'candidate_cap_exceeded' means the loaded policies did NOT prune down to the \
-             matching candidates — for a DSL set that indicates the resource-literal \
-             extraction (D2) failed to bucket them, which is a real regression."
+             matching candidates — for a literal-DSL set that indicates the resource-literal \
+             extraction (D2) regressed; for an abac set it indicates the resource-type tier \
+             (R3-P2-1) regressed (extraction, type_index maintenance, or the agent's \
+             same-store type resolution)."
         );
     }
     if probe.get("decision").and_then(|d| d.as_str()) != Some("allow") {
-        bail!("slo-evaluate-all probe was not allowed: {probe}");
+        bail!("{scenario} probe was not allowed: {probe}");
     }
 
     let policies_loaded = agent_policies_loaded(client, &args.reaper_url).await;
@@ -627,7 +686,7 @@ async fn run_evaluate_all(args: &Args, client: &reqwest::Client) -> Result<SloRe
     )
     .await?;
     Ok(build_result(
-        "slo-evaluate-all",
+        scenario,
         policies_loaded,
         args,
         None,

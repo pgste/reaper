@@ -1,7 +1,7 @@
 # Nightly served-path SLO harness (Plan 08 §3; closes PERF R2-P1-1).
 #
-# Drives a REAL release reaper-agent over HTTP through the four §3 SLO rows
-# (targeted / evaluate-all / ReBAC / batch) with benchmarks/reaper-vs-opa's
+# Drives a REAL release reaper-agent over HTTP through the §3 SLO rows
+# (targeted / evaluate-all Simple+DSL+ABAC / ReBAC / batch) with benchmarks/reaper-vs-opa's
 # slo-harness and asserts request-total p50/p99/p999 against the checked-in
 # benchmarks/reaper-vs-opa/slo.yaml table.
 #
@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   slo-harness:
-    name: Served-path SLO (4 scenarios, absolute w/ multiplier)
+    name: Served-path SLO (6 scenario runs, absolute w/ multiplier)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -89,6 +89,9 @@ jobs:
           ./target/release/generate-data --count 10000 \
             --output "$RUNNER_TEMP/slo-dsl-10k.json" \
             policy-set --language dsl --resource-prefix /slo/targeted
+          ./target/release/generate-data --count 10000 \
+            --output "$RUNNER_TEMP/slo-abac-10k.json" \
+            policy-set --language abac --resource-prefix /slo/abac --types 100
 
       - name: Run the four SLO scenarios (fresh agent each)
         working-directory: benchmarks/reaper-vs-opa
@@ -138,6 +141,13 @@ jobs:
           RESULT_LABEL=slo-evaluate-all-dsl \
             run_scenario slo-evaluate-all "REAPER_ALLOW_EVALUATE_ALL=true" \
             --evaluate-all-policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
+          # ABAC evaluate-all (round-3 Plan 06 C, R3-P2-1): 10k
+          # `resource.type`-gated DSL policies over 100 types, prunable via
+          # the resource-TYPE index tier. The harness probe fails the run on
+          # candidate_cap_exceeded — the signature of the type tier
+          # regressing back to 10k unprunable policies.
+          run_scenario slo-evaluate-all-abac "REAPER_ALLOW_EVALUATE_ALL=true" \
+            --evaluate-all-policy-set "$RUNNER_TEMP/slo-abac-10k.json"
           run_scenario slo-targeted "" \
             --policy-set "$RUNNER_TEMP/slo-dsl-10k.json"
           run_scenario slo-batch "" \

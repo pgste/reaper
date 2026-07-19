@@ -51,14 +51,21 @@ enum Commands {
     /// Generate an SLO policy SET: `--count` DISTINCT policies (not entities),
     /// one per resource, for the slo-harness scenarios (Plan 08 §3).
     PolicySet {
-        /// Policy language: "dsl" (Reaper DSL — targeted/batch SLO rows) or
-        /// "simple" (Simple rules with literal resources — the only language
-        /// the pruning index prunes today, required for the evaluate-all row).
+        /// Policy language: "dsl" (Reaper DSL, literal resources — targeted/
+        /// batch SLO rows), "simple" (Simple rules with literal resources), or
+        /// "abac" (Reaper DSL gated on `resource.type` — the R3-P2-1
+        /// evaluate-all ABAC row; also emits the typed resource entities the
+        /// requests address).
         #[arg(long, default_value = "dsl")]
         language: String,
-        /// Resource prefix; policy i guards "{prefix}/{i}".
+        /// Resource prefix; policy i guards "{prefix}/{i}" (for abac: the
+        /// typed entity ids the requests address).
         #[arg(long, default_value = "/slo")]
         resource_prefix: String,
+        /// abac only: number of distinct `resource.type` values the policies
+        /// spread across (policy i gates on "kind{i % types}").
+        #[arg(long, default_value = "100")]
+        types: usize,
     },
 }
 
@@ -70,13 +77,16 @@ fn main() -> anyhow::Result<()> {
     if let Commands::PolicySet {
         language,
         resource_prefix,
+        types,
     } = &cli.command
     {
-        let policies = generate_policy_set(cli.count, language, resource_prefix)?;
+        let (policies, entities) =
+            generate_policy_set(cli.count, language, resource_prefix, *types)?;
         let output = json!({
             "language": language,
             "resource_prefix": resource_prefix,
             "policies": policies,
+            "entities": entities,
         });
         let mut file = File::create(&cli.output)?;
         serde_json::to_writer(&mut file, &output)?;
@@ -209,21 +219,28 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Generate `count` DISTINCT policies for the SLO harness (Plan 08 §3 rows).
+/// Generate `count` DISTINCT policies for the SLO harness (Plan 08 §3 rows),
+/// plus (for `abac`) the typed resource entities the requests address.
 ///
-/// Every policy guards its own literal resource `{prefix}/{i}` and allows only
-/// `action == "read"`, so:
-/// - targeted requests (policy_id given) exercise the O(1) lookup + one eval;
-/// - evaluate-all requests prune to ~1 candidate per resource — but ONLY for
-///   `language=simple`, because the engine's pruning index does not extract
-///   resource terms from DSL policies yet (PERF R2-P2-1). Use `simple` for the
-///   evaluate-all SLO row and `dsl` for the targeted/batch rows.
+/// - `dsl` / `simple`: every policy guards its own literal resource
+///   `{prefix}/{i}` and allows only `action == "read"`; targeted requests
+///   exercise the O(1) lookup, evaluate-all requests prune to ~1 candidate via
+///   the resource-id index tier. No entities.
+/// - `abac` (R3-P2-1): policy i gates on `resource.type == "kind{i % types}"`
+///   — the canonical ABAC shape, prunable via the resource-TYPE index tier.
+///   Also emits one `{prefix}/{i}` resource entity typed `kind{i % types}`, so
+///   evaluate-all requests against those ids resolve a type and prune to the
+///   `count / types`-sized type bucket instead of fanning out to all `count`
+///   policies (pre-type-tier this set was 100% unprunable and evaluate-all
+///   blanket-denied on `candidate_cap_exceeded`).
 fn generate_policy_set(
     count: usize,
     language: &str,
     resource_prefix: &str,
-) -> anyhow::Result<Vec<Value>> {
+    types: usize,
+) -> anyhow::Result<(Vec<Value>, Vec<Value>)> {
     let mut policies = Vec::with_capacity(count);
+    let mut entities = Vec::new();
     for i in 0..count {
         let resource = format!("{}/{}", resource_prefix.trim_end_matches('/'), i);
         match language {
@@ -248,10 +265,29 @@ fn generate_policy_set(
                     "resource": resource,
                 }));
             }
-            other => anyhow::bail!("unknown policy-set language '{other}' (dsl|simple)"),
+            "abac" => {
+                anyhow::ensure!(types > 0, "--types must be > 0 for abac policy sets");
+                let kind = format!("kind{}", i % types);
+                let name = format!("slo-abac-{i:05}");
+                let content = format!(
+                    "policy slo_abac_{i} {{\n    version: \"1.0.0\",\n    description: \"SLO harness ABAC policy {i}\",\n    default: deny,\n\n    rule allow_read {{\n        allow if {{\n            resource.type == \"{kind}\" &&\n            action == \"read\"\n        }}\n    }}\n}}\n"
+                );
+                policies.push(json!({
+                    "name": name,
+                    "policy_id": uuid::Uuid::new_v4().to_string(),
+                    "resource": resource,
+                    "content": content,
+                }));
+                entities.push(json!({
+                    "id": resource,
+                    "type": "Resource",
+                    "attributes": { "type": kind }
+                }));
+            }
+            other => anyhow::bail!("unknown policy-set language '{other}' (dsl|simple|abac)"),
         }
     }
-    Ok(policies)
+    Ok((policies, entities))
 }
 
 fn generate_rbac_data(count: usize) -> Vec<Value> {
