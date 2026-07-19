@@ -83,7 +83,14 @@ jobs:
           # keeps a transient cache export/import failure from failing the build.
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }},ignore-error=true
-          platforms: linux/amd64,linux/arm64
+          # PRs build amd64 only: the arm64 leg is a QEMU-emulated Rust release
+          # build (~1-2h per service — management peaked at 1h53m) and PR
+          # images are never pushed, so PRs paid hours for a discarded
+          # artifact while the blocking Trivy scan (needs: build-images) sat
+          # invisible behind it. Push/tag events keep the multi-arch build —
+          # those images ARE published, so arm64 breakage still fails main on
+          # every merge, just not pre-merge.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           # Buildx-native SLSA provenance + image-bound SBOM, pushed as OCI
           # referrers of the image digest (round-3 CICD C1/C6, ADR-3/ADR-4).
           # Only emitted when the image is actually pushed (non-PR events).
@@ -170,6 +177,13 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
+          # Distinct per-service analysis category. Without it all three
+          # matrix legs upload to the same default category on the same
+          # commit and clobber each other — only one service's alerts
+          # survived in the Security tab, and code scanning's PR check
+          # ("Trivy") reported neutral because base-vs-head alert matching
+          # had no stable analysis identity to diff.
+          category: trivy-${{ matrix.service }}
         continue-on-error: true
 
   # ==========================================================================
