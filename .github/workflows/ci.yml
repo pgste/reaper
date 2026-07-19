@@ -1294,21 +1294,31 @@ jobs:
 
       - name: Generate test data for BDD tests
         run: |
+          # The RBAC/ABAC/multilayer feature files load these generated JSON
+          # fixtures; a generation failure would make 100+ scenarios fail with
+          # "data file not found", so it is a hard error — not swallowed.
           mkdir -p test-data
-          cargo run -p policy-engine --example generate_rbac_data --release 2>&1 || echo "RBAC data generation completed"
-          cargo run -p policy-engine --example generate_abac_data --release 2>&1 || echo "ABAC data generation completed"
-          cargo run -p policy-engine --example generate_multilayer_data --release 2>&1 || echo "Multilayer data generation completed"
+          cargo run -p policy-engine --example generate_rbac_data --release
+          cargo run -p policy-engine --example generate_abac_data --release
+          cargo run -p policy-engine --example generate_multilayer_data --release
 
       - name: Run BDD tests
         run: |
+          # BLOCKING: BDD failures fail the build. (Previously each suite's
+          # exit code was swallowed with `|| echo` and BDD_EXIT_CODE was
+          # hardcoded to 0, so a red Cucumber suite could never turn CI red.)
+          # All three suites run even if an earlier one fails, so the uploaded
+          # reports always cover every suite; pipefail keeps `| tee` from
+          # masking a cargo test failure.
+          set -o pipefail
           mkdir -p bdd-reports
-          # Run BDD tests only for packages with feature files
-          cargo test -p reaper-core --test reaper_bdd_tests 2>&1 | tee bdd-reports/bdd-core.txt || echo "Core BDD tests completed with status: $?"
-          cargo test -p policy-engine --test gherkin_tests 2>&1 | tee bdd-reports/bdd-policy-engine.txt || echo "Policy engine BDD tests completed with status: $?"
-          cargo test -p reaper-platform --test platform_bdd_tests 2>&1 | tee bdd-reports/bdd-platform.txt || echo "Platform BDD tests completed with status: $?"
+          status=0
+          cargo test -p reaper-core --test reaper_bdd_tests 2>&1 | tee bdd-reports/bdd-core.txt || status=1
+          cargo test -p policy-engine --test gherkin_tests 2>&1 | tee bdd-reports/bdd-policy-engine.txt || status=1
+          cargo test -p reaper-platform --test platform_bdd_tests 2>&1 | tee bdd-reports/bdd-platform.txt || status=1
           # Combine outputs
           cat bdd-reports/bdd-*.txt > bdd-reports/bdd-test-output.txt
-          echo "BDD_EXIT_CODE=0" >> $GITHUB_ENV
+          exit "$status"
 
       - name: Generate BDD summary
         if: always()
