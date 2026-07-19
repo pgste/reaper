@@ -549,3 +549,114 @@ fn non_matching_policies_are_non_decisive() {
     assert_eq!(out.decision, PolicyAction::Allow);
     assert_eq!(out.policy_name, "allow-a");
 }
+
+/// Reference model for `candidate_policy_ids`: every policy with a literal rule
+/// on `resource`, plus every wildcard policy, sorted and deduped. The engine
+/// now produces this via pre-sorted buckets merged with the pre-sorted
+/// unprunable mirror (round-3 Plan 06 C) — this pins that the merge rewrite is
+/// observationally identical to the old sort-per-request implementation.
+fn reference_candidates(engine: &PolicyEngine, resource: &str) -> Vec<Uuid> {
+    let mut ids: Vec<Uuid> = engine
+        .list_policies()
+        .into_iter()
+        .filter(|p| {
+            p.rules
+                .iter()
+                .any(|r| r.resource == "*" || r.resource == resource)
+        })
+        .map(|p| p.id)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// The candidate set must be sorted, deduped, and identical to the reference
+/// model — including after redeploys that move a policy between the prunable
+/// (bucketed) and unprunable (wildcard) categories, which exercises the
+/// `unprunable_sorted` mirror staying in lock-step with the `unprunable` map.
+#[test]
+fn candidates_stay_sorted_and_deduped_across_category_transitions() {
+    let engine = PolicyEngine::new();
+
+    // Random UUIDv4 ids arrive in arbitrary order — sortedness must come from
+    // the index maintenance, not deployment order.
+    for i in 0..50 {
+        engine
+            .deploy_policy(simple_policy(
+                &format!("lit{i}"),
+                vec![(PolicyAction::Allow, "/shared")],
+            ))
+            .unwrap();
+    }
+    for i in 0..20 {
+        engine
+            .deploy_policy(simple_policy(
+                &format!("wild{i}"),
+                vec![(PolicyAction::Deny, "*")],
+            ))
+            .unwrap();
+    }
+
+    let assert_matches_reference = |resource: &str| {
+        let got = engine.candidate_policy_ids(resource);
+        assert!(
+            got.windows(2).all(|w| w[0] < w[1]),
+            "candidates for {resource:?} not strictly sorted (sorted + deduped)"
+        );
+        assert_eq!(
+            got,
+            reference_candidates(&engine, resource),
+            "candidates for {resource:?} diverge from the reference model"
+        );
+    };
+    assert_matches_reference("/shared");
+    assert_matches_reference("/absent");
+
+    // Prunable -> unprunable: redeploy a literal policy as a wildcard. The
+    // mirror must gain it (candidate for EVERY resource), the bucket must lose it.
+    let mut mover = simple_policy("mover", vec![(PolicyAction::Allow, "/only-here")]);
+    let mover_id = mover.id;
+    engine.deploy_policy(mover.clone()).unwrap();
+    mover.update_rules(vec![PolicyRule {
+        action: PolicyAction::Allow,
+        resource: "*".to_string(),
+        conditions: vec![],
+    }]);
+    engine.deploy_policy(mover.clone()).unwrap();
+    assert!(engine.candidate_policy_ids("/absent").contains(&mover_id));
+    assert_matches_reference("/shared");
+    assert_matches_reference("/only-here");
+
+    // Unprunable -> prunable: back to a literal. The mirror must drop it.
+    mover.update_rules(vec![PolicyRule {
+        action: PolicyAction::Allow,
+        resource: "/only-here".to_string(),
+        conditions: vec![],
+    }]);
+    engine.deploy_policy(mover).unwrap();
+    assert!(
+        !engine.candidate_policy_ids("/absent").contains(&mover_id),
+        "mover left the unprunable set but its id is still served from the sorted mirror"
+    );
+    assert_matches_reference("/only-here");
+
+    // Remove an unprunable policy outright — mirror must shrink with the map.
+    let wild_id = engine
+        .list_policies()
+        .into_iter()
+        .find(|p| p.name == "wild0")
+        .map(|p| p.id)
+        .unwrap();
+    engine.remove_policy(&wild_id).unwrap();
+    assert!(!engine.candidate_policy_ids("/absent").contains(&wild_id));
+    assert_matches_reference("/shared");
+    assert_matches_reference("/absent");
+
+    // Full replace rebuilds mirror + buckets atomically.
+    let a = simple_policy("ra", vec![(PolicyAction::Allow, "/x")]);
+    let w = simple_policy("rw", vec![(PolicyAction::Deny, "*")]);
+    engine.replace_all_policies(vec![a, w]).unwrap();
+    assert_matches_reference("/x");
+    assert_matches_reference("/y");
+}

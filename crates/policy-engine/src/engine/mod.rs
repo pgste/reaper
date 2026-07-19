@@ -58,6 +58,10 @@ pub(crate) struct ActiveSet {
     /// always-candidate `unprunable` set, instead of the whole map. Held inside
     /// the `ActiveSet` so it swaps atomically with the policy map on a full
     /// bundle load (readers never see a partial index).
+    /// Each bucket is kept **sorted** by id (round-3 Plan 06 C, R3-P2-1): a
+    /// request merges its (small) sorted resource bucket with the pre-sorted
+    /// `unprunable_sorted` slice instead of sorting the concatenation per
+    /// request.
     pub(crate) resource_index: DashMap<String, Vec<PolicyId>>,
     /// Policies that must be evaluated for *every* resource because their match
     /// set cannot be statically narrowed to concrete resources — a Simple
@@ -66,6 +70,13 @@ pub(crate) struct ActiveSet {
     /// design: an unprunable policy is always a candidate, so pruning can never
     /// drop a policy that could have matched.
     pub(crate) unprunable: DashMap<PolicyId, ()>,
+    /// The `unprunable` key set as a **sorted, deduped** slice, maintained on
+    /// every mutation so the served evaluate-all path
+    /// ([`PolicyEngine::candidate_policy_ids`]) never sorts the full unprunable
+    /// set per request (round-3 Plan 06 C, R3-P3-1: at 10k unprunable policies
+    /// the per-request sort was ~O(10⁴·log 10⁴)). It is the exact same set as
+    /// `unprunable`; the two are kept in lock-step.
+    pub(crate) unprunable_sorted: RwLock<Vec<PolicyId>>,
 }
 
 impl ActiveSet {
@@ -75,8 +86,51 @@ impl ActiveSet {
             names: DashMap::new(),
             resource_index: DashMap::new(),
             unprunable: DashMap::new(),
+            unprunable_sorted: RwLock::new(Vec::new()),
         }
     }
+}
+
+/// Insert `id` into a sorted, deduped id vec (no-op if already present).
+fn sorted_insert(vec: &mut Vec<PolicyId>, id: PolicyId) {
+    if let Err(pos) = vec.binary_search(&id) {
+        vec.insert(pos, id);
+    }
+}
+
+/// Remove `id` from a sorted id vec (no-op if absent).
+fn sorted_remove(vec: &mut Vec<PolicyId>, id: &PolicyId) {
+    if let Ok(pos) = vec.binary_search(id) {
+        vec.remove(pos);
+    }
+}
+
+/// Merge two **sorted, deduped** id slices into one sorted, deduped vec.
+/// Linear in `a.len() + b.len()` — this is what replaces the per-request
+/// `sort() + dedup()` of the concatenation on the evaluate-all hot path.
+fn merge_sorted_unique(a: &[PolicyId], b: &[PolicyId]) -> Vec<PolicyId> {
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => {
+                out.push(a[i]);
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                out.push(b[j]);
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
 }
 
 /// High-performance policy engine with atomic hot-swapping
@@ -157,18 +211,20 @@ impl PolicyEngine {
     }
 
     /// Add `policy_id` to `set`'s pruning index per `policy`'s terms.
+    ///
+    /// Buckets and the `unprunable_sorted` mirror are maintained **sorted** on
+    /// insert so the read path can merge instead of sorting per request.
     fn index_policy(set: &ActiveSet, policy_id: PolicyId, policy: &EnhancedPolicy) {
         match Self::index_terms(policy) {
             Some(terms) => {
                 for term in terms {
                     let mut bucket = set.resource_index.entry(term).or_default();
-                    if !bucket.contains(&policy_id) {
-                        bucket.push(policy_id);
-                    }
+                    sorted_insert(&mut bucket, policy_id);
                 }
             }
             None => {
                 set.unprunable.insert(policy_id, ());
+                sorted_insert(&mut set.unprunable_sorted.write(), policy_id);
             }
         }
     }
@@ -196,6 +252,7 @@ impl PolicyEngine {
             }
             None => {
                 set.unprunable.remove(policy_id);
+                sorted_remove(&mut set.unprunable_sorted.write(), policy_id);
             }
         }
     }
@@ -334,19 +391,17 @@ impl PolicyEngine {
     /// has only non-matching literal-resource rules, so it is necessarily
     /// non-decisive (`evaluate_matched` → `false`) for this resource — dropping
     /// it cannot change the set decision.
+    ///
+    /// Perf (round-3 Plan 06 C, R3-P3-1): buckets and the unprunable mirror are
+    /// maintained pre-sorted on mutation, so this path is a linear two-way merge
+    /// — no per-request `O(n log n)` sort of the full candidate set.
     pub fn candidate_policy_ids(&self, resource: &str) -> Vec<PolicyId> {
         let active = self.active.load();
-        let mut ids: Vec<PolicyId> = active
-            .resource_index
-            .get(resource)
-            .map(|b| b.value().clone())
-            .unwrap_or_default();
-        ids.reserve(active.unprunable.len());
-        for entry in active.unprunable.iter() {
-            ids.push(*entry.key());
-        }
-        ids.sort();
-        ids.dedup();
+        let unprunable = active.unprunable_sorted.read();
+        let ids = match active.resource_index.get(resource) {
+            Some(bucket) => merge_sorted_unique(bucket.value(), &unprunable),
+            None => unprunable.clone(),
+        };
         ids
     }
 
@@ -507,8 +562,18 @@ impl PolicyEngine {
         };
         let mut any_allow = false;
 
+        // One snapshot for the whole set (R3-P3-1): every candidate resolves
+        // against the same `ActiveSet`, saving an `ArcSwap::load` per candidate
+        // and guaranteeing a full-bundle swap mid-set can't mix old and new
+        // policy versions within a single request's evaluation.
+        let active = self.active.load();
+
         for policy_id in policy_ids {
-            let Some(policy) = self.get_policy(policy_id) else {
+            let policy = active
+                .policies
+                .get(policy_id)
+                .map(|entry| entry.value().clone());
+            let Some(policy) = policy else {
                 outcome.decision = PolicyAction::Deny;
                 outcome.policy_id = *policy_id;
                 outcome.error = Some(
