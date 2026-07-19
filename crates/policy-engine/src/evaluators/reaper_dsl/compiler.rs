@@ -589,13 +589,163 @@ pub fn compile_literal(value: &LiteralValue, interner: &StringInterner) -> Compi
     }
 }
 
+// ===========================================================================
+// Tier-1 partial evaluation: deploy-time constant folding (R3 Plan 06 F)
+// ===========================================================================
+
+/// The canonical compiled `false`: `!true`. The parser lowers the `false`
+/// literal to `Not(Always)`, so this is the only constant-false shape the
+/// folder needs to recognize.
+fn is_false(cond: &CompiledCondition) -> bool {
+    matches!(cond, CompiledCondition::Not(inner) if matches!(**inner, CompiledCondition::Always))
+}
+
+/// Does evaluating this condition write to the rule-scoped `variables` map?
+///
+/// This is the SOUNDNESS GUARD for every eliminating fold. `And`/`Or`
+/// evaluation short-circuits, but a fold that *replaces a subtree with a
+/// constant* (or drops a child) skips evaluations the runtime would have
+/// performed — and an assignment condition evaluated inside one branch is
+/// visible to every LATER condition of the same rule (`variables` clears
+/// between rules, not between siblings). Example that would break without
+/// this guard: `(let x = user.role && false) || x == "admin"` — folding the
+/// left disjunct to `false` and dropping it would leave `x` unbound and flip
+/// the rule's outcome. Any subtree containing a binding form is therefore
+/// left completely untouched by eliminating folds.
+///
+/// Conservative by construction: every `*Assignment` variant is a binding
+/// form (they are exactly the variants whose evaluation calls
+/// `variables.insert`); recursion covers bindings nested under `And`/`Or`/
+/// `Not`. Unknown future variants default to NOT binding — a new binding
+/// variant must be added here, which the exhaustiveness test below pins.
+fn binds_variables(cond: &CompiledCondition) -> bool {
+    match cond {
+        CompiledCondition::Assignment { .. }
+        | CompiledCondition::ExpressionAssignment { .. }
+        | CompiledCondition::ExprCompareAssignment { .. }
+        | CompiledCondition::ComparisonAssignment { .. }
+        | CompiledCondition::NullComparisonAssignment { .. }
+        | CompiledCondition::VarAttrNullCompareAssignment { .. }
+        | CompiledCondition::ComprehensionAssignment { .. } => true,
+        CompiledCondition::And(children) | CompiledCondition::Or(children) => {
+            children.iter().any(binds_variables)
+        }
+        CompiledCondition::Not(inner) => binds_variables(inner),
+        _ => false,
+    }
+}
+
+/// Tier-1 partial evaluation (round-3 Plan 06 F): fold constants out of a
+/// compiled condition at DEPLOY time, so the per-request evaluation loop never
+/// visits a subtree whose truth is already known. Purely structural — no
+/// entity data is consulted (that is tier 2, see
+/// `docs/development/PARTIAL_EVALUATION.md`), so nothing here can go stale
+/// when the `DataStore` mutates.
+///
+/// Folds applied (each preserves decision, matched-flag, rule-name, AND the
+/// variable-binding side effects of evaluation — see [`binds_variables`]):
+/// - `Not(Not(x))` → `x` (double negation; `x` is still evaluated, so its
+///   bindings are preserved — no guard needed).
+/// - `And`: fold children, splice nested `And`s in place (same depth-first
+///   left-to-right evaluation order), drop `true` children (bind nothing).
+///   A `false` child makes the whole conjunction `false` — applied only when
+///   NO child binds a variable, else the conjunction is kept as-is.
+///   Empty after drops → `true`; single child → unwrapped.
+/// - `Or`: dual — splice nested `Or`s, drop `false` children (bind nothing);
+///   a `true` child folds the disjunction to `true` only when NO child binds.
+///   Empty after drops → `false`; single child → unwrapped.
+///
+/// Splicing vs short-circuit: `And(And(a, b), c)` and `And(a, b, c)` evaluate
+/// the identical prefix under the runtime's short-circuiting (`a` false skips
+/// `b` in both shapes), so flattening changes neither the outcome nor which
+/// bindings occur.
+///
+/// Rules are deliberately NOT dropped when their condition folds to `false`:
+/// a `deny if false` rule still occupies its slot (one cheap `is_false`-shaped
+/// check per request) so `validate()`'s at-least-one-rule invariant and rule
+/// counts stay untouched. The pruning-index extraction already maps a `false`
+/// rule to the empty bound.
+///
+/// Fold order is bottom-up (children first), so constants produced by inner
+/// folds propagate outward in one pass: `(false || true) && x` → `x`.
+pub fn fold_condition(cond: CompiledCondition) -> CompiledCondition {
+    match cond {
+        CompiledCondition::Not(inner) => {
+            let folded = fold_condition(*inner);
+            match folded {
+                // !!x → x. Bindings inside x still evaluate.
+                CompiledCondition::Not(grand) => *grand,
+                other => CompiledCondition::Not(Box::new(other)),
+            }
+        }
+        CompiledCondition::And(children) => {
+            let folded: Vec<CompiledCondition> = children.into_iter().map(fold_condition).collect();
+            let any_binds = folded.iter().any(binds_variables);
+            // A false conjunct decides the And — but only fold it away when no
+            // sibling binds (skipping a binding evaluation is observable).
+            if folded.iter().any(is_false) && !any_binds {
+                return CompiledCondition::Not(Box::new(CompiledCondition::Always));
+            }
+            let mut out: Vec<CompiledCondition> = Vec::with_capacity(folded.len());
+            for child in folded {
+                match child {
+                    // `true` conjunct: decides nothing, binds nothing — drop.
+                    CompiledCondition::Always => {}
+                    // Splice nested Ands in place (order-preserving).
+                    CompiledCondition::And(inner) => out.extend(inner),
+                    other => out.push(other),
+                }
+            }
+            match out.len() {
+                0 => CompiledCondition::Always,
+                1 => out.into_iter().next().expect("len checked"),
+                _ => CompiledCondition::And(out),
+            }
+        }
+        CompiledCondition::Or(children) => {
+            let folded: Vec<CompiledCondition> = children.into_iter().map(fold_condition).collect();
+            let any_binds = folded.iter().any(binds_variables);
+            // A true disjunct decides the Or — but only fold it away when no
+            // sibling binds (a dropped earlier disjunct may have bound a
+            // variable a later rule condition reads).
+            if folded
+                .iter()
+                .any(|c| matches!(c, CompiledCondition::Always))
+                && !any_binds
+            {
+                return CompiledCondition::Always;
+            }
+            let mut out: Vec<CompiledCondition> = Vec::with_capacity(folded.len());
+            for child in folded {
+                if is_false(&child) {
+                    // `false` disjunct: decides nothing, binds nothing — drop.
+                    continue;
+                }
+                match child {
+                    // Splice nested Ors in place (order-preserving).
+                    CompiledCondition::Or(inner) => out.extend(inner),
+                    other => out.push(other),
+                }
+            }
+            match out.len() {
+                0 => CompiledCondition::Not(Box::new(CompiledCondition::Always)),
+                1 => out.into_iter().next().expect("len checked"),
+                _ => CompiledCondition::Or(out),
+            }
+        }
+        // Leaves are already minimal.
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::evaluators::reaper_dsl::types::{
-        AttributeComparison, CompareTarget, CompiledCompareTarget, CountCondition, CountOp,
-        CrossEntityComparison, EntityType, NumericOp, StringOp, StringOperationCondition,
-        TimeCondition, VariableStringOperationCondition, WildcardComparison,
+        AttrCompareOp, AttributeComparison, CompareTarget, CompiledCompareTarget, CompiledExprType,
+        CountCondition, CountOp, CrossEntityComparison, EntityType, NumericOp, StringOp,
+        StringOperationCondition, TimeCondition, VariableStringOperationCondition,
+        WildcardComparison,
     };
 
     #[test]
@@ -784,5 +934,229 @@ mod tests {
         } else {
             panic!("Expected And, got {:?}", compiled);
         }
+    }
+
+    // =======================================================================
+    // Tier-1 partial evaluation: fold_condition
+    // =======================================================================
+
+    fn t() -> CompiledCondition {
+        CompiledCondition::Always
+    }
+    fn f() -> CompiledCondition {
+        CompiledCondition::Not(Box::new(CompiledCondition::Always))
+    }
+    /// A non-constant, non-binding leaf.
+    fn leaf(interner: &StringInterner, v: &str) -> CompiledCondition {
+        CompiledCondition::ResourceIdEquals {
+            value: interner.intern(v),
+        }
+    }
+    /// A binding condition (writes the rule-scoped `variables` map).
+    fn binding(interner: &StringInterner) -> CompiledCondition {
+        CompiledCondition::Assignment {
+            variable: interner.intern("x"),
+            entity_type: EntityType::User,
+            attribute: interner.intern("role"),
+            index: None,
+        }
+    }
+
+    #[test]
+    fn test_fold_double_negation() {
+        let i = StringInterner::new();
+        let folded = fold_condition(CompiledCondition::Not(Box::new(CompiledCondition::Not(
+            Box::new(leaf(&i, "r")),
+        ))));
+        assert!(matches!(folded, CompiledCondition::ResourceIdEquals { .. }));
+        // But Not(Always) (canonical false) must NOT unwrap to Always.
+        assert!(is_false(&fold_condition(f())));
+    }
+
+    #[test]
+    fn test_fold_and_drops_true_and_unwraps() {
+        let i = StringInterner::new();
+        // true && r  →  r
+        let folded = fold_condition(CompiledCondition::And(vec![t(), leaf(&i, "r")]));
+        assert!(matches!(folded, CompiledCondition::ResourceIdEquals { .. }));
+        // true && true  →  true
+        assert!(matches!(
+            fold_condition(CompiledCondition::And(vec![t(), t()])),
+            CompiledCondition::Always
+        ));
+    }
+
+    #[test]
+    fn test_fold_and_false_short_circuits_without_bindings() {
+        let i = StringInterner::new();
+        // r && false  →  false (no bindings anywhere in the conjunction)
+        let folded = fold_condition(CompiledCondition::And(vec![leaf(&i, "r"), f()]));
+        assert!(is_false(&folded));
+    }
+
+    #[test]
+    fn test_fold_and_false_kept_when_sibling_binds() {
+        let i = StringInterner::new();
+        // (let x = user.role) && false: the assignment must still evaluate
+        // (a later Or branch of the same rule may read x), so the false child
+        // is NOT allowed to erase the conjunction.
+        let folded = fold_condition(CompiledCondition::And(vec![binding(&i), f()]));
+        let CompiledCondition::And(children) = folded else {
+            panic!("binding conjunction must not be erased");
+        };
+        assert_eq!(children.len(), 2);
+        assert!(binds_variables(&children[0]));
+        assert!(is_false(&children[1]));
+    }
+
+    #[test]
+    fn test_fold_or_drops_false_and_unwraps() {
+        let i = StringInterner::new();
+        // false || r  →  r
+        let folded = fold_condition(CompiledCondition::Or(vec![f(), leaf(&i, "r")]));
+        assert!(matches!(folded, CompiledCondition::ResourceIdEquals { .. }));
+        // false || false  →  false
+        assert!(is_false(&fold_condition(CompiledCondition::Or(vec![
+            f(),
+            f()
+        ]))));
+    }
+
+    #[test]
+    fn test_fold_or_true_short_circuits_without_bindings() {
+        let i = StringInterner::new();
+        // r || true  →  true
+        assert!(matches!(
+            fold_condition(CompiledCondition::Or(vec![leaf(&i, "r"), t()])),
+            CompiledCondition::Always
+        ));
+    }
+
+    #[test]
+    fn test_fold_or_true_kept_when_sibling_binds() {
+        let i = StringInterner::new();
+        // (let x = user.role) || true: folding to `true` would skip the
+        // binding the runtime performs (Or evaluates left-to-right), so the
+        // disjunction must survive.
+        let folded = fold_condition(CompiledCondition::Or(vec![binding(&i), t()]));
+        assert!(matches!(folded, CompiledCondition::Or(_)));
+    }
+
+    #[test]
+    fn test_fold_flattens_nested_same_operator() {
+        let i = StringInterner::new();
+        // (a && b) && c  →  And(a, b, c), order preserved.
+        let folded = fold_condition(CompiledCondition::And(vec![
+            CompiledCondition::And(vec![leaf(&i, "a"), leaf(&i, "b")]),
+            leaf(&i, "c"),
+        ]));
+        let CompiledCondition::And(children) = folded else {
+            panic!("expected flattened And");
+        };
+        let names: Vec<String> = children
+            .iter()
+            .map(|c| match c {
+                CompiledCondition::ResourceIdEquals { value } => {
+                    i.resolve(*value).unwrap().to_string()
+                }
+                other => panic!("unexpected child {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_fold_propagates_bottom_up() {
+        let i = StringInterner::new();
+        // (false || true) && r  →  r  (inner Or folds to true, then drops).
+        let folded = fold_condition(CompiledCondition::And(vec![
+            CompiledCondition::Or(vec![f(), t()]),
+            leaf(&i, "r"),
+        ]));
+        assert!(matches!(folded, CompiledCondition::ResourceIdEquals { .. }));
+    }
+
+    #[test]
+    fn test_binds_variables_covers_every_assignment_variant() {
+        // Exhaustiveness pin: every variant whose evaluation writes the
+        // `variables` map must be flagged. If a new binding variant is added
+        // to CompiledCondition without updating `binds_variables`, the
+        // eliminating folds become unsound — extend BOTH, then this list.
+        let i = StringInterner::new();
+        let v = i.intern("x");
+        let a = i.intern("attr");
+        let all_binding: Vec<CompiledCondition> = vec![
+            CompiledCondition::Assignment {
+                variable: v,
+                entity_type: EntityType::User,
+                attribute: a,
+                index: None,
+            },
+            CompiledCondition::ExpressionAssignment {
+                variable: v,
+                expr_type: CompiledExprType::CollectionCount {
+                    entity_type: EntityType::User,
+                    attribute: a,
+                },
+            },
+            CompiledCondition::ExprCompareAssignment {
+                variable: v,
+                expr_type: CompiledExprType::CollectionCount {
+                    entity_type: EntityType::User,
+                    attribute: a,
+                },
+                op: AttrCompareOp::Equal,
+                value: CompiledLiteralValue::Int(1),
+            },
+            CompiledCondition::ComparisonAssignment {
+                variable: v,
+                entity_type: EntityType::User,
+                attribute: a,
+                op: AttrCompareOp::Equal,
+                value: CompiledLiteralValue::Int(1),
+            },
+            CompiledCondition::NullComparisonAssignment {
+                variable: v,
+                entity_type: EntityType::User,
+                attribute: a,
+                is_null_check: true,
+            },
+            CompiledCondition::VarAttrNullCompareAssignment {
+                result_variable: v,
+                source_variable: v,
+                attribute: a,
+                is_null_check: true,
+            },
+            CompiledCondition::ComprehensionAssignment {
+                variable: v,
+                comprehension: Box::new(CompiledComprehension {
+                    comp_type: ComprehensionType::Array,
+                    iterator: CompiledIterator {
+                        variable: v,
+                        source: CompiledIterationSource::EntityAttr {
+                            entity_type: EntityType::User,
+                            attribute: a,
+                        },
+                    },
+                    filters: vec![],
+                    output: Some(CompiledOutput::Variable(v)),
+                    key_value: None,
+                }),
+            },
+        ];
+        for cond in &all_binding {
+            assert!(
+                binds_variables(cond),
+                "binding variant not flagged: {cond:?}"
+            );
+            // And nested under logic operators.
+            assert!(binds_variables(&CompiledCondition::And(vec![
+                CompiledCondition::Always,
+                cond.clone()
+            ])));
+        }
+        // Non-binding leaves stay unflagged.
+        assert!(!binds_variables(&leaf(&i, "r")));
+        assert!(!binds_variables(&t()));
     }
 }

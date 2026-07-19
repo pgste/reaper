@@ -237,9 +237,18 @@ impl ReaperDSLEvaluator {
         let mut compiled_allow_rules = Vec::new();
 
         for rule in rules {
+            // Tier-1 partial evaluation (round-3 Plan 06 F): constant-fold the
+            // compiled condition once at deploy so the per-request loop never
+            // re-derives statically-known truth. Purely structural — the
+            // decision, matched-flag, rule name, and variable-binding side
+            // effects are preserved (see `compiler::fold_condition`), which the
+            // compiled-vs-AST differential pins.
             let compiled = CompiledRule {
                 name: rule.name,
-                condition: compiler::compile_condition(&rule.condition, interner),
+                condition: compiler::fold_condition(compiler::compile_condition(
+                    &rule.condition,
+                    interner,
+                )),
                 decision: rule.decision.clone(),
             };
 
