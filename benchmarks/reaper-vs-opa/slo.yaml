@@ -27,9 +27,18 @@ scenarios:
     p99_us: 10
     p999_us: 50
   # Evaluate-all via pruning index (few candidates match) — N=10,000, 5,000 rps.
-  # NOTE: prunable only for Simple-language policies until R2-P2-1 (DSL
-  # partial-evaluation pruning) lands; the harness enforces a Simple set.
+  # Simple and literal-DSL sets prune via the resource-ID tier (round-2 D2).
   slo-evaluate-all:
+    p50_us: 5
+    p99_us: 25
+    p999_us: 100
+  # Evaluate-all over ABAC-shaped DSL policies (`resource.type == "…"`),
+  # prunable via the resource-TYPE index tier (round-3 R3-P2-1) — N=10,000
+  # across 100 types, so each request evaluates a ~100-policy type bucket
+  # (pre-type-tier this set was 100% unprunable and evaluate-all blanket-
+  # denied on candidate_cap_exceeded). Same budget as the plain evaluate-all
+  # row per the Plan 06 DoD.
+  slo-evaluate-all-abac:
     p50_us: 5
     p99_us: 25
     p999_us: 100
