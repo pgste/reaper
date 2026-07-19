@@ -54,6 +54,11 @@ fn state(allow_evaluate_all: bool, max_candidate_policies: usize) -> Arc<AgentSt
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
         data_sync: Arc::new(DataSyncState::from_env()),
         bundle_verifier: Arc::new(BundleVerifier::from_config(&ManagementSettings::default())),
+        capability_gate: std::sync::Arc::new(
+            reaper_agent::capability_cache::CapabilityGateRuntime::from_auth(
+                &reaper_core::config::AgentAuthSettings::default(),
+            ),
+        ),
     })
 }
 

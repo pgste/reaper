@@ -173,6 +173,11 @@ async fn main() -> anyhow::Result<()> {
                 &reaper_core::config::ManagementSettings::default(),
             ),
         ),
+        capability_gate: std::sync::Arc::new(
+            reaper_agent::capability_cache::CapabilityGateRuntime::from_auth(
+                &reaper_core::config::AgentAuthSettings::default(),
+            ),
+        ),
     });
 
     let app = Router::new()

@@ -64,6 +64,11 @@ fn state_with(
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
         data_sync: Arc::new(data_sync),
         bundle_verifier: Arc::new(BundleVerifier::from_config(&ManagementSettings::default())),
+        capability_gate: std::sync::Arc::new(
+            reaper_agent::capability_cache::CapabilityGateRuntime::from_auth(
+                &reaper_core::config::AgentAuthSettings::default(),
+            ),
+        ),
     })
 }
 

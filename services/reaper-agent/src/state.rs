@@ -47,6 +47,8 @@ pub struct AgentState {
     /// Bundle signature verification policy — the single implementation both
     /// the sync pull path and the HTTP push endpoints enforce (Plan 02).
     pub bundle_verifier: Arc<crate::management::verify::BundleVerifier>,
+    /// Capability verdict cache + verify rate limiter (Plan 06 Phase D).
+    pub capability_gate: Arc<crate::capability_cache::CapabilityGateRuntime>,
 }
 
 /// What to do when the data-plane staleness budget is exceeded.

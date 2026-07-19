@@ -110,6 +110,37 @@ lazy_static! {
     )
     .expect("Failed to register ACTIVE_POLICIES metric");
 
+    /// Capability verdict-cache hits (Plan 06 Phase D). Scraped from the
+    /// gate's counters on /metrics; steady-state agentic traffic should be
+    /// nearly all hits.
+    pub static ref CAPABILITY_CACHE_HITS: Gauge = register_gauge!(
+        "reaper_capability_cache_hits_total",
+        "Capability verdict cache hits"
+    )
+    .expect("Failed to register CAPABILITY_CACHE_HITS metric");
+
+    /// Capability verdict-cache misses (each one is a full ed25519 verify).
+    pub static ref CAPABILITY_CACHE_MISSES: Gauge = register_gauge!(
+        "reaper_capability_cache_misses_total",
+        "Capability verdict cache misses (full verifications)"
+    )
+    .expect("Failed to register CAPABILITY_CACHE_MISSES metric");
+
+    /// Live entries in the capability verdict cache.
+    pub static ref CAPABILITY_CACHE_SIZE: Gauge = register_gauge!(
+        "reaper_capability_cache_entries",
+        "Capability verdict cache entries"
+    )
+    .expect("Failed to register CAPABILITY_CACHE_SIZE metric");
+
+    /// Full ed25519 capability verifications performed (the work the cache
+    /// exists to avoid; steady state should be flat while hits climb).
+    pub static ref CAPABILITY_FULL_VERIFIES: Gauge = register_gauge!(
+        "reaper_capability_full_verifies_total",
+        "Full ed25519 capability verifications performed"
+    )
+    .expect("Failed to register CAPABILITY_FULL_VERIFIES metric");
+
     /// Error counter by type.
     pub static ref ERRORS_TOTAL: CounterVec = register_counter_vec!(
         "reaper_errors_total",

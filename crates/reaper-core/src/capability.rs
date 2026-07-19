@@ -349,6 +349,25 @@ impl Capability {
             .ok_or_else(|| CapabilityError::Malformed("signature is not valid hex".into()))?;
         verifying_key.verify_raw(&canonical_message(self), &sig)?;
 
+        self.check_validity_at(now_unix, revoked_ids)
+    }
+
+    /// The time/revocation half of [`Self::verify_at`] — everything that can
+    /// change BETWEEN verifications of byte-identical content: the validity
+    /// window against `now_unix` and revocation of this id or any ancestor.
+    /// Pure, cheap (integer compares + set lookups, no crypto).
+    ///
+    /// This is what a verdict-cache hit must still enforce (R3-P2-2): a
+    /// cache entry proves the *content-bound* checks (signature, key pin,
+    /// algorithm, version — see [`Self::cache_digest`]) were passed for these
+    /// exact bytes, but proves nothing about the current clock or the current
+    /// revocation set. `verify_at` calls this after the crypto so the two
+    /// paths cannot drift.
+    pub fn check_validity_at(
+        &self,
+        now_unix: i64,
+        revoked_ids: &HashSet<String>,
+    ) -> Result<(), CapabilityError> {
         if self.not_before > self.expires_at {
             return Err(CapabilityError::InvalidWindow);
         }
@@ -377,6 +396,29 @@ impl Capability {
             }
         }
         Ok(())
+    }
+
+    /// Content digest for the agent's capability verdict cache (R3-P2-2):
+    /// SHA-256 over the canonical signing message plus the signature hex.
+    ///
+    /// ## Why not the plan's literal `(id, key_id, signature, expiry)` key
+    /// A cache key that omits any SIGNED claim is a signature bypass: take a
+    /// legitimately-verified capability, keep `id`/`signature`, and widen
+    /// `grants` (or swap `subject`/`actor`) — the literal key still matches
+    /// the cached positive verdict, so the tampered claims are accepted
+    /// without `verify_raw` ever seeing them. The canonical message covers
+    /// every claim (version, id, algorithm, key_id, subject, actor, grants,
+    /// window, ancestry — the exact bytes the signature is over), so ANY
+    /// claim mutation changes this digest and forces a real verification.
+    /// The signature itself is folded in so a same-claims/different-signature
+    /// token can never alias a cached verdict either.
+    pub fn cache_digest(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(canonical_message(self));
+        h.update([0x1f]);
+        h.update(self.signature.as_bytes());
+        h.finalize().into()
     }
 
     /// Does this (already-verified) capability authorize `action` on

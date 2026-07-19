@@ -364,6 +364,25 @@ impl ReaperAgentConfig {
             self.auth.require_actor_capability =
                 matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
+        if let Ok(val) = std::env::var("REAPER_CAPABILITY_CACHE_ENABLED") {
+            self.auth.capability_cache_enabled =
+                matches!(val.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(val) = std::env::var("REAPER_CAPABILITY_CACHE_TTL_SECS") {
+            if let Ok(n) = val.parse() {
+                self.auth.capability_cache_ttl_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_CAPABILITY_CACHE_CAPACITY") {
+            if let Ok(n) = val.parse() {
+                self.auth.capability_cache_capacity = n;
+            }
+        }
+        if let Ok(val) = std::env::var("REAPER_CAPABILITY_VERIFY_LIMIT_PER_MIN") {
+            if let Ok(n) = val.parse() {
+                self.auth.capability_verify_limit_per_min = n;
+            }
+        }
 
         // TLS settings
         if let Ok(val) = std::env::var("REAPER_TLS_ENABLED") {

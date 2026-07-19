@@ -179,6 +179,15 @@ pub async fn metrics(State(state): State<Arc<AgentState>>) -> Result<Response, S
     let engine_stats = state.policy_engine.get_stats();
     ACTIVE_POLICIES.set(engine_stats.total_policies as f64);
 
+    // Capability verdict-cache effectiveness (Plan 06 Phase D): scraped from
+    // the gate's atomic counters at collection time, not on the hot path.
+    let gate = &state.capability_gate;
+    crate::observability::CAPABILITY_CACHE_HITS.set(gate.cache.hit_count() as f64);
+    crate::observability::CAPABILITY_CACHE_MISSES.set(gate.cache.miss_count() as f64);
+    crate::observability::CAPABILITY_CACHE_SIZE.set(gate.cache.len() as f64);
+    crate::observability::CAPABILITY_FULL_VERIFIES
+        .set(state.bundle_verifier.capability_verify_count() as f64);
+
     // Encode metrics to Prometheus text format
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
@@ -224,6 +233,11 @@ mod tests {
             bundle_verifier: Arc::new(crate::management::verify::BundleVerifier::from_config(
                 &reaper_core::config::ManagementSettings::default(),
             )),
+            capability_gate: std::sync::Arc::new(
+                crate::capability_cache::CapabilityGateRuntime::from_auth(
+                    &reaper_core::config::AgentAuthSettings::default(),
+                ),
+            ),
         })
     }
 

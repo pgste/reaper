@@ -226,7 +226,9 @@ pub async fn evaluate_policy(
         &mut payload.actor,
         payload.capability.as_ref(),
         crate::capability_gate::now_unix(),
-    ) {
+    )
+    .await
+    {
         ERRORS_TOTAL
             .with_label_values(&["capability_rejected"])
             .inc();
@@ -1191,31 +1193,36 @@ pub async fn batch_evaluate_policy(
     // parallel eval loop: an item failing it becomes a pre-denied slot
     // (Err(reason)) that skips evaluation and reports the reason.
     let gate_now = crate::capability_gate::now_unix();
-    let requests: Vec<Result<PolicyRequest, String>> = payload
-        .requests
-        .iter()
-        .map(|r| {
-            let mut actor = r.actor.clone();
-            crate::capability_gate::enforce(
-                &state,
-                &r.principal,
-                &r.action,
-                &r.resource,
-                &mut actor,
-                r.capability.as_ref(),
-                gate_now,
-            )?;
+    // Plain loop, not `.map()`: the gate is async now (Plan 06 Phase D — a
+    // verdict-cache miss verifies off-reactor via spawn_blocking). Steady
+    // state stays cheap: repeated capabilities across a batch hit the cache
+    // and never leave the reactor.
+    let mut requests: Vec<Result<PolicyRequest, String>> =
+        Vec::with_capacity(payload.requests.len());
+    for r in &payload.requests {
+        let mut actor = r.actor.clone();
+        let gated = crate::capability_gate::enforce(
+            &state,
+            &r.principal,
+            &r.action,
+            &r.resource,
+            &mut actor,
+            r.capability.as_ref(),
+            gate_now,
+        )
+        .await;
+        requests.push(gated.map(|()| {
             let mut context = r.context.clone().unwrap_or_default();
             context.insert("principal".to_string(), r.principal.clone());
-            Ok(PolicyRequest {
+            PolicyRequest {
                 resource: r.resource.clone(),
                 action: r.action.clone(),
                 context,
                 actor,
                 context_provenance: r.context_provenance.clone(),
-            })
-        })
-        .collect();
+            }
+        }));
+    }
 
     let request_count = requests.len();
 
