@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784492074046,
+  "lastUpdate": 1784492100857,
   "repoUrl": "https://github.com/pgste/reaper",
   "entries": {
     "Eval latency (criterion)": [
@@ -59,6 +59,66 @@ window.BENCHMARK_DATA = {
             "name": "rebac/ast_policy_allow_group_viewer",
             "value": 1291,
             "range": "± 7",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hwhbygwarm@gmail.com",
+            "name": "pgste",
+            "username": "pgste"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea43d2a1b948e31b16a6dc5eb04a96f1289120bf",
+          "message": "Merge pull request #94 from pgste/claude/reaper-pr-pages",
+          "timestamp": "2026-07-19T21:10:10+01:00",
+          "tree_id": "8b75baaa7e2885a4eff3e9779a19e23f44fadf05",
+          "url": "https://github.com/pgste/reaper/commit/ea43d2a1b948e31b16a6dc5eb04a96f1289120bf"
+        },
+        "date": 1784492099993,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "policy_evaluation/simple_policy",
+            "value": 121,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_evaluation/complex_policy",
+            "value": 452,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "latency_targets/policy_evaluation_performance",
+            "value": 121,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/compiled_policy_allow_group_viewer",
+            "value": 303,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/compiled_policy_deny_full_sweep",
+            "value": 556,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/ast_policy_allow_group_viewer",
+            "value": 1333,
+            "range": "± 6",
             "unit": "ns/iter"
           }
         ]
