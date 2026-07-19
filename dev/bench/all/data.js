@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784492076702,
+  "lastUpdate": 1784492103641,
   "repoUrl": "https://github.com/pgste/reaper",
   "entries": {
     "All benchmarks (criterion)": [
@@ -125,6 +125,132 @@ window.BENCHMARK_DATA = {
             "name": "rebac/ast_policy_allow_group_viewer",
             "value": 1291,
             "range": "± 7",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hwhbygwarm@gmail.com",
+            "name": "pgste",
+            "username": "pgste"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea43d2a1b948e31b16a6dc5eb04a96f1289120bf",
+          "message": "Merge pull request #94 from pgste/claude/reaper-pr-pages",
+          "timestamp": "2026-07-19T21:10:10+01:00",
+          "tree_id": "8b75baaa7e2885a4eff3e9779a19e23f44fadf05",
+          "url": "https://github.com/pgste/reaper/commit/ea43d2a1b948e31b16a6dc5eb04a96f1289120bf"
+        },
+        "date": 1784492103486,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "policy_evaluation/simple_policy",
+            "value": 121,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_evaluation/complex_policy",
+            "value": 452,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_hot_swap/deploy_policy",
+            "value": 155123,
+            "range": "± 36490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_hot_swap/concurrent_lookup",
+            "value": 33,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/concurrent_evaluations",
+            "value": 379185,
+            "range": "± 7487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "memory_efficiency/policy_storage/100",
+            "value": 173983,
+            "range": "± 251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "memory_efficiency/policy_storage/1000",
+            "value": 3375292,
+            "range": "± 5595",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "realistic_workloads/microservice_auth_pattern",
+            "value": 11969,
+            "range": "± 115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "latency_targets/policy_evaluation_performance",
+            "value": 121,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/has_relation_direct_hit",
+            "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/has_relation_direct_miss",
+            "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/reachable_1hop_hit",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/reachable_3hop_miss_bounded",
+            "value": 66,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/inherited_1hop_hit",
+            "value": 25,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/compiled_policy_allow_group_viewer",
+            "value": 303,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/compiled_policy_deny_full_sweep",
+            "value": 556,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/ast_policy_allow_group_viewer",
+            "value": 1333,
+            "range": "± 6",
             "unit": "ns/iter"
           }
         ]
