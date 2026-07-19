@@ -638,6 +638,45 @@ jobs:
           fi
         done
 
+    # Performance TREND page (main only). Allure's stock graphs are
+    # test-oriented (status pie, duration trend of synthetic "passed" records)
+    # and say nothing about rps / ns-µs latency over time. This keeps an
+    # append-only per-scenario history (reaper/opa/wasm rps + p50/p99 µs, one
+    # point per merge to main) at trends/data.json and ships the self-contained
+    # chart page (benchmarks/reaper-vs-opa/trends-page/index.html — no CDN
+    # scripts) beside the Allure report at <pages>/trends/.
+    - name: Update performance trend data
+      if: github.ref == 'refs/heads/main'
+      run: |
+        mkdir -p allure-history/trends
+        # Seed with the accumulated history from the previous publish (the
+        # gh-pages checkout above); start fresh if absent.
+        if [ -f gh-pages/trends/data.json ]; then
+          cp gh-pages/trends/data.json data.json
+        else
+          echo '{"points":[]}' > data.json
+        fi
+        # One point for this run: every scenario's metrics keyed by name.
+        entry=$(jq -n \
+          --arg t "$(date -u +%FT%TZ)" \
+          --arg sha "$(echo '${{ github.sha }}' | cut -c1-7)" \
+          --argjson run '${{ github.run_number }}' \
+          '{t:$t, sha:$sha, run:$run, scenarios:{}}')
+        for f in allure-results/*-metrics.json; do
+          [ -f "$f" ] || continue
+          s=$(jq -r '.scenario' "$f")
+          m=$(jq '{reaper:{rps:.reaper.throughput_rps, p50:.reaper.latency_p50_us, p99:.reaper.latency_p99_us},
+                   opa:{rps:.opa.throughput_rps, p50:.opa.latency_p50_us, p99:.opa.latency_p99_us},
+                   wasm:(if .wasm then {rps:.wasm.throughput_rps, p50:.wasm.latency_p50_us, p99:.wasm.latency_p99_us} else null end),
+                   speedup:.speedup}' "$f")
+          entry=$(echo "$entry" | jq --arg s "$s" --argjson m "$m" '.scenarios[$s]=$m')
+        done
+        # Append, cap the series (~300 merges of history), publish page + data.
+        jq --argjson e "$entry" '.points += [$e] | .points |= .[-300:]' \
+          data.json > allure-history/trends/data.json
+        cp benchmarks/reaper-vs-opa/trends-page/index.html allure-history/trends/index.html
+        echo "trend points now: $(jq '.points | length' allure-history/trends/data.json)"
+
     - name: Publish to GitHub Pages
       if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v3
@@ -701,6 +740,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "This PR's preview: https://${REPO%/*}.github.io/${REPO#*/}/pr-${{ github.event.number }}/" >> $GITHUB_STEP_SUMMARY
         fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Performance trends (rps + p50/p99 latency over time): https://${REPO%/*}.github.io/${REPO#*/}/trends/" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
         # Also show summary table
