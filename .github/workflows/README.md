@@ -63,7 +63,10 @@ Location: `.github/workflows/ci.yml`
 
 ### 🔒 Build Failure Policy
 - **Unit tests MUST pass** - Pipeline fails immediately if unit tests fail
-- **Performance tests DON'T fail build** - All volume/memory/BDD tests use `continue-on-error: true`
+- **BDD tests MUST pass** - The Cucumber suites (core, policy-engine, platform)
+  are behavioral correctness tests and fail the build, including a failure to
+  generate their test-data fixtures
+- **Performance tests DON'T fail build** - Volume/memory tests use `continue-on-error: true`
 - This allows monitoring performance regressions without blocking releases
 
 ### ⚡ Parallel Execution
