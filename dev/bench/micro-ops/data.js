@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784489891177,
+  "lastUpdate": 1784489937026,
   "repoUrl": "https://github.com/pgste/reaper",
   "entries": {
     "Engine micro-ops (criterion)": [
@@ -88,6 +88,96 @@ window.BENCHMARK_DATA = {
           {
             "name": "rebac/inherited_1hop_hit",
             "value": 22,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hwhbygwarm@gmail.com",
+            "name": "pgste",
+            "username": "pgste"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b68d1f9274a234b02fa2afd9343492b68fdcb71a",
+          "message": "Merge pull request #91 from pgste/claude/reaper-slo-abac-row",
+          "timestamp": "2026-07-19T20:31:41+01:00",
+          "tree_id": "231d7d93e26d79b918e69745c330d0f80c5a8aab",
+          "url": "https://github.com/pgste/reaper/commit/b68d1f9274a234b02fa2afd9343492b68fdcb71a"
+        },
+        "date": 1784489936876,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "policy_hot_swap/deploy_policy",
+            "value": 157538,
+            "range": "± 36502",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_hot_swap/concurrent_lookup",
+            "value": 33,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/concurrent_evaluations",
+            "value": 380555,
+            "range": "± 18030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "memory_efficiency/policy_storage/100",
+            "value": 175814,
+            "range": "± 475",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "memory_efficiency/policy_storage/1000",
+            "value": 3401790,
+            "range": "± 11761",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "realistic_workloads/microservice_auth_pattern",
+            "value": 12024,
+            "range": "± 103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/has_relation_direct_hit",
+            "value": 23,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/has_relation_direct_miss",
+            "value": 23,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/reachable_1hop_hit",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/reachable_3hop_miss_bounded",
+            "value": 65,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/inherited_1hop_hit",
+            "value": 24,
             "range": "± 0",
             "unit": "ns/iter"
           }
