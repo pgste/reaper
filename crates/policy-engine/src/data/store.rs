@@ -11,6 +11,7 @@ use dashmap::DashMap;
 use reaper_core::ReaperError;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Index strategy for optimizing different query patterns
@@ -87,29 +88,42 @@ pub struct DataStore {
 
     /// ReBAC relationship graph (named directed edges, forward+reverse indexed)
     relationships: Arc<crate::data::relationships::RelationshipGraph>,
+
+    /// Data generation counter (R3-06 Phase F.2). Bumped at the END of every
+    /// mutation entry point — entity inserts/removals/clears, batch loads,
+    /// and relationship-graph mutations (the graph holds this same `Arc`, so
+    /// direct `store.relationships().add_edge(..)` calls bump it too).
+    ///
+    /// Consumers (deploy-time policy specialization, `/health`) snapshot the
+    /// epoch, read data, then compare: an unequal epoch means the data may
+    /// have changed since the snapshot. Bump-after-mutation ordering means a
+    /// snapshot taken mid-mutation is always invalidated by the trailing
+    /// bump. The counter only ever increases; equality is the only meaningful
+    /// comparison.
+    data_epoch: Arc<AtomicU64>,
 }
 
 impl DataStore {
     /// Create a new data store
     pub fn new() -> Self {
-        let interner = Arc::new(StringInterner::new());
-        Self {
-            config: DataStoreConfig::default(),
-            entities: Arc::new(DashMap::new()),
-            type_index: Arc::new(DashMap::new()),
-            attribute_index: Arc::new(DashMap::new()),
-            composite_index: Arc::new(DashMap::new()),
-            view_manager: Arc::new(ViewManager::new()),
-            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new(
-                (*interner).clone(),
-            )),
-            interner,
-        }
+        Self::build(DataStoreConfig::default(), StringInterner::new())
     }
 
     /// Create a new data store with custom configuration
     pub fn with_config(config: DataStoreConfig) -> Self {
-        let interner = Arc::new(StringInterner::new());
+        Self::build(config, StringInterner::new())
+    }
+
+    /// Create a new data store with pre-warmed strings
+    pub fn with_prewarm(common_strings: &[&str]) -> Self {
+        let interner = StringInterner::new();
+        interner.prewarm(common_strings);
+        Self::build(DataStoreConfig::default(), interner)
+    }
+
+    fn build(config: DataStoreConfig, interner: StringInterner) -> Self {
+        let interner = Arc::new(interner);
+        let data_epoch = Arc::new(AtomicU64::new(0));
         Self {
             config,
             entities: Arc::new(DashMap::new()),
@@ -117,31 +131,26 @@ impl DataStore {
             attribute_index: Arc::new(DashMap::new()),
             composite_index: Arc::new(DashMap::new()),
             view_manager: Arc::new(ViewManager::new()),
-            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new(
+            relationships: Arc::new(crate::data::relationships::RelationshipGraph::with_epoch(
                 (*interner).clone(),
+                data_epoch.clone(),
             )),
             interner,
+            data_epoch,
         }
     }
 
-    /// Create a new data store with pre-warmed strings
-    pub fn with_prewarm(common_strings: &[&str]) -> Self {
-        let interner = StringInterner::new();
-        interner.prewarm(common_strings);
-        let interner = Arc::new(interner);
+    /// Current data generation. Increases (by at least one) across every
+    /// completed mutation of this store or its relationship graph; two equal
+    /// readings with no mutation in between guarantee the data was not
+    /// changed by any completed mutation in that window. See the field doc
+    /// for the snapshot/compare protocol.
+    pub fn data_epoch(&self) -> u64 {
+        self.data_epoch.load(Ordering::Relaxed)
+    }
 
-        Self {
-            config: DataStoreConfig::default(),
-            entities: Arc::new(DashMap::new()),
-            type_index: Arc::new(DashMap::new()),
-            attribute_index: Arc::new(DashMap::new()),
-            composite_index: Arc::new(DashMap::new()),
-            view_manager: Arc::new(ViewManager::new()),
-            relationships: Arc::new(crate::data::relationships::RelationshipGraph::new(
-                (*interner).clone(),
-            )),
-            interner,
-        }
+    fn bump_data_epoch(&self) {
+        self.data_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get the string interner
@@ -199,6 +208,8 @@ impl DataStore {
                 }
             }
         }
+
+        self.bump_data_epoch();
     }
 
     /// Batch insert entities with reduced per-entity overhead.
@@ -244,6 +255,11 @@ impl DataStore {
                 }
             }
         }
+
+        // One bump for the whole batch, at the end: the epoch is a staleness
+        // signal, not a transactionality claim — a half-visible batch was
+        // never atomic, and per-entity bumps would only add contention.
+        self.bump_data_epoch();
     }
 
     /// Get an entity by ID
@@ -426,6 +442,7 @@ impl DataStore {
         // strings (type, keys, relations) are no-ops in `release`.
         self.release_entity_strings(&entity);
 
+        self.bump_data_epoch();
         Some(entity)
     }
 
@@ -496,6 +513,7 @@ impl DataStore {
         // them so a clear()+reload (snapshot deploy) doesn't accumulate stale
         // interned strings. Pinned strings (policy literals, types) survive.
         self.interner.reset_counted();
+        self.bump_data_epoch();
     }
 
     /// Get entity counts by type
