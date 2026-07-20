@@ -68,7 +68,16 @@ static SPEC: OnceLock<utoipa::openapi::OpenApi> = OnceLock::new();
 /// `GET /openapi.json` — serve the generated control-plane contract. Public
 /// (see the auth gateway allowlist); the document describes the surface only.
 pub async fn serve_openapi() -> axum::Json<&'static utoipa::openapi::OpenApi> {
-    axum::Json(SPEC.get_or_init(super::build_openapi))
+    // Fallback initialization matches the default config (billing OFF);
+    // main.rs calls `init_spec` with the real flag before serving.
+    axum::Json(SPEC.get_or_init(|| super::build_openapi(false)))
+}
+
+/// Initialize the served spec for the process's actual configuration. Called
+/// once from main before the server starts; later calls are no-ops (the spec
+/// is immutable per process, exactly like the mounted routes).
+pub fn init_spec(enable_billing: bool) {
+    let _ = SPEC.get_or_init(|| super::build_openapi(enable_billing));
 }
 
 /// Registers the `bearer_jwt` security scheme referenced by protected

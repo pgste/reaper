@@ -44,13 +44,21 @@ pub const ALGORITHM: &str = ALG_ED25519;
 pub const SIGNATURE_HEADER: &str = "x-reaper-bundle-signature";
 
 /// Supported signature algorithms.
+///
+/// `#[non_exhaustive]`: the algorithm set grows for crypto-agility (e.g. new
+/// FIPS curves or post-quantum schemes), so downstream matches must carry a
+/// wildcard arm — treat unknown algorithms as unsupported, never accept them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SigAlgorithm {
+    /// Ed25519 signatures over SHA-256 digested bundles (the default).
     Ed25519Sha256,
+    /// ECDSA over NIST P-256 with SHA-256 (for FIPS 186 requirements).
     EcdsaP256Sha256,
 }
 
 impl SigAlgorithm {
+    /// The wire/config identifier for this algorithm (e.g. `ed25519-sha256`).
     pub fn as_str(self) -> &'static str {
         match self {
             SigAlgorithm::Ed25519Sha256 => ALG_ED25519,
@@ -58,6 +66,8 @@ impl SigAlgorithm {
         }
     }
 
+    /// Parse a wire/config algorithm identifier; unknown identifiers are
+    /// rejected with [`SignatureError::UnsupportedAlgorithm`] (fail closed).
     pub fn parse(s: &str) -> Result<Self, SignatureError> {
         match s {
             ALG_ED25519 => Ok(SigAlgorithm::Ed25519Sha256),
@@ -135,34 +145,78 @@ pub struct EnvelopeClaims {
 /// anti-rollback / lineage checks outside the crypto core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedEnvelope {
+    /// Schema version of the verified envelope (1 = legacy, 2 = current).
     pub envelope_version: u8,
+    /// Authenticated bundle lineage UUID (empty for v1 envelopes).
     pub bundle_id: String,
+    /// Authenticated monotonic version within the lineage (0 for v1 envelopes).
     pub version: u64,
 }
 
 /// Errors from signing-key handling and bundle verification.
+///
+/// `#[non_exhaustive]`: new verification failure modes are added as the
+/// envelope evolves, so downstream matches must carry a wildcard arm — treat
+/// unknown errors as verification failure (fail closed).
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SignatureError {
+    /// The envelope names an algorithm this build does not implement.
     #[error("unsupported signature algorithm: {0}")]
     UnsupportedAlgorithm(String),
+    /// The envelope's algorithm does not match the pinned verifying key's.
     #[error("algorithm mismatch: signature is {sig}, key is {key}")]
-    AlgorithmMismatch { sig: String, key: String },
+    AlgorithmMismatch {
+        /// Algorithm identifier declared by the signature envelope.
+        sig: String,
+        /// Algorithm of the pinned verifying key.
+        key: String,
+    },
+    /// The bundle bytes do not hash to the digest recorded in the envelope.
     #[error("integrity check failed: SHA-256 mismatch")]
     IntegrityMismatch,
+    /// The cryptographic signature did not verify against the pinned key.
     #[error("signature verification failed")]
     BadSignature,
+    /// The envelope was signed by a different key than the caller pinned.
     #[error("key id mismatch: expected {expected}, got {got}")]
-    KeyIdMismatch { expected: String, got: String },
+    KeyIdMismatch {
+        /// The key id the verifier required.
+        expected: String,
+        /// The key id the envelope actually carries.
+        got: String,
+    },
+    /// Key material could not be decoded (bad hex, wrong length, invalid point).
     #[error("invalid key material: {0}")]
     InvalidKey(String),
+    /// The envelope itself could not be decoded (bad hex, wrong sizes).
     #[error("malformed signature envelope: {0}")]
     Malformed(String),
+    /// A v2 envelope's validity window has already ended.
     #[error("envelope expired at {expires_at} (now {now})")]
-    Expired { expires_at: i64, now: i64 },
+    Expired {
+        /// Unix seconds at which the envelope stopped being valid.
+        expires_at: i64,
+        /// Unix seconds of the verification attempt.
+        now: i64,
+    },
+    /// A v2 envelope's validity window has not started yet.
     #[error("envelope not valid before {not_before} (now {now})")]
-    NotYetValid { not_before: i64, now: i64 },
+    NotYetValid {
+        /// Unix seconds at which the envelope becomes valid.
+        not_before: i64,
+        /// Unix seconds of the verification attempt.
+        now: i64,
+    },
+    /// The envelope's schema version is unknown, or below what the verifier
+    /// requires (e.g. v1 when strict anti-replay demands v2). Fails closed.
     #[error("unsupported envelope version {got} (require >= {required})")]
-    EnvelopeVersionUnsupported { got: u8, required: u8 },
+    EnvelopeVersionUnsupported {
+        /// The envelope version encountered.
+        got: u8,
+        /// The minimum envelope version the verifier accepts.
+        required: u8,
+    },
 }
 
 /// SHA-256 of `bytes`.
@@ -174,11 +228,14 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
 
 /// A private signing key for one of the supported algorithms.
 pub enum SigningKey {
+    /// An Ed25519 private key (32-byte seed).
     Ed25519(Box<ed25519_dalek::SigningKey>),
+    /// An ECDSA P-256 private key (32-byte scalar).
     EcdsaP256(Box<p256::ecdsa::SigningKey>),
 }
 
 impl SigningKey {
+    /// The signature algorithm this key signs with.
     pub fn algorithm(&self) -> SigAlgorithm {
         match self {
             SigningKey::Ed25519(_) => SigAlgorithm::Ed25519Sha256,
@@ -261,11 +318,14 @@ impl SigningKey {
 
 /// A public verifying key for one of the supported algorithms.
 pub enum VerifyingKey {
+    /// An Ed25519 public key (32 bytes).
     Ed25519(Box<ed25519_dalek::VerifyingKey>),
+    /// An ECDSA P-256 public key (SEC1 point).
     EcdsaP256(Box<p256::ecdsa::VerifyingKey>),
 }
 
 impl VerifyingKey {
+    /// The signature algorithm this key verifies.
     pub fn algorithm(&self) -> SigAlgorithm {
         match self {
             VerifyingKey::Ed25519(_) => SigAlgorithm::Ed25519Sha256,

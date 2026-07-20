@@ -65,6 +65,15 @@ pub struct Bundle {
     pub policy_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Monotonic modification counter, bumped by every bundle write; the
+    /// bundle ETag derives from it (Plan 06 Phase E, R3-07 — a counter, not a
+    /// clock, so sub-resolution edits can never share a tag).
+    #[serde(default = "default_row_version")]
+    pub row_version: i64,
+}
+
+fn default_row_version() -> i64 {
+    1
 }
 
 /// Update bundle metadata
@@ -192,6 +201,7 @@ mod tests {
             policy_count: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            row_version: 1,
         };
 
         assert!(draft_bundle.can_compile());

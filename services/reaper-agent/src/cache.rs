@@ -51,11 +51,10 @@ pub struct CachedSourceMetadata {
 
 impl From<&EnhancedPolicy> for CachedPolicy {
     fn from(policy: &EnhancedPolicy) -> Self {
-        let language = match &policy.language {
-            policy_engine::PolicyLanguage::Simple => "simple",
-            policy_engine::PolicyLanguage::Cedar => "cedar",
-            policy_engine::PolicyLanguage::ReaperDsl => "reaper",
-        };
+        // `PolicyLanguage` is non_exhaustive; delegate to its `Display` impl
+        // (defined next to the enum) so future variants serialize under their
+        // real name instead of a lossy local fallback.
+        let language = policy.language.to_string();
 
         let source_metadata = policy.source_metadata.as_ref().map(|sm| {
             let (source_type, source_details) = match &sm.source {
@@ -95,7 +94,7 @@ impl From<&EnhancedPolicy> for CachedPolicy {
             version: policy.version,
             name: policy.name.clone(),
             description: policy.description.clone(),
-            language: language.to_string(),
+            language,
             content: policy.content.clone(),
             metadata: policy.metadata.clone(),
             priority: policy.priority,

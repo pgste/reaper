@@ -112,7 +112,7 @@ fn no_undocumented_raw_routes() {
 
 #[test]
 fn openapi_spec_is_populated() {
-    let spec = reaper_management::api::build_openapi();
+    let spec = reaper_management::api::build_openapi(false);
     let json = spec.to_json().expect("serialize openapi to json");
     let doc: serde_json::Value = serde_json::from_str(&json).expect("valid json");
 
@@ -217,14 +217,16 @@ fn references_problem_details(response: &serde_json::Value) -> bool {
 // over its baseline and fails this gate. Operations in the TYPED groups
 // (`is_typed_group_path`) are exempt from the ratchet and hard-fail instead.
 //
-// Baselines recorded 2026-07-13 (C4 landing):
+// Baselines recorded 2026-07-13 (C4 landing), lowered 2026-07-20 (R3-06
+// Phase E: billing gated out of the default contract; 404 responses
+// documented on bundle and agent operations):
 // - every operation now carries a summary/description → 0.
-// - 129 pre-existing operations document no 4xx (auth/users/orgs/policies/
-//   bundles/agents/sources/deployments/scim/...).
-// - 94 pre-existing 200/201 responses document no body schema.
+// - 105 pre-existing operations document no 4xx (auth/users/orgs/policies/
+//   sources/deployments/scim/...).
+// - 89 pre-existing 200/201 responses document no body schema.
 const DESCRIPTION_BASELINE: usize = 0;
-const MISSING_4XX_BASELINE: usize = 129;
-const UNTYPED_SUCCESS_BASELINE: usize = 94;
+const MISSING_4XX_BASELINE: usize = 105;
+const UNTYPED_SUCCESS_BASELINE: usize = 89;
 
 fn ratchet(name: &str, baseline: usize, violations: &[String]) {
     assert!(
@@ -239,7 +241,7 @@ fn ratchet(name: &str, baseline: usize, violations: &[String]) {
 
 #[test]
 fn contract_is_publishable() {
-    let spec = reaper_management::api::build_openapi();
+    let spec = reaper_management::api::build_openapi(false);
     let json = spec.to_json().expect("serialize openapi to json");
     let doc: serde_json::Value = serde_json::from_str(&json).expect("valid json");
 
@@ -449,7 +451,7 @@ fn unpaginated_list_reason(op_id: &str) -> Option<&'static str> {
 
 #[test]
 fn every_collection_list_is_paginated_or_allowlisted() {
-    let spec = reaper_management::api::build_openapi();
+    let spec = reaper_management::api::build_openapi(false);
     let json = spec.to_json().expect("serialize openapi to json");
     let doc: serde_json::Value = serde_json::from_str(&json).expect("valid json");
     let paths = doc["paths"].as_object().expect("spec has a paths object");
@@ -486,4 +488,74 @@ fn every_collection_list_is_paginated_or_allowlisted() {
          with a justification):\n  {}",
         offenders.join("\n  ")
     );
+}
+
+// ===========================================================================
+// Plan 06 Phase E (R3-04/ADR-5): the billing stub is opt-in and honest.
+// ===========================================================================
+
+/// Default config: the billing surface is absent from the published contract
+/// AND the publishability/parity gates above already run against this default
+/// spec. This is the "the contract never advertises a flow that does not
+/// exist" half of ADR-5.
+#[test]
+fn billing_absent_from_default_contract() {
+    let spec = reaper_management::api::build_openapi(false);
+    let json = serde_json::to_value(&spec).expect("spec serializes");
+    let paths = json["paths"].as_object().expect("paths object");
+    let billing: Vec<&String> = paths
+        .keys()
+        .filter(|p| p.contains("/billing") || p.contains("/webhooks/stripe"))
+        .collect();
+    assert!(
+        billing.is_empty(),
+        "billing paths must be absent from the default contract: {billing:?}"
+    );
+}
+
+/// Opt-in config: billing is present, every operation is tagged
+/// `x-experimental: true`, and the publishability invariants that the default
+/// gate enforces still hold on the enlarged spec (the "parity green in both
+/// configs" requirement).
+#[test]
+fn billing_enabled_contract_is_experimental_and_publishable() {
+    let spec = reaper_management::api::build_openapi(true);
+    let json = serde_json::to_value(&spec).expect("spec serializes");
+    let paths = json["paths"].as_object().expect("paths object");
+
+    let billing_paths: Vec<(&String, &serde_json::Value)> = paths
+        .iter()
+        .filter(|(p, _)| p.contains("/billing") || p.contains("/webhooks/stripe"))
+        .collect();
+    assert!(
+        !billing_paths.is_empty(),
+        "enable_billing=true must mount the billing surface"
+    );
+
+    for (path, item) in billing_paths {
+        for method in ["get", "put", "post", "delete", "patch"] {
+            let Some(op) = item.get(method) else { continue };
+            assert_eq!(
+                op.get("x-experimental"),
+                Some(&serde_json::json!(true)),
+                "billing operation {method} {path} must be tagged x-experimental"
+            );
+        }
+    }
+
+    // The enlarged spec still parses/serializes and keeps unique operation
+    // ids — the structural half of publishability on the opt-in config.
+    let mut seen = std::collections::HashSet::new();
+    for (path, item) in json["paths"].as_object().expect("paths") {
+        for method in ["get", "put", "post", "delete", "patch"] {
+            if let Some(op) = item.get(method) {
+                if let Some(id) = op.get("operationId").and_then(|v| v.as_str()) {
+                    assert!(
+                        seen.insert(id.to_string()),
+                        "duplicate operationId '{id}' at {method} {path} with billing enabled"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -72,7 +72,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
-                   policy_count, created_at, updated_at, compiled_at, promoted_at
+                   policy_count, created_at, updated_at, compiled_at, promoted_at, row_version
             FROM bundles
             WHERE id = $1
         "#;
@@ -102,7 +102,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
-                   policy_count, created_at, updated_at, compiled_at, promoted_at
+                   policy_count, created_at, updated_at, compiled_at, promoted_at, row_version
             FROM bundles
             WHERE id = $1 AND org_id = $2
         "#;
@@ -143,7 +143,7 @@ impl<'a> BundleRepository<'a> {
         let sql = if status_filter.is_some() {
             r#"
                 SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
-                       policy_count, created_at, updated_at, compiled_at, promoted_at
+                       policy_count, created_at, updated_at, compiled_at, promoted_at, row_version
                 FROM bundles
                 WHERE org_id = $1 AND status = $2
                 ORDER BY created_at DESC
@@ -151,7 +151,7 @@ impl<'a> BundleRepository<'a> {
         } else {
             r#"
                 SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
-                       policy_count, created_at, updated_at, compiled_at, promoted_at
+                       policy_count, created_at, updated_at, compiled_at, promoted_at, row_version
                 FROM bundles
                 WHERE org_id = $1
                 ORDER BY created_at DESC
@@ -194,7 +194,7 @@ impl<'a> BundleRepository<'a> {
         // below must mirror this order exactly.
         let mut sql = String::from(
             "SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum, \
-                    policy_count, created_at, updated_at, compiled_at, promoted_at \
+                    policy_count, created_at, updated_at, compiled_at, promoted_at, row_version \
              FROM bundles WHERE org_id = $1",
         );
         let mut n = 1;
@@ -232,7 +232,7 @@ impl<'a> BundleRepository<'a> {
 
         let sql = r#"
             SELECT id, org_id, name, description, version, status, storage_key, size_bytes, checksum,
-                   policy_count, created_at, updated_at, compiled_at, promoted_at
+                   policy_count, created_at, updated_at, compiled_at, promoted_at, row_version
             FROM bundles
             WHERE org_id = $1 AND status = 'promoted'
             ORDER BY promoted_at DESC
@@ -273,21 +273,23 @@ impl<'a> BundleRepository<'a> {
             BundleStatus::Compiled => {
                 r#"
                     UPDATE bundles
-                    SET status = $1, updated_at = $2, compiled_at = $3
+                    SET status = $1, updated_at = $2, compiled_at = $3,
+                        row_version = row_version + 1
                     WHERE id = $4
                 "#
             }
             BundleStatus::Promoted => {
                 r#"
                     UPDATE bundles
-                    SET status = $1, updated_at = $2, promoted_at = $3
+                    SET status = $1, updated_at = $2, promoted_at = $3,
+                        row_version = row_version + 1
                     WHERE id = $4
                 "#
             }
             _ => {
                 r#"
                     UPDATE bundles
-                    SET status = $1, updated_at = $2
+                    SET status = $1, updated_at = $2, row_version = row_version + 1
                     WHERE id = $3
                 "#
             }
@@ -341,7 +343,8 @@ impl<'a> BundleRepository<'a> {
         let sql = r#"
             UPDATE bundles
             SET status = 'compiled', storage_key = $1, size_bytes = $2, checksum = $3,
-                policy_count = $4, compiled_at = $5, updated_at = $6
+                policy_count = $4, compiled_at = $5, updated_at = $6,
+                row_version = row_version + 1
             WHERE id = $7
         "#;
 
@@ -367,20 +370,22 @@ impl<'a> BundleRepository<'a> {
 
     /// Update bundle metadata.
     ///
-    /// `expected_updated_at` is the optimistic-concurrency guard (Plan 07
-    /// Phase C): when `Some(rfc3339)`, the UPDATE carries
-    /// `AND updated_at = $expected` — every bundle write path bumps
-    /// `updated_at`, so a concurrent writer makes this write match zero rows
-    /// and the call returns [`DatabaseError::VersionConflict`] instead of
-    /// silently clobbering. `None` skips the guard (transitional warn-only
-    /// mode for clients that did not send `If-Match`).
+    /// `expected_row_version` is the optimistic-concurrency guard (Plan 07
+    /// Phase C, hardened by Plan 06 Phase E / R3-07): when `Some(v)`, the
+    /// UPDATE carries `AND row_version = $expected` — every bundle write path
+    /// bumps `row_version`, so a concurrent writer makes this write match
+    /// zero rows and the call returns [`DatabaseError::VersionConflict`]
+    /// instead of silently clobbering. A monotonic counter, not a clock:
+    /// sub-resolution rapid edits can never alias (the R2-10 trap the old
+    /// `updated_at` guard carried). `None` skips the guard (transitional
+    /// warn-only mode for clients that did not send `If-Match`).
     pub async fn update(
         &self,
         id: Uuid,
         name: Option<&str>,
         description: Option<&str>,
         version: Option<&str>,
-        expected_updated_at: Option<&str>,
+        expected_row_version: Option<i64>,
     ) -> Result<Bundle, DatabaseError> {
         let pool = self
             .db
@@ -397,11 +402,12 @@ impl<'a> BundleRepository<'a> {
         let new_description = description.or(bundle.description.as_deref());
         let new_version = version.unwrap_or("1.0.0");
 
-        let result = if let Some(expected) = expected_updated_at {
+        let result = if let Some(expected) = expected_row_version {
             let sql = r#"
                 UPDATE bundles
-                SET name = $1, description = $2, version = $3, updated_at = $4
-                WHERE id = $5 AND updated_at = $6
+                SET name = $1, description = $2, version = $3, updated_at = $4,
+                    row_version = row_version + 1
+                WHERE id = $5 AND row_version = $6
             "#;
             sqlx::query(sql)
                 .bind(new_name)
@@ -415,7 +421,8 @@ impl<'a> BundleRepository<'a> {
         } else {
             let sql = r#"
                 UPDATE bundles
-                SET name = $1, description = $2, version = $3, updated_at = $4
+                SET name = $1, description = $2, version = $3, updated_at = $4,
+                    row_version = row_version + 1
                 WHERE id = $5
             "#;
             sqlx::query(sql)
@@ -428,7 +435,7 @@ impl<'a> BundleRepository<'a> {
                 .await?
         };
 
-        if result.rows_affected() == 0 && expected_updated_at.is_some() {
+        if result.rows_affected() == 0 && expected_row_version.is_some() {
             return Err(DatabaseError::VersionConflict(format!(
                 "bundle {id} was modified concurrently"
             )));
@@ -499,7 +506,7 @@ impl<'a> BundleRepository<'a> {
             .ok_or_else(|| DatabaseError::Config("No database pool".to_string()))?;
 
         let result =
-            sqlx::query("UPDATE bundles SET source_id = $1, source_commit = $2 WHERE id = $3")
+            sqlx::query("UPDATE bundles SET source_id = $1, source_commit = $2, row_version = row_version + 1 WHERE id = $3")
                 .bind(source_id.to_string())
                 .bind(commit)
                 .bind(bundle_id.to_string())
@@ -724,7 +731,7 @@ impl<'a> BundleRepository<'a> {
             .await
             .map(|r| r.get::<i32, _>("cnt"))?;
 
-        let update_sql = "UPDATE bundles SET policy_count = $1, updated_at = $2 WHERE id = $3";
+        let update_sql = "UPDATE bundles SET policy_count = $1, updated_at = $2, row_version = row_version + 1 WHERE id = $3";
         sqlx::query(update_sql)
             .bind(count)
             .bind(Utc::now().to_rfc3339())
@@ -763,6 +770,7 @@ impl<'a> BundleRepository<'a> {
             updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
+            row_version: row.try_get("row_version").unwrap_or(1),
         })
     }
 }

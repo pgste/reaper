@@ -1,3 +1,9 @@
+//! Core types and traits shared across the Reaper platform: policy and agent
+//! identities, the common error type, configuration, bundle signing and
+//! revocation, and agentic capabilities. Both the enforcement layer (agent)
+//! and the management layer (platform) build on this crate.
+#![deny(missing_docs)]
+
 pub mod agent;
 pub mod bundle_signing;
 pub mod capability;
@@ -30,9 +36,14 @@ pub const BUILD_INFO: &str = concat!(
 
 /// Standard API endpoints for Reaper services
 pub mod endpoints {
+    /// Health check endpoint (agent and platform).
     pub const HEALTH: &str = "/health";
+    /// Metrics endpoint (Prometheus text format).
     pub const METRICS: &str = "/metrics";
+    /// Policy CRUD / listing endpoint.
     pub const API_V1_POLICIES: &str = "/api/v1/policies";
+    /// Agent registry endpoint (platform).
     pub const API_V1_AGENTS: &str = "/api/v1/agents";
+    /// Policy evaluation endpoint (agent).
     pub const API_V1_MESSAGES: &str = "/api/v1/messages";
 }

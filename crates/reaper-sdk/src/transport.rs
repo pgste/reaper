@@ -7,7 +7,12 @@
 use std::path::PathBuf;
 
 /// Transport configuration for connecting to a Reaper Agent.
+///
+/// `#[non_exhaustive]`: new transports may be added (e.g. UDP, gRPC), so
+/// downstream matches must carry a wildcard arm (treat unknown transports as
+/// unsupported).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Transport {
     /// HTTP over TCP (default). Uses reqwest internally.
     Http {

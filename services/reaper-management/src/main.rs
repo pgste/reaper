@@ -281,7 +281,16 @@ fn build_router(
     // Single versioned surface (Plan 07 Phase B): the resource API is served
     // only under /api/v1; health/metrics/openapi probes stay unversioned at the
     // root. A bare `/orgs/...` returns 404 unless the transitional alias is on.
-    let api_router = api::build_served_router();
+    let enable_billing = state.config.server.enable_billing;
+    if enable_billing {
+        warn!(
+            "enable_billing=true: mounting the EXPERIMENTAL billing stub \
+             (fabricated checkout sessions; webhook returns 501) — the spec \
+             tags these operations x-experimental"
+        );
+    }
+    api::openapi::init_spec(enable_billing);
+    let api_router = api::build_served_router(enable_billing);
 
     // Transitional bare-root alias (default OFF). When enabled, the pre-Plan-07
     // un-versioned layout is also served, tagged with RFC 8594
@@ -294,7 +303,8 @@ fn build_router(
              bare root with Deprecation headers — migrate clients to /api/v1"
         );
         api_router.merge(
-            api::build_api_router().layer(middleware::from_fn(app_middleware::deprecation_headers)),
+            api::build_api_router(enable_billing)
+                .layer(middleware::from_fn(app_middleware::deprecation_headers)),
         )
     } else {
         api_router

@@ -33,8 +33,13 @@ pub struct PolicyResponse {
 }
 
 /// Policy decision
+///
+/// `#[non_exhaustive]`: the decision set may grow (e.g. audit/log outcomes),
+/// so downstream matches must carry a wildcard arm — treat unknown decisions
+/// as deny, never silently allow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Decision {
     /// Allow the request
     Allow,
@@ -43,8 +48,12 @@ pub enum Decision {
 }
 
 /// Where the policy was evaluated
+///
+/// `#[non_exhaustive]`: new evaluation locations may be added (e.g. wasm,
+/// edge), so downstream matches must carry a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Source {
     /// Evaluated in eBPF kernel
     Ebpf,
@@ -81,14 +90,20 @@ pub struct DeployBundleResponse {
 /// Entity data for CRUD operations (future use)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityData {
+    /// Entity type (e.g., "user", "document")
     pub entity_type: String,
+    /// Unique identifier of the entity within its type
     pub entity_id: String,
+    /// String-valued attributes used in ABAC conditions
     #[serde(default)]
     pub string_attrs: HashMap<String, String>,
+    /// Numeric attributes used in ABAC conditions
     #[serde(default)]
     pub numeric_attrs: HashMap<String, i64>,
+    /// Relationships to other entities (ReBAC edges)
     #[serde(default)]
     pub relationships: Vec<Relationship>,
+    /// Boolean attributes (feature flags, status markers)
     #[serde(default)]
     pub flags: HashMap<String, bool>,
 }
@@ -96,6 +111,8 @@ pub struct EntityData {
 /// Relationship between entities
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Relationship {
+    /// Kind of relationship (e.g., "member_of", "owner_of")
     pub relation_type: String,
+    /// ID of the entity this relationship points to
     pub target_id: String,
 }

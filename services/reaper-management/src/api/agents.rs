@@ -14,7 +14,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
-    api::error::{ApiError, ApiResult},
+    api::error::{ApiError, ApiResult, ProblemDetails},
     api::orgs::resolve_org,
     api::pagination::{PageQuery, Paginated},
     auth::{jwt::JwtManager, middleware::RequireAuth, scopes::Scope},
@@ -129,7 +129,8 @@ pub struct HeartbeatResponse {
     ),
     request_body = RegisterAgentRequest,
     responses(
-        (status = 201, description = "Agent registered", body = RegisterAgentResponse)
+        (status = 201, description = "Agent registered", body = RegisterAgentResponse),
+        (status = 404, description = "Organization or agent not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -301,7 +302,8 @@ async fn list_agents(
         ("agent_id" = Uuid, Path, description = "Agent ID")
     ),
     responses(
-        (status = 200, description = "Agent details", body = AgentSummary)
+        (status = 200, description = "Agent details", body = AgentSummary),
+        (status = 404, description = "Organization or agent not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -349,7 +351,8 @@ async fn get_agent(
         ("agent_id" = Uuid, Path, description = "Agent ID")
     ),
     responses(
-        (status = 204, description = "Agent deleted")
+        (status = 204, description = "Agent deleted"),
+        (status = 404, description = "Organization or agent not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -400,7 +403,8 @@ async fn delete_agent(
         ("agent_id" = Uuid, Path, description = "Agent ID")
     ),
     responses(
-        (status = 200, description = "Heartbeat acknowledged", body = HeartbeatResponse)
+        (status = 200, description = "Heartbeat acknowledged", body = HeartbeatResponse),
+        (status = 404, description = "Organization or agent not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -543,7 +547,8 @@ fn data_stale_transition(previous: Option<bool>, current: Option<bool>) -> Optio
     ),
     request_body = DeploymentReportRequest,
     responses(
-        (status = 200, description = "Deployment report acknowledged", body = DeploymentReportResponse)
+        (status = 200, description = "Deployment report acknowledged", body = DeploymentReportResponse),
+        (status = 404, description = "Organization or agent not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]

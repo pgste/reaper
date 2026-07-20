@@ -38,11 +38,14 @@ pub const CAPABILITY_V1: u32 = 1;
 /// and [`pattern_covers`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
+    /// Action pattern the actor may perform (literal, `*`, or `prefix*`).
     pub action: String,
+    /// Resource pattern the action applies to (literal, `*`, or `prefix*`).
     pub resource: String,
 }
 
 impl Grant {
+    /// Build a grant from an action pattern and a resource pattern.
     pub fn new(action: impl Into<String>, resource: impl Into<String>) -> Self {
         Self {
             action: action.into(),
@@ -69,8 +72,9 @@ pub struct Capability {
     /// What the actor may do — a subset of the subject's authority, and on
     /// attenuation a subset of the parent capability's grants.
     pub grants: Vec<Grant>,
-    /// Validity window (unix seconds, inclusive bounds).
+    /// Validity window start (unix seconds, inclusive).
     pub not_before: i64,
+    /// Validity window end (unix seconds, inclusive).
     pub expires_at: i64,
     /// Ancestor capability ids, root first. Revoking ANY ancestor revokes
     /// this capability (checked in [`Capability::verify_at`]).
@@ -81,34 +85,56 @@ pub struct Capability {
 }
 
 /// Why a capability was rejected.
+///
+/// `#[non_exhaustive]`: new rejection reasons are added as the capability
+/// model evolves, so downstream matches must carry a wildcard arm — treat
+/// unknown errors as rejection (fail closed), never as acceptance.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CapabilityError {
+    /// The capability's validity window has already ended.
     Expired {
+        /// Unix seconds at which the capability stopped being valid.
         expires_at: i64,
+        /// Unix seconds of the verification attempt.
         now: i64,
     },
+    /// The capability's validity window has not started yet.
     NotYetValid {
+        /// Unix seconds at which the capability becomes valid.
         not_before: i64,
+        /// Unix seconds of the verification attempt.
         now: i64,
     },
+    /// The window is inverted (`not_before` after `expires_at`).
     InvalidWindow,
+    /// The signature did not verify over the canonical claims.
     BadSignature,
+    /// The capability, or one of its ancestors, is on the revocation list.
     Revoked {
+        /// The revoked id that killed the chain (self or ancestor).
         id: String,
     },
+    /// The capability names a signature algorithm this build does not
+    /// implement, or one that does not match the verifying key.
     UnknownAlgorithm(String),
+    /// The capability was signed by a different key than the verifier pinned.
     KeyMismatch {
+        /// The key id the verifier required.
         expected: String,
+        /// The key id the capability actually carries.
         got: String,
     },
     /// Attenuation attempted to grant something the parent does not cover.
     WidenedGrant {
+        /// The `(action, resource)` pair that exceeded the parent's authority.
         grant: String,
     },
     /// Attenuation attempted to extend the parent's validity window.
     WidenedWindow,
     /// Attenuation attempted to change subject or actor lineage rules.
     LineageViolation(String),
+    /// The capability could not be decoded (bad hex, unsupported version, ...).
     Malformed(String),
 }
 

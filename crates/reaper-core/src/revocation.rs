@@ -97,7 +97,9 @@ impl RevocationList {
 /// A revocation list plus its detached signature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedRevocationList {
+    /// The revocation list body (the bytes that were signed, canonicalized).
     pub list: RevocationList,
+    /// Detached signature over [`RevocationList::canonical_bytes`].
     pub signature: BundleSignature,
 }
 

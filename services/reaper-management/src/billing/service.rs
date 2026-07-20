@@ -37,6 +37,8 @@ pub enum BillingError {
     InvalidPlan(String),
     #[error("Billing not configured")]
     NotConfigured,
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 }
 
 /// Billing configuration
@@ -302,24 +304,21 @@ impl BillingService {
     ) -> Result<(), BillingError> {
         let _config = self.config()?;
 
-        // TODO: Implement actual Stripe webhook verification and handling
-        // let event = stripe::Webhook::construct_event(payload, signature, &config.stripe_webhook_secret)?;
-        // match event.type_ {
-        //     stripe::EventType::CustomerSubscriptionCreated => { ... }
-        //     stripe::EventType::CustomerSubscriptionUpdated => { ... }
-        //     stripe::EventType::CustomerSubscriptionDeleted => { ... }
-        //     stripe::EventType::InvoicePaymentSucceeded => { ... }
-        //     stripe::EventType::InvoicePaymentFailed => { ... }
-        //     _ => {}
-        // }
-
+        // Signature verification is NOT implemented. A silent 200 here would
+        // tell Stripe the event was processed — and tell an operator the
+        // billing flow works — when neither is true. Fail honestly with 501
+        // until real verification + event handling ship (Plan 06 Phase E,
+        // R3-04: the webhook must "verify the signature or return 501, never
+        // a silent 200").
         warn!(
             payload_len = payload.len(),
             signature_len = signature.len(),
-            "Webhook handling not fully implemented - would process event"
+            "Stripe webhook received but verification/handling is not implemented; returning 501"
         );
-
-        Ok(())
+        Err(BillingError::NotImplemented(
+            "Stripe webhook signature verification and event handling are not implemented"
+                .to_string(),
+        ))
     }
 }
 

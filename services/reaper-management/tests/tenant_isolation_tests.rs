@@ -59,7 +59,7 @@ async fn setup() -> Env {
         ..Config::default()
     };
     let state = AppState::new(db.clone(), config, storage);
-    let app = build_served_router().with_state(Arc::new(state));
+    let app = build_served_router(false).with_state(Arc::new(state));
     Env { tmp, app, db }
 }
 

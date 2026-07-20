@@ -15,7 +15,7 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use crate::api::error::{ApiError, ApiResult};
+use crate::api::error::{ApiError, ApiResult, ProblemDetails};
 use crate::api::idempotency;
 use crate::api::orgs::authorize_org;
 use crate::api::pagination::{PageQuery, Paginated};
@@ -169,7 +169,8 @@ async fn list_bundles(
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 201, description = "Bundle created")
+        (status = 201, description = "Bundle created"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -213,9 +214,10 @@ async fn get_bundle(
         .await?
         .id;
     let bundle = state.bundle_service.get_scoped(org_id, bundle_id).await?;
-    // Bundle ETag: `updated_at`, which every bundle write path bumps (ADR-2 —
-    // an existing column, no schema change; stored/round-tripped as RFC 3339).
-    let tag = etag(&bundle.updated_at.to_rfc3339());
+    // Bundle ETag: the monotonic `row_version` every bundle write path bumps
+    // (Plan 06 Phase E, R3-07). A counter, not a clock — two sub-resolution
+    // edits can never share a tag, so a stale If-Match always loses with 412.
+    let tag = etag(&bundle.row_version.to_string());
     Ok(([(header::ETAG, tag)], Json(bundle)))
 }
 
@@ -255,16 +257,17 @@ async fn update_bundle(
     let current = state.bundle_service.get_scoped(org_id, bundle_id).await?;
 
     // Optimistic concurrency (Plan 07 Phase C): fast-fail a stale If-Match
-    // here; the repository's `AND updated_at = $expected` is the atomic
-    // arbiter for writers racing past this check.
-    let current_stamp = current.updated_at.to_rfc3339();
+    // here; the repository's `AND row_version = $expected` is the atomic
+    // arbiter for writers racing past this check (monotonic counter — Plan 06
+    // Phase E, R3-07).
+    let current_stamp = current.row_version.to_string();
     let guarded = check_precondition(
         &headers,
         &current_stamp,
         state.config.server.require_if_match,
         &format!("bundle {bundle_id}"),
     )?;
-    let expected = guarded.then_some(current_stamp.as_str());
+    let expected = guarded.then_some(current.row_version);
 
     // Update bundle metadata through repository
     let bundle = crate::db::repositories::BundleRepository::new(&state.db)
@@ -278,7 +281,7 @@ async fn update_bundle(
         .await
         .map_err(ApiError::from)?;
 
-    let new_tag = etag(&bundle.updated_at.to_rfc3339());
+    let new_tag = etag(&bundle.row_version.to_string());
     Ok(([(header::ETAG, new_tag)], Json(bundle)))
 }
 
@@ -292,7 +295,8 @@ async fn update_bundle(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 204, description = "Bundle deleted")
+        (status = 204, description = "Bundle deleted"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -320,7 +324,8 @@ async fn delete_bundle(
     ),
     request_body = AddPoliciesRequest,
     responses(
-        (status = 200, description = "Policies added")
+        (status = 200, description = "Policies added"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -352,7 +357,8 @@ async fn add_policies(
     ),
     request_body = RemovePoliciesRequest,
     responses(
-        (status = 200, description = "Policies removed")
+        (status = 200, description = "Policies removed"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -383,7 +389,8 @@ async fn remove_policies(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Bundle compiled")
+        (status = 200, description = "Bundle compiled"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -410,7 +417,8 @@ async fn compile_bundle(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Bundle staged")
+        (status = 200, description = "Bundle staged"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -675,7 +683,8 @@ async fn execute_promotion(
         ("limit" = Option<i64>, Query, description = "Max to return (default 200, max 500)")
     ),
     responses(
-        (status = 200, description = "Promotion change requests")
+        (status = 200, description = "Promotion change requests"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -704,7 +713,8 @@ async fn list_change_requests(
         ("cr_id" = Uuid, Path, description = "Change request ID")
     ),
     responses(
-        (status = 200, description = "Change request details")
+        (status = 200, description = "Change request details"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -747,7 +757,8 @@ async fn get_change_request(
         ("cr_id" = Uuid, Path, description = "Change request ID")
     ),
     responses(
-        (status = 200, description = "Change request approved and executed")
+        (status = 200, description = "Change request approved and executed"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -811,7 +822,8 @@ async fn approve_change_request(
         ("cr_id" = Uuid, Path, description = "Change request ID")
     ),
     responses(
-        (status = 200, description = "Change request rejected")
+        (status = 200, description = "Change request rejected"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -873,7 +885,8 @@ async fn reject_change_request(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Bundle deprecated")
+        (status = 200, description = "Bundle deprecated"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -900,7 +913,8 @@ async fn deprecate_bundle(
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Compiled bundle artifact", content_type = "application/octet-stream")
+        (status = 200, description = "Compiled bundle artifact", content_type = "application/octet-stream"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -979,7 +993,8 @@ fn bundle_content_disposition(name: &str, bundle_id: &Uuid) -> String {
         ("org" = String, Path, description = "Organization ID")
     ),
     responses(
-        (status = 200, description = "Currently promoted bundle (if any)")
+        (status = 200, description = "Currently promoted bundle (if any)"),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]
@@ -1091,7 +1106,8 @@ pub struct DiffSummary {
         ("bundle_id" = Uuid, Path, description = "Bundle ID")
     ),
     responses(
-        (status = 200, description = "Diff between two bundles", body = BundleDiffResponse)
+        (status = 200, description = "Diff between two bundles", body = BundleDiffResponse),
+        (status = 404, description = "Organization or bundle not found", body = ProblemDetails)
     ),
     security(("bearer_jwt" = []))
 )]

@@ -44,6 +44,12 @@ pub enum ApiError {
     #[error("Precondition failed: {0}")]
     PreconditionFailed(String),
 
+    /// The operation is documented but its implementation is not complete —
+    /// served as 501 so a caller can never mistake a stub for success
+    /// (Plan 06 Phase E, R3-04).
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
@@ -122,6 +128,9 @@ impl IntoResponse for ApiError {
                 "precondition_failed",
                 msg.clone(),
             ),
+            ApiError::NotImplemented(msg) => {
+                (StatusCode::NOT_IMPLEMENTED, "not_implemented", msg.clone())
+            }
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg.clone()),
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", msg.clone()),
             ApiError::QuotaExceeded(msg) => {

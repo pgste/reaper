@@ -8,7 +8,7 @@
 //! openapi-spec-validator openapi-management.json
 //! ```
 fn main() {
-    let spec = reaper_management::api::build_openapi();
+    let spec = reaper_management::api::build_openapi(false);
     match spec.to_json() {
         Ok(json) => println!("{json}"),
         Err(e) => {
