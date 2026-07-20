@@ -93,19 +93,22 @@ impl RevocationStore {
         Ok(())
     }
 
-    /// Snapshot of the revoked capability ids for the eval-path gate, with
-    /// the same staleness policy as bundle loads applied first: a stale list
-    /// under `Enforce` refuses capability verification outright (fail
-    /// closed); under `Monitor` it serves on the last-good set with a
-    /// warning. A cold agent that has never fetched a list gets an empty set
-    /// (nothing to enforce yet — mirrors the bundle-load posture).
-    pub fn capability_revocations(
+    /// Snapshot for the eval-path capability gate: the revoked capability ids
+    /// **and** the applied list's monotonic `serial` — the **revocation
+    /// generation** the verdict cache folds into its key (R3-P2-2/ADR-4): a
+    /// fresh list bumps the serial, so every verdict cached under the
+    /// previous generation misses and re-verifies. The same staleness policy
+    /// as bundle loads applies first: a stale list under `Enforce` refuses
+    /// capability verification outright (fail closed); under `Monitor` it
+    /// serves on the last-good set with a warning. A cold store (no list
+    /// ever applied) is generation 0 with an empty set.
+    pub fn capability_revocations_with_serial(
         &self,
         now: i64,
-    ) -> Result<std::sync::Arc<HashSet<String>>, String> {
+    ) -> Result<(u64, std::sync::Arc<HashSet<String>>), String> {
         let cached = self.cached.read();
         if !cached.loaded {
-            return Ok(std::sync::Arc::new(HashSet::new()));
+            return Ok((0, std::sync::Arc::new(HashSet::new())));
         }
         if cached.next_update != 0 && now > cached.next_update {
             match self.staleness {
@@ -126,7 +129,7 @@ impl RevocationStore {
                 }
             }
         }
-        Ok(std::sync::Arc::clone(&cached.capability_ids))
+        Ok((cached.serial, std::sync::Arc::clone(&cached.capability_ids)))
     }
 
     /// Load-time check for one bundle. `Err(reason)` refuses the load.
@@ -302,10 +305,10 @@ mod tests {
             )
             .unwrap();
         // Fresh: the revoked set is served.
-        let set = enforce.capability_revocations(400).unwrap();
+        let set = enforce.capability_revocations_with_serial(400).unwrap().1;
         assert!(set.contains("cap-1"));
         // Stale + Enforce: capability verification is refused (fail closed).
-        assert!(enforce.capability_revocations(600).is_err());
+        assert!(enforce.capability_revocations_with_serial(600).is_err());
 
         // Stale + Monitor: last-good set still served.
         list.serial = 2;
@@ -317,13 +320,17 @@ mod tests {
                 Some("k1"),
             )
             .unwrap();
-        let set = monitor.capability_revocations(600).unwrap();
+        let set = monitor.capability_revocations_with_serial(600).unwrap().1;
         assert!(set.contains("cap-1"));
     }
 
     #[test]
     fn cold_store_serves_empty_capability_set() {
         let store = RevocationStore::new(RevocationStaleness::Enforce);
-        assert!(store.capability_revocations(100).unwrap().is_empty());
+        assert!(store
+            .capability_revocations_with_serial(100)
+            .unwrap()
+            .1
+            .is_empty());
     }
 }

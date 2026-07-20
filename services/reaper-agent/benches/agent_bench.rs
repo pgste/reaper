@@ -79,6 +79,11 @@ fn build_state_with_buffer(decision_buffer: Option<SharedDecisionBuffer>) -> Arc
                 &reaper_core::config::ManagementSettings::default(),
             ),
         ),
+        capability_gate: std::sync::Arc::new(
+            reaper_agent::capability_cache::CapabilityGateRuntime::from_auth(
+                &reaper_core::config::AgentAuthSettings::default(),
+            ),
+        ),
     })
 }
 
@@ -148,5 +153,64 @@ fn bench_decision_id(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_fast_evaluate, bench_decision_id);
+/// Plan 06 Phase D DoD: steady-state agentic throughput is not gated by
+/// ed25519 cost. Benches the two capability-gate path bodies side by side:
+/// - `verdict_cache_hit`: digest + cache lookup + window/revocation check —
+///   the ENTIRE per-request crypto-path work once a capability's verdict is
+///   cached (expected ~hundreds of ns);
+/// - `full_verify`: one `verify_capability_with` — the ed25519 cost every
+///   request paid before Phase D (expected tens of µs).
+fn bench_capability_gate(c: &mut Criterion) {
+    use reaper_agent::capability_cache::CapabilityVerdictCache;
+    use reaper_agent::management::verify::BundleVerifier;
+    use reaper_core::bundle_signing::SigningKey;
+    use reaper_core::capability::{issue, Grant};
+    use reaper_core::config::ManagementSettings;
+
+    let key = SigningKey::Ed25519(Box::new(ed25519_dalek::SigningKey::from_bytes(&[9u8; 32])));
+    let verifier = BundleVerifier::from_config(&ManagementSettings {
+        enabled: true,
+        bundle_public_key: Some(key.public_key_hex()),
+        bundle_key_id: Some("k1".to_string()),
+        ..Default::default()
+    });
+    let now = reaper_agent::capability_gate::now_unix();
+    let cap = issue(
+        &key,
+        "k1",
+        "alice",
+        "agent-1",
+        vec![Grant::new("read", "/doc/*")],
+        now - 300,
+        now + 3600,
+    )
+    .expect("issue capability");
+    let revoked = std::collections::HashSet::new();
+
+    let cache = CapabilityVerdictCache::new(1024, 300);
+    let cache_key = (cap.cache_digest(), 0u64);
+    cache.insert(cache_key, now);
+    c.bench_function("capability/verdict_cache_hit", |b| {
+        b.iter(|| {
+            let key = (black_box(&cap).cache_digest(), 0u64);
+            assert!(cache.check(&key, now));
+            black_box(&cap).check_validity_at(now, &revoked).unwrap();
+        })
+    });
+
+    c.bench_function("capability/full_verify", |b| {
+        b.iter(|| {
+            verifier
+                .verify_capability_with(black_box(&cap), now, &revoked)
+                .unwrap();
+        })
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_fast_evaluate,
+    bench_decision_id,
+    bench_capability_gate
+);
 criterion_main!(benches);

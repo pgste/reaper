@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod bootstrap;
 mod cache;
+mod capability_cache;
 mod capability_gate;
 mod decision_stream;
 mod handlers;
@@ -645,6 +646,9 @@ async fn run(
         decision_metrics: Arc::new(metrics_cache::DecisionMetrics::new()),
         data_sync: data_sync.clone(),
         bundle_verifier: bundle_verifier.clone(),
+        capability_gate: Arc::new(capability_cache::CapabilityGateRuntime::from_auth(
+            &config.auth,
+        )),
     });
 
     // Evaluation endpoints accept authorization *requests*, not entity

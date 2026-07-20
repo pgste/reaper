@@ -57,6 +57,11 @@ fn make_app_with(verifier: Arc<BundleVerifier>) -> (Router, Arc<AgentState>) {
         decision_metrics: Arc::new(reaper_agent::metrics_cache::DecisionMetrics::new()),
         data_sync: Arc::new(DataSyncState::from_env()),
         bundle_verifier: verifier,
+        capability_gate: std::sync::Arc::new(
+            reaper_agent::capability_cache::CapabilityGateRuntime::from_auth(
+                &reaper_core::config::AgentAuthSettings::default(),
+            ),
+        ),
     });
     let app = Router::new()
         .route("/api/v1/bundles/deploy", post(deploy_bundle))

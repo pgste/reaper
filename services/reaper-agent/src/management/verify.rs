@@ -54,6 +54,8 @@ pub struct BundleVerifier {
     anti_rollback: AntiRollbackStore,
     /// Signed revocation list cache, checked at load (Plan 02 Phase B step 4).
     revocation: super::revocation::RevocationStore,
+    /// Full ed25519 capability verifications performed (verdict-cache misses).
+    capability_verifies: std::sync::atomic::AtomicU64,
 }
 
 impl BundleVerifier {
@@ -111,6 +113,7 @@ impl BundleVerifier {
             managed: config.enabled,
             anti_rollback,
             revocation: super::revocation::RevocationStore::new(config.revocation_staleness),
+            capability_verifies: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -129,32 +132,60 @@ impl BundleVerifier {
         }
     }
 
-    /// Verify a capability token against the SAME trust anchor as bundles
-    /// (management signs both with its bundle signing key) and the current
-    /// signed revocation snapshot. Fail closed on every leg:
-    /// - no pinned verification key → the capability cannot be trusted;
-    /// - stale revocation list under `Enforce` → refuse;
-    /// - then the pure `Capability::verify_at` (version, key pin, algorithm,
-    ///   signature, window, self+ancestor revocation).
+    /// Capability verification against the SAME trust anchor as bundles
+    /// (management signs both with its bundle signing key): the gate takes a
+    /// [`Self::capability_revocation_snapshot`] and runs
+    /// [`Self::verify_capability_with`] on verdict-cache misses. Fail closed
+    /// on every leg. Grant coverage and subject/actor binding are the
+    /// caller's checks — they need the request, which this layer never sees.
     ///
-    /// Grant coverage and subject/actor binding are the caller's checks —
-    /// they need the request, which this layer deliberately never sees.
-    pub fn verify_capability(
+    /// Revocation snapshot for the capability gate (R3-P2-2): the current
+    /// revocation **generation** (the applied list's monotonic serial; 0 on a
+    /// cold agent) plus the revoked-id set, with the trust-anchor and
+    /// staleness fail-closed checks applied first. The generation is folded
+    /// into the verdict-cache key, so a fresh revocation list invalidates
+    /// every previously cached verdict without a scan (ADR-4).
+    pub fn capability_revocation_snapshot(
+        &self,
+        now: i64,
+    ) -> Result<(u64, std::sync::Arc<std::collections::HashSet<String>>), String> {
+        if self.key.is_none() {
+            return Err("capability presented but no trust anchor is configured \
+                 (management.bundle_public_key): cannot verify, refusing"
+                .to_string());
+        }
+        self.revocation.capability_revocations_with_serial(now)
+    }
+
+    /// The full cryptographic verification against an already-fetched
+    /// revocation set — the verdict-cache MISS path. Increments the verify
+    /// counter the cache-effectiveness tests and metrics read.
+    pub fn verify_capability_with(
         &self,
         cap: &reaper_core::capability::Capability,
         now: i64,
+        revoked: &std::collections::HashSet<String>,
     ) -> Result<(), String> {
         let Some(key) = &self.key else {
             return Err("capability presented but no trust anchor is configured \
                  (management.bundle_public_key): cannot verify, refusing"
                 .to_string());
         };
-        let revoked = self.revocation.capability_revocations(now)?;
+        self.capability_verifies
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // With no explicit key-id pin, the capability's own key_id is used —
         // the signature must still verify against OUR pinned key either way.
         let expected_key_id = self.key_id_pin.as_deref().unwrap_or(&cap.key_id);
-        cap.verify_at(key, expected_key_id, now, &revoked)
+        cap.verify_at(key, expected_key_id, now, revoked)
             .map_err(|e| format!("capability rejected: {e}"))
+    }
+
+    /// Number of FULL cryptographic capability verifications performed (cache
+    /// misses). The verdict cache's effectiveness contract — "same capability
+    /// twice → one verify_raw" — is asserted against this counter.
+    pub fn capability_verify_count(&self) -> u64 {
+        self.capability_verifies
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Verify a **managed** (pulled) bundle before apply. Fail closed.
@@ -282,6 +313,7 @@ mod tests {
             revocation: crate::management::revocation::RevocationStore::new(
                 reaper_core::config::RevocationStaleness::Monitor,
             ),
+            capability_verifies: std::sync::atomic::AtomicU64::new(0),
         }
     }
 

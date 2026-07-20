@@ -169,6 +169,50 @@ pub struct AgentAuthSettings {
     /// itself remains the gate).
     #[serde(default)]
     pub require_actor_capability: bool,
+
+    /// R3-P2-2 (Plan 06 Phase D): cache positive capability verdicts so a
+    /// repeated capability is a hash hit, not a fresh ed25519 verify. The
+    /// cache key binds the capability's full signed content and the current
+    /// revocation generation; hits still enforce the validity window and the
+    /// live revocation set. Default true; the rollback path is turning this
+    /// off (inline verify — pre-Phase-D behavior).
+    #[serde(default = "default_capability_cache_enabled")]
+    pub capability_cache_enabled: bool,
+
+    /// TTL for cached capability verdicts, seconds. Short by design (ADR-4):
+    /// the generation key handles revocation, so the TTL only bounds how long
+    /// an entry can occupy the cache. Default 300.
+    #[serde(default = "default_capability_cache_ttl_secs")]
+    pub capability_cache_ttl_secs: u64,
+
+    /// Maximum cached capability verdicts. Bounded so an attacker minting
+    /// many VALID capabilities cannot grow memory without limit (invalid ones
+    /// are never cached). Default 65536 (~40 bytes/entry ≈ 2.5 MB).
+    #[serde(default = "default_capability_cache_capacity")]
+    pub capability_cache_capacity: usize,
+
+    /// Per-principal per-minute budget of FULL capability verifications
+    /// (verdict-cache misses). Cache hits are free, so steady-state agentic
+    /// traffic is unaffected; this bounds the asymmetric-cost DoS of
+    /// garbage-signature floods, which never cache-hit. Over budget → the
+    /// request is denied (`capability_verify_rate_limited`). 0 disables.
+    /// Default 600 (10 full verifies/second/principal — far above any
+    /// legitimate capability churn).
+    #[serde(default = "default_capability_verify_limit_per_min")]
+    pub capability_verify_limit_per_min: u32,
+}
+
+fn default_capability_cache_enabled() -> bool {
+    true
+}
+fn default_capability_cache_ttl_secs() -> u64 {
+    300
+}
+fn default_capability_cache_capacity() -> usize {
+    65_536
+}
+fn default_capability_verify_limit_per_min() -> u32 {
+    600
 }
 
 impl Default for AgentAuthSettings {
@@ -185,6 +229,10 @@ impl Default for AgentAuthSettings {
             allow_unauthenticated: false,
             open_data_plane: false,
             require_actor_capability: false,
+            capability_cache_enabled: default_capability_cache_enabled(),
+            capability_cache_ttl_secs: default_capability_cache_ttl_secs(),
+            capability_cache_capacity: default_capability_cache_capacity(),
+            capability_verify_limit_per_min: default_capability_verify_limit_per_min(),
         }
     }
 }
