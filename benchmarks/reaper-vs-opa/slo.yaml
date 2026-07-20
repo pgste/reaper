@@ -42,6 +42,14 @@ scenarios:
     p50_us: 5
     p99_us: 25
     p999_us: 100
+  # Agentic: targeted request + a signed capability on EVERY request
+  # (Plan 06 Phase D DoD). Budget = the targeted row + the verdict-cache hit
+  # path (~2µs digest+lookup+window check, measured in agent_bench). Before
+  # Phase D this row would have carried the full ~36µs ed25519 per request.
+  slo-agentic:
+    p50_us: 4
+    p99_us: 15
+    p999_us: 75
   # ABAC/ReBAC (bounded traversal) — N=10,000, 2,000 rps.
   slo-rebac:
     p50_us: 15
