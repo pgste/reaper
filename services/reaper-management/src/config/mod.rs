@@ -92,6 +92,10 @@ impl Config {
             config.server.serve_root_alias =
                 matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
         }
+        if let Ok(v) = std::env::var("REAPER_ENABLE_BILLING") {
+            config.server.enable_billing =
+                matches!(v.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
 
         // If-Match enforcement on policy/bundle PUTs (Plan 07 Phase C) —
         // enforced (true) by default since R2-02; the override is the

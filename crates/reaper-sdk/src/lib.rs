@@ -49,6 +49,7 @@
 //! ```text
 //! SDK Client  ──HTTP/UDS──>  Agent (8080 / socket)  ──>  PolicyEngine
 //! ```
+#![deny(missing_docs)]
 
 pub mod error;
 pub mod http_client;

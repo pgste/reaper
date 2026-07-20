@@ -30,6 +30,13 @@ pub struct ServerConfig {
     /// `If-Match`, when sent, always fails with 412 regardless of this flag.
     #[serde(default = "default_require_if_match")]
     pub require_if_match: bool,
+    /// Mount the billing API (Plan 06 Phase E, R3-04/ADR-5). Default **off**:
+    /// the surface is a stub that fabricates checkout sessions, so it is
+    /// excluded from the router AND the OpenAPI contract until an operator
+    /// explicitly opts in (`REAPER_ENABLE_BILLING=true`). When on, the spec
+    /// tags the operations `x-experimental`.
+    #[serde(default)]
+    pub enable_billing: bool,
 }
 
 impl Default for ServerConfig {
@@ -39,6 +46,7 @@ impl Default for ServerConfig {
             port: default_port(),
             serve_root_alias: false,
             require_if_match: default_require_if_match(),
+            enable_billing: false,
         }
     }
 }

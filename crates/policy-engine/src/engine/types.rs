@@ -33,8 +33,13 @@ pub struct PolicyVersion {
 }
 
 /// Supported policy languages
+///
+/// `#[non_exhaustive]`: new policy languages will be added over time, so
+/// downstream matches must carry a wildcard arm (treat unknown languages as
+/// unsupported, never silently evaluate).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PolicyLanguage {
     /// Simple rule-based policies (sub-microsecond evaluation)
     Simple,

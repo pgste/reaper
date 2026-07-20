@@ -65,7 +65,7 @@ async fn setup_env_with(customize: impl FnOnce(&mut Config)) -> TestEnv {
     customize(&mut config);
 
     let state = AppState::new(db.clone(), config, storage);
-    let app = build_served_router().with_state(Arc::new(state));
+    let app = build_served_router(false).with_state(Arc::new(state));
 
     TestEnv { temp_dir, app, db }
 }
@@ -2270,7 +2270,7 @@ async fn setup_gateway_env() -> (axum::Router, Arc<Database>) {
     };
 
     let state = Arc::new(AppState::new(db.clone(), config, storage));
-    let app = build_served_router()
+    let app = build_served_router(false)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             reaper_management::auth::gateway::require_authentication,
@@ -2745,7 +2745,7 @@ async fn test_revocation_list_served_signed_and_updates() {
         ..Config::default()
     };
     let state = AppState::new(db.clone(), config, storage);
-    let app = build_served_router().with_state(Arc::new(state));
+    let app = build_served_router(false).with_state(Arc::new(state));
 
     // Org + admin key.
     let response = app
@@ -4432,6 +4432,104 @@ async fn bundle_lost_update_is_prevented() {
         .await
         .unwrap();
     assert_eq!(parse_body(response).await["name"], "writer-a");
+}
+
+/// Plan 06 Phase E (R3-07): the bundle ETag is a monotonic COUNTER, not a
+/// clock. Back-to-back sub-resolution edits — the exact case where the old
+/// `updated_at.to_rfc3339()` tag could alias (two writes inside one timestamp
+/// resolution shared a tag, silently defeating If-Match) — must produce
+/// strictly distinct, strictly increasing tags, and a reused stale tag must
+/// still lose with 412.
+#[tokio::test]
+async fn bundle_etag_is_monotonic_across_rapid_edits() {
+    let env = setup_test_env().await;
+
+    let create_org = json_request(
+        "POST",
+        "/orgs",
+        Some(json!({"name": "Bundle Tag Org", "slug": "bundle-tag-org"})),
+    );
+    let response = env.app.clone().oneshot(create_org).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let org_id: Uuid = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let key = create_test_api_key(&env.db, org_id).await;
+
+    let create_bundle = authed_request(
+        "POST",
+        "/orgs/bundle-tag-org/bundles",
+        Some(json!({"name": "tag-bundle", "description": "v0"})),
+        &key,
+    );
+    let response = env.app.clone().oneshot(create_bundle).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bundle_id = parse_body(response).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let path = format!("/orgs/bundle-tag-org/bundles/{bundle_id}");
+
+    // As fast as the server can take them: three consecutive edits, each
+    // using the tag the previous response returned. No sleeps — this is the
+    // sub-resolution case.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request("GET", &path, None, &key))
+        .await
+        .unwrap();
+    let mut tags = vec![etag_of(&response)];
+    for i in 0..3 {
+        let response = env
+            .app
+            .clone()
+            .oneshot(authed_request_if_match(
+                "PUT",
+                &path,
+                Some(json!({"name": format!("rapid-{i}")})),
+                &key,
+                tags.last().unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        tags.push(etag_of(&response));
+    }
+
+    // All four observed tags are pairwise distinct and, as raw counters,
+    // strictly increasing — the property a wall-clock tag cannot promise.
+    let counters: Vec<u64> = tags
+        .iter()
+        .map(|t| {
+            t.trim_matches('"')
+                .parse()
+                .unwrap_or_else(|_| panic!("bundle ETag {t:?} is not a bare counter"))
+        })
+        .collect();
+    for pair in counters.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "ETag counters must strictly increase: {counters:?}"
+        );
+    }
+
+    // The very first tag, now three writes stale, still loses cleanly.
+    let response = env
+        .app
+        .clone()
+        .oneshot(authed_request_if_match(
+            "PUT",
+            &path,
+            Some(json!({"name": "stale-writer"})),
+            &key,
+            &tags[0],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 }
 
 // =============================================================================
@@ -8826,7 +8924,7 @@ async fn test_capability_issue_attenuate_revoke_lifecycle() {
         ..Config::default()
     };
     let state = AppState::new(db.clone(), config, storage);
-    let app = build_served_router().with_state(Arc::new(state));
+    let app = build_served_router(false).with_state(Arc::new(state));
 
     let response = app
         .clone()

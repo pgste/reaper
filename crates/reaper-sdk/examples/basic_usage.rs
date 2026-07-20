@@ -73,6 +73,9 @@ async fn main() -> Result<()> {
             match response.decision {
                 Decision::Allow => println!("\n🟢 ACCESS GRANTED"),
                 Decision::Deny => println!("\n🔴 ACCESS DENIED"),
+                // `Decision` is non_exhaustive: treat anything unknown as not
+                // granted (fail closed).
+                other => println!("\n🔴 ACCESS NOT GRANTED (unrecognized decision {other:?})"),
             }
         }
         Err(e) => {

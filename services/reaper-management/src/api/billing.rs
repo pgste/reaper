@@ -321,5 +321,6 @@ fn billing_error_to_api(e: BillingError) -> ApiError {
         BillingError::Config(msg) => ApiError::Internal(format!("Billing config error: {}", msg)),
         BillingError::Database(e) => ApiError::Internal(format!("Database error: {}", e)),
         BillingError::Stripe(msg) => ApiError::Internal(format!("Stripe error: {}", msg)),
+        BillingError::NotImplemented(msg) => ApiError::NotImplemented(msg),
     }
 }
