@@ -619,7 +619,43 @@ policy example_from_cedar {
 }
 ```
 
+## Deliberate Non-Features
+
+The following are **refusals, not gaps**. Each buys a property the engine
+sells — replayable decisions, total evaluation, bounded latency — and none
+is on any roadmap. (Comparison context: `docs/development/REGO_GAP_ANALYSIS.md`.)
+
+- **No mid-decision I/O** (no `http.send` equivalent, no DNS, no file
+  reads). External facts enter through the DataStore and its sync
+  pipeline *before* evaluation. A decision's latency is bounded by the
+  engine, never by a remote dependency, and a decision can always be
+  replayed from its logged inputs.
+- **No nondeterministic builtins** (no `rand`, no `uuid`). The one
+  sanctioned nondeterminism is the clock (`time::now*`), same as other
+  policy engines; everything else must make identical inputs produce
+  identical decisions, or the decision log and frozen corpus lose their
+  meaning.
+- **No value-producing rules / arbitrary output documents.** Rules decide
+  (`allow`/`deny`, plus check-mode violation messages). Deriving data
+  documents belongs to the DataStore and materialized views, not the
+  policy language.
+- **No unification** (Rego's `=`). Assignment is `:=`, comparison is `==`;
+  a solver adds authoring surprise for no authorization benefit.
+- **No unbounded traversal.** `rebac::` traversals are indexed, budgeted,
+  and depth-clamped (≤16). There is no way to write a policy whose
+  evaluation cost is unbounded in the data.
+- **No in-language mocking** (Rego's `with input as …`). Testing injects
+  fixtures from outside via `reaper-cli test` / `test-suite` — the policy
+  text that runs in tests is byte-identical to the policy text that runs
+  in production.
+- **No loops, no recursion, no general-purpose computation.** The language
+  is total and terminating by construction (see Totality & Limits).
+
 ## Future Enhancements
+
+Planned work is tracked in `plans/round-4/01-dsl-parity-and-fast-path.md`
+(helper predicates, imports, compiled `input` access, stdlib growth —
+sourced from `docs/development/REGO_GAP_ANALYSIS.md`). Declared directions:
 
 1. **Imports** - Reuse rules across policies
 2. **Schemas** - Type validation for entities
