@@ -1,7 +1,9 @@
 # Partial Evaluation for the Compiled DSL Path
 
-**Status:** Tier 1 shipped (Plan 06 Phase F, this document's sibling PR).
-Tier 2 designed here, not yet implemented.
+**Status:** Tier 1 shipped (Plan 06 Phase F.1). F.2 (data epoch) and F.3
+(dry-run fitness) shipped 2026-07-20; the §6 fitness measurement came back
+**below threshold**, so **F.4/F.5 are parked** — see §6.1 for the numbers,
+the verdict, and the revisit triggers.
 **Owner plan:** `plans/round-3/06-ga-hardening.md` §7 Phase F.
 
 ## 1. Context: what "partial evaluation" means here, and what already exists
@@ -237,16 +239,62 @@ bundle. If < ~5% of rules shorten, park tier 2 and keep only the epoch
 counter (observability) — the pruning index has already captured the bulk of
 the win.
 
+### 6.1 Measurement (2026-07-20) and verdict: PARKED
+
+Instrument: `compiler::leaf_staticness` + `compiler::specialization_fitness`
+(exhaustive-match pinned — a new `CompiledCondition` variant fails
+compilation until classified), driven by
+`cargo run --example specialization_fitness -- <dirs>`. The "would shorten"
+answer is a simulation through the REAL tier-1 `fold_condition` (substitute
+static leaves with both truth constants, count surviving non-constant
+leaves), so it inherits the binding guard rather than re-implementing it.
+
+| Corpus | Policies (compiled / AST-fallback) | Rules | Static leaves | Shorten today | Shorten w/ static-context |
+|---|---|---|---|---|---|
+| `policy-library/` | 14 / 4 | 55 | **0** | **0 (0.00%)** | 33 (60.00%) |
+| benchmarks + reaper-bench + engine examples/tests | 45 / 15 | 482 | **0** | **0 (0.00%)** | 3 (0.62%) |
+
+Two structural facts drive the zero:
+
+1. **The literal-entity attribute row of §2.1 is empty by construction.**
+   The compiled condition language anchors every attribute read to the
+   request — `EntityType` is `User | Resource | Context | Actor`; there is
+   no compiled shape that reads a *literal-named* entity's attribute. The
+   only provably data-static leaf shape is literal-literal ReBAC.
+2. **No corpus policy uses literal-literal ReBAC.** Real ReBAC conjuncts
+   bind `principal`/`resource` — the literal-literal form
+   (`has_relation("team_a", "owns", "repo_1")`) appears nowhere.
+
+The 60% static-context figure for `policy-library/` is a deliberately loose
+upper bound: it assumes *every* context key is operator-static, but most
+context keys in those policies (`mfa`, `channel`, source IP, …) are
+per-request. A real static-context config would declare keys (region,
+environment, tenant) individually, unlocking only a subset.
+
+**Verdict (per this section's own gate):** 0.00% < 5% ⇒ **park F.4/F.5.**
+The epoch counter (F.2) stays — it is independently useful as `/health`
+observability and is the invalidation primitive any future overlay needs.
+Legacy artifacts (§5) stay as-is, per §5's "until then".
+
+**Revisit triggers:**
+- a production corpus showing literal-literal ReBAC conjuncts (re-run the
+  example; the numbers are one command away), or
+- building an operator-declared static-context config (then re-measure with
+  the declared-keys subset, not the loose bound), or
+- the compiled language gaining a literal-entity attribute read shape.
+
 ## 7. Phasing
 
 - **F.1 (shipped):** tier-1 constant folding in the compiled path.
-- **F.2:** `data_epoch` counter + `/health` exposure + bump-completeness test.
-- **F.3:** dry-run `specialize_condition` + `OptimizationStats` + fitness
-  measurement (§6). **Decision point.**
-- **F.4:** overlay + fallback path behind `REAPER_USE_SPECIALIZED_POLICIES`,
-  with gates §4.1-4.4.
-- **F.5:** legacy artifact deletion (§5), flag default flip one release
-  later.
+- **F.2 (shipped):** `data_epoch` counter + `/health` exposure +
+  bump-completeness test (`crates/policy-engine/tests/data_epoch_tests.rs`).
+- **F.3 (shipped):** dry-run `leaf_staticness`/`specialization_fitness` +
+  fitness measurement (§6). **Decision recorded in §6.1: parked.**
+- **F.4 (parked):** overlay + fallback path behind
+  `REAPER_USE_SPECIALIZED_POLICIES`, with gates §4.1-4.4. Build only on a
+  §6.1 revisit trigger.
+- **F.5 (parked with F.4):** legacy artifact deletion (§5), flag default
+  flip one release later.
 
 Each step independently shippable; F.4 is the only one touching the eval hot
 path and it is guarded by the flag and the differential gates.

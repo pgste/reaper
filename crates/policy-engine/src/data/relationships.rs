@@ -94,6 +94,13 @@ pub struct RelationshipGraph {
     /// pinned for the life of the store. Relations are pinned (bounded
     /// vocabulary), so releasing them is a no-op.
     interner: StringInterner,
+    /// The owning store's data-generation counter (R3-06 Phase F.2), shared
+    /// so callers mutating the graph directly (`store.relationships()
+    /// .add_edge(..)`) still invalidate epoch-stamped consumers. Bumped at
+    /// the END of every mutating method, unconditionally — a no-op mutation
+    /// (duplicate edge, missing removal target) still bumps, which can only
+    /// cost an unnecessary re-specialization, never a stale read.
+    epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl RelationshipGraph {
@@ -101,14 +108,36 @@ impl RelationshipGraph {
     /// `Clone` but Arc-backed internally, so this shares state with the store
     /// rather than copying it — releases here evict from the same table the
     /// loader interned into.
+    ///
+    /// A graph built this way owns a private epoch counter; graphs embedded
+    /// in a `DataStore` share the store's counter via `with_epoch`.
     pub fn new(interner: StringInterner) -> Self {
+        Self::with_epoch(
+            interner,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        )
+    }
+
+    /// Build a graph whose mutations bump `epoch` — the `DataStore`
+    /// constructor passes its own `data_epoch` here so store-level and
+    /// graph-level mutations advance one shared generation.
+    pub(crate) fn with_epoch(
+        interner: StringInterner,
+        epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
         Self {
             forward: DashMap::new(),
             reverse: DashMap::new(),
             carrier_rels: DashMap::new(),
             subject_rels: DashMap::new(),
             interner,
+            epoch,
         }
+    }
+
+    fn bump_epoch(&self) {
+        self.epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record `from #relation @to` (idempotent; lists stay sorted).
@@ -136,6 +165,7 @@ impl RelationshipGraph {
             // Duplicate edge — the loader's extra counted reference is redundant.
             self.interner.release(to);
         }
+        self.bump_epoch();
     }
 
     /// Remove one edge (both directions). Idempotent: removing a missing
@@ -147,6 +177,7 @@ impl RelationshipGraph {
             // Balances the one counted reference this live edge held on `to`.
             self.interner.release(to);
         }
+        self.bump_epoch();
     }
 
     /// Drop every edge this entity CARRIES (declares). The upsert primitive:
@@ -165,6 +196,7 @@ impl RelationshipGraph {
                 }
             }
         }
+        self.bump_epoch();
     }
 
     /// Fully detach an entity — carried edges AND edges pointing at it.
@@ -185,6 +217,9 @@ impl RelationshipGraph {
                 }
             }
         }
+        // detach_carried already bumped, but the subject-side removals above
+        // must also be covered by a bump that follows them.
+        self.bump_epoch();
     }
 
     /// Subjects of `object #relation` (direct, one lookup).
@@ -364,6 +399,7 @@ impl RelationshipGraph {
         self.reverse.clear();
         self.carrier_rels.clear();
         self.subject_rels.clear();
+        self.bump_epoch();
     }
 
     /// Total number of forward edge lists (diagnostics).

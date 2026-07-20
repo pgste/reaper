@@ -12,17 +12,21 @@
 
 use super::types::{
     // Compiled types
+    CompiledCompareTarget,
     CompiledComprehension,
     CompiledCondition,
     CompiledIterationSource,
     CompiledIterator,
     CompiledLiteralValue,
     CompiledOutput,
+    CompiledRebacRef,
     // Compiled consolidated types
     CompiledRegexMatch,
+    CompiledRule,
     ComprehensionType,
     // Uncompiled types
     Condition,
+    EntityType,
     LiteralValue,
     UncompiledComprehensionType,
     UncompiledIterationSource,
@@ -738,6 +742,321 @@ pub fn fold_condition(cond: CompiledCondition) -> CompiledCondition {
     }
 }
 
+// ===========================================================================
+// Tier-2 partial evaluation, F.3 DRY RUN (R3 Plan 06 F; design in
+// docs/development/PARTIAL_EVALUATION.md §3.3/§6). Nothing here rewrites the
+// serving rules — this is the fitness instrument that decides whether the
+// F.4 specialization overlay is worth building. It classifies every compiled
+// leaf by what its truth depends on, and simulates (via the REAL tier-1
+// fold) how much shorter each rule would get if the data-static leaves were
+// pre-evaluated to constants.
+// ===========================================================================
+
+/// What a compiled leaf condition's truth depends on (design §2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeafStaticness {
+    /// Depends only on deploy-time data (the DataStore / relationship
+    /// graph): pre-evaluable by the tier-2 overlay, invalidated by the
+    /// `data_epoch`. Today this is exactly the literal-literal ReBAC shape —
+    /// the compiled condition language anchors every attribute read to the
+    /// request (`EntityType` is User/Resource/Context/Actor), so the
+    /// "literal-named entity attribute" row of §2.1 is empty by construction.
+    Static,
+    /// Anchored on the request CONTEXT: static only under an
+    /// operator-declared static-context config (region, tenant, deployment
+    /// environment — design §2.1 last row), which does not exist yet. Counted
+    /// separately as the upper bound such a config could unlock.
+    StaticContext,
+    /// Depends on the request (principal, resource, action, actor,
+    /// variables, taint provenance): never specializable.
+    Dynamic,
+}
+
+/// Classify one compiled condition node. `And`/`Or`/`Not` are structure, not
+/// leaves — callers recurse; this returns `Dynamic` for them defensively.
+///
+/// The match is EXHAUSTIVE ON PURPOSE (no `_` arm): adding a
+/// `CompiledCondition` variant must fail compilation here, forcing an
+/// explicit staticness decision — the same pin discipline as
+/// [`binds_variables`]. Classification is conservative: when in doubt a leaf
+/// is `Dynamic`, which can only cost a missed optimization, never a stale
+/// answer.
+pub fn leaf_staticness(cond: &CompiledCondition) -> LeafStaticness {
+    use CompiledCondition as C;
+    use LeafStaticness::{Dynamic, Static, StaticContext};
+
+    /// Context-anchored ⇒ static-context candidate; any other anchor ⇒
+    /// request-dependent.
+    fn by_entity(entity: &EntityType) -> LeafStaticness {
+        match entity {
+            EntityType::Context => StaticContext,
+            EntityType::User | EntityType::Resource | EntityType::Actor => Dynamic,
+        }
+    }
+
+    match cond {
+        // -- The one provably data-static shape today: ReBAC with BOTH refs
+        // literal. Every RebacKind (direct / reachable / inherited) reads
+        // only the relationship graph, whose mutations bump the data epoch.
+        C::RebacCheck {
+            subject, object, ..
+        } => match (subject, object) {
+            (CompiledRebacRef::Literal(_), CompiledRebacRef::Literal(_)) => Static,
+            _ => Dynamic,
+        },
+
+        // -- Entity-anchored reads: staticness follows the anchor. For
+        // comparisons whose TARGET is itself an entity attribute or a
+        // variable, the target must be context/literal too.
+        C::AttributeCompare(c) => match (&c.entity_type, &c.target) {
+            (EntityType::Context, CompiledCompareTarget::LiteralString(_))
+            | (EntityType::Context, CompiledCompareTarget::LiteralNum(_))
+            | (EntityType::Context, CompiledCompareTarget::LiteralBool(_))
+            | (EntityType::Context, CompiledCompareTarget::LiteralNull) => StaticContext,
+            (EntityType::Context, CompiledCompareTarget::EntityAttr { entity_type, .. }) => {
+                by_entity(entity_type)
+            }
+            _ => Dynamic,
+        },
+        C::StringOp(c) => by_entity(&c.entity_type),
+        C::CountOp(c) => by_entity(&c.entity_type),
+        // Compares an entity attribute to a literal threshold baked in at
+        // compile time — no clock read at eval time, so the anchor decides.
+        C::TimeOp(c) => by_entity(&c.entity_type),
+        C::RegexMatch(c) => by_entity(&c.entity_type),
+        C::CrossEntityCompare(c) => match (by_entity(&c.left_entity), by_entity(&c.right_entity)) {
+            (StaticContext, StaticContext) => StaticContext,
+            _ => Dynamic,
+        },
+        C::WildcardCompare(c) => {
+            match (by_entity(&c.collection_entity), by_entity(&c.scalar_entity)) {
+                (StaticContext, StaticContext) => StaticContext,
+                _ => Dynamic,
+            }
+        }
+        C::ObjectHasKey { entity_type, .. }
+        | C::CollectionAny { entity_type, .. }
+        | C::CollectionAll { entity_type, .. }
+        | C::SameEntityAttrCompare { entity_type, .. }
+        | C::MembershipTest { entity_type, .. }
+        | C::IndexedEquals { entity_type, .. }
+        | C::IsString { entity_type, .. }
+        | C::IsNumber { entity_type, .. }
+        | C::IsBool { entity_type, .. }
+        | C::SetIntersectionCountGreater { entity_type, .. }
+        | C::MapKeyExists { entity_type, .. }
+        | C::ComprehensionCountGreaterEqual { entity_type, .. }
+        | C::ComprehensionCountEqual { entity_type, .. } => by_entity(entity_type),
+
+        // -- Request-intrinsic: never static.
+        C::ActionEquals { .. } | C::ResourceIdEquals { .. } => Dynamic,
+        // Trust provenance is a property of the incoming request.
+        C::TaintTrusted { .. } => Dynamic,
+
+        // -- Anything touching the rule-scoped variables map: reads depend
+        // on bindings made at eval time; writes ARE eval-time side effects
+        // (and the binding guard forbids eliminating them anyway).
+        C::Assignment { .. }
+        | C::ExpressionAssignment { .. }
+        | C::ExprCompareAssignment { .. }
+        | C::ComparisonAssignment { .. }
+        | C::NullComparisonAssignment { .. }
+        | C::VarAttrNullCompareAssignment { .. }
+        | C::ComprehensionAssignment { .. }
+        | C::EqualsVariable { .. }
+        | C::VariableStringOp(_)
+        | C::VariableEqualsLiteral { .. }
+        | C::VariableNotEqualsLiteral { .. }
+        | C::VariableCompare { .. }
+        | C::VariableIsNull { .. }
+        | C::VariableIsNotNull { .. }
+        | C::VariableMembershipTest { .. }
+        | C::VariableIsString { .. }
+        | C::VariableIsNumber { .. }
+        | C::VariableIsBool { .. }
+        | C::VariableIsTruthy { .. }
+        | C::VariableEqualsVariable { .. }
+        | C::VariableNotEqualsVariable { .. }
+        | C::VariableMethodWithLiteralArray { .. }
+        | C::VariableMethodCompare { .. }
+        | C::VariableChainedMethodCompare { .. }
+        | C::VariableAttrEqualsLiteral { .. }
+        | C::VariableAttrNotEqualsLiteral { .. }
+        | C::VariableAttrCompare { .. }
+        | C::VariableAttrEqualsNull { .. }
+        | C::VariableAttrNotEqualsNull { .. }
+        | C::VariableAttrContains { .. } => Dynamic,
+
+        // -- Constants and structure: no specialization opportunity in the
+        // node itself. (`Always` is tier-1's business; And/Or/Not are walked
+        // through by the callers, never classified.)
+        C::Always => Dynamic,
+        C::And(_) | C::Or(_) | C::Not(_) => Dynamic,
+    }
+}
+
+/// Dry-run fitness numbers for the tier-2 specialization overlay
+/// (design §6). Aggregatable across rules and policies via [`Self::merge`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpecializationFitness {
+    /// Rules analyzed.
+    pub total_rules: usize,
+    /// Non-constant leaf conditions across all rules.
+    pub total_leaves: usize,
+    /// Leaves provably data-static today (literal-literal ReBAC).
+    pub static_leaves: usize,
+    /// Context-anchored leaves — static only under a (not yet existing)
+    /// operator-declared static-context config; the hypothetical upper bound.
+    pub static_context_leaves: usize,
+    /// Rules containing at least one `Static` leaf.
+    pub rules_with_static_leaf: usize,
+    /// Rules the overlay would actually SHORTEN today: substituting the
+    /// `Static` leaves with a constant truth value and running the real
+    /// tier-1 fold removes at least one leaf (under the binding guard).
+    pub rules_shortenable: usize,
+    /// Same simulation with `StaticContext` leaves included — what a
+    /// static-context config could additionally unlock.
+    pub rules_shortenable_with_static_context: usize,
+}
+
+impl SpecializationFitness {
+    /// Fold another measurement into this one (for corpus-level totals).
+    pub fn merge(&mut self, other: &SpecializationFitness) {
+        self.total_rules += other.total_rules;
+        self.total_leaves += other.total_leaves;
+        self.static_leaves += other.static_leaves;
+        self.static_context_leaves += other.static_context_leaves;
+        self.rules_with_static_leaf += other.rules_with_static_leaf;
+        self.rules_shortenable += other.rules_shortenable;
+        self.rules_shortenable_with_static_context += other.rules_shortenable_with_static_context;
+    }
+}
+
+/// Count the non-constant leaves of a condition tree. Constants (`Always`,
+/// `!Always`) count zero — a rule whose condition folds to a constant costs
+/// nothing at eval time, which is exactly what "shorter" must measure.
+fn leaf_count(cond: &CompiledCondition) -> usize {
+    match cond {
+        CompiledCondition::And(children) | CompiledCondition::Or(children) => {
+            children.iter().map(leaf_count).sum()
+        }
+        CompiledCondition::Not(inner) => leaf_count(inner),
+        CompiledCondition::Always => 0,
+        _ => 1,
+    }
+}
+
+/// Replace every qualifying static leaf with the constant `truth`
+/// (`Always` / `!Always`), leaving all other nodes intact. The dry run then
+/// feeds the result through [`fold_condition`], whose binding guard decides
+/// whether the constant may actually be eliminated — the simulation reuses
+/// the exact machinery F.4 would, so its "would shorten" answer is the real
+/// one, not a reimplementation's.
+fn substitute_static_leaves(
+    cond: &CompiledCondition,
+    include_context: bool,
+    truth: bool,
+) -> CompiledCondition {
+    match cond {
+        CompiledCondition::And(children) => CompiledCondition::And(
+            children
+                .iter()
+                .map(|c| substitute_static_leaves(c, include_context, truth))
+                .collect(),
+        ),
+        CompiledCondition::Or(children) => CompiledCondition::Or(
+            children
+                .iter()
+                .map(|c| substitute_static_leaves(c, include_context, truth))
+                .collect(),
+        ),
+        CompiledCondition::Not(inner) => CompiledCondition::Not(Box::new(
+            substitute_static_leaves(inner, include_context, truth),
+        )),
+        leaf => {
+            let qualifies = match leaf_staticness(leaf) {
+                LeafStaticness::Static => true,
+                LeafStaticness::StaticContext => include_context,
+                LeafStaticness::Dynamic => false,
+            };
+            if qualifies {
+                if truth {
+                    CompiledCondition::Always
+                } else {
+                    CompiledCondition::Not(Box::new(CompiledCondition::Always))
+                }
+            } else {
+                leaf.clone()
+            }
+        }
+    }
+}
+
+/// Would specializing this condition's static leaves make it cheaper?
+/// True iff SOME truth assignment (all-true or all-false — static leaves in
+/// one rule share few enough shapes that mixed assignments add nothing the
+/// bound needs) folds to fewer non-constant leaves than the rule has today.
+fn condition_shortens(cond: &CompiledCondition, include_context: bool) -> bool {
+    let baseline = leaf_count(cond);
+    if baseline == 0 {
+        return false;
+    }
+    [true, false].into_iter().any(|truth| {
+        leaf_count(&fold_condition(substitute_static_leaves(
+            cond,
+            include_context,
+            truth,
+        ))) < baseline
+    })
+}
+
+/// Tally one condition's leaves into (total, static, static-context).
+fn tally_leaves(cond: &CompiledCondition, tally: &mut (usize, usize, usize)) {
+    match cond {
+        CompiledCondition::And(children) | CompiledCondition::Or(children) => {
+            for child in children {
+                tally_leaves(child, tally);
+            }
+        }
+        CompiledCondition::Not(inner) => tally_leaves(inner, tally),
+        CompiledCondition::Always => {}
+        leaf => {
+            tally.0 += 1;
+            match leaf_staticness(leaf) {
+                LeafStaticness::Static => tally.1 += 1,
+                LeafStaticness::StaticContext => tally.2 += 1,
+                LeafStaticness::Dynamic => {}
+            }
+        }
+    }
+}
+
+/// Measure the tier-2 fitness of a set of compiled rules (design §6). Pure
+/// analysis: consults no DataStore, mutates nothing, safe to run anywhere.
+pub fn specialization_fitness(rules: &[CompiledRule]) -> SpecializationFitness {
+    let mut fitness = SpecializationFitness {
+        total_rules: rules.len(),
+        ..Default::default()
+    };
+    for rule in rules {
+        let mut tally = (0usize, 0usize, 0usize);
+        tally_leaves(&rule.condition, &mut tally);
+        fitness.total_leaves += tally.0;
+        fitness.static_leaves += tally.1;
+        fitness.static_context_leaves += tally.2;
+        if tally.1 > 0 {
+            fitness.rules_with_static_leaf += 1;
+        }
+        if condition_shortens(&rule.condition, false) {
+            fitness.rules_shortenable += 1;
+        }
+        if condition_shortens(&rule.condition, true) {
+            fitness.rules_shortenable_with_static_context += 1;
+        }
+    }
+    fitness
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1158,5 +1477,170 @@ mod tests {
         // Non-binding leaves stay unflagged.
         assert!(!binds_variables(&leaf(&i, "r")));
         assert!(!binds_variables(&t()));
+    }
+
+    // =======================================================================
+    // Tier-2 partial evaluation, F.3 dry run: leaf_staticness + fitness
+    // =======================================================================
+
+    use crate::evaluators::reaper_dsl::types::{CompiledAttributeComparison, CompiledRebacRef};
+    use crate::PolicyAction;
+
+    /// The one provably data-static shape: ReBAC with both refs literal.
+    fn static_rebac(interner: &StringInterner) -> CompiledCondition {
+        CompiledCondition::RebacCheck {
+            kind: crate::evaluators::reaper_dsl::types::RebacKind::Direct,
+            subject: CompiledRebacRef::Literal(interner.intern("team_a")),
+            relation: interner.intern("owns"),
+            object: CompiledRebacRef::Literal(interner.intern("repo_1")),
+            via: None,
+            max_depth: 1,
+        }
+    }
+
+    fn context_leaf(interner: &StringInterner) -> CompiledCondition {
+        CompiledCondition::AttributeCompare(CompiledAttributeComparison {
+            entity_type: EntityType::Context,
+            attribute: interner.intern("region"),
+            op: NumericOp::Equal,
+            target: CompiledCompareTarget::LiteralString(interner.intern("eu")),
+        })
+    }
+
+    fn rule(cond: CompiledCondition) -> CompiledRule {
+        CompiledRule {
+            name: "r".into(),
+            condition: cond,
+            decision: PolicyAction::Allow,
+        }
+    }
+
+    #[test]
+    fn test_leaf_staticness_classes() {
+        let i = StringInterner::new();
+
+        // Literal-literal ReBAC: the only Static shape today.
+        assert_eq!(leaf_staticness(&static_rebac(&i)), LeafStaticness::Static);
+
+        // ReBAC with a request-bound ref: dynamic.
+        let dynamic_rebac = CompiledCondition::RebacCheck {
+            kind: crate::evaluators::reaper_dsl::types::RebacKind::Direct,
+            subject: CompiledRebacRef::Principal,
+            relation: i.intern("owns"),
+            object: CompiledRebacRef::Literal(i.intern("repo_1")),
+            via: None,
+            max_depth: 1,
+        };
+        assert_eq!(leaf_staticness(&dynamic_rebac), LeafStaticness::Dynamic);
+
+        // Context-anchored comparison against a literal: static only under a
+        // declared static context.
+        assert_eq!(
+            leaf_staticness(&context_leaf(&i)),
+            LeafStaticness::StaticContext
+        );
+
+        // Context compared against a USER attribute: the target drags in the
+        // request — dynamic.
+        let ctx_vs_user = CompiledCondition::AttributeCompare(CompiledAttributeComparison {
+            entity_type: EntityType::Context,
+            attribute: i.intern("region"),
+            op: NumericOp::Equal,
+            target: CompiledCompareTarget::EntityAttr {
+                entity_type: EntityType::User,
+                attribute: i.intern("region"),
+            },
+        });
+        assert_eq!(leaf_staticness(&ctx_vs_user), LeafStaticness::Dynamic);
+
+        // Request-intrinsic leaves.
+        assert_eq!(leaf_staticness(&leaf(&i, "r")), LeafStaticness::Dynamic);
+        assert_eq!(
+            leaf_staticness(&CompiledCondition::TaintTrusted { key: "k".into() }),
+            LeafStaticness::Dynamic
+        );
+        // Bindings are never static (side effects).
+        assert_eq!(leaf_staticness(&binding(&i)), LeafStaticness::Dynamic);
+    }
+
+    #[test]
+    fn test_fitness_counts_and_shortening() {
+        let i = StringInterner::new();
+
+        // Rule 1: static_rebac && dynamic — substituting the static leaf
+        // with a constant and folding drops it (true) or collapses the And
+        // (false): shortenable today.
+        let r1 = rule(CompiledCondition::And(vec![
+            static_rebac(&i),
+            leaf(&i, "doc1"),
+        ]));
+        // Rule 2: purely dynamic — nothing to specialize.
+        let r2 = rule(CompiledCondition::And(vec![
+            leaf(&i, "doc2"),
+            leaf(&i, "doc3"),
+        ]));
+        // Rule 3: context leaf && dynamic — shortenable only under the
+        // hypothetical static-context config.
+        let r3 = rule(CompiledCondition::And(vec![
+            context_leaf(&i),
+            leaf(&i, "doc4"),
+        ]));
+
+        let fitness = specialization_fitness(&[r1, r2, r3]);
+        assert_eq!(fitness.total_rules, 3);
+        assert_eq!(fitness.total_leaves, 6);
+        assert_eq!(fitness.static_leaves, 1);
+        assert_eq!(fitness.static_context_leaves, 1);
+        assert_eq!(fitness.rules_with_static_leaf, 1);
+        assert_eq!(fitness.rules_shortenable, 1);
+        // Context inclusion unlocks rule 3 IN ADDITION to rule 1.
+        assert_eq!(fitness.rules_shortenable_with_static_context, 2);
+    }
+
+    #[test]
+    fn test_shortening_respects_the_binding_guard() {
+        let i = StringInterner::new();
+        // (let x = user.role) && static_rebac: substituting the rebac with
+        // `false` may NOT erase the conjunction (the binding must still
+        // evaluate) — the guard inside fold_condition enforces it. With
+        // `true` the rebac conjunct IS droppable (dropping a true conjunct
+        // skips no evaluation semantics the runtime needs: the binding still
+        // runs). So the rule is shortenable — but only via the sound path.
+        let cond = CompiledCondition::And(vec![binding(&i), static_rebac(&i)]);
+
+        // Direct check of the unsound direction: false-substitution + fold
+        // must keep the binding.
+        let false_sub = fold_condition(substitute_static_leaves(&cond, false, false));
+        let CompiledCondition::And(children) = &false_sub else {
+            panic!("binding conjunction must survive false-substitution");
+        };
+        assert!(binds_variables(&children[0]));
+
+        // And the aggregate still reports it shortenable (via true).
+        let fitness = specialization_fitness(&[rule(cond)]);
+        assert_eq!(fitness.rules_shortenable, 1);
+    }
+
+    #[test]
+    fn test_fitness_single_static_leaf_rule_counts_as_shortenable() {
+        // A rule that is NOTHING BUT a static leaf specializes to a
+        // constant: leaf_count 1 → 0. That is the biggest win available and
+        // must register as shortening.
+        let i = StringInterner::new();
+        let fitness = specialization_fitness(&[rule(static_rebac(&i))]);
+        assert_eq!(fitness.total_leaves, 1);
+        assert_eq!(fitness.rules_shortenable, 1);
+    }
+
+    #[test]
+    fn test_fitness_static_leaf_under_or_shortens() {
+        let i = StringInterner::new();
+        // static || dynamic: false-substitution drops the disjunct;
+        // true-substitution folds the Or to true. Either way shorter.
+        let fitness = specialization_fitness(&[rule(CompiledCondition::Or(vec![
+            static_rebac(&i),
+            leaf(&i, "doc"),
+        ]))]);
+        assert_eq!(fitness.rules_shortenable, 1);
     }
 }

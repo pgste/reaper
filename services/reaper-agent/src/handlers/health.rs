@@ -47,6 +47,12 @@ pub async fn health_check(State(state): State<Arc<AgentState>>) -> Result<Json<V
         "eval_errors": state.stats.eval_errors.load(Ordering::Relaxed),
         "cache_hits": state.stats.decision_cache_hits.load(Ordering::Relaxed),
         "cache_misses": state.stats.decision_cache_misses.load(Ordering::Relaxed),
+        // DataStore mutation generation (R3-06 Phase F.2): increases across
+        // every entity/relationship mutation. A frozen value across a window
+        // where data loads were expected is the observable symptom of a
+        // missed bump; consumers (specialization overlays) compare it for
+        // staleness.
+        "data_epoch": state.data_store.data_epoch(),
         "capabilities": [
             "policy-evaluation",
             "hot-swapping",
@@ -253,6 +259,21 @@ mod tests {
         assert_eq!(value["status"], "healthy");
         assert_eq!(value["service"], "reaper-agent");
         assert!(value["version"].is_string());
+        assert_eq!(value["data_epoch"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_health_reports_advancing_data_epoch() {
+        let state = create_test_state();
+
+        let loader = policy_engine::DataLoader::new((*state.data_store).clone());
+        loader
+            .load_json(r#"{"entities": [{"id": "u1", "type": "User", "attributes": {}}]}"#)
+            .expect("load test entity");
+
+        let value = health_check(State(state)).await.unwrap().0;
+        let epoch = value["data_epoch"].as_u64().expect("data_epoch is a u64");
+        assert!(epoch > 0, "data load must advance the reported epoch");
     }
 
     #[tokio::test]
