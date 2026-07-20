@@ -7,6 +7,7 @@ mod ast_evaluator;
 mod bundle;
 mod compiler;
 mod limits;
+mod mixed_evaluator;
 mod parser;
 mod yaml_parser;
 
@@ -24,6 +25,7 @@ pub use limits::{
     configured_max_nesting_depth, enforce_policy_depth, enforce_source_nesting,
     DEFAULT_MAX_NESTING_DEPTH,
 };
+pub use mixed_evaluator::{MixedReapEvaluator, PerRuleBuild};
 pub use parser::ReapParser;
 pub use yaml_parser::YamlPolicy;
 
@@ -121,15 +123,18 @@ impl ReaperPolicy {
     }
 
     /// Build the PREFERRED evaluator: the compiled `ReaperDSLEvaluator` when
-    /// this policy compiles, otherwise the `ReapAstEvaluator` fallback.
+    /// this policy compiles whole; otherwise a per-RULE mixed evaluator that
+    /// keeps every compilable rule on the compiled path and interprets only
+    /// the rules that need it (R4-01 Phase A.2); a whole-policy
+    /// `ReapAstEvaluator` only when no rule compiles at all.
     ///
-    /// The compiled path is faster; the AST path supports every feature. They
-    /// are required to produce identical decisions for any policy both can
-    /// evaluate (pinned by the compiled-vs-AST equivalence differential), so
-    /// falling back never changes an authorization outcome — it only trades
-    /// speed for coverage on policies the compiler doesn't yet handle. This is
-    /// the entry point production code should use unless it specifically needs
-    /// one implementation.
+    /// The compiled path is faster; the AST path supports every feature. All
+    /// three shapes are required to produce identical decisions for any
+    /// policy (pinned by the compiled-vs-AST and mixed-mode differentials),
+    /// so falling back never changes an authorization outcome — it only
+    /// trades speed for coverage on constructs the compiler doesn't yet
+    /// handle. This is the entry point production code should use unless it
+    /// specifically needs one implementation.
     pub fn build_preferred(
         self,
         store: Arc<DataStore>,
@@ -137,10 +142,27 @@ impl ReaperPolicy {
         match compiler::compile_policy(self.clone().ast, store.clone()) {
             Ok(compiled) => Ok(Box::new(compiled)),
             Err(compile_err) => {
-                tracing::debug!(
-                    "policy did not compile ({compile_err}); falling back to AST evaluator"
-                );
-                Ok(Box::new(ReapAstEvaluator::new(store, self.ast)))
+                match mixed_evaluator::MixedReapEvaluator::build(self.ast, store)? {
+                    PerRuleBuild::Mixed(mixed) => {
+                        let (compiled_rules, ast_rules) = mixed.rule_modes();
+                        tracing::info!(
+                            %compile_err,
+                            compiled_rules,
+                            ast_rules,
+                            ast_rule_names = %mixed.ast_rule_names().join(","),
+                            "policy did not compile whole; serving mixed-mode \
+                             (per-rule compiled/AST fallback)"
+                        );
+                        Ok(Box::new(mixed))
+                    }
+                    PerRuleBuild::AllAst(ast) => {
+                        tracing::debug!(
+                            %compile_err,
+                            "no rule compiled; falling back to whole-policy AST evaluator"
+                        );
+                        Ok(Box::new(ast))
+                    }
+                }
             }
         }
     }
