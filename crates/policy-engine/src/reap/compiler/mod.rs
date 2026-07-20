@@ -25,8 +25,9 @@ use super::ast::{
     AssignmentValue, Comprehension, Condition, Decision, Entity, Expr, Index, Policy, Rule,
 };
 use crate::evaluators::reaper_dsl::{
-    Condition as DslCondition, EntityType as DslEntityType, ExprType, NumericOp,
-    ReaperDSLEvaluator, Rule as DslRule, TimeCondition, UncompiledComprehensionType,
+    Condition as DslCondition, EntityType as DslEntityType, ExprType,
+    LiteralValue as DslLiteralValue, NumericOp, ReaperDSLEvaluator, Rule as DslRule, TimeCondition,
+    UncompiledComprehensionType,
 };
 use crate::{data::DataStore, PolicyAction};
 use reaper_core::ReaperError;
@@ -66,7 +67,11 @@ fn compile_rule(rule: Rule) -> Result<DslRule, ReaperError> {
         Decision::Deny => PolicyAction::Deny,
     };
 
-    let condition = compile_condition(rule.condition)?;
+    // R4-01 A.3: `entity.attr == <var>` may lower to the compiled
+    // `EqualsVariable` shape only when every such use is dominated by its
+    // binding (see `entity_var_compares_dominated`) — decided once per rule.
+    let allow_var_compare = entity_var_compares_dominated(&rule.condition);
+    let condition = compile_condition_with(rule.condition, allow_var_compare)?;
 
     Ok(DslRule {
         name: rule.name,
@@ -75,8 +80,58 @@ fn compile_rule(rule: Rule) -> Result<DslRule, ReaperError> {
     })
 }
 
-/// Compile a condition expression
+/// R4-01 A.3 soundness guard: may `entity.attr ==/!= <var>` comparisons in
+/// this rule lower to the compiled `EqualsVariable` shape?
+///
+/// The compiled shape reads an UNBOUND variable as a non-match (`false`)
+/// while the interpreter reports an evaluation error — so the lowering is
+/// permitted only when evaluation order guarantees the variable is bound at
+/// every such use, making the divergence unobservable. Conservative
+/// dominance walk, mirroring the runtime's left-to-right short-circuit:
+/// `And` chains accumulate bindings in order; bindings made inside `Or`/
+/// `Not` branches never escape the branch (the branch may be skipped at
+/// runtime). Any un-dominated use ⇒ `false` ⇒ the rule keeps its AST
+/// fallback (cheap and observable since per-rule fallback, A.2).
+fn entity_var_compares_dominated(cond: &Condition) -> bool {
+    use crate::reap::ast::ComparisonRight;
+    fn walk(cond: &Condition, bound: &mut std::collections::HashSet<String>) -> bool {
+        match cond {
+            Condition::Assignment { variable, .. } => {
+                bound.insert(variable.clone());
+                true
+            }
+            Condition::Comparison {
+                right: ComparisonRight::Variable(v),
+                ..
+            } => bound.contains(v),
+            Condition::Comparison { .. } => true,
+            Condition::And(children) => children.iter().all(|c| walk(c, bound)),
+            Condition::Or(children) => children.iter().all(|c| {
+                let mut branch = bound.clone();
+                walk(c, &mut branch)
+            }),
+            Condition::Not(inner) => {
+                let mut branch = bound.clone();
+                walk(inner, &mut branch)
+            }
+            Condition::True | Condition::False | Condition::Expr(_) => true,
+        }
+    }
+    walk(cond, &mut std::collections::HashSet::new())
+}
+
+/// Compile a condition expression (public shim kept for existing callers:
+/// variable-compare lowering disabled, the conservative default).
 fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
+    compile_condition_with(cond, false)
+}
+
+/// Compile a condition expression. `allow_var_compare` is the per-rule
+/// dominance verdict from [`entity_var_compares_dominated`].
+fn compile_condition_with(
+    cond: Condition,
+    allow_var_compare: bool,
+) -> Result<DslCondition, ReaperError> {
     match cond {
         Condition::True => Ok(DslCondition::Always),
 
@@ -85,12 +140,14 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
             Ok(DslCondition::Not(Box::new(DslCondition::Always)))
         }
 
-        Condition::Comparison { left, op, right } => compile_comparison(left, op, right),
+        Condition::Comparison { left, op, right } => {
+            compile_comparison(left, op, right, allow_var_compare)
+        }
 
         Condition::And(conditions) => {
             let mut compiled = Vec::new();
             for c in conditions {
-                compiled.push(compile_condition(c)?);
+                compiled.push(compile_condition_with(c, allow_var_compare)?);
             }
             Ok(DslCondition::And(compiled))
         }
@@ -98,13 +155,13 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
         Condition::Or(conditions) => {
             let mut compiled = Vec::new();
             for c in conditions {
-                compiled.push(compile_condition(c)?);
+                compiled.push(compile_condition_with(c, allow_var_compare)?);
             }
             Ok(DslCondition::Or(compiled))
         }
 
         Condition::Not(cond) => {
-            let compiled = compile_condition(*cond)?;
+            let compiled = compile_condition_with(*cond, allow_var_compare)?;
             Ok(DslCondition::Not(Box::new(compiled)))
         }
 
@@ -153,11 +210,33 @@ fn compile_condition(cond: Condition) -> Result<DslCondition, ReaperError> {
                     })
                 }
 
-                // Literal value assignment: x := "admin"
-                AssignmentValue::Value(_val) => Err(ReaperError::InvalidPolicy {
-                    reason: "Literal value assignments are not yet supported in compiled policies."
-                        .to_string(),
-                }),
+                // Literal value assignment: x := "admin" (R4-01 A.3). Scalar
+                // string/int/bool literals lower to a constant-load
+                // expression assignment; float/null/composite literals stay
+                // on the AST evaluator (CompiledLiteralValue has no such
+                // variants — widening it is a later slice, tracked in
+                // REGO_GAP_ANALYSIS §4).
+                AssignmentValue::Value(val) => {
+                    use super::ast::Value;
+                    let literal = match val {
+                        Value::String(s) => DslLiteralValue::String(s),
+                        Value::Integer(n) => DslLiteralValue::Int(n),
+                        Value::Boolean(b) => DslLiteralValue::Bool(b),
+                        other => {
+                            return Err(ReaperError::InvalidPolicy {
+                                reason: format!(
+                                    "Literal assignment of {other:?} is not supported in \
+                                     compiled policies (only string/int/bool literals \
+                                     compile); the policy runs on the AST evaluator."
+                                ),
+                            })
+                        }
+                    };
+                    Ok(DslCondition::ExpressionAssignment {
+                        variable,
+                        expr_type: ExprType::Literal { value: literal },
+                    })
+                }
 
                 // Comparison assignment: x := user.age >= 18
                 AssignmentValue::Comparison { left, op, right } => {

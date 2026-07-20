@@ -543,6 +543,10 @@ fn collect_expr_type_strings(
         // Taint keys look up the request's provenance map by raw string —
         // nothing to pre-intern.
         ExprType::TaintLevel { .. } => {}
+
+        // Literals intern (string case) inside compile_expr_type itself —
+        // nothing to pre-collect here.
+        ExprType::Literal { .. } => {}
     }
 }
 

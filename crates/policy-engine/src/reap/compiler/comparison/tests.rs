@@ -19,6 +19,7 @@ mod tests {
             }),
             Operator::Equal,
             ComparisonRight::Value(Value::String("admin".to_string())),
+            false,
         )
         .unwrap();
 
@@ -32,6 +33,7 @@ mod tests {
             ComparisonLeft::Expr(Expr::Variable("action".to_string())),
             Operator::Equal,
             ComparisonRight::Value(Value::String("read".to_string())),
+            false,
         )
         .unwrap();
 
@@ -48,6 +50,7 @@ mod tests {
             ComparisonLeft::Expr(Expr::Variable("x".to_string())),
             Operator::Equal,
             ComparisonRight::Value(Value::String("test".to_string())),
+            false,
         )
         .unwrap();
 
@@ -72,6 +75,7 @@ mod tests {
                 attribute: "required_level".to_string(),
                 index: None,
             }),
+            false,
         )
         .unwrap();
 

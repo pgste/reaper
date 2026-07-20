@@ -2,6 +2,7 @@
 
 use crate::data::InternedString;
 
+use super::compiled_literal::CompiledLiteralValue;
 use super::core::EntityType;
 
 /// Compiled expression type for expression-based assignments (e.g., x := user.name.lower())
@@ -192,6 +193,12 @@ pub enum CompiledExprType {
     /// read from the request provenance under the fail-untrusted rule.
     TaintLevel {
         key: String,
+    },
+
+    /// A scalar literal, pre-interned where applicable (R4-01 A.3). The
+    /// cheapest expression there is: evaluation is a constant load.
+    Literal {
+        value: CompiledLiteralValue,
     },
 }
 
