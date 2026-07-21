@@ -70,13 +70,16 @@ impl ReapAstEvaluator {
             Entity::Input => unreachable!("Input entity handled above"),
         };
 
-        // Get entity from DataStore
-        let entity = self
-            .store
-            .get(entity_id)
-            .ok_or_else(|| ReaperError::InvalidPolicy {
-                reason: format!("Entity with ID {:?} not found", entity_id),
-            })?;
+        // Missing entity reads Null — fail-closed non-match, never an
+        // evaluation error. This is the documented contract (see
+        // `evaluate_with_input`: an absent principal "simply fails to
+        // match"), the same rule the actor arm above and missing ATTRIBUTES
+        // below already follow, and the compiled evaluator's semantics for
+        // the identical condition — pinned by the mixed-mode differential
+        // (R4-01 A.2), which is what surfaced the old error path.
+        let Some(entity) = self.store.get(entity_id) else {
+            return Ok(EvalValue::Null);
+        };
 
         // Handle chained attributes like "payload.valid"
         let interner = self.store.interner();
@@ -144,12 +147,11 @@ impl ReapAstEvaluator {
         entity_id: EntityId,
         attribute: &str,
     ) -> Result<EvalValue, ReaperError> {
-        let entity = self
-            .store
-            .get(entity_id)
-            .ok_or_else(|| ReaperError::InvalidPolicy {
-                reason: format!("Entity with ID {:?} not found", entity_id),
-            })?;
+        // Missing entity reads Null (fail-closed non-match) — same contract
+        // as `get_entity_attribute` above.
+        let Some(entity) = self.store.get(entity_id) else {
+            return Ok(EvalValue::Null);
+        };
 
         let interner = self.store.interner();
         let attr_id = interner.intern(attribute);
