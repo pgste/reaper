@@ -26,8 +26,8 @@ use super::ast::{
 };
 use crate::evaluators::reaper_dsl::{
     Condition as DslCondition, EntityType as DslEntityType, ExprType,
-    LiteralValue as DslLiteralValue, NumericOp, ReaperDSLEvaluator, Rule as DslRule, TimeCondition,
-    UncompiledComprehensionType,
+    LiteralValue as DslLiteralValue, Message as DslMessage, MessagePart as DslMessagePart,
+    NumericOp, ReaperDSLEvaluator, Rule as DslRule, TimeCondition, UncompiledComprehensionType,
 };
 use crate::{data::DataStore, PolicyAction};
 use reaper_core::ReaperError;
@@ -71,13 +71,116 @@ fn compile_rule(rule: Rule) -> Result<DslRule, ReaperError> {
     // `EqualsVariable` shape only when every such use is dominated by its
     // binding (see `entity_var_compares_dominated`) — decided once per rule.
     let allow_var_compare = entity_var_compares_dominated(&rule.condition);
+    // Check-mode message (R4-01 B.3): lower `with message <expr>` to
+    // literal/variable parts. An expression shape the lowering does not
+    // cover keeps the RULE on the AST evaluator (per-rule fallback) so
+    // check-mode output stays byte-identical.
+    let message = rule.message.as_ref().map(lower_message).transpose()?;
+    // Message variables must be assignment targets somewhere in the rule.
+    // The compiled renderer mirrors the interpreter's full resolution chain
+    // (rule variables → request context → "Undefined variable" error), so
+    // this guard is a conservative compile-surface fence, not a correctness
+    // requirement: a message naming a variable the rule never assigns is an
+    // unusual shape (context-map reads, typos) that stays on the AST
+    // evaluator where behavior is definitionally right.
+    if let Some(msg) = &message {
+        let mut assigned = std::collections::HashSet::new();
+        collect_assigned_vars(&rule.condition, &mut assigned);
+        let msg_vars: Vec<&String> = match msg {
+            DslMessage::Literal(_) => Vec::new(),
+            DslMessage::Variable(v) => vec![v],
+            DslMessage::Concat(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    DslMessagePart::Variable(v) => Some(v),
+                    DslMessagePart::Literal(_) => None,
+                })
+                .collect(),
+        };
+        for v in msg_vars {
+            if !assigned.contains(v.as_str()) {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "check-mode message references variable '{v}' that the rule \
+                         never binds; the rule runs on the AST evaluator"
+                    ),
+                });
+            }
+        }
+    }
     let condition = compile_condition_with(rule.condition, allow_var_compare)?;
 
     Ok(DslRule {
         name: rule.name,
         condition,
         decision,
+        message,
     })
+}
+
+/// Collect every variable name the condition tree ASSIGNS (any
+/// `AssignmentValue` form), for the message-variable guard above.
+fn collect_assigned_vars(cond: &Condition, out: &mut std::collections::HashSet<String>) {
+    match cond {
+        Condition::Assignment { variable, .. } => {
+            out.insert(variable.clone());
+        }
+        Condition::And(children) | Condition::Or(children) => {
+            for c in children {
+                collect_assigned_vars(c, out);
+            }
+        }
+        Condition::Not(inner) => collect_assigned_vars(inner, out),
+        Condition::True | Condition::False | Condition::Comparison { .. } | Condition::Expr(_) => {}
+    }
+}
+
+/// Lower a check-mode message expression to renderable parts: string
+/// literals, rule-variable references, and `concat(...)` of those.
+fn lower_message(expr: &Expr) -> Result<DslMessage, ReaperError> {
+    match expr {
+        Expr::Literal(super::ast::Value::String(s)) => Ok(DslMessage::Literal(s.clone())),
+        Expr::Variable(v) => Ok(DslMessage::Variable(v.clone())),
+        Expr::FunctionCall {
+            namespace: None,
+            function,
+            args,
+        } if function == "concat" => {
+            // Arguments must be string literals or variables — nested
+            // concat calls do NOT lower. Flattening a nested concat would
+            // reorder the interpreter's error sequence (an inner concat's
+            // type check runs during OUTER argument evaluation, before
+            // later outer arguments evaluate), breaking byte-identical
+            // error parity. Nested concat keeps the rule on the AST
+            // evaluator.
+            let mut parts = Vec::with_capacity(args.len());
+            for arg in args {
+                parts.push(match arg {
+                    Expr::Literal(super::ast::Value::String(s)) => {
+                        DslMessagePart::Literal(s.clone())
+                    }
+                    Expr::Variable(v) => DslMessagePart::Variable(v.clone()),
+                    other => {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: format!(
+                                "check-mode concat argument {other:?} is not compiled \
+                                 (only string literals and variables); the rule runs \
+                                 on the AST evaluator"
+                            ),
+                        })
+                    }
+                });
+            }
+            Ok(DslMessage::Concat(parts))
+        }
+        other => Err(ReaperError::InvalidPolicy {
+            reason: format!(
+                "check-mode message expression {other:?} is not compiled (only string \
+                 literals, variables, and concat of those); the rule runs on the AST \
+                 evaluator"
+            ),
+        }),
+    }
 }
 
 /// R4-01 A.3 soundness guard: may `entity.attr ==/!= <var>` comparisons in
@@ -177,16 +280,34 @@ fn compile_condition_with(
 
                 // Entity attribute assignment: x := user.role
                 AssignmentValue::EntityAttr(attr) => {
+                    // `x := input.<dotted.path>` (R4-01 B.3): lower to an
+                    // input-read expression assignment; the path pre-parses
+                    // at compile and missing doc/path binds Null (assignment
+                    // still succeeds), matching the interpreter's total
+                    // input access. Indexed input reads stay on the AST
+                    // evaluator (the wildcard form is B.2's iteration
+                    // source, not an assignment value).
+                    if matches!(attr.entity, Entity::Input) {
+                        if attr.index.is_some() {
+                            return Err(ReaperError::InvalidPolicy {
+                                reason: "indexed `input` assignment is not compiled; the \
+                                         rule runs on the AST evaluator"
+                                    .to_string(),
+                            });
+                        }
+                        return Ok(DslCondition::ExpressionAssignment {
+                            variable,
+                            expr_type: ExprType::InputRead {
+                                path: attr.attribute,
+                            },
+                        });
+                    }
                     let entity_type = match attr.entity {
                         Entity::User => DslEntityType::User,
                         Entity::Resource => DslEntityType::Resource,
                         Entity::Context => DslEntityType::Context,
                         Entity::Actor => DslEntityType::Actor,
-                        Entity::Input => {
-                            return Err(ReaperError::InvalidPolicy {
-                                reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),
-                            })
-                        },
+                        Entity::Input => unreachable!("Input entity handled above"),
                     };
                     let index = attr.index.map(|i| match i {
                         Index::Number(n) => crate::evaluators::reaper_dsl::IndexExpr::Number(n),

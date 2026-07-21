@@ -30,7 +30,10 @@ mod tests;
 // ============================================================================
 
 // Core types
-pub use core::{CompiledRule, EntityBindings, EntityType, IndexExpr, LiteralValue, Rule};
+pub use core::{
+    CompiledMessage, CompiledMessagePart, CompiledRule, EntityBindings, EntityType, IndexExpr,
+    LiteralValue, Message, MessagePart, Rule,
+};
 
 // Operators
 pub use operators::{AttrCompareOp, ComprehensionFilterOp, CountOp, NumericOp, StringOp};

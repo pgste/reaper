@@ -247,6 +247,54 @@ impl MixedReapEvaluator {
         Ok((self.default_decision.clone(), None))
     }
 
+    /// Check-mode over the mixed split (R4-01 B.3): each deny unit
+    /// contributes its violations in source order (a single-rule sub-policy
+    /// yields exactly that rule's violation when it matches); `allowed`
+    /// composes exactly like the interpreter's check driver.
+    pub fn check_with_input(
+        &self,
+        request: &crate::PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<super::CheckResult, ReaperError> {
+        let mut violations = Vec::new();
+        for unit in &self.deny_units {
+            let result = match &unit.eval {
+                UnitEval::Compiled(e) => e.check_with_input(request, input)?,
+                UnitEval::Ast(e) => e.check_with_input(request, input)?,
+            };
+            violations.extend(result.violations);
+        }
+        let allowed = if violations.is_empty() {
+            match self.default_decision {
+                PolicyAction::Allow => true,
+                _ => {
+                    let mut any = false;
+                    for unit in &self.allow_units {
+                        let matched = match &unit.eval {
+                            UnitEval::Compiled(e) => {
+                                e.evaluate_with_input_named(request, input)?.1.is_some()
+                            }
+                            UnitEval::Ast(e) => {
+                                e.evaluate_with_input_named(request, input)?.1.is_some()
+                            }
+                        };
+                        if matched {
+                            any = true;
+                            break;
+                        }
+                    }
+                    any
+                }
+            }
+        } else {
+            false
+        };
+        Ok(super::CheckResult {
+            allowed,
+            violations,
+        })
+    }
+
     /// The shared deny-overrides / first-allow-wins / default loop.
     fn decide(
         &self,

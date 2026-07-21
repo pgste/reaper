@@ -150,6 +150,18 @@ fn is_truthy(v: &AttributeValue, interner: &crate::data::StringInterner) -> bool
 /// Zero-copy evaluation context — avoids HashMap clone per evaluation.
 /// "action" and "resource" are served from borrowed fields;
 /// all other keys fall through to the original request context.
+/// Per-evaluation memo of materialized `input` iteration collections
+/// (R4-01 B.3). Check mode evaluates EVERY deny rule, and sibling rules
+/// typically iterate the same document array (all five k8s library rules
+/// iterate `...spec.containers`) — without the memo each rule re-runs the
+/// full transient materialization, which dominates check latency. Keyed by
+/// the resolved JSON node's ADDRESS: the document is borrowed for the whole
+/// evaluation, so node identity is stable, and two paths reaching the same
+/// node share one materialization. Both the memo and the transient-interned
+/// values it holds are evaluation-scoped (dropped with the eval env).
+type InputCollectionMemo =
+    std::cell::RefCell<rustc_hash::FxHashMap<usize, std::rc::Rc<Vec<crate::data::AttributeValue>>>>;
+
 pub(crate) struct EvalContext<'a> {
     action: &'a str,
     resource: &'a str,
@@ -158,6 +170,8 @@ pub(crate) struct EvalContext<'a> {
     /// navigated by pre-parsed `InputPath`s. `None` on the ordinary
     /// entity-request path; `Some` only via the `*_with_input` entries.
     input: Option<&'a serde_json::Value>,
+    /// See [`InputCollectionMemo`].
+    input_collections: &'a InputCollectionMemo,
 }
 
 impl<'a> EvalContext<'a> {
@@ -167,12 +181,14 @@ impl<'a> EvalContext<'a> {
         resource: &'a str,
         context: &'a std::collections::HashMap<String, String>,
         input: Option<&'a serde_json::Value>,
+        input_collections: &'a InputCollectionMemo,
     ) -> Self {
         Self {
             action,
             resource,
             context,
             input,
+            input_collections,
         }
     }
 
@@ -258,11 +274,30 @@ impl ReaperDSLEvaluator {
             // effects are preserved (see `compiler::fold_condition`), which the
             // compiled-vs-AST differential pins.
             let compiled = CompiledRule {
-                name: rule.name,
                 condition: compiler::fold_condition(compiler::compile_condition(
                     &rule.condition,
                     interner,
                 )),
+                // Check-mode message (R4-01 B.3): variables pre-interned.
+                // The Message shape carries semantics — bare variables
+                // render leniently, concat parts are strictly string-typed
+                // (see types/core.rs) — so it maps shape-for-shape.
+                message: rule.message.as_ref().map(|m| match m {
+                    Message::Literal(s) => CompiledMessage::Literal(s.clone()),
+                    Message::Variable(v) => CompiledMessage::Variable(interner.intern(v)),
+                    Message::Concat(parts) => CompiledMessage::Concat(
+                        parts
+                            .iter()
+                            .map(|p| match p {
+                                MessagePart::Literal(s) => CompiledMessagePart::Literal(s.clone()),
+                                MessagePart::Variable(v) => {
+                                    CompiledMessagePart::Variable(interner.intern(v))
+                                }
+                            })
+                            .collect(),
+                    ),
+                }),
+                name: rule.name,
                 decision: rule.decision.clone(),
             };
 
@@ -1271,10 +1306,22 @@ impl ReaperDSLEvaluator {
         &self,
         expr_type: &CompiledExprType,
         bindings: EntityBindings<'_>,
-        _context: &EvalContext<'_>,
+        context: &EvalContext<'_>,
         variables: &std::collections::HashMap<String, AttributeValue>,
         interner: &crate::data::StringInterner,
     ) -> Option<AttributeValue> {
+        // Input reads (R4-01 B.3) need the eval context's document handle,
+        // which `expr_eval` deliberately doesn't carry — handled here.
+        // Missing document or path binds Null; the assignment SUCCEEDS
+        // either way, mirroring the interpreter's total input access
+        // (ast_evaluator/entity_access.rs) where `x := input.missing`
+        // binds Null and evaluation continues.
+        if let CompiledExprType::InputRead { path } = expr_type {
+            return Some(match context.input.and_then(|d| path.resolve(d)) {
+                Some(v) => input_eval::json_to_attribute_transient(v, interner),
+                None => AttributeValue::Null,
+            });
+        }
         expr_eval::evaluate_compiled_expr_type(expr_type, bindings, variables, interner)
     }
 
@@ -1287,8 +1334,11 @@ impl ReaperDSLEvaluator {
         variables: &std::collections::HashMap<String, AttributeValue>,
         interner: &crate::data::StringInterner,
     ) -> Option<AttributeValue> {
-        // Get the source collection
-        let source_items = match &comp.iterator.source {
+        // Get the source collection. Rc-wrapped so the input arm can share
+        // one materialization across sibling rules via the per-evaluation
+        // memo (the loops below clone per-ELEMENT for the iteration
+        // variable either way — the collection itself is never mutated).
+        let source_items: std::rc::Rc<Vec<AttributeValue>> = match &comp.iterator.source {
             CompiledIterationSource::EntityAttr {
                 entity_type,
                 attribute,
@@ -1301,7 +1351,7 @@ impl ReaperDSLEvaluator {
                     // (total iteration — matches the AST contract below).
                     EntityType::Actor => bindings.actor,
                 };
-                match entity.and_then(|e| e.get_attribute(*attribute)) {
+                std::rc::Rc::new(match entity.and_then(|e| e.get_attribute(*attribute)) {
                     Some(AttributeValue::List(items)) => items.clone(),
                     Some(AttributeValue::Set(items)) => items.iter().cloned().collect(),
                     // TOTAL ITERATION (matches the AST contract): a missing
@@ -1310,11 +1360,11 @@ impl ReaperDSLEvaluator {
                     // still binds — returning None here made the rule fail
                     // where the AST evaluator continued with an empty list.
                     _ => Vec::new(),
-                }
+                })
             }
             CompiledIterationSource::Variable { variable } => {
                 let var_name = interner.resolve(*variable)?;
-                if let Some(attr_val) = variables.get(&*var_name) {
+                std::rc::Rc::new(if let Some(attr_val) = variables.get(&*var_name) {
                     match attr_val {
                         AttributeValue::List(items) => items.clone(),
                         AttributeValue::Set(items) => items.iter().cloned().collect(),
@@ -1324,20 +1374,40 @@ impl ReaperDSLEvaluator {
                 } else {
                     // Total iteration: unbound variable = empty.
                     Vec::new()
-                }
+                })
             }
             // input.<path>[_] (R4-01 B.2): resolve the pre-parsed path in the
             // request document; each element is materialized once into the
-            // variable domain (transient interning, reclaimed at eval end).
+            // variable domain (transient interning, reclaimed at eval end)
+            // and memoized per resolved node for the rest of this evaluation
+            // (R4-01 B.3 — see InputCollectionMemo).
             // Total iteration: no document / missing path / non-array ⇒ empty
             // — the same contract as the arms above and the interpreter.
             CompiledIterationSource::Input { path } => {
                 match context.input.and_then(|d| path.resolve(d)) {
-                    Some(serde_json::Value::Array(items)) => items
-                        .iter()
-                        .map(|v| input_eval::json_to_attribute_transient(v, interner))
-                        .collect(),
-                    _ => Vec::new(),
+                    Some(node @ serde_json::Value::Array(items)) => {
+                        let key = node as *const serde_json::Value as usize;
+                        let cached = context.input_collections.borrow().get(&key).cloned();
+                        match cached {
+                            Some(collection) => collection,
+                            None => {
+                                let collection = std::rc::Rc::new(
+                                    items
+                                        .iter()
+                                        .map(|v| {
+                                            input_eval::json_to_attribute_transient(v, interner)
+                                        })
+                                        .collect::<Vec<_>>(),
+                                );
+                                context
+                                    .input_collections
+                                    .borrow_mut()
+                                    .insert(key, std::rc::Rc::clone(&collection));
+                                collection
+                            }
+                        }
+                    }
+                    _ => std::rc::Rc::new(Vec::new()),
                 }
             }
         };
@@ -1356,10 +1426,18 @@ impl ReaperDSLEvaluator {
                 // Clone once, reuse across iterations (saves N-1 clones)
                 let mut local_vars = variables.clone();
                 let snapshot_keys: Vec<String> = local_vars.keys().cloned().collect();
-                for item in source_items {
-                    // Reset to snapshot: remove keys added by previous iteration
-                    local_vars.retain(|k, _| snapshot_keys.contains(k));
-                    local_vars.insert(iter_var_name.clone(), item.clone());
+                for item in source_items.iter() {
+                    // Reset to snapshot: remove keys added by previous
+                    // iteration — but keep the iteration variable's slot so
+                    // rebinding below reuses it (no String key alloc per
+                    // element; the value is overwritten before any filter
+                    // reads it).
+                    local_vars.retain(|k, _| k == &iter_var_name || snapshot_keys.contains(k));
+                    if let Some(slot) = local_vars.get_mut(&iter_var_name) {
+                        *slot = item.clone();
+                    } else {
+                        local_vars.insert(iter_var_name.clone(), item.clone());
+                    }
 
                     // Evaluate filters
                     let passes = self.evaluate_object_comprehension_filters(
@@ -1400,16 +1478,23 @@ impl ReaperDSLEvaluator {
         let mut result = Vec::new();
         let mut local_vars = variables.clone();
         let snapshot_keys: Vec<String> = local_vars.keys().cloned().collect();
-        for item in source_items {
-            // Reset to snapshot: remove keys added by previous iteration's filters
-            local_vars.retain(|k, _| snapshot_keys.contains(k));
+        for item in source_items.iter() {
+            // Reset to snapshot: remove keys added by previous iteration's
+            // filters — but keep the iteration variable's slot so rebinding
+            // below reuses it (no String key alloc per element; the value
+            // is overwritten before any filter reads it).
+            local_vars.retain(|k, _| k == &iter_var_name || snapshot_keys.contains(k));
             // Restore original values for snapshot keys that may have been modified
             for key in &snapshot_keys {
                 if let Some(original) = variables.get(key) {
                     local_vars.insert(key.clone(), original.clone());
                 }
             }
-            local_vars.insert(iter_var_name.clone(), item.clone());
+            if let Some(slot) = local_vars.get_mut(&iter_var_name) {
+                *slot = item.clone();
+            } else {
+                local_vars.insert(iter_var_name.clone(), item.clone());
+            }
 
             // Recursively evaluate filters with nested iteration support
             self.evaluate_comprehension_filters_recursive(
@@ -1637,6 +1722,124 @@ impl ReaperDSLEvaluator {
         input: Option<&serde_json::Value>,
         relax_principal: bool,
     ) -> Result<(PolicyAction, bool, Option<&str>), reaper_core::ReaperError> {
+        self.with_eval_env(
+            request,
+            input,
+            relax_principal,
+            |this, bindings, eval_context| {
+                // Variable context for local bindings (scoped to policy evaluation)
+                let mut variables = std::collections::HashMap::new();
+
+                // Security-first evaluation: deny rules ALWAYS take precedence.
+                for rule in &this.compiled_deny_rules {
+                    if this.evaluate_compiled_condition(
+                        &rule.condition,
+                        bindings,
+                        eval_context,
+                        &mut variables,
+                    ) {
+                        return (PolicyAction::Deny, true, Some(rule.name.as_str()));
+                    }
+                    variables.clear();
+                }
+                for rule in &this.compiled_allow_rules {
+                    if this.evaluate_compiled_condition(
+                        &rule.condition,
+                        bindings,
+                        eval_context,
+                        &mut variables,
+                    ) {
+                        return (PolicyAction::Allow, true, Some(rule.name.as_str()));
+                    }
+                    variables.clear();
+                }
+                (this.default_decision.clone(), false, None)
+            },
+        )
+    }
+
+    /// Compiled check-mode evaluation (R4-01 B.3) — the conftest/gatekeeper
+    /// driver: evaluate EVERY deny rule (fresh rule scope each), collect the
+    /// matching rules as violations with their rendered `with message` text,
+    /// and compose `allowed` exactly like the interpreter's
+    /// `check_with_input`: any violation ⇒ false; else default-allow ⇒ true;
+    /// else true iff any allow rule matches.
+    pub fn check_with_input(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<crate::reap::CheckResult, reaper_core::ReaperError> {
+        self.with_eval_env(request, input, true, |this, bindings, eval_context| {
+            let interner = this.store.interner();
+            let mut violations = Vec::new();
+            let mut variables = std::collections::HashMap::new();
+            for rule in &this.compiled_deny_rules {
+                variables.clear();
+                if this.evaluate_compiled_condition(
+                    &rule.condition,
+                    bindings,
+                    eval_context,
+                    &mut variables,
+                ) {
+                    // A render error (unbound variable, non-string concat
+                    // arg) aborts the whole check — exactly what the
+                    // interpreter's driver does when the message expression
+                    // fails to evaluate.
+                    let message = match &rule.message {
+                        Some(m) => Some(render_message(
+                            m,
+                            &variables,
+                            eval_context.context,
+                            interner,
+                        )?),
+                        None => None,
+                    };
+                    violations.push(crate::reap::Violation {
+                        rule: rule.name.clone(),
+                        message,
+                    });
+                }
+            }
+            let allowed = if violations.is_empty() {
+                match this.default_decision {
+                    PolicyAction::Allow => true,
+                    _ => {
+                        // Mirror the interpreter: ONE shared scope across the
+                        // allow sweep (its check driver does not clear
+                        // variables between allow rules).
+                        let mut allow_vars = std::collections::HashMap::new();
+                        this.compiled_allow_rules.iter().any(|rule| {
+                            this.evaluate_compiled_condition(
+                                &rule.condition,
+                                bindings,
+                                eval_context,
+                                &mut allow_vars,
+                            )
+                        })
+                    }
+                }
+            } else {
+                false
+            };
+            Ok(crate::reap::CheckResult {
+                allowed,
+                violations,
+            })
+        })?
+    }
+
+    /// Build the evaluation environment (traversal budget, transient-intern
+    /// scope, principal/resource/actor resolution, zero-copy context) and run
+    /// `f` inside it. Single source of truth for BOTH the decision path and
+    /// the check path — the resolution rules (lookup-not-intern, synthesized
+    /// stack-local entities, the `relax_principal` contract) live only here.
+    fn with_eval_env<'s, R>(
+        &'s self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+        relax_principal: bool,
+        f: impl FnOnce(&'s Self, EntityBindings<'_>, &EvalContext<'_>) -> R,
+    ) -> Result<R, reaper_core::ReaperError> {
         // One evaluation = one ReBAC traversal budget, shared across every
         // condition this policy checks (Plan 08 Phase E).
         crate::data::relationships::reset_traversal_budget();
@@ -1782,8 +1985,14 @@ impl ReaperDSLEvaluator {
         };
 
         // Zero-copy evaluation context — avoids HashMap clone + 2 String allocations per call
-        let eval_context =
-            EvalContext::new(&request.action, &request.resource, &request.context, input);
+        let input_collections = InputCollectionMemo::default();
+        let eval_context = EvalContext::new(
+            &request.action,
+            &request.resource,
+            &request.context,
+            input,
+            &input_collections,
+        );
 
         // Entity bindings for this evaluation; Copy, so passing it down is
         // the same cost as the old ref pair.
@@ -1794,56 +2003,130 @@ impl ReaperDSLEvaluator {
             provenance: request.context_provenance.as_ref(),
         };
 
-        // Variable context for local bindings (scoped to policy evaluation)
-        // Performance: no allocation until first variable use (most policies have zero variables)
-        let mut variables = std::collections::HashMap::new();
+        Ok(f(self, bindings, &eval_context))
+    }
+}
 
-        // Security-first evaluation: Deny rules ALWAYS take precedence over Allow rules
-        // Rules are pre-partitioned at construction time for optimal performance
+/// A message variable resolved the way the interpreter resolves
+/// `Expr::Variable`: rule-bound variables first, then the request's string
+/// context map, else an "Undefined variable" error.
+enum ResolvedMsgVar<'a> {
+    Bound(&'a AttributeValue),
+    RequestContext(&'a str),
+}
 
-        // Phase 1: Evaluate all DENY rules first (pre-partitioned, no type checking needed)
-        // Using compiled conditions with pre-interned strings - zero HashMap lookups!
-        for rule in &self.compiled_deny_rules {
-            if self.evaluate_compiled_condition(
-                &rule.condition,
-                bindings,
-                &eval_context,
-                &mut variables,
-            ) {
-                // Explicit deny - return immediately, no allow can override this
-                return Ok((PolicyAction::Deny, true, Some(rule.name.as_str())));
+fn resolve_message_var<'a>(
+    id: crate::data::InternedString,
+    variables: &'a std::collections::HashMap<String, AttributeValue>,
+    request_context: &'a std::collections::HashMap<String, String>,
+    interner: &crate::data::StringInterner,
+) -> Result<ResolvedMsgVar<'a>, reaper_core::ReaperError> {
+    let name = interner
+        .resolve(id)
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    if let Some(value) = variables.get(&name) {
+        Ok(ResolvedMsgVar::Bound(value))
+    } else if let Some(s) = request_context.get(&name) {
+        // The interpreter's Expr::Variable eval falls back to the request
+        // context (a string map) before erroring — mirror it.
+        Ok(ResolvedMsgVar::RequestContext(s))
+    } else {
+        Err(reaper_core::ReaperError::InvalidPolicy {
+            reason: format!("Undefined variable: {name}"),
+        })
+    }
+}
+
+/// Render a compiled check-mode message from the matched rule's bound
+/// variables (R4-01 B.3). Parity target: the interpreter evaluates the
+/// message EXPRESSION and renders with `eval_value_to_message` — including
+/// its error behavior, per message shape:
+/// - bare variables render LENIENTLY (any value stringifies);
+/// - `concat(...)` arguments are STRICT: all arguments evaluate first (an
+///   unbound variable errors here, in argument order), then every argument
+///   must be a string ("concat() requires string arguments"), also in
+///   argument order. Two passes, exactly like the interpreter's
+///   evaluate-args-then-typecheck.
+fn render_message(
+    message: &CompiledMessage,
+    variables: &std::collections::HashMap<String, AttributeValue>,
+    request_context: &std::collections::HashMap<String, String>,
+    interner: &crate::data::StringInterner,
+) -> Result<String, reaper_core::ReaperError> {
+    match message {
+        CompiledMessage::Literal(s) => Ok(s.clone()),
+        CompiledMessage::Variable(id) => {
+            match resolve_message_var(*id, variables, request_context, interner)? {
+                ResolvedMsgVar::Bound(value) => Ok(attr_value_to_message(value, interner)),
+                ResolvedMsgVar::RequestContext(s) => Ok(s.to_string()),
             }
-            // Clear variables between rules (each rule has independent scope)
-            variables.clear();
         }
-
-        // Phase 2: No deny matched, evaluate ALLOW rules (pre-partitioned, no type checking needed)
-        for rule in &self.compiled_allow_rules {
-            let matches = self.evaluate_compiled_condition(
-                &rule.condition,
-                bindings,
-                &eval_context,
-                &mut variables,
-            );
-
-            if matches {
-                tracing::trace!(
-                    rule_name = %rule.name,
-                    action = %request.action,
-                    "Rule matched - returning Allow"
-                );
-                return Ok((PolicyAction::Allow, true, Some(rule.name.as_str())));
+        CompiledMessage::Concat(parts) => {
+            // Pass 1: evaluate every argument (interpreter argument order —
+            // undefined-variable errors surface before any type error).
+            let mut resolved: Vec<Option<ResolvedMsgVar<'_>>> = Vec::with_capacity(parts.len());
+            for part in parts {
+                resolved.push(match part {
+                    CompiledMessagePart::Literal(_) => None,
+                    CompiledMessagePart::Variable(id) => Some(resolve_message_var(
+                        *id,
+                        variables,
+                        request_context,
+                        interner,
+                    )?),
+                });
             }
-            // Clear variables between rules (each rule has independent scope)
-            variables.clear();
+            // Pass 2: concat's own string type check, in argument order.
+            let mut out = String::new();
+            for (part, value) in parts.iter().zip(resolved) {
+                match (part, value) {
+                    (CompiledMessagePart::Literal(s), _) => out.push_str(s),
+                    (_, Some(ResolvedMsgVar::RequestContext(s))) => out.push_str(s),
+                    (_, Some(ResolvedMsgVar::Bound(AttributeValue::String(id)))) => {
+                        if let Some(s) = interner.resolve(*id) {
+                            out.push_str(&s);
+                        }
+                    }
+                    (_, Some(ResolvedMsgVar::Bound(_))) => {
+                        return Err(reaper_core::ReaperError::InvalidPolicy {
+                            reason: "concat() requires string arguments".to_string(),
+                        })
+                    }
+                    (CompiledMessagePart::Variable(_), None) => unreachable!(),
+                }
+            }
+            Ok(out)
         }
+    }
+}
 
-        // Phase 3: No rule matched - return default decision
-        tracing::debug!(
-            default_decision = ?self.default_decision,
-            "No rules matched - returning default"
-        );
-        Ok((self.default_decision.clone(), false, None))
+/// `eval_value_to_message` mirrored over `AttributeValue`: strings resolve,
+/// numbers/bools stringify, Null renders empty, collections join their
+/// parts. (Object-valued message variables are outside the parity contract —
+/// the interpreter debug-formats its own value type there — and do not occur
+/// in lowerable corpus messages.)
+fn attr_value_to_message(value: &AttributeValue, interner: &crate::data::StringInterner) -> String {
+    match value {
+        AttributeValue::String(id) => interner
+            .resolve(*id)
+            .map(|s| s.to_string())
+            .unwrap_or_default(),
+        AttributeValue::Int(i) => i.to_string(),
+        AttributeValue::Float(f) => f.to_string(),
+        AttributeValue::Bool(b) => b.to_string(),
+        AttributeValue::Null => String::new(),
+        AttributeValue::List(items) => items
+            .iter()
+            .map(|v| attr_value_to_message(v, interner))
+            .collect::<Vec<_>>()
+            .join(""),
+        AttributeValue::Set(items) => items
+            .iter()
+            .map(|v| attr_value_to_message(v, interner))
+            .collect::<Vec<_>>()
+            .join(""),
+        AttributeValue::Object(_) => format!("{value:?}"),
     }
 }
 

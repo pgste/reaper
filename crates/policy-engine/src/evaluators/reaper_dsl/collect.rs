@@ -558,6 +558,10 @@ fn collect_expr_type_strings(
         // Literals intern (string case) inside compile_expr_type itself —
         // nothing to pre-collect here.
         ExprType::Literal { .. } => {}
+
+        // Input reads navigate the raw JSON document by string key; values
+        // materialize with TRANSIENT interning at eval — nothing to pin.
+        ExprType::InputRead { .. } => {}
     }
 }
 

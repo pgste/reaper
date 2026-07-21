@@ -25,6 +25,13 @@ pub(super) fn compile_expr_type(
             value: super::compiler::compile_literal(value, interner),
         },
 
+        // Input read (R4-01 B.3): pre-parse the dotted path once at compile.
+        // Path keys navigate raw serde_json objects at eval — nothing to
+        // intern here.
+        ExprType::InputRead { path } => CompiledExprType::InputRead {
+            path: super::InputPath::from_dotted(path),
+        },
+
         ExprType::StringLower {
             entity_type,
             attribute,

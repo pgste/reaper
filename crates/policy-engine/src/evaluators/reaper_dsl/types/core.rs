@@ -52,6 +52,42 @@ pub struct Rule {
     pub condition: Condition,
     /// Decision if condition is true
     pub decision: PolicyAction,
+    /// Lowered check-mode `with message` expression (R4-01 B.3), rendered
+    /// when the rule matches in check mode. `None` = the rule declares no
+    /// message. Appended with a serde default so serialized rules keep
+    /// their encoding.
+    #[serde(default)]
+    pub message: Option<Message>,
+}
+
+/// A lowered check-mode message (uncompiled). The three shapes carry
+/// DIFFERENT rendering semantics, mirroring the AST interpreter exactly:
+/// a bare variable renders leniently (any value stringifies, like the
+/// interpreter's `eval_value_to_message`), while `concat(...)` arguments
+/// are strictly string-typed — a non-string argument is an evaluation
+/// ERROR ("concat() requires string arguments"), never a stringified
+/// value. Conflating them would silently render messages the interpreter
+/// rejects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Message {
+    /// `with message "text"` — literal text.
+    Literal(String),
+    /// `with message x` — a rule-scoped variable, rendered leniently from
+    /// its bound value.
+    Variable(String),
+    /// `with message concat(...)` — ordered parts; every variable part
+    /// must be bound to a STRING at render, else the render errors like
+    /// the interpreter's `concat()`.
+    Concat(Vec<MessagePart>),
+}
+
+/// One lowered piece of a check-mode `concat(...)` message (uncompiled).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MessagePart {
+    /// Literal text.
+    Literal(String),
+    /// A rule-scoped variable; must hold a string at render.
+    Variable(String),
 }
 
 /// Compiled rule with pre-interned condition for fast evaluation
@@ -63,6 +99,31 @@ pub struct CompiledRule {
     pub condition: CompiledCondition,
     /// Decision if condition is true
     pub decision: PolicyAction,
+    /// Check-mode message, variables pre-interned (R4-01 B.3).
+    pub message: Option<CompiledMessage>,
+}
+
+/// Compiled check-mode message. Shape semantics mirror [`Message`]:
+/// bare variables render leniently, `concat` parts are strictly
+/// string-typed and error like the interpreter on a non-string value.
+#[derive(Debug, Clone)]
+pub enum CompiledMessage {
+    /// Literal text.
+    Literal(String),
+    /// A rule-scoped variable (interned name), rendered leniently.
+    Variable(crate::data::InternedString),
+    /// Ordered `concat(...)` parts; variable parts must hold strings.
+    Concat(Vec<CompiledMessagePart>),
+}
+
+/// One compiled `concat(...)` message piece.
+#[derive(Debug, Clone)]
+pub enum CompiledMessagePart {
+    /// Literal text.
+    Literal(String),
+    /// A rule-scoped variable (interned name); must hold a string at
+    /// render.
+    Variable(crate::data::InternedString),
 }
 
 /// Entity type for condition evaluation

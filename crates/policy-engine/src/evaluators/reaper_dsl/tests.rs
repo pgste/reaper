@@ -36,6 +36,7 @@ fn test_reaper_dsl_simple_rule() {
             target: CompareTarget::LiteralString("admin".to_string()),
         }),
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -92,6 +93,7 @@ fn test_reaper_dsl_complex_rule() {
             right_attr: "department".to_string(),
         }),
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -161,6 +163,7 @@ fn allow_rule(name: &str, condition: Condition) -> Rule {
         name: name.to_string(),
         condition,
         decision: PolicyAction::Allow,
+        message: None,
     }
 }
 
@@ -291,6 +294,7 @@ fn test_ridx_deny_rule_literal_bounded() {
             name: "block".to_string(),
             condition: resource_eq("secret"),
             decision: PolicyAction::Deny,
+            message: None,
         }],
         PolicyAction::Allow,
     );
@@ -321,6 +325,7 @@ fn test_ridx_soundness_differential() {
             name: "block".to_string(),
             condition: resource_eq("secret"),
             decision: PolicyAction::Deny,
+            message: None,
         }],
         vec![
             allow_rule("dead", Condition::Not(Box::new(Condition::Always))),
@@ -652,6 +657,7 @@ fn test_pruning_soundness_differential_two_tier() {
             name: "block".to_string(),
             condition: resource_type_eq("secretkind"),
             decision: PolicyAction::Deny,
+            message: None,
         }],
     ];
 
