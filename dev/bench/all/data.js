@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784583882768,
+  "lastUpdate": 1784612344206,
   "repoUrl": "https://github.com/pgste/reaper",
   "entries": {
     "All benchmarks (criterion)": [
@@ -881,6 +881,132 @@ window.BENCHMARK_DATA = {
             "name": "rebac/ast_policy_allow_group_viewer",
             "value": 1339,
             "range": "± 6",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hwhbygwarm@gmail.com",
+            "name": "pgste",
+            "username": "pgste"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cb4b430c7180fcf3a61af0df1217dd8ec2a1fa7d",
+          "message": "Merge pull request #102 from pgste/claude/reaper-r4-per-rule-fallback",
+          "timestamp": "2026-07-21T06:31:48+01:00",
+          "tree_id": "45792f1ef012a556d721f2f2894403125fbf1a58",
+          "url": "https://github.com/pgste/reaper/commit/cb4b430c7180fcf3a61af0df1217dd8ec2a1fa7d"
+        },
+        "date": 1784612344070,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "policy_evaluation/simple_policy",
+            "value": 117,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_evaluation/complex_policy",
+            "value": 354,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_hot_swap/deploy_policy",
+            "value": 173041,
+            "range": "± 41080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "policy_hot_swap/concurrent_lookup",
+            "value": 47,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/concurrent_evaluations",
+            "value": 225084,
+            "range": "± 2038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "memory_efficiency/policy_storage/100",
+            "value": 185283,
+            "range": "± 229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "memory_efficiency/policy_storage/1000",
+            "value": 3676579,
+            "range": "± 7643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "realistic_workloads/microservice_auth_pattern",
+            "value": 11876,
+            "range": "± 91",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "latency_targets/policy_evaluation_performance",
+            "value": 115,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/has_relation_direct_hit",
+            "value": 23,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/has_relation_direct_miss",
+            "value": 23,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/reachable_1hop_hit",
+            "value": 56,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/reachable_3hop_miss_bounded",
+            "value": 56,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/inherited_1hop_hit",
+            "value": 25,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/compiled_policy_allow_group_viewer",
+            "value": 291,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/compiled_policy_deny_full_sweep",
+            "value": 541,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rebac/ast_policy_allow_group_viewer",
+            "value": 1173,
+            "range": "± 4",
             "unit": "ns/iter"
           }
         ]
