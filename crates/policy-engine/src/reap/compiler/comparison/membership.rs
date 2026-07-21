@@ -61,6 +61,13 @@ pub fn compile_membership_test(
                 variable: var_name,
             })
         }
+        // "lit" in var.attr (R4-01 B.2b), e.g. `"delete" in rc.change.actions`
+        // over comprehension elements. Dotted attribute paths navigate at eval.
+        ComparisonLeft::VarAttr(var_attr) => Ok(DslCondition::VariableAttrMembershipTest {
+            value: literal_value,
+            variable: var_attr.variable,
+            attribute: var_attr.attribute,
+        }),
         _ => {
             Err(ReaperError::InvalidPolicy {
                 reason: "Left side of 'in' operator should be an entity attribute collection (e.g., user.roles) or a variable".to_string(),

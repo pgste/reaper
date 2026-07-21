@@ -200,11 +200,16 @@ pub fn get_comprehension_output(
         } => {
             let var_name = interner.resolve(*variable)?;
             let var_val = variables.get(&*var_name)?;
-            if let AttributeValue::Object(obj) = var_val {
-                obj.get(attribute).cloned()
-            } else {
-                None
-            }
+            // Dotted paths navigate; a MISSING attribute projects Null (the
+            // element is still collected) — the interpreter pushes Null for
+            // absent output attributes, and skipping instead changed
+            // count()s under negated filters (caught by the R4-01 B.2b
+            // differential: `[c.image | …; !c.image.startswith(…)]` over an
+            // element with no image).
+            Some(
+                super::variable_eval::get_var_attr_value(var_val, *attribute, interner)
+                    .unwrap_or(AttributeValue::Null),
+            )
         }
         CompiledOutput::Literal(lit) => match lit {
             CompiledLiteralValue::String(s) => Some(AttributeValue::String(*s)),

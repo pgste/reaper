@@ -99,9 +99,10 @@ impl ReapAstEvaluator {
                     Ok(false)
                 }
             }
-            _ => Err(ReaperError::InvalidPolicy {
-                reason: "In operator requires array, set, or object on right side".to_string(),
-            }),
+            // Non-collection membership target: fail-closed non-match, not
+            // an error (total evaluation; matches the compiled path — R4-01
+            // B.2b, caught by the input-comprehension differential).
+            _ => Ok(false),
         }
     }
 

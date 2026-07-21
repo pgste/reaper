@@ -381,4 +381,23 @@ pub enum Condition {
         op: super::operators::NumericOp,
         target: super::input::InputLiteral,
     },
+
+    /// `var.attr.startswith("p")` / `.endswith("s")` on a (possibly dotted)
+    /// variable attribute — the comprehension-filter string ops (R4-01
+    /// B.2b). Value stays a raw String (document data, not interned).
+    /// Appended so serialized encodings stay stable.
+    VariableAttrStringOp {
+        variable: String,
+        attribute: String,
+        op: super::operators::StringOp,
+        value: String,
+    },
+
+    /// `"lit" in var.attr` on a (possibly dotted) variable attribute
+    /// (R4-01 B.2b) — e.g. `"delete" in rc.change.actions`.
+    VariableAttrMembershipTest {
+        value: LiteralValue,
+        variable: String,
+        attribute: String,
+    },
 }

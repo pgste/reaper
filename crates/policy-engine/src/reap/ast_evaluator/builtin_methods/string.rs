@@ -72,9 +72,12 @@ pub fn method_contains(value: &EvalValue, item: &EvalValue) -> Result<EvalValue,
         (EvalValue::Array(arr), item) | (EvalValue::Set(arr), item) => {
             Ok(EvalValue::Boolean(arr.contains(item)))
         }
-        _ => Err(ReaperError::InvalidPolicy {
-            reason: "contains() requires string/collection and value".to_string(),
-        }),
+        // Type-mismatched receiver: fail-closed non-match, not an error —
+        // the compiled path's string ops answer false on non-strings, the
+        // language is total, and document data (input elements) routinely
+        // carries unexpected types (aligned in R4-01 B.2b; caught by the
+        // input-comprehension differential).
+        _ => Ok(EvalValue::Boolean(false)),
     }
 }
 
@@ -85,9 +88,8 @@ pub fn method_startswith(value: &EvalValue, prefix: &EvalValue) -> Result<EvalVa
         (EvalValue::String(s), EvalValue::String(pre)) => {
             Ok(EvalValue::Boolean(s.starts_with(pre.as_str())))
         }
-        _ => Err(ReaperError::InvalidPolicy {
-            reason: "startswith() requires string value and prefix".to_string(),
-        }),
+        // Fail-closed on type mismatch — see contains() above (R4-01 B.2b).
+        _ => Ok(EvalValue::Boolean(false)),
     }
 }
 
@@ -98,9 +100,8 @@ pub fn method_endswith(value: &EvalValue, suffix: &EvalValue) -> Result<EvalValu
         (EvalValue::String(s), EvalValue::String(suf)) => {
             Ok(EvalValue::Boolean(s.ends_with(suf.as_str())))
         }
-        _ => Err(ReaperError::InvalidPolicy {
-            reason: "endswith() requires string value and suffix".to_string(),
-        }),
+        // Fail-closed on type mismatch — see contains() above (R4-01 B.2b).
+        _ => Ok(EvalValue::Boolean(false)),
     }
 }
 

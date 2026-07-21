@@ -296,6 +296,24 @@ pub enum CompiledCondition {
         op: super::operators::NumericOp,
         target: super::input::InputLiteral,
     },
+
+    /// `var.attr.startswith("p")` / `.endswith("s")` (R4-01 B.2b): dotted
+    /// attribute paths navigate (get_var_attr_value); the comparison value
+    /// stays a raw String — filters over materialized input elements
+    /// compare document text, not interned ids.
+    VariableAttrStringOp {
+        variable: InternedString,
+        attribute: InternedString,
+        op: super::operators::StringOp,
+        value: String,
+    },
+
+    /// `"lit" in var.attr` (R4-01 B.2b): dotted attribute paths navigate.
+    VariableAttrMembershipTest {
+        value: CompiledLiteralValue,
+        variable: InternedString,
+        attribute: InternedString,
+    },
 }
 
 // ============================================================================
