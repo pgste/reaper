@@ -21,6 +21,7 @@ mod expr_compiler;
 mod expr_eval;
 #[cfg(test)]
 mod expr_eval_tests;
+mod input_eval;
 mod string_eval;
 #[cfg(test)]
 mod tests;
@@ -153,6 +154,10 @@ pub(crate) struct EvalContext<'a> {
     action: &'a str,
     resource: &'a str,
     context: &'a std::collections::HashMap<String, String>,
+    /// The request's structured `input` document (R4-01 B.1) — raw JSON,
+    /// navigated by pre-parsed `InputPath`s. `None` on the ordinary
+    /// entity-request path; `Some` only via the `*_with_input` entries.
+    input: Option<&'a serde_json::Value>,
 }
 
 impl<'a> EvalContext<'a> {
@@ -161,11 +166,13 @@ impl<'a> EvalContext<'a> {
         action: &'a str,
         resource: &'a str,
         context: &'a std::collections::HashMap<String, String>,
+        input: Option<&'a serde_json::Value>,
     ) -> Self {
         Self {
             action,
             resource,
             context,
+            input,
         }
     }
 
@@ -303,6 +310,13 @@ impl ReaperDSLEvaluator {
             // get on the request's provenance map; no interner involved.
             CompiledCondition::TaintTrusted { key } => {
                 bindings.context_trust(key) >= crate::TrustLevel::Verified
+            }
+
+            // input.<path> <op> <literal> (R4-01 B.1): pre-parsed path walked
+            // over the request's raw JSON document; truth table mirrors the
+            // interpreter leaf-for-leaf (see input_eval).
+            CompiledCondition::InputCompare { path, op, target } => {
+                input_eval::eval_input_compare(path, op, target, _context.input)
             }
 
             // ReBAC: pure interned graph lookups. Direct = one DashMap get +
@@ -1292,6 +1306,20 @@ impl ReaperDSLEvaluator {
                     Vec::new()
                 }
             }
+            // input.<path>[_] (R4-01 B.2): resolve the pre-parsed path in the
+            // request document; each element is materialized once into the
+            // variable domain (transient interning, reclaimed at eval end).
+            // Total iteration: no document / missing path / non-array ⇒ empty
+            // — the same contract as the arms above and the interpreter.
+            CompiledIterationSource::Input { path } => {
+                match context.input.and_then(|d| path.resolve(d)) {
+                    Some(serde_json::Value::Array(items)) => items
+                        .iter()
+                        .map(|v| input_eval::json_to_attribute_transient(v, interner))
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            }
         };
 
         // Get the iterator variable name
@@ -1570,6 +1598,25 @@ impl ReaperDSLEvaluator {
         &self,
         request: &PolicyRequest,
     ) -> Result<(PolicyAction, bool, Option<&str>), reaper_core::ReaperError> {
+        self.evaluate_with_match_input(request, None, false)
+    }
+
+    /// Like [`Self::evaluate_with_match`], with an optional structured
+    /// `input` document (R4-01 B.1) — the compiled counterpart of the
+    /// interpreter's `evaluate_with_input_named`. When `relax_principal` is
+    /// set (the with-input ENTRY, document present or not), the
+    /// unknown/absent-principal ERROR contract of the legacy entry is
+    /// relaxed to a synthesized empty principal (attribute reads miss, fail
+    /// closed): document policies routinely carry no principal, and the
+    /// interpreter's with-input entry reads an absent principal as Null.
+    /// The legacy entry (`relax_principal: false`) is byte-identical to
+    /// before.
+    pub(crate) fn evaluate_with_match_input(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+        relax_principal: bool,
+    ) -> Result<(PolicyAction, bool, Option<&str>), reaper_core::ReaperError> {
         // One evaluation = one ReBAC traversal budget, shared across every
         // condition this policy checks (Plan 08 Phase E).
         crate::data::relationships::reset_traversal_budget();
@@ -1586,17 +1633,9 @@ impl ReaperDSLEvaluator {
         // cardinality (many principals / resources) — and, when a principal is a
         // loaded entity, would pin that entity's id and defeat the data-plane's
         // refcounted reclamation. `lookup` only reads an already-interned id.
-        let principal = request.context.get("principal").ok_or_else(|| {
-            reaper_core::ReaperError::EvaluationError {
-                reason: "Missing principal in context".to_string(),
-            }
-        })?;
+        let principal = request.context.get("principal");
         // A principal that was never interned cannot be a loaded entity.
-        let user_id = interner.lookup(principal).ok_or_else(|| {
-            reaper_core::ReaperError::EvaluationError {
-                reason: format!("User entity not found: {}", principal),
-            }
-        })?;
+        let user_id = principal.and_then(|p| interner.lookup(p));
 
         // The resource id is used only for the entity lookup and the synthesized
         // entity below; `resource == "x"` compares the raw request string
@@ -1607,13 +1646,37 @@ impl ReaperDSLEvaluator {
             .lookup(&request.resource)
             .unwrap_or(InternedString::from_id(u32::MAX));
 
-        // Fast DataStore lookups (~20-50ns each)
-        let user =
-            self.store
-                .get(user_id)
-                .ok_or_else(|| reaper_core::ReaperError::EvaluationError {
-                    reason: format!("User entity not found: {:?}", user_id),
-                })?;
+        // Fast DataStore lookups (~20-50ns each). Legacy (no-input) entry
+        // keeps its exact error contract for unknown principals; the
+        // with-input entry synthesizes an empty principal instead (Null
+        // reads, fail closed — matching the interpreter, see the entry doc).
+        let user_found = user_id.and_then(|id| self.store.get(id));
+        let temp_user;
+        let user: &Entity = match &user_found {
+            Some(entity) => entity,
+            None => {
+                if !relax_principal {
+                    let principal =
+                        principal.ok_or_else(|| reaper_core::ReaperError::EvaluationError {
+                            reason: "Missing principal in context".to_string(),
+                        })?;
+                    return Err(match user_id {
+                        Some(id) => reaper_core::ReaperError::EvaluationError {
+                            reason: format!("User entity not found: {:?}", id),
+                        },
+                        None => reaper_core::ReaperError::EvaluationError {
+                            reason: format!("User entity not found: {}", principal),
+                        },
+                    });
+                }
+                temp_user = Entity::new(
+                    user_id.unwrap_or(InternedString::from_id(u32::MAX)),
+                    self.resource_type_id,
+                    std::collections::HashMap::new(),
+                );
+                &temp_user
+            }
+        };
 
         // Log user entity info at trace level
         #[cfg(debug_assertions)]
@@ -1699,12 +1762,13 @@ impl ReaperDSLEvaluator {
         };
 
         // Zero-copy evaluation context — avoids HashMap clone + 2 String allocations per call
-        let eval_context = EvalContext::new(&request.action, &request.resource, &request.context);
+        let eval_context =
+            EvalContext::new(&request.action, &request.resource, &request.context, input);
 
         // Entity bindings for this evaluation; Copy, so passing it down is
         // the same cost as the old ref pair.
         let bindings = EntityBindings {
-            user: &user,
+            user,
             actor,
             resource,
             provenance: request.context_provenance.as_ref(),
@@ -1908,6 +1972,19 @@ impl ReaperDSLEvaluator {
     /// rule non-matching (the set combiner treats that as non-decisive), so
     /// pruning it is safe. It can never fail open: an unrecognized shape
     /// yields unbounded, never a spurious bound.
+    /// Evaluate with an optional structured `input` document, naming the
+    /// deciding rule (R4-01 B.1) — the compiled counterpart of the
+    /// interpreter's `evaluate_with_input_named`. `None` rule name = the
+    /// per-policy default decided.
+    pub fn evaluate_with_input_named(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<(PolicyAction, Option<&str>), reaper_core::ReaperError> {
+        self.evaluate_with_match_input(request, input, true)
+            .map(|(action, _, name)| (action, name))
+    }
+
     /// Tier-2 specialization fitness of this evaluator's compiled rules
     /// (R3 Plan 06 F.3 dry run — design §6). Pure measurement: consults no
     /// data, rewrites nothing.

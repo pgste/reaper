@@ -217,6 +217,36 @@ impl MixedReapEvaluator {
         &self.ast_rule_names
     }
 
+    /// Like [`PolicyEvaluator::evaluate_named`] but with a structured
+    /// `input` document (R4-01 B.1). No unknown-principal routing here: the
+    /// compiled `*_with_input` entry synthesizes an empty principal (Null
+    /// reads) exactly like the interpreter, so the per-rule units agree on
+    /// that edge by construction and both document- and entity-anchored
+    /// rules dispatch to their fast side.
+    pub fn evaluate_with_input_named(
+        &self,
+        request: &crate::PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<(PolicyAction, Option<&str>), ReaperError> {
+        let unit_matched = |unit: &RuleUnit| -> Result<bool, ReaperError> {
+            Ok(match &unit.eval {
+                UnitEval::Compiled(e) => e.evaluate_with_input_named(request, input)?.1.is_some(),
+                UnitEval::Ast(e) => e.evaluate_with_input_named(request, input)?.1.is_some(),
+            })
+        };
+        for unit in &self.deny_units {
+            if unit_matched(unit)? {
+                return Ok((PolicyAction::Deny, Some(unit.name.as_str())));
+            }
+        }
+        for unit in &self.allow_units {
+            if unit_matched(unit)? {
+                return Ok((PolicyAction::Allow, Some(unit.name.as_str())));
+            }
+        }
+        Ok((self.default_decision.clone(), None))
+    }
+
     /// The shared deny-overrides / first-allow-wins / default loop.
     fn decide(
         &self,

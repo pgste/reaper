@@ -91,11 +91,27 @@ pub fn compile_iterator(
                 Entity::Resource => DslEntityType::Resource,
                 Entity::Context => DslEntityType::Context,
                 Entity::Actor => DslEntityType::Actor,
+                // `c := input.<dotted.path>[_]` (R4-01 B.2): pre-parse the
+                // path; elements materialize into the variable domain at
+                // eval. The `[_]` wildcard is the iteration marker itself;
+                // any OTHER bracket index on the source stays uncompiled.
                 Entity::Input => {
-                    return Err(ReaperError::InvalidPolicy {
-                        reason: "`input` document access is not compiled yet; policy runs on the AST evaluator".to_string(),
-                    })
-                },
+                    if !matches!(attr.index, None | Some(crate::reap::ast::Index::Wildcard)) {
+                        return Err(ReaperError::InvalidPolicy {
+                            reason: "indexed `input` comprehension sources are not \
+                                     compiled; the rule runs on the AST evaluator"
+                                .to_string(),
+                        });
+                    }
+                    return Ok((
+                        var,
+                        UncompiledIterationSource::Input {
+                            path: crate::evaluators::reaper_dsl::InputPath::from_dotted(
+                                &attr.attribute,
+                            ),
+                        },
+                    ));
+                }
             };
             UncompiledIterationSource::EntityAttr {
                 entity_type,

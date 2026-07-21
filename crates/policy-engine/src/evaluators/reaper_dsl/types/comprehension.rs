@@ -28,6 +28,11 @@ pub enum UncompiledIterationSource {
     Variable {
         variable: String,
     },
+    /// `input.<dotted.path>[_]` — iterate an array in the request's input
+    /// document (R4-01 B.2). Appended so serialized encodings stay stable.
+    Input {
+        path: super::input::InputPath,
+    },
 }
 
 /// Uncompiled output expression
@@ -89,6 +94,12 @@ pub enum CompiledIterationSource {
     },
     Variable {
         variable: InternedString,
+    },
+    /// `input.<dotted.path>[_]` (R4-01 B.2): the pre-parsed path resolves
+    /// in the request document; elements are materialized into the variable
+    /// domain via transient interning (reclaimed at eval end).
+    Input {
+        path: super::input::InputPath,
     },
 }
 

@@ -57,6 +57,10 @@ pub fn collect_strings_for_interning(
         // nothing to pre-intern.
         Condition::TaintTrusted { .. } => {}
 
+        // Input paths/literals are raw request-document strings — nothing to
+        // pre-intern (design: input values never touch the interner).
+        Condition::InputCompare { .. } => {}
+
         // Pre-intern rebac strings so compilation is alloc-free at eval time.
         Condition::RebacCheck {
             subject,
@@ -376,6 +380,8 @@ pub fn collect_strings_for_interning(
                 UncompiledIterationSource::Variable { variable: v } => {
                     intern(v);
                 }
+                // Input paths are raw document keys — nothing to pre-intern.
+                UncompiledIterationSource::Input { .. } => {}
             }
             // Collect output strings
             if let Some(out) = output {
