@@ -1306,6 +1306,20 @@ impl ReaperDSLEvaluator {
                     Vec::new()
                 }
             }
+            // input.<path>[_] (R4-01 B.2): resolve the pre-parsed path in the
+            // request document; each element is materialized once into the
+            // variable domain (transient interning, reclaimed at eval end).
+            // Total iteration: no document / missing path / non-array ⇒ empty
+            // — the same contract as the arms above and the interpreter.
+            CompiledIterationSource::Input { path } => {
+                match context.input.and_then(|d| path.resolve(d)) {
+                    Some(serde_json::Value::Array(items)) => items
+                        .iter()
+                        .map(|v| input_eval::json_to_attribute_transient(v, interner))
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            }
         };
 
         // Get the iterator variable name

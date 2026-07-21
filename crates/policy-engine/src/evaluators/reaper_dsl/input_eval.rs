@@ -23,7 +23,50 @@
 //!    ⇒ integer, else f64 ⇒ float.
 
 use super::types::{InputLiteral, InputPath, NumericOp};
+use crate::data::{AttributeValue, StringInterner};
 use serde_json::Value;
+
+/// Materialize one input-array element into the compiled variable domain
+/// (R4-01 B.2). Mirrors the loader's `json_value_to_attribute` shape mapping
+/// (i64-first numbers, order-preserving List, Null for the unrepresentable),
+/// but interns every string — keys and values — via `intern_transient`, so
+/// document strings are reclaimed when the evaluation ends instead of
+/// pinning request data in the shared interner. Filter attribute lookups
+/// still match: policy-side attribute names are pinned, and transient
+/// interning of an already-pinned string resolves to the same id.
+pub(super) fn json_to_attribute_transient(
+    value: &Value,
+    interner: &StringInterner,
+) -> AttributeValue {
+    match value {
+        Value::Null => AttributeValue::Null,
+        Value::Bool(b) => AttributeValue::Bool(*b),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => AttributeValue::Int(i),
+            None => match n.as_f64() {
+                Some(f) => AttributeValue::Float(f),
+                None => AttributeValue::Null,
+            },
+        },
+        Value::String(s) => AttributeValue::String(super::intern_transient(interner, s)),
+        Value::Array(items) => AttributeValue::List(
+            items
+                .iter()
+                .map(|v| json_to_attribute_transient(v, interner))
+                .collect(),
+        ),
+        Value::Object(map) => AttributeValue::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    (
+                        super::intern_transient(interner, k),
+                        json_to_attribute_transient(v, interner),
+                    )
+                })
+                .collect(),
+        ),
+    }
+}
 
 /// Evaluate `input.<path> <op> <literal>` against the request document.
 pub(super) fn eval_input_compare(

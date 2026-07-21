@@ -208,9 +208,14 @@ impl ReapAstEvaluator {
             // collection, so document policies over absent/partial input fail
             // their rules instead of erroring the whole evaluation.
             EvalValue::Null => Ok(Vec::new()),
-            _ => Err(ReaperError::InvalidPolicy {
-                reason: "Iterator collection must be an array or set".to_string(),
-            }),
+            // A present-but-non-collection node (a scalar where an array was
+            // expected — e.g. a malformed admission document) is ALSO an
+            // empty iteration, not an error: the compiled comprehension path
+            // has always treated non-collections as empty, the language is
+            // total by doctrine, and this is the Rego-undefined analog
+            // (iterating a scalar yields nothing). Divergence caught by the
+            // R4-01 B.2a input-comprehension differential.
+            _ => Ok(Vec::new()),
         }
     }
 }

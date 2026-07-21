@@ -542,6 +542,10 @@ fn compile_comprehension(
         UncompiledIterationSource::Variable { variable } => CompiledIterationSource::Variable {
             variable: interner.intern(variable),
         },
+        // Pre-parsed at lowering; raw document keys, nothing interned.
+        UncompiledIterationSource::Input { path } => {
+            CompiledIterationSource::Input { path: path.clone() }
+        }
     };
 
     let compiled_filters: Vec<CompiledCondition> = filters

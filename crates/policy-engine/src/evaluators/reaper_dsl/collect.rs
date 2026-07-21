@@ -380,6 +380,8 @@ pub fn collect_strings_for_interning(
                 UncompiledIterationSource::Variable { variable: v } => {
                     intern(v);
                 }
+                // Input paths are raw document keys — nothing to pre-intern.
+                UncompiledIterationSource::Input { .. } => {}
             }
             // Collect output strings
             if let Some(out) = output {

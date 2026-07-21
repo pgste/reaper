@@ -16,6 +16,46 @@ use std::collections::HashMap;
 
 use super::types::{AttrCompareOp, CompiledLiteralValue, VariableCollectionMethod};
 
+/// Resolve `var.attr` where `attr` may be a DOTTED path ("change.after.acl")
+/// — the variable-domain mirror of `entity_helpers::get_nested_attr`, with
+/// the same two-step strategy: try the whole attribute as a single key
+/// first (zero resolve on the common flat case), then split on '.' and
+/// navigate nested objects. Added in R4-01 B.2a: comprehension filters over
+/// input-document elements are dotted-path-heavy, and the single-key lookup
+/// silently never matched them (caught by the input-comprehension
+/// differential on its first run).
+fn get_var_attr_value(
+    var_val: &AttributeValue,
+    attribute: InternedString,
+    interner: &StringInterner,
+) -> Option<AttributeValue> {
+    let AttributeValue::Object(obj) = var_val else {
+        return None;
+    };
+    if let Some(v) = obj.get(&attribute) {
+        return Some(v.clone());
+    }
+    let attr_name = interner.resolve(attribute)?;
+    if !attr_name.contains('.') {
+        return None;
+    }
+    let parts: Vec<&str> = attr_name.split('.').collect();
+    // Segment keys are bounded schema vocabulary — pinned interning, the
+    // same discipline as get_nested_attr.
+    let first = interner.intern(parts[0]);
+    let mut current = obj.get(&first)?.clone();
+    for part in &parts[1..] {
+        match current {
+            AttributeValue::Object(ref map) => {
+                let key = interner.intern(part);
+                current = map.get(&key)?.clone();
+            }
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
 /// Evaluate variable equals literal: var == "value"
 #[inline]
 pub fn eval_variable_equals_literal(
@@ -400,11 +440,8 @@ pub fn eval_variable_attr_equals_literal(
         None => return false,
     };
 
-    // Get the attribute from the variable (if it's an object)
-    let attr_val = match var_val {
-        AttributeValue::Object(obj) => obj.get(&attribute).cloned(),
-        _ => None,
-    };
+    // Get the attribute from the variable (dotted paths navigate)
+    let attr_val = get_var_attr_value(var_val, attribute, interner);
 
     match (attr_val.as_ref(), value) {
         (Some(AttributeValue::String(s)), CompiledLiteralValue::String(expected)) => {
@@ -439,10 +476,7 @@ pub fn eval_variable_attr_not_equals_literal(
         None => return false,
     };
 
-    let attr_val = match var_val {
-        AttributeValue::Object(obj) => obj.get(&attribute).cloned(),
-        _ => None,
-    };
+    let attr_val = get_var_attr_value(var_val, attribute, interner);
 
     match (attr_val.as_ref(), value) {
         (None, _) => false,
@@ -476,11 +510,8 @@ pub fn eval_variable_attr_compare(
         None => return false,
     };
 
-    // Get the attribute from the variable (if it's an object)
-    let attr_val = match var_val {
-        AttributeValue::Object(obj) => obj.get(&attribute).cloned(),
-        _ => None,
-    };
+    // Get the attribute from the variable (dotted paths navigate)
+    let attr_val = get_var_attr_value(var_val, attribute, interner);
 
     match (attr_val.as_ref(), value, op) {
         // Integer comparisons
@@ -547,12 +578,10 @@ pub fn eval_variable_attr_equals_null(
         None => return true,
     };
 
-    match var_val {
-        AttributeValue::Object(obj) => {
-            matches!(obj.get(&attribute), None | Some(AttributeValue::Null))
-        }
-        _ => true, // Not an object, attribute doesn't exist
-    }
+    matches!(
+        get_var_attr_value(var_val, attribute, interner),
+        None | Some(AttributeValue::Null)
+    )
 }
 
 /// Evaluate variable attribute not equals null: var.attr != null
@@ -573,12 +602,10 @@ pub fn eval_variable_attr_not_equals_null(
         None => return false,
     };
 
-    match var_val {
-        AttributeValue::Object(obj) => {
-            !matches!(obj.get(&attribute), None | Some(AttributeValue::Null))
-        }
-        _ => false,
-    }
+    !matches!(
+        get_var_attr_value(var_val, attribute, interner),
+        None | Some(AttributeValue::Null)
+    )
 }
 
 /// Evaluate variable attribute contains: var.attr.contains("value")
@@ -600,11 +627,8 @@ pub fn eval_variable_attr_contains(
         None => return false,
     };
 
-    // Get the attribute from the variable
-    let attr_val = match var_val {
-        AttributeValue::Object(obj) => obj.get(&attribute),
-        _ => None,
-    };
+    // Get the attribute from the variable (dotted paths navigate)
+    let attr_val = get_var_attr_value(var_val, attribute, interner);
 
     // Check if it's a collection containing the substring
     match attr_val {
@@ -614,7 +638,7 @@ pub fn eval_variable_attr_contains(
         Some(AttributeValue::Set(items)) => items.contains(&AttributeValue::String(substring)),
         Some(AttributeValue::String(s)) => {
             // String contains check
-            let str_val = match interner.resolve(*s) {
+            let str_val = match interner.resolve(s) {
                 Some(v) => v,
                 None => return false,
             };

@@ -41,6 +41,19 @@ pub fn compile_method_call(
                 };
                 return compile_entity_method_call(entity_type, attr.to_string(), method, args);
             }
+            // `input` is an entity keyword too, but it has NO compiled
+            // method lowering — before this fence the pseudo-variable
+            // ("input.name") fell through to the VARIABLE lowering below,
+            // compiled to an unbound-variable read, and silently never
+            // matched while the interpreter read the document (caught by the
+            // R4-01 B.2a fallback pins). Reject ⇒ per-rule AST fallback.
+            if entity == "input" {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: "method calls on `input` paths are not compiled; the \
+                             rule runs on the AST evaluator"
+                        .to_string(),
+                });
+            }
         }
         // It's a regular variable, compile as variable method call
         return compile_variable_method_call(var_name.clone(), method, args);
@@ -54,6 +67,18 @@ pub fn compile_method_call(
     } = &receiver
     {
         let is_entity = matches!(variable.as_str(), "user" | "actor" | "resource" | "context");
+        // `input` is an entity keyword too, but it has NO compiled method
+        // lowering — before this fence it fell through to the VARIABLE
+        // lowering below, compiled to an unbound-variable read, and silently
+        // never matched while the interpreter read the document (caught by
+        // the R4-01 B.2a fallback pins). Reject ⇒ per-rule AST fallback.
+        if variable == "input" {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "method calls on `input` paths are not compiled; the rule \
+                         runs on the AST evaluator"
+                    .to_string(),
+            });
+        }
         if !is_entity {
             // It's a variable attribute method call, like d.permissions.contains("execute")
             return compile_variable_attr_method_call(

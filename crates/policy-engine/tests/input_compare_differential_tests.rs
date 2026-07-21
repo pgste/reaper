@@ -278,10 +278,10 @@ fn uncompiled_input_shapes_still_fall_back() {
         ("indexed input access", r#"input.items[0] == "x""#),
         ("wildcard input access", r#"input.items[_] == "x""#),
         ("ordered vs null", r#"input.count > null"#),
-        (
-            "input comprehension",
-            r#"{ bad := [c | c := input.items[_]; c.x == 1] && bad.count() > 0 }"#,
-        ),
+        // (input comprehensions compiled in B.2a — pin moved to shapes
+        // that remain AST-only)
+        ("input membership", r#""admin" in input.roles"#),
+        ("input path method call", r#"input.name.endswith("x")"#),
     ] {
         let policy =
             format!("policy f {{\n    default: deny,\n    rule r {{ allow if {cond} }}\n}}");
