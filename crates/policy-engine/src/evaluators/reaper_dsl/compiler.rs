@@ -58,6 +58,29 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
             target: target.clone(),
         },
 
+        // Var-attr string op (R4-01 B.2b): names intern; the value stays raw.
+        Condition::VariableAttrStringOp {
+            variable,
+            attribute,
+            op,
+            value,
+        } => CompiledCondition::VariableAttrStringOp {
+            variable: interner.intern(variable),
+            attribute: interner.intern(attribute),
+            op: *op,
+            value: value.clone(),
+        },
+
+        Condition::VariableAttrMembershipTest {
+            value,
+            variable,
+            attribute,
+        } => CompiledCondition::VariableAttrMembershipTest {
+            value: compile_literal(value, interner),
+            variable: interner.intern(variable),
+            attribute: interner.intern(attribute),
+        },
+
         Condition::RebacCheck {
             kind,
             subject,
@@ -866,6 +889,9 @@ pub fn leaf_staticness(cond: &CompiledCondition) -> LeafStaticness {
         C::TaintTrusted { .. } => Dynamic,
         // The input document is request-scoped by definition.
         C::InputCompare { .. } => Dynamic,
+        // Reads a rule-scoped variable: eval-time dependent.
+        C::VariableAttrStringOp { .. } => Dynamic,
+        C::VariableAttrMembershipTest { .. } => Dynamic,
 
         // -- Anything touching the rule-scoped variables map: reads depend
         // on bindings made at eval time; writes ARE eval-time side effects

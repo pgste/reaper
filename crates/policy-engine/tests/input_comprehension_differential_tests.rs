@@ -191,8 +191,8 @@ fn library_policies_reach_expected_mixed_split() {
     // regression in any lowering shows up as a changed split, loudly.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy-library");
     for (rel, want_compiled, want_ast) in [
-        ("kubernetes/admission-control/policy.reap", 3, 2),
-        ("terraform/s3-guardrails/policy.reap", 3, 1),
+        ("kubernetes/admission-control/policy.reap", 5, 0),
+        ("terraform/s3-guardrails/policy.reap", 4, 0),
     ] {
         let path = root.join(rel);
         let src = std::fs::read_to_string(&path).expect("read library policy");
@@ -233,4 +233,162 @@ policy f {
         "indexed comprehension source unexpectedly compiled — extend the \
          differential before removing this pin"
     );
+}
+
+/// B.2b: string-op filters (endswith / negated startswith) — the remaining
+/// k8s rule shapes — plus var-attr membership (the remaining terraform
+/// shape). Full-policy differentials over realistic documents.
+const LATEST_TAG: &str = r#"
+policy k8s_latest {
+    default: allow,
+    rule disallow_latest_tag {
+        deny if {
+            bad := [c.image | c := input.request.object.spec.containers[_]; c.image.endswith(":latest")] &&
+            bad.count() > 0
+        }
+    }
+    rule approved_registries_only {
+        deny if {
+            bad := [c.image | c := input.request.object.spec.containers[_]; !c.image.startswith("registry.corp.internal/")] &&
+            bad.count() > 0
+        }
+    }
+}
+"#;
+
+#[test]
+fn string_op_filter_rules_compile_and_match_ast() {
+    let good = json!({"request": {"object": {"spec": {"containers": [
+        {"name": "app", "image": "registry.corp.internal/app:v1.2"}
+    ]}}}});
+    let latest = json!({"request": {"object": {"spec": {"containers": [
+        {"name": "app", "image": "registry.corp.internal/app:latest"}
+    ]}}}});
+    let foreign = json!({"request": {"object": {"spec": {"containers": [
+        {"name": "app", "image": "docker.io/library/nginx:v1"}
+    ]}}}});
+    // Non-string image value: string ops fail closed on both paths.
+    let non_string = json!({"request": {"object": {"spec": {"containers": [
+        {"name": "app", "image": 42}
+    ]}}}});
+    // Missing image attribute entirely.
+    let no_image = json!({"request": {"object": {"spec": {"containers": [
+        {"name": "app"}
+    ]}}}});
+
+    assert_eq!(
+        assert_equivalent(LATEST_TAG, Some(&good), true),
+        PolicyAction::Allow
+    );
+    assert_eq!(
+        assert_equivalent(LATEST_TAG, Some(&latest), true),
+        PolicyAction::Deny
+    );
+    assert_eq!(
+        assert_equivalent(LATEST_TAG, Some(&foreign), true),
+        PolicyAction::Deny
+    );
+    // Negated startswith over a NON-STRING: the interpreter's !(false-ish)
+    // vs the compiled Not(VariableAttrStringOp) must agree — equivalence is
+    // the assertion, whatever the agreed decision is.
+    assert_equivalent(LATEST_TAG, Some(&non_string), true);
+    assert_equivalent(LATEST_TAG, Some(&no_image), true);
+    assert_equivalent(LATEST_TAG, None, true);
+}
+
+const IAM_DELETE: &str = r#"
+policy tf_iam {
+    default: allow,
+    rule no_iam_deletions {
+        deny if {
+            deletions := [rc | rc := input.resource_changes[_]; rc.type == "aws_iam_user"; "delete" in rc.change.actions] &&
+            deletions.count() > 0
+        }
+    }
+}
+"#;
+
+#[test]
+fn var_attr_membership_rule_compiles_and_matches_ast() {
+    let deleting = json!({"resource_changes": [
+        {"type": "aws_iam_user", "change": {"actions": ["delete"]}}
+    ]});
+    let creating = json!({"resource_changes": [
+        {"type": "aws_iam_user", "change": {"actions": ["create"]}}
+    ]});
+    // delete on a NON-IAM type: gated out by the type filter.
+    let bucket_delete = json!({"resource_changes": [
+        {"type": "aws_s3_bucket", "change": {"actions": ["delete"]}}
+    ]});
+    // actions missing / non-list.
+    let no_actions = json!({"resource_changes": [
+        {"type": "aws_iam_user", "change": {}}
+    ]});
+    let scalar_actions = json!({"resource_changes": [
+        {"type": "aws_iam_user", "change": {"actions": "delete"}}
+    ]});
+
+    assert_eq!(
+        assert_equivalent(IAM_DELETE, Some(&deleting), true),
+        PolicyAction::Deny
+    );
+    for doc in [&creating, &bucket_delete, &no_actions] {
+        assert_eq!(
+            assert_equivalent(IAM_DELETE, Some(doc), true),
+            PolicyAction::Allow
+        );
+    }
+    // Scalar (non-list) actions: equivalence is the assertion.
+    assert_equivalent(IAM_DELETE, Some(&scalar_actions), true);
+}
+
+#[test]
+fn full_library_policies_compile_whole_and_match_ast() {
+    // The whole point of Phase B: the REAL k8s + terraform library policies
+    // compile WHOLE and agree with the interpreter over realistic docs.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy-library");
+    let k8s = std::fs::read_to_string(root.join("kubernetes/admission-control/policy.reap"))
+        .expect("read k8s policy");
+    let tf = std::fs::read_to_string(root.join("terraform/s3-guardrails/policy.reap"))
+        .expect("read terraform policy");
+
+    let violating_pod = json!({"request": {"object": {
+        "metadata": {"labels": {"env": "prod"}},
+        "spec": {"containers": [
+            {"name": "app", "image": "docker.io/nginx:latest",
+             "securityContext": {"privileged": true}}
+        ]}
+    }}});
+    let clean_pod = json!({"request": {"object": {
+        "metadata": {"labels": {"owner": "team-a"}},
+        "spec": {"containers": [
+            {"name": "app", "image": "registry.corp.internal/app:v1",
+             "securityContext": {"privileged": false},
+             "resources": {"limits": {"cpu": "1"}}}
+        ]}
+    }}});
+    assert_eq!(
+        assert_equivalent(&k8s, Some(&violating_pod), true),
+        PolicyAction::Deny
+    );
+    assert_eq!(
+        assert_equivalent(&k8s, Some(&clean_pod), true),
+        PolicyAction::Allow
+    );
+
+    let bad_plan = json!({"resource_changes": [
+        {"name": "logs", "type": "aws_s3_bucket",
+         "change": {"actions": ["create"], "after": {"acl": "public-read"}}}
+    ]});
+    let good_plan = json!({"resource_changes": [
+        {"name": "data", "type": "aws_s3_bucket",
+         "change": {"actions": ["create"], "after": {"acl": "private", "versioning": true}}}
+    ]});
+    assert_eq!(
+        assert_equivalent(&tf, Some(&bad_plan), true),
+        PolicyAction::Deny
+    );
+    // good_plan: equivalence is the assertion (other guardrail rules may
+    // still fire depending on the policy's full rule set).
+    assert_equivalent(&tf, Some(&good_plan), true);
 }

@@ -61,6 +61,11 @@ pub fn collect_strings_for_interning(
         // pre-intern (design: input values never touch the interner).
         Condition::InputCompare { .. } => {}
 
+        // Raw-string comparison value; variable/attribute intern at compile.
+        Condition::VariableAttrStringOp { .. } => {}
+        // Literal interns via compile_literal; names intern at compile.
+        Condition::VariableAttrMembershipTest { .. } => {}
+
         // Pre-intern rebac strings so compilation is alloc-free at eval time.
         Condition::RebacCheck {
             subject,

@@ -24,7 +24,7 @@ use super::types::{AttrCompareOp, CompiledLiteralValue, VariableCollectionMethod
 /// input-document elements are dotted-path-heavy, and the single-key lookup
 /// silently never matched them (caught by the input-comprehension
 /// differential on its first run).
-fn get_var_attr_value(
+pub(super) fn get_var_attr_value(
     var_val: &AttributeValue,
     attribute: InternedString,
     interner: &StringInterner,
@@ -775,6 +775,90 @@ pub fn eval_variable_chained_method_compare(
         }
     } else {
         false
+    }
+}
+
+/// Evaluate `var.attr.startswith("p")` / `.endswith("s")` /
+/// `.contains("c")` (R4-01 B.2b). The attribute may be a dotted path
+/// (navigates via [`get_var_attr_value`]); a missing/unbound/non-string
+/// value fails closed — mirroring the interpreter, where a method on a
+/// Null receiver yields Null (non-match) and string methods only apply to
+/// strings.
+#[inline]
+pub fn eval_variable_attr_string_op(
+    variable: InternedString,
+    attribute: InternedString,
+    op: &super::types::StringOp,
+    value: &str,
+    variables: &HashMap<String, AttributeValue>,
+    interner: &StringInterner,
+) -> bool {
+    let var_name = match interner.resolve(variable) {
+        Some(name) => name,
+        None => return false,
+    };
+    let var_val = match variables.get(&*var_name) {
+        Some(val) => val,
+        None => return false,
+    };
+    let attr_val = get_var_attr_value(var_val, attribute, interner);
+    let Some(AttributeValue::String(s)) = attr_val else {
+        return false;
+    };
+    let Some(text) = interner.resolve(s) else {
+        return false;
+    };
+    match op {
+        super::types::StringOp::StartsWith => text.starts_with(value),
+        super::types::StringOp::EndsWith => text.ends_with(value),
+        super::types::StringOp::Contains => text.contains(value),
+        // lower()/upper() forms are separate lowerings; this shape never
+        // carries them (the compiler only emits the three above).
+        super::types::StringOp::LowerEquals
+        | super::types::StringOp::UpperEquals
+        | super::types::StringOp::LowerNotEquals
+        | super::types::StringOp::UpperNotEquals => false,
+    }
+}
+
+/// Evaluate `"lit" in var.attr` (R4-01 B.2b). The attribute may be a dotted
+/// path (navigates via [`get_var_attr_value`]); missing/unbound/non-
+/// collection values fail closed. Same literal-matching semantics as
+/// [`eval_variable_membership_test`].
+#[inline]
+pub fn eval_variable_attr_membership_test(
+    value: &CompiledLiteralValue,
+    variable: InternedString,
+    attribute: InternedString,
+    variables: &HashMap<String, AttributeValue>,
+    interner: &StringInterner,
+) -> bool {
+    let var_name = match interner.resolve(variable) {
+        Some(name) => name,
+        None => return false,
+    };
+    let var_val = match variables.get(&*var_name) {
+        Some(val) => val,
+        None => return false,
+    };
+    let collection = match get_var_attr_value(var_val, attribute, interner) {
+        Some(v) => v,
+        None => return false,
+    };
+    match (&collection, value) {
+        (AttributeValue::List(items), CompiledLiteralValue::String(s)) => items
+            .iter()
+            .any(|item| matches!(item, AttributeValue::String(v) if *v == *s)),
+        (AttributeValue::Set(items), CompiledLiteralValue::String(s)) => {
+            items.contains(&AttributeValue::String(*s))
+        }
+        (AttributeValue::List(items), CompiledLiteralValue::Int(i)) => items
+            .iter()
+            .any(|item| matches!(item, AttributeValue::Int(v) if *v == *i)),
+        (AttributeValue::Set(items), CompiledLiteralValue::Int(i)) => {
+            items.contains(&AttributeValue::Int(*i))
+        }
+        _ => false,
     }
 }
 

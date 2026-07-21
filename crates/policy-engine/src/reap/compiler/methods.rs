@@ -460,10 +460,35 @@ pub fn compile_variable_attr_method_call(
             })
         }
 
+        // startswith/endswith on a (possibly dotted) variable attribute —
+        // the comprehension-filter string ops (R4-01 B.2b), e.g.
+        // `c.image.endswith(":latest")` over input elements.
+        MethodName::Startswith | MethodName::Endswith => {
+            if args.len() != 1 {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        ".{}() requires 1 argument, got {}",
+                        method.as_str(),
+                        args.len()
+                    ),
+                });
+            }
+            let value = extract_string_literal(&args[0])?;
+            Ok(DslCondition::VariableAttrStringOp {
+                variable,
+                attribute,
+                op: match method {
+                    MethodName::Startswith => StringOp::StartsWith,
+                    _ => StringOp::EndsWith,
+                },
+                value,
+            })
+        }
+
         _ => Err(ReaperError::InvalidPolicy {
             reason: format!(
                 "Method .{}() is not supported on variable attributes. \
-                Supported: .contains()",
+                Supported: .contains(), .startswith(), .endswith()",
                 method.as_str()
             ),
         }),

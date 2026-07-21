@@ -319,6 +319,26 @@ impl ReaperDSLEvaluator {
                 input_eval::eval_input_compare(path, op, target, _context.input)
             }
 
+            // var.attr.startswith/endswith (R4-01 B.2b) — dotted attribute
+            // paths navigate; missing/non-string values fail closed.
+            CompiledCondition::VariableAttrStringOp {
+                variable,
+                attribute,
+                op,
+                value,
+            } => variable_eval::eval_variable_attr_string_op(
+                *variable, *attribute, op, value, variables, interner,
+            ),
+
+            // "lit" in var.attr (R4-01 B.2b) — dotted paths navigate.
+            CompiledCondition::VariableAttrMembershipTest {
+                value,
+                variable,
+                attribute,
+            } => variable_eval::eval_variable_attr_membership_test(
+                value, *variable, *attribute, variables, interner,
+            ),
+
             // ReBAC: pure interned graph lookups. Direct = one DashMap get +
             // binary search (~100ns); traversals are bounded BFS.
             CompiledCondition::RebacCheck {
