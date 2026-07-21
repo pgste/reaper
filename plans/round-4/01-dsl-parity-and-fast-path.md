@@ -93,6 +93,19 @@ this); the filter API (own design doc, demand-gated); tier-2 specialization
   compiled path with identical decisions AND identical check-mode violation
   messages to the AST evaluator (differential + frozen corpus additions).
   Benchmarked ≥5× faster than AST on those policies.
+- [ ] **The agent is a Kubernetes admission webhook target.** A new agent
+  endpoint `POST /api/v1/check` accepts `{request-coordinates, input:
+  <json>, policy?}` and returns `CheckResult` (allowed + violations with
+  messages) — the HTTP serving surface for the check-mode driver that today
+  exists only behind wasm/CLI. On top of it, `POST /api/v1/admission`
+  accepts a native Kubernetes `AdmissionReview` (v1), maps it to
+  `input` (+ operation → action), and answers with a well-formed
+  `AdmissionReview` response (uid echoed, `allowed`, violation messages in
+  `status.message`) so a `ValidatingWebhookConfiguration` can point at the
+  agent directly — no adapter shim. TLS/deployment docs included
+  (admission webhooks require HTTPS); failurePolicy guidance documented
+  (fail-closed recommended). Gated by integration tests round-tripping real
+  AdmissionReview fixtures against the k8s library policy.
 - [ ] **Helper predicates + imports ship behind a language-version bump.**
   `func` definitions (non-recursive, depth-counted, call-graph DAG enforced
   at parse) usable in conditions; `import` of a `.reap` library file;
@@ -128,6 +141,12 @@ this); the filter API (own design doc, demand-gated); tier-2 specialization
 6. Gates: differential over the input corpus (decisions + messages), frozen
    corpus additions, bench row (compiled ≥5× AST on library input policies),
    fitness re-run to confirm the AST-fallback count drops (S).
+6b. Admission webhook serving surface (after B.3, uses the compiled check
+   driver): agent `POST /api/v1/check` (generic input check → `CheckResult`)
+   and `POST /api/v1/admission` (native `AdmissionReview` v1 in/out, uid
+   echo, violations → `status.message`); OpenAPI + contract tests; TLS and
+   failurePolicy deployment guidance; integration tests with real
+   AdmissionReview fixtures against the k8s library policy (M).
 
 **Phase C — functions & imports (L; language-version bump)**
 7. Grammar + AST: `func name(params) := <condition-or-expr>`; call-graph

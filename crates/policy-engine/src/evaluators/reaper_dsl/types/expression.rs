@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::core::EntityType;
+use super::core::{EntityType, LiteralValue};
 
 /// Expression type for assignments (uncompiled, uses String)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +197,14 @@ pub enum ExprType {
     /// variants so serialized expressions keep their encoding.
     TaintLevel {
         key: String,
+    },
+
+    /// A scalar literal (`x := "admin"`, `x := 42`, `x := true`) — R4-01
+    /// A.3. Appended after the original variants so serialized expressions
+    /// keep their encoding. Float/null/composite literals stay AST-only
+    /// (see the reap compiler's `AssignmentValue::Value` arm).
+    Literal {
+        value: LiteralValue,
     },
 }
 

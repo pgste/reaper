@@ -40,6 +40,7 @@ pub fn compile_comparison(
     left: ComparisonLeft,
     op: Operator,
     right: ComparisonRight,
+    allow_var_compare: bool,
 ) -> Result<DslCondition, ReaperError> {
     // Special case: check if this is an "action" or "resource" variable comparison
     if let ComparisonLeft::Expr(Expr::Variable(var_name)) = &left {
@@ -124,9 +125,61 @@ pub fn compile_comparison(
                 var_attr.variable, var_attr.attribute
             ),
         }),
-        ComparisonRight::Variable(_) => Err(ReaperError::InvalidPolicy {
-            reason: "Variable references are not yet supported in compiled policies".to_string(),
-        }),
+        // entity.attr ==/!= <var> (R4-01 A.3): lowers to the compiled
+        // EqualsVariable shape, permitted only when the per-rule dominance
+        // check proved every such variable bound at use (the compiled shape
+        // reads an unbound variable as false; the interpreter errors — the
+        // guard makes that divergence unobservable). Restrictions matching
+        // the compiled shape: plain single-segment attribute, no index, ==
+        // and != only, request-bound entity anchors.
+        ComparisonRight::Variable(var) => {
+            if !allow_var_compare {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Comparison against variable '{var}' is not compiled: the \
+                         variable is not provably bound before use (or a sibling \
+                         use is not); the rule runs on the AST evaluator."
+                    ),
+                });
+            }
+            if left_attr.index.is_some() || left_attr.attribute.contains('.') {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Comparison of an indexed/nested attribute against variable \
+                         '{var}' is not compiled; the rule runs on the AST evaluator."
+                    ),
+                });
+            }
+            let entity_type = match left_attr.entity {
+                Entity::User => EntityType::User,
+                Entity::Resource => EntityType::Resource,
+                Entity::Actor => EntityType::Actor,
+                Entity::Context | Entity::Input => {
+                    return Err(ReaperError::InvalidPolicy {
+                        reason: format!(
+                            "{:?}-anchored comparisons against variables are not \
+                             compiled; the rule runs on the AST evaluator.",
+                            left_attr.entity
+                        ),
+                    })
+                }
+            };
+            let equals = DslCondition::EqualsVariable {
+                entity_type,
+                attribute: left_attr.attribute,
+                variable: var,
+            };
+            match op {
+                Operator::Equal => Ok(equals),
+                Operator::NotEqual => Ok(DslCondition::Not(Box::new(equals))),
+                _ => Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "Operator {op:?} against a variable is not compiled (only == \
+                         and !=); the rule runs on the AST evaluator."
+                    ),
+                }),
+            }
+        }
         ComparisonRight::Expr(_) => Err(ReaperError::InvalidPolicy {
             reason: "Expression comparisons (method calls, etc.) are not supported in compiled policies. \
                 Use .reap format with AST evaluation for expression support.".to_string(),
