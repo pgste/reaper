@@ -286,6 +286,16 @@ pub enum CompiledCondition {
     TaintTrusted {
         key: String,
     },
+
+    /// `input.<dotted.path> <op> <scalar literal>` (R4-01 B.1): pre-parsed
+    /// path over the request's raw JSON document. Nothing here is interned —
+    /// input keys/values are request data, not policy text (design
+    /// COMPILED_INPUT_DESIGN.md §3.1).
+    InputCompare {
+        path: super::input::InputPath,
+        op: super::operators::NumericOp,
+        target: super::input::InputLiteral,
+    },
 }
 
 // ============================================================================

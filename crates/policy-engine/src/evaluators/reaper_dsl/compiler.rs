@@ -50,6 +50,14 @@ pub fn compile_condition(condition: &Condition, interner: &StringInterner) -> Co
         // provenance map at eval time, never the interner.
         Condition::TaintTrusted { key } => CompiledCondition::TaintTrusted { key: key.clone() },
 
+        // Input comparison (R4-01 B.1): already pre-parsed at lowering;
+        // nothing is interned (raw document keys/values).
+        Condition::InputCompare { path, op, target } => CompiledCondition::InputCompare {
+            path: path.clone(),
+            op: *op,
+            target: target.clone(),
+        },
+
         Condition::RebacCheck {
             kind,
             subject,
@@ -852,6 +860,8 @@ pub fn leaf_staticness(cond: &CompiledCondition) -> LeafStaticness {
         C::ActionEquals { .. } | C::ResourceIdEquals { .. } => Dynamic,
         // Trust provenance is a property of the incoming request.
         C::TaintTrusted { .. } => Dynamic,
+        // The input document is request-scoped by definition.
+        C::InputCompare { .. } => Dynamic,
 
         // -- Anything touching the rule-scoped variables map: reads depend
         // on bindings made at eval time; writes ARE eval-time side effects

@@ -57,6 +57,10 @@ pub fn collect_strings_for_interning(
         // nothing to pre-intern.
         Condition::TaintTrusted { .. } => {}
 
+        // Input paths/literals are raw request-document strings — nothing to
+        // pre-intern (design: input values never touch the interner).
+        Condition::InputCompare { .. } => {}
+
         // Pre-intern rebac strings so compilation is alloc-free at eval time.
         Condition::RebacCheck {
             subject,
