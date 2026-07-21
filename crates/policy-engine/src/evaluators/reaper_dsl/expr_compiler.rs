@@ -18,6 +18,13 @@ pub(super) fn compile_expr_type(
         // Taint: raw-String key, looks up the request provenance at eval.
         ExprType::TaintLevel { key } => CompiledExprType::TaintLevel { key: key.clone() },
 
+        // Scalar literal (R4-01 A.3): string literals are POLICY text, so
+        // interning (pinning) them at compile is correct — same rule as
+        // every other compiled literal.
+        ExprType::Literal { value } => CompiledExprType::Literal {
+            value: super::compiler::compile_literal(value, interner),
+        },
+
         ExprType::StringLower {
             entity_type,
             attribute,

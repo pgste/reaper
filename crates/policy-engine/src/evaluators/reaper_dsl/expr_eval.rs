@@ -617,6 +617,18 @@ pub fn evaluate_compiled_expr_type(
     interner: &StringInterner,
 ) -> Option<AttributeValue> {
     match expr_type {
+        // Scalar literal (R4-01 A.3): a constant load — the value was
+        // compiled (and interned, for strings) at deploy.
+        CompiledExprType::Literal { value } => Some(match value {
+            crate::evaluators::reaper_dsl::CompiledLiteralValue::String(id) => {
+                AttributeValue::String(*id)
+            }
+            crate::evaluators::reaper_dsl::CompiledLiteralValue::Int(n) => AttributeValue::Int(*n),
+            crate::evaluators::reaper_dsl::CompiledLiteralValue::Bool(b) => {
+                AttributeValue::Bool(*b)
+            }
+        }),
+
         CompiledExprType::StringLower {
             entity_type,
             attribute,
