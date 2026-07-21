@@ -371,4 +371,14 @@ pub enum Condition {
     TaintTrusted {
         key: String,
     },
+
+    /// `input.<dotted.path> <op> <scalar literal>` (R4-01 B.1). The path is
+    /// pre-parsed; evaluation walks the request's raw JSON document.
+    /// Appended after the original variants so serialized conditions keep
+    /// their encoding.
+    InputCompare {
+        path: super::input::InputPath,
+        op: super::operators::NumericOp,
+        target: super::input::InputLiteral,
+    },
 }

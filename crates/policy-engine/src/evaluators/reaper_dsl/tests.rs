@@ -378,23 +378,24 @@ fn test_ridx_soundness_differential() {
 /// pruning index can never drop it. This is the safe default for constructs the
 /// compiler does not yet handle.
 ///
-/// The chosen fallback construct is `input.*` document access: it parses and
-/// evaluates on the AST interpreter, but the compiler rejects it (see
-/// `reap/compiler/comparison/entity.rs`: "`input` document access is not
-/// compiled yet; policy runs on the AST evaluator"). So `build_preferred`
-/// returns a LIVE fallback evaluator here — asserted via `evaluator_type()` —
-/// not the compiled path, making this a real compile-fallback policy rather
-/// than a direct default-None assertion.
+/// The chosen fallback construct is a float-literal assignment used with an
+/// ordered comparison (`t := 0.5 && user.score > t`) — doubly AST-bound
+/// (no float CompiledLiteralValue variant; ordered ops against variables
+/// are not lowered). Scalar `input.*` comparisons compiled in R4-01 B.1, so
+/// the previous `input.tenant == "acme"` trigger no longer falls back. So
+/// `build_preferred` returns a LIVE fallback evaluator here — asserted via
+/// `evaluator_type()` — not the compiled path, making this a real
+/// compile-fallback policy rather than a direct default-None assertion.
 #[test]
 fn test_ast_fallback_policy_is_unprunable() {
     let store = Arc::new(DataStore::new());
-    let content = "policy p {\n    default: deny,\n    rule r {\n        allow if input.tenant == \"acme\"\n    }\n}";
+    let content = "policy p {\n    default: deny,\n    rule r {\n        allow if { t := 0.5 && user.score > t }\n    }\n}";
     let policy: crate::reap::ReaperPolicy = content
         .parse()
-        .expect("policy with `input` access should parse");
+        .expect("policy with a float-assignment threshold should parse");
     let evaluator = policy
         .build_preferred(store)
-        .expect("build_preferred falls back to the AST evaluator for `input` access");
+        .expect("build_preferred falls back to the AST evaluator for the float trigger");
 
     // Confirm we exercised the real fallback, not a compiled evaluator.
     assert_eq!(

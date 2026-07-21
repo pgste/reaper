@@ -47,6 +47,53 @@ pub fn compile_value_comparison(
     op: Operator,
     value: Value,
 ) -> Result<DslCondition, ReaperError> {
+    // `input.<dotted.path> <op> <scalar literal>` (R4-01 B.1): pre-parse the
+    // path, keep the literal raw. Outside this shape the input class keeps
+    // its per-rule AST fallback: bracket indexes/wildcards belong to B.2's
+    // iteration source, and ordered-vs-null must stay on the interpreter
+    // (which ERRORS there — a compiled leaf must not turn that into a
+    // decision).
+    if matches!(left.entity, Entity::Input) {
+        use crate::evaluators::reaper_dsl::{InputLiteral, InputPath};
+        if left.index.is_some() {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "indexed `input` access is not compiled yet (B.2); the rule \
+                         runs on the AST evaluator"
+                    .to_string(),
+            });
+        }
+        let target = match &value {
+            Value::Null => InputLiteral::Null,
+            Value::String(s) => InputLiteral::Str(s.clone()),
+            Value::Integer(i) => InputLiteral::Int(*i),
+            Value::Float(f) => InputLiteral::Float(*f),
+            Value::Boolean(b) => InputLiteral::Bool(*b),
+            other => {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "`input` comparisons against {other:?} are not compiled; the \
+                         rule runs on the AST evaluator"
+                    ),
+                })
+            }
+        };
+        let num_op = operator_to_numeric_op(&op)?;
+        if matches!(target, InputLiteral::Null)
+            && !matches!(num_op, NumericOp::Equal | NumericOp::NotEqual)
+        {
+            return Err(ReaperError::InvalidPolicy {
+                reason: "ordered comparisons against null are not compiled (the \
+                         interpreter rejects them); the rule runs on the AST evaluator"
+                    .to_string(),
+            });
+        }
+        return Ok(DslCondition::InputCompare {
+            path: InputPath::from_dotted(&left.attribute),
+            op: num_op,
+            target,
+        });
+    }
+
     let entity_type = entity_to_type(&left.entity)?;
 
     // Bracket-indexed comparison: `user.roles[0] == "admin"`,

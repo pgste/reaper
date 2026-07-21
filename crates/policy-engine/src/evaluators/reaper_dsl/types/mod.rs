@@ -18,6 +18,7 @@ mod comprehension;
 mod condition;
 mod core;
 mod expression;
+mod input;
 mod operators;
 mod v2;
 
@@ -37,6 +38,7 @@ pub use operators::{AttrCompareOp, ComprehensionFilterOp, CountOp, NumericOp, St
 // Condition types
 pub use compiled_condition::CompiledCondition;
 pub use condition::Condition;
+pub use input::{InputLiteral, InputPath, InputPathSeg};
 
 // Expression types
 pub use compiled_expression::{CompiledChainMethod, CompiledExprIndexType, CompiledExprType};
