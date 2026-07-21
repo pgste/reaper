@@ -31,6 +31,13 @@ mod variable_eval;
 // Re-export types for external use
 pub use types::*;
 
+// Tier-2 partial-evaluation dry-run instruments (R3 Plan 06 F.3): public so
+// offline fitness tooling (examples/specialization_fitness.rs) can measure
+// corpora without reaching into private modules.
+pub use compiler::{
+    leaf_staticness, specialization_fitness, LeafStaticness, SpecializationFitness,
+};
+
 use super::{EvaluatorMetadata, PolicyEvaluator};
 use crate::data::{AttributeValue, DataStore, Entity, InternedString, StringInterner};
 use crate::{PolicyAction, PolicyRequest};
@@ -1901,6 +1908,17 @@ impl ReaperDSLEvaluator {
     /// rule non-matching (the set combiner treats that as non-decisive), so
     /// pruning it is safe. It can never fail open: an unrecognized shape
     /// yields unbounded, never a spurious bound.
+    /// Tier-2 specialization fitness of this evaluator's compiled rules
+    /// (R3 Plan 06 F.3 dry run — design §6). Pure measurement: consults no
+    /// data, rewrites nothing.
+    pub fn specialization_fitness(&self) -> compiler::SpecializationFitness {
+        let mut fitness = compiler::specialization_fitness(&self.compiled_deny_rules);
+        fitness.merge(&compiler::specialization_fitness(
+            &self.compiled_allow_rules,
+        ));
+        fitness
+    }
+
     fn compiled_resource_pruning(&self) -> crate::evaluators::ResourcePruning {
         let interner = self.store.interner();
         let mut ids: Vec<String> = Vec::new();

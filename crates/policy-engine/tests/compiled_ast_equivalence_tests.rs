@@ -1206,3 +1206,97 @@ fn taint_gate_composes_with_actor() {
     );
     assert_taint_equivalent_is(p, &req3, PolicyAction::Deny, "no-actor+platform");
 }
+
+// ===========================================================================
+// R4-01 A.3 slice 1: literal-value assignments + entity-attr-vs-variable
+// comparisons now compile — equivalence pins for the new lowerings.
+// ===========================================================================
+
+#[test]
+fn literal_assignment_string_compiles_and_matches_ast() {
+    // The canonical previously-uncompilable shape: bind a string literal,
+    // compare an entity attribute against it (dominated use ⇒ compiles).
+    let p = r#"
+policy lit_string {
+    default: deny,
+    rule admin { allow if { x := "admin" && user.role == x } }
+}
+"#;
+    assert_equivalent_is(p, "alice", "res_util", PolicyAction::Allow);
+    assert_equivalent_is(p, "bob", "res_util", PolicyAction::Deny);
+}
+
+#[test]
+fn literal_assignment_int_and_bool_compile_and_match_ast() {
+    let p = r#"
+policy lit_scalar {
+    default: deny,
+    rule exact_level { allow if { lvl := 7 && user.level == lvl } }
+}
+"#;
+    assert_equivalent_is(p, "alice", "res_util", PolicyAction::Allow); // level 7
+    assert_equivalent_is(p, "bob", "res_util", PolicyAction::Deny); // level 1
+
+    let p_bool = r#"
+policy lit_bool {
+    default: deny,
+    rule flagged { allow if { want := true && user.flagged == want } }
+}
+"#;
+    // Neither fixture user has a `flagged` attribute: missing-attr vs bound
+    // bool must be a non-match on BOTH paths.
+    assert_equivalent_is(p_bool, "alice", "res_util", PolicyAction::Deny);
+}
+
+#[test]
+fn entity_attr_not_equals_variable_compiles_and_matches_ast() {
+    let p = r#"
+policy lit_ne {
+    default: deny,
+    rule not_guest { allow if { g := "guest" && user.role != g } }
+}
+"#;
+    assert_equivalent_is(p, "alice", "res_util", PolicyAction::Allow); // admin
+    assert_equivalent_is(p, "bob", "res_util", PolicyAction::Deny); // guest
+}
+
+#[test]
+fn float_literal_assignment_still_falls_back() {
+    // CompiledLiteralValue has no float variant: this must NOT compile (it
+    // would need widening — a later slice), and must still evaluate on AST.
+    let p = r#"
+policy lit_float {
+    default: deny,
+    rule f { allow if { t := 0.5 && user.level > t } }
+}
+"#;
+    let policy = ReaperPolicy::from_str(p).expect("parse");
+    assert!(
+        policy.clone().build(store_with_data()).is_err(),
+        "float literal assignment unexpectedly compiled — widen this test"
+    );
+    let ast = policy.build_ast_evaluator(store_with_data());
+    assert_eq!(
+        ast.evaluate(&request("alice", "res_util")).expect("ast"),
+        PolicyAction::Allow
+    );
+}
+
+#[test]
+fn undominated_variable_use_still_falls_back() {
+    // `x` is bound inside an Or branch only: the runtime may reach the use
+    // with x unbound (interpreter errors, compiled EqualsVariable would read
+    // false) — the dominance guard must refuse to compile the rule.
+    let p = r#"
+policy undominated {
+    default: deny,
+    rule r { allow if { ( x := "admin" && user.level > 100 ) || user.role == x } }
+}
+"#;
+    let policy = ReaperPolicy::from_str(p).expect("parse");
+    assert!(
+        policy.build(store_with_data()).is_err(),
+        "un-dominated variable use must not compile (unbound-read semantics \
+         differ between the evaluators)"
+    );
+}
