@@ -237,6 +237,8 @@ GET    /ready                       # Readiness check
 GET    /live                        # Liveness check
 GET    /metrics                     # Agent performance metrics
 POST   /api/v1/messages            # Evaluate policy request
+POST   /api/v1/check               # Check-mode document validation (all violations + messages)
+POST   /api/v1/admission/:policy   # Kubernetes AdmissionReview v1 webhook target
 POST   /api/v1/policies/deploy     # Deploy policy (from platform)
 GET    /api/v1/policies            # List active policies
 
@@ -505,6 +507,7 @@ tests:
     - OPERATIONS_GUIDE.md - Production operations (health, metrics, troubleshooting)
     - DEPLOYMENT_PATTERNS.md - Standalone, Integrated, Embedded patterns
     - SIDECAR_DEPLOYMENT.md - Sidecar deployment guide
+    - ADMISSION_WEBHOOK.md - Kubernetes ValidatingWebhookConfiguration target (TLS, failurePolicy)
     - MCP_ADAPTER.md - reaper-mcp stdio gate for MCP tool-calling agents
   - **performance/** - Performance optimization documentation
     - PERFORMANCE_ANALYSIS.md - Benchmarks and analysis

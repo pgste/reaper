@@ -2157,6 +2157,14 @@ impl PolicyEvaluator for ReaperDSLEvaluator {
         })
     }
 
+    fn check_with_input(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<crate::reap::CheckResult, reaper_core::ReaperError> {
+        ReaperDSLEvaluator::check_with_input(self, request, input)
+    }
+
     fn validate(&self) -> Result<(), reaper_core::ReaperError> {
         // Validation happens at construction time
         // Check we have at least one rule
