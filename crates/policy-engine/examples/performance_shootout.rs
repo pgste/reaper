@@ -217,6 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             target: CompareTarget::LiteralString("admin".to_string()),
         }),
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let reaper_evaluator = ReaperDSLEvaluator::new(store.clone(), reaper_rules, PolicyAction::Deny);
@@ -262,6 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 target: CompareTarget::LiteralString("admin".to_string()),
             }),
             decision: PolicyAction::Allow,
+            message: None,
         },
         Rule {
             name: "department_access".to_string(),
@@ -281,6 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }),
             ]),
             decision: PolicyAction::Allow,
+            message: None,
         },
         Rule {
             name: "clearance_check".to_string(),
@@ -292,6 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 right_attr: "clearance".to_string(),
             }),
             decision: PolicyAction::Deny,
+            message: None,
         },
     ];
 

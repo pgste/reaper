@@ -200,6 +200,18 @@ pub enum CompiledExprType {
     Literal {
         value: CompiledLiteralValue,
     },
+
+    /// An `input` document read (R4-01 B.3): resolve the pre-parsed path
+    /// against the request's raw JSON document and materialize the value
+    /// into the variable domain via transient interning. Missing document
+    /// or path evaluates to `Null` — the assignment still SUCCEEDS, exactly
+    /// like the AST interpreter's total input access. Needs the eval
+    /// context's input handle, so it is evaluated in the context-aware
+    /// wrapper (`ReaperDSLEvaluator::evaluate_expr_type`), not in
+    /// `expr_eval::evaluate_compiled_expr_type`.
+    InputRead {
+        path: super::input::InputPath,
+    },
 }
 
 /// Compiled index type for indexed access expressions

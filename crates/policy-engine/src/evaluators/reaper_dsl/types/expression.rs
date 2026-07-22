@@ -206,6 +206,15 @@ pub enum ExprType {
     Literal {
         value: LiteralValue,
     },
+
+    /// An `input` document read (`x := input.metadata.owner`) — R4-01 B.3.
+    /// The dotted path is kept raw here and pre-parsed to an `InputPath` at
+    /// compile. Missing document or path binds `Null`, matching the AST
+    /// interpreter's total input-access semantics. Appended after the
+    /// original variants so serialized expressions keep their encoding.
+    InputRead {
+        path: String,
+    },
 }
 
 /// Index type for indexed access expressions

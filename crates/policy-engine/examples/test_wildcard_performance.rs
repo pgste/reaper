@@ -77,6 +77,7 @@ fn test_wildcard_small_list() {
             value: "admin".to_string(),
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -155,6 +156,7 @@ fn test_wildcard_medium_list() {
             value: "admin".to_string(),
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -232,6 +234,7 @@ fn test_wildcard_large_list() {
             value: "admin".to_string(),
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -310,6 +313,7 @@ fn test_wildcard_set() {
             value: "admin".to_string(),
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -384,6 +388,7 @@ fn test_wildcard_first_match() {
             value: "admin".to_string(),
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -462,6 +467,7 @@ fn test_wildcard_last_match() {
             value: "admin".to_string(),
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);

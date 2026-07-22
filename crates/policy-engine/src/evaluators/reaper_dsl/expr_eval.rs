@@ -629,6 +629,15 @@ pub fn evaluate_compiled_expr_type(
             }
         }),
 
+        // Input reads (R4-01 B.3) need the eval context's document handle
+        // and are intercepted in `ReaperDSLEvaluator::evaluate_expr_type`
+        // before this function runs. The compiler only ever emits InputRead
+        // as a direct assignment value — never as a chained-method base (the
+        // input class is fenced in reap/compiler/methods.rs) — so this arm
+        // is unreachable by construction. None fails closed if that ever
+        // changes.
+        CompiledExprType::InputRead { .. } => None,
+
         CompiledExprType::StringLower {
             entity_type,
             attribute,

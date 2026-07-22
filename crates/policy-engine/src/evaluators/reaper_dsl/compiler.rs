@@ -1552,6 +1552,7 @@ mod tests {
             name: "r".into(),
             condition: cond,
             decision: PolicyAction::Allow,
+            message: None,
         }
     }
 

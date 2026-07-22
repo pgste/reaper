@@ -63,6 +63,7 @@ fn test_baseline_performance() {
             target: CompareTarget::LiteralString("admin".to_string()),
         }),
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -148,6 +149,7 @@ fn test_membership_set_performance() {
             index: None,
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -234,6 +236,7 @@ fn test_membership_list_performance() {
             index: None,
         },
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -322,6 +325,7 @@ fn test_indexed_access_performance() {
                 value: "admin".to_string(),
             },
             decision: PolicyAction::Allow,
+            message: None,
         },
         Rule {
             name: "object_index".to_string(),
@@ -332,6 +336,7 @@ fn test_indexed_access_performance() {
                 value: "engineering".to_string(),
             },
             decision: PolicyAction::Allow,
+            message: None,
         },
     ];
 
@@ -418,6 +423,7 @@ fn test_variable_assignment_performance() {
             },
         ]),
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
@@ -535,6 +541,7 @@ fn test_complex_policy_performance() {
             },
         ]),
         decision: PolicyAction::Allow,
+        message: None,
     }];
 
     let evaluator = ReaperDSLEvaluator::new(store, rules, PolicyAction::Deny);
