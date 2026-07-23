@@ -3,11 +3,11 @@
 //! `POST /api/v1/check` evaluates a JSON document against a deployed policy's
 //! deny rules and returns EVERY violation with its rendered message — the
 //! gatekeeper/CI driver, distinct from the first-match sub-microsecond
-//! decision endpoints. Check calls run on the AST evaluator (parse-per-call is
-//! fine at CI frequency; the authorization hot path is untouched).
+//! decision endpoints. Check calls run on the policy's cached preferred
+//! evaluator (compiled / mixed / AST — R4-01 B.3's check driver), so admission
+//! webhooks get the fast path with no per-call parse.
 
 use axum::{extract::State, http::StatusCode, response::Json};
-use policy_engine::reap::ReaperPolicy;
 use policy_engine::PolicyRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -65,18 +65,16 @@ pub async fn check_document(
             )
         })?;
 
-    // Check mode always uses the AST evaluator (it supports `input` and
-    // collects all violations). Parse from the stored policy content.
-    let reaper_policy: ReaperPolicy = policy.content.parse().map_err(|e| {
+    // The cached evaluator was built at deploy time against the live
+    // DataStore (compiled when the policy compiles, mixed/AST otherwise);
+    // the trait's check_with_input dispatches to the matching check driver.
+    // Non-DSL policy languages have no check mode and report so.
+    let evaluator = policy.get_evaluator().map_err(|e| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "policy '{}' is not a Reaper DSL policy: {e}",
-                payload.policy_name
-            ),
+            format!("policy '{}' has no evaluator: {e}", payload.policy_name),
         )
     })?;
-    let evaluator = reaper_policy.build_ast_evaluator(state.data_store.clone());
 
     let mut context = payload.context.clone();
     if let Some(ref principal) = payload.principal {
@@ -108,6 +106,7 @@ pub async fn check_document(
         "policy_name": policy.name,
         "allowed": result.allowed,
         "violations": result.violations,
+        "evaluator": evaluator.evaluator_type(),
         "check_time_us": start.elapsed().as_micros() as u64,
     })))
 }

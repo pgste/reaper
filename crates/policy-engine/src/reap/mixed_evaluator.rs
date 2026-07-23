@@ -348,6 +348,14 @@ impl PolicyEvaluator for MixedReapEvaluator {
         })
     }
 
+    fn check_with_input(
+        &self,
+        request: &crate::PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<crate::reap::CheckResult, ReaperError> {
+        MixedReapEvaluator::check_with_input(self, request, input)
+    }
+
     fn validate(&self) -> Result<(), ReaperError> {
         if self.total_rules == 0 {
             return Err(ReaperError::InvalidPolicy {

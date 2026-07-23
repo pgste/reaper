@@ -56,7 +56,7 @@ fn is_data_plane(path: &str) -> bool {
     matches!(
         path,
         "/api/v1/messages" | "/api/v1/fast-messages" | "/api/v1/batch-messages" | "/api/v1/check"
-    )
+    ) || path.starts_with("/api/v1/admission/")
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -312,6 +312,7 @@ mod tests {
             "/api/v1/fast-messages",
             "/api/v1/batch-messages",
             "/api/v1/check",
+            "/api/v1/admission/k8s-admission",
         ] {
             assert!(is_data_plane(p), "{p} is the eval hot path");
         }

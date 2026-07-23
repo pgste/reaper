@@ -364,6 +364,14 @@ impl crate::evaluators::PolicyEvaluator for ReapAstEvaluator {
         })
     }
 
+    fn check_with_input(
+        &self,
+        request: &crate::PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<CheckResult, reaper_core::ReaperError> {
+        ReapAstEvaluator::check_with_input(self, request, input)
+    }
+
     // D2 secondary: AST-side resource extraction is a follow-up. AST-fallback
     // policies are the uncommon case (constructs the compiler doesn't yet
     // support), so we keep the trait default `resource_index_terms() -> None`

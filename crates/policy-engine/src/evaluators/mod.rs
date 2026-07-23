@@ -132,6 +132,33 @@ pub trait PolicyEvaluator: Send + Sync + Debug {
         None
     }
 
+    /// Check-mode evaluation (the conftest/gatekeeper driver): evaluate EVERY
+    /// deny rule against the request + optional `input` JSON document and
+    /// collect all matching rules as violations with their rendered
+    /// `with message` text. This is the serving entry for document-validation
+    /// surfaces (agent `/api/v1/check`, admission webhooks, CLI check) — it
+    /// dispatches to whichever implementation (compiled / mixed / AST) the
+    /// policy was built with, so callers get the fast driver without knowing
+    /// the concrete evaluator.
+    ///
+    /// The default errs: only the Reaper DSL evaluators have check-mode
+    /// semantics (all-violations + messages). Simple/Cedar policies report
+    /// "unsupported" rather than inventing a lossy mapping from first-match
+    /// decisions.
+    fn check_with_input(
+        &self,
+        request: &PolicyRequest,
+        input: Option<&serde_json::Value>,
+    ) -> Result<crate::reap::CheckResult, ReaperError> {
+        let _ = (request, input);
+        Err(ReaperError::EvaluationError {
+            reason: format!(
+                "check mode is not supported by the '{}' evaluator (Reaper DSL policies only)",
+                self.evaluator_type()
+            ),
+        })
+    }
+
     /// The finite set of resource strings this policy can match, or `None` if
     /// its match set is unbounded (wildcards, attribute/prefix/negation/dynamic
     /// resource predicates). `Some(v)` is a PROMISE: the evaluator matches NO

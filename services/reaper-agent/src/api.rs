@@ -83,6 +83,7 @@ fn openapi_router() -> OpenApiRouter<Arc<AgentState>> {
         .routes(routes!(handlers::evaluate::fast_evaluate_policy))
         .routes(routes!(handlers::evaluate::batch_evaluate_policy))
         .routes(routes!(handlers::check::check_document))
+        .routes(routes!(handlers::admission::admission_review))
         // Managed data
         .routes(routes!(handlers::data::load_data_handler))
         .routes(routes!(handlers::data::load_data_stream_handler))

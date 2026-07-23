@@ -43,9 +43,10 @@ use uuid::Uuid;
 
 // Import from extracted modules
 use handlers::{
+    // Evaluation handlers
+    admission_review,
     // Data handlers
     apply_data_deltas,
-    // Evaluation handlers
     batch_evaluate_policy,
     // Entity handlers
     batch_upsert_handler,
@@ -667,6 +668,8 @@ async fn run(
         // Batch evaluation endpoint (bounded + offloaded)
         .route("/api/v1/batch-messages", post(batch_evaluate_policy))
         .route("/api/v1/check", post(check_document))
+        // Kubernetes admission webhook target (AdmissionReview v1 in/out)
+        .route("/api/v1/admission/{policy}", post(admission_review))
         .route_layer(axum::extract::DefaultBodyLimit::max(EVAL_BODY_LIMIT));
 
     let app = Router::new()
