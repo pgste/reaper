@@ -13,6 +13,7 @@ mod comparison;
 mod comprehension;
 mod expression;
 mod helpers;
+mod inline;
 mod methods;
 
 use comparison::{compile_comparison, compile_comparison_assignment};
@@ -41,8 +42,16 @@ pub fn compile_policy(
     // Bound structural nesting before the recursive compile walk. Covers ASTs
     // that reach the compiler without going through the pest parser's pre-scan
     // (the YAML/JSON policy formats, or a directly-constructed AST) — Plan 05,
-    // Step 2.
+    // Step 2. Func-aware: also validates the helper-predicate set (names,
+    // arities, call-graph DAG) and inline-effective depths.
     crate::reap::limits::enforce_policy_depth(&policy)?;
+
+    // Expand user-defined `func` calls in place (R4-01 Phase C, ADR-2): the
+    // compiled path stays a flat condition walk with no call stack. Rules
+    // whose calls don't fit the substitution guards error here and take the
+    // per-rule AST fallback (A.2), where call-by-value is interpreted
+    // directly.
+    let policy = inline::inline_policy(policy)?;
 
     // Convert default decision
     let default_decision = match policy.default_decision {
@@ -775,6 +784,8 @@ mod tests {
                     right: ComparisonRight::Value(Value::String("admin".to_string())),
                 },
             }],
+            functions: vec![],
+            imports: vec![],
         };
 
         let store = Arc::new(DataStore::new());

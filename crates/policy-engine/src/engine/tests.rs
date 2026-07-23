@@ -274,6 +274,8 @@ async fn test_bundle_deployment_with_version_tracking() {
             decision: Decision::Allow,
             condition: ReapCondition::True,
         }],
+        functions: vec![],
+        imports: vec![],
     };
 
     // Create bundle
@@ -307,6 +309,8 @@ async fn test_bundle_version_history() {
         metadata: metadata1,
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle1 = crate::reap::PolicyBundle::new(policy1);
@@ -321,6 +325,8 @@ async fn test_bundle_version_history() {
         metadata: metadata2,
         default_decision: Decision::Allow,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle2 = crate::reap::PolicyBundle::new(policy2);
@@ -353,6 +359,8 @@ async fn test_bundle_rollback() {
         metadata: metadata1,
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle1 = crate::reap::PolicyBundle::new(policy1);
@@ -367,6 +375,8 @@ async fn test_bundle_rollback() {
         metadata: metadata2,
         default_decision: Decision::Allow,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle2 = crate::reap::PolicyBundle::new(policy2);
@@ -398,6 +408,8 @@ async fn test_bundle_force_deployment() {
         metadata,
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle = crate::reap::PolicyBundle::new(policy);
@@ -425,6 +437,8 @@ async fn test_bundle_hash_integrity() {
         metadata: metadata.clone(),
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle1 = crate::reap::PolicyBundle::new(policy.clone());
@@ -439,6 +453,8 @@ async fn test_bundle_hash_integrity() {
         metadata: metadata2,
         default_decision: Decision::Allow,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle2 = crate::reap::PolicyBundle::new(policy2);
@@ -465,6 +481,8 @@ async fn test_get_version_metadata() {
         metadata,
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle = crate::reap::PolicyBundle::new(policy);
@@ -502,6 +520,8 @@ async fn test_atomic_package_stage_and_commit() {
             decision: Decision::Allow,
             condition: ReapCondition::True,
         }],
+        functions: vec![],
+        imports: vec![],
     };
 
     let policy2 = ReapPolicy {
@@ -509,6 +529,8 @@ async fn test_atomic_package_stage_and_commit() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Allow,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let package = PolicyPackage::new(
@@ -552,6 +574,8 @@ async fn test_atomic_package_rollback() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let package = PolicyPackage::new(
@@ -586,6 +610,8 @@ async fn test_atomic_deploy_package() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Allow,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let package = PolicyPackage::new(
@@ -622,6 +648,8 @@ async fn test_concurrent_staging_prevented() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let policy2 = ReapPolicy {
@@ -629,6 +657,8 @@ async fn test_concurrent_staging_prevented() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Allow,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let package1 = PolicyPackage::new("package-1".to_string(), "1.0.0".to_string(), vec![policy1]);
@@ -662,6 +692,8 @@ async fn test_staging_id_mismatch_rejected() {
         metadata: std::collections::HashMap::new(),
         default_decision: Decision::Deny,
         rules: vec![],
+        functions: vec![],
+        imports: vec![],
     };
 
     let package = PolicyPackage::new(

@@ -1,0 +1,7 @@
+// Shared helper-predicate library — imported by the scenario policy via
+// `import "lib/predicates.reap" as pred`. FROZEN: decisions of the cases in
+// ../manifest.json are pinned; see policy-library/frozen/CHECKSUMS.
+library predicates {
+    func senior(lvl, team) := lvl >= 5 && team == "engineering",
+    func suspended(s) := s == "suspended",
+}

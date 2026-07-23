@@ -51,10 +51,53 @@ pub struct PolicyBundle {
     pub policy: Policy,
 }
 
+/// The v2 wire shape of a policy — exactly the four fields v2 encoders wrote.
+/// Postcard is positional (not self-describing), so `serde(default)` cannot
+/// express "field absent on old bytes"; decoding old bundles requires the old
+/// shape verbatim, then converting.
+#[derive(Serialize, Deserialize)]
+struct PolicyWireV2 {
+    name: String,
+    metadata: std::collections::HashMap<String, String>,
+    default_decision: ReapDecision,
+    rules: Vec<super::ast::Rule>,
+}
+
+impl From<PolicyWireV2> for Policy {
+    fn from(p: PolicyWireV2) -> Self {
+        Policy {
+            name: p.name,
+            metadata: p.metadata,
+            default_decision: p.default_decision,
+            rules: p.rules,
+            functions: Vec::new(),
+            imports: Vec::new(),
+        }
+    }
+}
+
+impl From<Policy> for PolicyWireV2 {
+    fn from(p: Policy) -> Self {
+        PolicyWireV2 {
+            name: p.name,
+            metadata: p.metadata,
+            default_decision: p.default_decision,
+            rules: p.rules,
+        }
+    }
+}
+
 impl PolicyBundle {
     const MAGIC_BYTES: &'static [u8; 4] = b"REAP";
-    /// Format version 2: postcard serialization (replaces bincode v1.3, RUSTSEC-2025-0141)
-    const FORMAT_VERSION: u32 = 2;
+    /// Format version 3: the policy carries `functions`/`imports` (language
+    /// v3, R4-01 Phase C). Version 2 (postcard, replacing bincode v1.3 —
+    /// RUSTSEC-2025-0141) is still WRITTEN for policies that use neither, so
+    /// v2 engines keep loading function-free bundles; a v3-encoded bundle is
+    /// rejected by v2 engines on its wire version AND its `language_version`
+    /// metadata — fail closed twice over, never silently dropping functions.
+    const FORMAT_VERSION: u32 = 3;
+    /// The function-free wire encoding (see [`Self::FORMAT_VERSION`]).
+    const LEGACY_FORMAT_VERSION: u32 = 2;
 
     /// Create a new bundle from a policy
     pub fn new(policy: Policy) -> Self {
@@ -75,15 +118,32 @@ impl PolicyBundle {
         Self { metadata, policy }
     }
 
-    /// Serialize to bytes
+    /// Serialize to bytes. Function-free policies encode as wire version 2 —
+    /// byte-compatible with v2 engines — so the format only ratchets forward
+    /// for policies that actually use v3 constructs.
     pub fn to_bytes(&self) -> Result<Vec<u8>, ReaperError> {
         let mut bytes = Vec::new();
 
         // Magic bytes
         bytes.extend_from_slice(Self::MAGIC_BYTES);
 
-        // Serialize bundle with postcard (replaces bincode — RUSTSEC-2025-0141)
-        let bundle_bytes = postcard::to_allocvec(self).map_err(|e| ReaperError::InvalidPolicy {
+        let legacy = self.policy.functions.is_empty() && self.policy.imports.is_empty();
+        // Postcard encodes a tuple as its fields concatenated — identical
+        // bytes to the `PolicyBundle { metadata, policy }` struct encoding.
+        let bundle_bytes = if legacy {
+            let metadata = BundleFormat {
+                version: Self::LEGACY_FORMAT_VERSION,
+                ..self.metadata.clone()
+            };
+            postcard::to_allocvec(&(metadata, PolicyWireV2::from(self.policy.clone())))
+        } else {
+            let metadata = BundleFormat {
+                version: Self::FORMAT_VERSION,
+                ..self.metadata.clone()
+            };
+            postcard::to_allocvec(&(metadata, self.policy.clone()))
+        }
+        .map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("Failed to serialize bundle: {}", e),
         })?;
 
@@ -92,7 +152,8 @@ impl PolicyBundle {
         Ok(bytes)
     }
 
-    /// Deserialize from bytes
+    /// Deserialize from bytes. Staged decode: the metadata prefix first, then
+    /// the policy in the wire shape that metadata's version declares.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ReaperError> {
         // Check magic bytes
         if bytes.len() < 4 || &bytes[0..4] != Self::MAGIC_BYTES {
@@ -101,22 +162,36 @@ impl PolicyBundle {
             });
         }
 
-        // Deserialize with postcard
-        let bundle: Self =
-            postcard::from_bytes(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
-                reason: format!("Failed to deserialize bundle: {}", e),
+        let (metadata, rest): (BundleFormat, &[u8]) = postcard::take_from_bytes(&bytes[4..])
+            .map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to deserialize bundle metadata: {}", e),
             })?;
 
-        // Wire-format version check.
-        if bundle.metadata.version > Self::FORMAT_VERSION {
+        // Wire-format version check — BEFORE decoding the policy, since the
+        // version dictates the policy's wire shape.
+        if metadata.version > Self::FORMAT_VERSION {
             return Err(ReaperError::InvalidPolicy {
                 reason: format!(
                     "Bundle version {} is newer than supported version {}",
-                    bundle.metadata.version,
+                    metadata.version,
                     Self::FORMAT_VERSION
                 ),
             });
         }
+
+        let policy: Policy = if metadata.version >= Self::FORMAT_VERSION {
+            postcard::from_bytes(rest).map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to deserialize bundle: {}", e),
+            })?
+        } else {
+            postcard::from_bytes::<PolicyWireV2>(rest)
+                .map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Failed to deserialize bundle: {}", e),
+                })?
+                .into()
+        };
+
+        let bundle = Self { metadata, policy };
 
         // DSL language-version check (round-3 Plan 04): the language version
         // rides in the compiled policy's metadata. A bundle whose policy targets
@@ -414,10 +489,22 @@ pub struct PackageMetadata {
     pub policy_count: usize,
 }
 
+/// The v2 wire shape of a package policy entry (see [`PolicyWireV2`]).
+#[derive(Serialize, Deserialize)]
+struct PolicyEntryWireV2 {
+    policy: PolicyWireV2,
+    priority: u32,
+    package: String,
+}
+
 impl PolicyPackage {
     const MAGIC_BYTES: &'static [u8; 4] = b"REPP"; // Reaper Policy Package
-    /// Format version 2: postcard serialization (replaces bincode v1.3, RUSTSEC-2025-0141)
-    const FORMAT_VERSION: u32 = 2;
+    /// Format version 3: policies carry `functions`/`imports` (language v3,
+    /// R4-01 Phase C). Version 2 (postcard) is still written when no policy
+    /// in the package uses them, so v2 engines keep loading such packages.
+    const FORMAT_VERSION: u32 = 3;
+    /// The function-free wire encoding (see [`Self::FORMAT_VERSION`]).
+    const LEGACY_FORMAT_VERSION: u32 = 2;
 
     /// Create a new package from multiple policies
     ///
@@ -499,12 +586,41 @@ impl PolicyPackage {
         }
     }
 
-    /// Serialize to bytes
+    /// Serialize to bytes. Packages whose policies are all function-free
+    /// encode as wire version 2 — loadable by v2 engines.
     pub fn to_bytes(&self) -> Result<Vec<u8>, ReaperError> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(Self::MAGIC_BYTES);
 
-        let bundle_bytes = postcard::to_allocvec(self).map_err(|e| ReaperError::InvalidPolicy {
+        let legacy = self
+            .policies
+            .iter()
+            .all(|e| e.policy.functions.is_empty() && e.policy.imports.is_empty());
+        // Tuple encoding == struct encoding under postcard (fields
+        // concatenated), mirroring `PolicyBundle::to_bytes`.
+        let bundle_bytes = if legacy {
+            let metadata = PackageMetadata {
+                format_version: Self::LEGACY_FORMAT_VERSION,
+                ..self.metadata.clone()
+            };
+            let entries: Vec<PolicyEntryWireV2> = self
+                .policies
+                .iter()
+                .map(|e| PolicyEntryWireV2 {
+                    policy: e.policy.clone().into(),
+                    priority: e.priority,
+                    package: e.package.clone(),
+                })
+                .collect();
+            postcard::to_allocvec(&(metadata, entries, self.hints.clone()))
+        } else {
+            let metadata = PackageMetadata {
+                format_version: Self::FORMAT_VERSION,
+                ..self.metadata.clone()
+            };
+            postcard::to_allocvec(&(metadata, self.policies.clone(), self.hints.clone()))
+        }
+        .map_err(|e| ReaperError::InvalidPolicy {
             reason: format!("Failed to serialize policy package: {}", e),
         })?;
 
@@ -512,7 +628,8 @@ impl PolicyPackage {
         Ok(bytes)
     }
 
-    /// Deserialize from bytes
+    /// Deserialize from bytes. Staged decode: metadata prefix first, then the
+    /// entries in the wire shape the declared version dictates.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ReaperError> {
         if bytes.len() < 4 || &bytes[0..4] != Self::MAGIC_BYTES {
             return Err(ReaperError::InvalidPolicy {
@@ -520,19 +637,68 @@ impl PolicyPackage {
             });
         }
 
-        let bundle: Self =
-            postcard::from_bytes(&bytes[4..]).map_err(|e| ReaperError::InvalidPolicy {
-                reason: format!("Failed to deserialize policy package: {}", e),
+        let (metadata, rest): (PackageMetadata, &[u8]) = postcard::take_from_bytes(&bytes[4..])
+            .map_err(|e| ReaperError::InvalidPolicy {
+                reason: format!("Failed to deserialize package metadata: {}", e),
             })?;
 
-        if bundle.metadata.format_version > Self::FORMAT_VERSION {
+        if metadata.format_version > Self::FORMAT_VERSION {
             return Err(ReaperError::InvalidPolicy {
                 reason: format!(
                     "Package version {} is newer than supported version {}",
-                    bundle.metadata.format_version,
+                    metadata.format_version,
                     Self::FORMAT_VERSION
                 ),
             });
+        }
+
+        let (policies, hints): (Vec<PolicyEntry>, PrecompilationHints) =
+            if metadata.format_version >= Self::FORMAT_VERSION {
+                postcard::from_bytes(rest).map_err(|e| ReaperError::InvalidPolicy {
+                    reason: format!("Failed to deserialize policy package: {}", e),
+                })?
+            } else {
+                let (entries, hints): (Vec<PolicyEntryWireV2>, PrecompilationHints) =
+                    postcard::from_bytes(rest).map_err(|e| ReaperError::InvalidPolicy {
+                        reason: format!("Failed to deserialize policy package: {}", e),
+                    })?;
+                (
+                    entries
+                        .into_iter()
+                        .map(|e| PolicyEntry {
+                            policy: e.policy.into(),
+                            priority: e.priority,
+                            package: e.package,
+                        })
+                        .collect(),
+                    hints,
+                )
+            };
+
+        let bundle = Self {
+            metadata,
+            policies,
+            hints,
+        };
+
+        // Same fail-closed language gate as the single-policy bundle: any
+        // packaged policy targeting a newer DSL than this engine rejects the
+        // whole package rather than being misread.
+        for entry in &bundle.policies {
+            if let Some(raw) = entry.policy.metadata.get("language_version") {
+                let got = raw.parse::<u32>().map_err(|_| ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "packaged policy '{}' declares a malformed language_version {raw:?}",
+                        entry.policy.name
+                    ),
+                })?;
+                if got > crate::reap::CURRENT_LANGUAGE_VERSION {
+                    return Err(ReaperError::LanguageVersionUnsupported {
+                        got,
+                        supported: crate::reap::CURRENT_LANGUAGE_VERSION,
+                    });
+                }
+            }
         }
 
         Ok(bundle)
@@ -797,6 +963,8 @@ mod tests {
                 decision: Decision::Allow,
                 condition: Condition::True,
             }],
+            functions: vec![],
+            imports: vec![],
         };
 
         // Compile to bundle
@@ -819,6 +987,8 @@ mod tests {
             metadata,
             default_decision: Decision::Allow,
             rules: vec![],
+            functions: vec![],
+            imports: vec![],
         };
 
         let bundle = PolicyBundle::new(policy);

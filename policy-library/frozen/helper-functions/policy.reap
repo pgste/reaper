@@ -1,0 +1,25 @@
+// Helper predicates + load-time imports (DSL language version 3, R4-01
+// Phase C). One local func, two imported ones (the import resolves against
+// this directory at load time), a deny rule proving deny-overrides works
+// through a func call. FROZEN: the decisions pinned in manifest.json must
+// never change.
+import "lib/predicates.reap" as pred
+
+policy helper_functions {
+    language_version: "3",
+    default: deny,
+
+    func is_admin(role) := role == "admin",
+
+    rule admins {
+        allow if is_admin(user.role)
+    }
+
+    rule senior_engineers {
+        allow if pred::senior(user.level, user.team)
+    }
+
+    rule suspended_never {
+        deny if pred::suspended(user.status)
+    }
+}

@@ -133,8 +133,17 @@ pub fn enforce_source_nesting(input: &str) -> Result<(), ReaperError> {
 
 /// Validate that no rule's condition/expression tree nests deeper than the
 /// configured cap. Cheap on real policies, self-limiting on adversarial ones.
+///
+/// Func-aware (R4-01 Phase C): also validates the policy's helper-predicate
+/// set — names, arities, call-graph DAG (recursion = error) — and accounts
+/// call sites at their inline-expanded depth, so a chain of `func` calls
+/// cannot smuggle unbounded depth past the cap. Runs on every entry path
+/// (pest parser, compiler, AST evaluator `validate()`), covering ASTs that
+/// arrive via bundles or hand-built trees.
 pub fn enforce_policy_depth(policy: &Policy) -> Result<(), ReaperError> {
-    check_policy_depth(policy, configured_max_nesting_depth())
+    let limit = configured_max_nesting_depth();
+    check_policy_depth(policy, limit)?;
+    super::functions::validate_policy_functions(policy, limit)
 }
 
 /// Walk every rule condition, bounding structural depth at `limit`.

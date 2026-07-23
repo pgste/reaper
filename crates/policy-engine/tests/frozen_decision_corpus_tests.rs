@@ -151,9 +151,10 @@ fn frozen_decisions_never_change() {
             serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap())
                 .unwrap_or_else(|e| panic!("bad manifest {manifest_path:?}: {e}"));
 
-        let policy_src = std::fs::read_to_string(dir.join(&manifest.policy)).unwrap();
-        let parsed: ReaperPolicy = policy_src
-            .parse()
+        // File-based load: `import "..." as ns` declarations in frozen
+        // policies resolve against the scenario directory (R4-01 Phase C) —
+        // the frozen tier covers the full load path, not just string parsing.
+        let parsed: ReaperPolicy = ReaperPolicy::from_file(dir.join(&manifest.policy))
             .unwrap_or_else(|e| panic!("[{}] parse policy: {e:?}", manifest.name));
 
         let store = Arc::new(DataStore::new());

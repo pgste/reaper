@@ -49,11 +49,16 @@ impl ReapParser {
         let mut metadata = HashMap::new();
         let mut default_decision = None;
         let mut rules = Vec::new();
+        let mut functions = Vec::new();
+        let mut imports = Vec::new();
 
         for pair in pairs {
             if pair.as_rule() == Rule::policy {
                 for inner_pair in pair.into_inner() {
                     match inner_pair.as_rule() {
+                        Rule::import_stmt => {
+                            imports.push(parse_import_stmt(inner_pair)?);
+                        }
                         Rule::ident => {
                             policy_name = inner_pair.as_str().to_string();
                         }
@@ -69,6 +74,9 @@ impl ReapParser {
                                     }
                                     Rule::rule => {
                                         rules.push(parse_rule(item)?);
+                                    }
+                                    Rule::func_def => {
+                                        functions.push(parse_func_def(item)?);
                                     }
                                     _ => {}
                                 }
@@ -89,15 +97,84 @@ impl ReapParser {
             metadata,
             default_decision,
             rules,
+            functions,
+            imports,
         };
 
         // Belt-and-suspenders: the pre-scan bounds the source, but re-check the
         // built AST so the depth guarantee holds even if the lexical accounting
-        // and the true tree shape ever diverge.
+        // and the true tree shape ever diverge. (Func-aware: validates the
+        // function set — names, call-graph DAG — and depth-accounts call
+        // expansions.)
         crate::reap::limits::enforce_policy_depth(&policy)?;
 
         Ok(policy)
     }
+
+    /// Parse a `.reap` LIBRARY file: `library name { func ... }`. Returns the
+    /// library name and its function definitions (namespace `None` — the
+    /// importer namespaces them under the import alias).
+    pub fn parse_library(input: &str) -> Result<(String, Vec<FuncDef>), ReaperError> {
+        crate::reap::limits::enforce_source_nesting(input)?;
+
+        let pairs = <Self as PestParser<Rule>>::parse(Rule::library, input).map_err(|e| {
+            ReaperError::InvalidPolicy {
+                reason: format!("Library parse error: {}", e),
+            }
+        })?;
+
+        let mut name = String::new();
+        let mut functions = Vec::new();
+        for pair in pairs {
+            if pair.as_rule() == Rule::library {
+                for inner_pair in pair.into_inner() {
+                    match inner_pair.as_rule() {
+                        Rule::ident => name = inner_pair.as_str().to_string(),
+                        Rule::func_def => functions.push(parse_func_def(inner_pair)?),
+                        // metadata fields are allowed but carry no semantics yet
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok((name, functions))
+    }
+}
+
+/// Parse an import statement: import "path" as alias
+fn parse_import_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ImportDecl, ReaperError> {
+    let mut inner = pair.into_inner();
+    let path_pair = inner.next().unwrap();
+    let path = parse_string_literal(path_pair)?;
+    let alias = inner.next().unwrap().as_str().to_string();
+    Ok(ImportDecl { path, alias })
+}
+
+/// Parse a helper predicate: func name(params) := condition
+fn parse_func_def(pair: pest::iterators::Pair<Rule>) -> Result<FuncDef, ReaperError> {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+
+    let mut next = inner.next().unwrap();
+    let params = if next.as_rule() == Rule::func_params {
+        let params: Vec<String> = next
+            .clone()
+            .into_inner()
+            .map(|p| p.as_str().to_string())
+            .collect();
+        next = inner.next().unwrap();
+        params
+    } else {
+        Vec::new()
+    };
+
+    let body = parse_condition(next)?;
+    Ok(FuncDef {
+        name,
+        namespace: None,
+        params,
+        body,
+    })
 }
 
 /// Parse metadata field: key = "value"

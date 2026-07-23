@@ -79,6 +79,8 @@ fn compile_rejects_deep_ast() {
             condition,
             message: None,
         }],
+        functions: vec![],
+        imports: vec![],
     };
 
     let result = compile_policy(policy, Arc::new(DataStore::new()));

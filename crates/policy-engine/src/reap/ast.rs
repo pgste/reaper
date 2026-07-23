@@ -10,6 +10,49 @@ pub struct Policy {
     pub metadata: HashMap<String, String>,
     pub default_decision: Decision,
     pub rules: Vec<Rule>,
+    /// Helper predicates (`func name(params) := <condition>`), both the
+    /// policy's own (namespace `None`) and those merged from resolved imports
+    /// (namespace = the import alias). Language version 3.
+    #[serde(default)]
+    pub functions: Vec<FuncDef>,
+    /// Import declarations as written in source (`import "path" as ns`).
+    /// Imports resolve at LOAD time (file load / bundle build): the imported
+    /// functions are merged into [`Policy::functions`], so by the time a
+    /// policy evaluates, this list is provenance only — never runtime I/O.
+    #[serde(default)]
+    pub imports: Vec<ImportDecl>,
+}
+
+/// A helper predicate: a named, parameterized boolean condition usable
+/// wherever a condition can appear (`allow if is_admin(user.role)`).
+/// Non-recursive by construction — the call graph is checked to be a DAG at
+/// parse/validate time, and depth accounting includes function bodies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FuncDef {
+    /// Function name (unqualified — the namespace lives alongside).
+    pub name: String,
+    /// `None` for the policy's own functions; `Some(alias)` for functions
+    /// merged from an `import "..." as alias`.
+    #[serde(default)]
+    pub namespace: Option<String>,
+    /// Parameter names, bound call-by-value (arguments evaluate once, in the
+    /// caller's scope, before the body runs).
+    pub params: Vec<String>,
+    /// The predicate body — evaluated in a fresh scope containing only the
+    /// parameters (entity references like `user.role` stay available; caller
+    /// rule variables do not leak in).
+    pub body: Condition,
+}
+
+/// One `import "path" as alias` declaration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportDecl {
+    /// The library path as written (relative, resolved against the importing
+    /// file's directory at load time).
+    pub path: String,
+    /// Namespace alias the library's functions are called through
+    /// (`alias::helper(...)`).
+    pub alias: String,
 }
 
 /// A single policy rule

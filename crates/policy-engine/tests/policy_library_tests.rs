@@ -78,11 +78,9 @@ fn every_library_scenario_meets_its_manifest() {
             serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap())
                 .unwrap_or_else(|e| panic!("bad manifest {manifest_path:?}: {e}"));
 
-        // Load policy + data
-        let policy_src = std::fs::read_to_string(dir.join(&manifest.policy))
-            .unwrap_or_else(|e| panic!("[{}] read policy: {e}", manifest.name));
-        let parsed: ReaperPolicy = policy_src
-            .parse()
+        // Load policy + data. File-based load so `import "..." as ns`
+        // declarations resolve against the scenario directory (language v3).
+        let parsed: ReaperPolicy = ReaperPolicy::from_file(dir.join(&manifest.policy))
             .unwrap_or_else(|e| panic!("[{}] parse policy: {e:?}", manifest.name));
 
         let store = Arc::new(DataStore::new());

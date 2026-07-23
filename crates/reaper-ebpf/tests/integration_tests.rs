@@ -124,6 +124,8 @@ async fn test_bundle_deployment_routing() {
                 message: None,
             },
         ],
+        functions: vec![],
+        imports: vec![],
     };
 
     let bundle = PolicyBundle {

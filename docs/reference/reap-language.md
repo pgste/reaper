@@ -376,6 +376,89 @@ policy bucket_guard {
 }
 ```
 
+### Helper Predicates (`func`) — language v3
+
+A `func` is a named, parameterized boolean condition, callable wherever a
+condition can appear. Policies using `func` (or `import`) target **language
+version 3**: the engine stamps `language_version: "3"` automatically if the
+policy declares none, and rejects an explicit older declaration — so v2
+engines fail closed on v3 artifacts instead of misreading them.
+
+```reap
+policy example {
+    default: deny,
+
+    func is_admin(role) := role == "admin",
+    func senior(lvl, team) := lvl >= 5 && team == "engineering",
+
+    rule admins  { allow if is_admin(user.role) }
+    rule seniors { allow if senior(user.level, user.team) }
+}
+```
+
+Semantics and rules:
+
+- **Call-by-value.** Arguments evaluate once, eagerly, in the caller's
+  scope; the body then runs in a **fresh scope** containing only the
+  parameters (entity references like `user.role` stay available; caller
+  rule variables do not leak in, and a body referencing an undefined
+  variable is a parse error).
+- **Boolean only.** A `func` is a predicate; its result cannot be assigned
+  or used inside value expressions on the compiled path.
+- **Total by construction.** The call graph must be a DAG — recursion,
+  direct or mutual, is a *parse error* — and the nesting-depth cap applies
+  to the fully expanded (inlined) tree, so chained calls cannot smuggle
+  unbounded depth. Arity and unknown-namespace errors are also caught at
+  parse.
+- **No collisions.** Function names may not shadow builtin functions
+  (`concat`, `is_*`, ...) or reserved words; namespaces may not shadow
+  builtin namespaces (`time`, `math`, `regex`, `json`, `jwt`, `rebac`,
+  `taint`).
+- **Performance.** On the compiled path calls are **inlined at compile
+  time** (zero runtime call machinery). Inlining accepts literal,
+  entity/input-path, and previously-bound-variable arguments; other
+  argument shapes (e.g. method-call results) keep that rule on the
+  per-rule AST fallback — observable in deploy metadata, never silent, and
+  decisions are identical either way (pinned by the differential suite).
+
+### Imports — language v3
+
+`import "path" as ns` brings a library of helper predicates into a policy
+under a namespace alias. Libraries are `.reap` files with a `library` block
+containing only `func` definitions:
+
+```reap
+// lib/predicates.reap
+library predicates {
+    func senior(lvl, team) := lvl >= 5 && team == "engineering",
+}
+```
+
+```reap
+// policy.reap
+import "lib/predicates.reap" as pred
+
+policy example {
+    default: deny,
+    rule seniors { allow if pred::senior(user.level, user.team) }
+}
+```
+
+Imports resolve at **load time**, never at evaluation time:
+
+- Paths are relative to the importing file, must end in `.reap`, and may
+  not be absolute or traverse upward (`..`).
+- Resolution happens when the policy is loaded from a file (CLI, agent
+  file load) or when a bundle is built; the imported functions are
+  **embedded in the policy AST**, so compiled bundles are self-contained
+  and evaluation performs no file I/O. A policy parsed from a raw string
+  (e.g. an inline API deploy) cannot resolve imports and is rejected with
+  a pointer to file/bundle loading.
+- Libraries cannot themselves import (single-level resolution), and an
+  import alias applies to every function in the library
+  (`pred::senior(...)`); library-internal calls are rewritten to the alias
+  automatically.
+
 ## Bundle Format (.rbb)
 
 Reaper compiles `.reap` files into binary bundles for maximum performance.
@@ -654,12 +737,12 @@ is on any roadmap. (Comparison context: `docs/development/REGO_GAP_ANALYSIS.md`.
 ## Future Enhancements
 
 Planned work is tracked in `plans/round-4/01-dsl-parity-and-fast-path.md`
-(helper predicates, imports, compiled `input` access, stdlib growth —
-sourced from `docs/development/REGO_GAP_ANALYSIS.md`). Declared directions:
+(stdlib growth — sourced from `docs/development/REGO_GAP_ANALYSIS.md`).
+Helper predicates (`func`) and imports shipped in language v3 (see above).
+Declared directions:
 
-1. **Imports** - Reuse rules across policies
-2. **Schemas** - Type validation for entities
-3. **Additional builtins** - Growing the standard library (regex, time, JWT and
+1. **Schemas** - Type validation for entities
+2. **Additional builtins** - Growing the standard library (regex, time, JWT and
    ReBAC traversal builtins already ship; see the policy library for usage)
 
 Any change that alters an existing policy's decision is a breaking change gated
