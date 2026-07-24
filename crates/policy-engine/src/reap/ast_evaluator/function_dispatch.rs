@@ -14,6 +14,42 @@ use super::ReapAstEvaluator;
 use crate::reap::ast::Expr;
 use reaper_core::ReaperError;
 
+/// Runtime guard against function-call recursion. The call-graph DAG check
+/// at parse/validate time already makes recursion unrepresentable for any
+/// policy that went through `enforce_policy_depth`; this thread-local counter
+/// is the belt-and-suspenders backstop so even a hand-built AST that somehow
+/// skipped validation cannot loop or overflow the stack at evaluation time.
+struct FuncCallDepthGuard;
+
+thread_local! {
+    static FUNC_CALL_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl FuncCallDepthGuard {
+    fn enter() -> Result<Self, ReaperError> {
+        let limit = crate::reap::limits::configured_max_nesting_depth();
+        FUNC_CALL_DEPTH.with(|d| {
+            let depth = d.get();
+            if depth >= limit {
+                return Err(ReaperError::InvalidPolicy {
+                    reason: format!(
+                        "function call depth exceeded the maximum of {limit}; \
+                         recursive or excessively chained func calls are not permitted"
+                    ),
+                });
+            }
+            d.set(depth + 1);
+            Ok(FuncCallDepthGuard)
+        })
+    }
+}
+
+impl Drop for FuncCallDepthGuard {
+    fn drop(&mut self) {
+        FUNC_CALL_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 impl ReapAstEvaluator {
     /// Evaluate function call expressions (e.g., time.now_ns(), concat(a, b))
     pub(super) fn evaluate_function_call(
@@ -23,6 +59,16 @@ impl ReapAstEvaluator {
         args: &[Expr],
         context: &EvalContext,
     ) -> Result<EvalValue, ReaperError> {
+        // User-defined helper predicates (R4-01 Phase C). Name collisions
+        // with builtins are rejected at parse/validate, so checking user
+        // functions first cannot shadow a builtin; when the policy defines
+        // no functions this is a scan over an empty slice — free.
+        if let Some(i) =
+            crate::reap::functions::find_function(&self.policy.functions, namespace, function)
+        {
+            return self.call_user_function(i, args, context);
+        }
+
         match (namespace, function) {
             // Type checking functions (using builtin_functions)
             (None, "is_string") => {
@@ -698,5 +744,66 @@ impl super::ReapAstEvaluator {
                 reason: format!("rebac::{name} {position} must be a string, got {other:?}"),
             }),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// User-defined helper predicates (R4-01 Phase C)
+// ---------------------------------------------------------------------------
+
+impl ReapAstEvaluator {
+    /// Call a user-defined `func`: call-by-value semantics — every argument
+    /// evaluates exactly once, eagerly, in the CALLER's scope, then the body
+    /// runs in a fresh scope containing only the parameters (plus the
+    /// request pseudo-variables `user`/`resource`/`actor`, which are ambient
+    /// request facts, not rule-local state). Caller rule variables do not
+    /// leak in; body-local bindings do not leak out. The result is the
+    /// body's boolean.
+    ///
+    /// The compiler implements the same semantics by inlining
+    /// (`reap/compiler/inline.rs`); the compiled-vs-AST differential pins
+    /// the two implementations together.
+    fn call_user_function(
+        &self,
+        index: usize,
+        args: &[Expr],
+        context: &EvalContext,
+    ) -> Result<EvalValue, ReaperError> {
+        let def = &self.policy.functions[index];
+        if args.len() != def.params.len() {
+            return Err(ReaperError::InvalidPolicy {
+                reason: format!(
+                    "func '{}' takes {} argument{}, called with {}",
+                    crate::reap::functions::qualified(def),
+                    def.params.len(),
+                    if def.params.len() == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            });
+        }
+
+        // Arguments first (caller scope), THEN the depth guard: argument
+        // expressions may themselves contain calls, which re-enter here.
+        let mut arg_values = Vec::with_capacity(args.len());
+        for a in args {
+            arg_values.push(self.evaluate_expr(a, context)?);
+        }
+
+        let _guard = FuncCallDepthGuard::enter()?;
+
+        let mut vars = std::collections::HashMap::with_capacity(def.params.len() + 3);
+        for key in ["user", "resource", "actor"] {
+            if let Some(v) = context.variables.get(key) {
+                vars.insert(key.to_string(), v.clone());
+            }
+        }
+        for (p, v) in def.params.iter().zip(arg_values) {
+            vars.insert(p.clone(), v);
+        }
+
+        let mut func_ctx = context.clone();
+        func_ctx.variables = vars;
+        let matched = self.evaluate_condition(&def.body, &mut func_ctx)?;
+        Ok(EvalValue::Boolean(matched))
     }
 }

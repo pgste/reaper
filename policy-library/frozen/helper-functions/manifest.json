@@ -1,0 +1,43 @@
+{
+  "name": "Helper predicates + imports (language v3)",
+  "source": "plans/round-4/01-dsl-parity-and-fast-path.md (Phase C)",
+  "policy": "policy.reap",
+  "data": "data.json",
+  "cases": [
+    {
+      "name": "admin allowed via local func",
+      "principal": "root",
+      "action": "read",
+      "resource": "server-1",
+      "expect": "allow"
+    },
+    {
+      "name": "senior engineer allowed via imported func",
+      "principal": "alice",
+      "action": "read",
+      "resource": "server-1",
+      "expect": "allow"
+    },
+    {
+      "name": "junior engineer denied (level below threshold)",
+      "principal": "bob",
+      "action": "read",
+      "resource": "server-1",
+      "expect": "deny"
+    },
+    {
+      "name": "senior non-engineer denied (team mismatch)",
+      "principal": "carol",
+      "action": "read",
+      "resource": "server-1",
+      "expect": "deny"
+    },
+    {
+      "name": "suspended admin denied (deny wins through func)",
+      "principal": "mallory",
+      "action": "read",
+      "resource": "server-1",
+      "expect": "deny"
+    }
+  ]
+}

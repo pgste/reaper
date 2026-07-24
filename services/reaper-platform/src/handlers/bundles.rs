@@ -73,6 +73,10 @@ pub async fn create_bundle(
         metadata,
         default_decision: Decision::Deny,
         rules: reap_rules,
+        // Platform-converted Simple policies never carry helper predicates
+        // or imports (language-v3 .reap source constructs).
+        functions: vec![],
+        imports: vec![],
     };
 
     // 3. Compile to .rbb bundle

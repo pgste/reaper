@@ -19,7 +19,7 @@
 //! different fence tag and are not extracted. To show a `.reap` snippet that is
 //! deliberately NOT meant to parse (there are none today), tag it `reap-invalid`.
 
-use policy_engine::reap::ReaperPolicy;
+use policy_engine::reap::{ReapParser, ReaperPolicy};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -100,15 +100,27 @@ fn every_reap_block_in_the_reference_parses() {
 
     let mut failures = Vec::new();
     for block in &reap_blocks {
-        let is_full_policy = first_token(&block.body) == "policy";
-        let source = if is_full_policy {
-            block.body.clone()
-        } else {
-            wrap_fragment(block.body.trim())
+        let token = first_token(&block.body);
+        // Three top-level forms (language v3): a policy (optionally preceded
+        // by imports — grammar-parsed directly, since `from_str` deliberately
+        // rejects unresolved imports at LOAD, not at parse), a library file,
+        // and bare condition fragments.
+        let (kind, result) = match token.as_str() {
+            "policy" => ("policy", ReaperPolicy::from_str(&block.body).map(|_| ())),
+            "import" => (
+                "importing policy",
+                ReapParser::parse(&block.body).map(|_| ()),
+            ),
+            "library" => (
+                "library",
+                ReapParser::parse_library(&block.body).map(|_| ()),
+            ),
+            _ => (
+                "fragment",
+                ReaperPolicy::from_str(&wrap_fragment(block.body.trim())).map(|_| ()),
+            ),
         };
-
-        if let Err(e) = ReaperPolicy::from_str(&source) {
-            let kind = if is_full_policy { "policy" } else { "fragment" };
+        if let Err(e) = result {
             failures.push(format!(
                 "  - {} block at reap-language.md:{} failed to parse: {e}",
                 kind, block.start_line

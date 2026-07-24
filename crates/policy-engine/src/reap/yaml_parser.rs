@@ -104,6 +104,10 @@ impl YamlPolicy {
             metadata,
             default_decision,
             rules,
+            // The YAML/JSON formats do not express helper predicates or
+            // imports; those are .reap-source (language v3) constructs.
+            functions: Vec::new(),
+            imports: Vec::new(),
         })
     }
 }

@@ -149,6 +149,12 @@ impl MixedReapEvaluator {
                 metadata: policy.metadata.clone(),
                 default_decision: policy.default_decision.clone(),
                 rules: vec![rule.clone()],
+                // Helper predicates are policy-wide: every single-rule
+                // sub-policy carries the full function set so both the
+                // compiled path (inlining) and the AST path (interpretation)
+                // can resolve the rule's calls.
+                functions: policy.functions.clone(),
+                imports: policy.imports.clone(),
             };
             let eval = match compiler::compile_policy(sub_policy.clone(), store.clone()) {
                 Ok(compiled) => UnitEval::Compiled(compiled),

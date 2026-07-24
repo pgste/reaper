@@ -138,6 +138,19 @@ fn wasm_wrapper_meets_every_library_manifest() {
         let policy_src = std::fs::read_to_string(dir.join(&manifest.policy))
             .unwrap_or_else(|e| panic!("[{}] read policy: {e}", manifest.name));
 
+        // Import-using scenarios (language v3) are out of the wasm wrapper's
+        // reach BY CONTRACT: the wrapper deploys policy SOURCE strings and
+        // has no filesystem, and imports resolve at load time (file load /
+        // bundle build). Such policies reach wasm-class consumers as
+        // compiled bundles with the imports already embedded. The scenario
+        // stays covered by the native library + frozen corpus runners.
+        if policy_src
+            .lines()
+            .any(|l| l.trim_start().starts_with("import "))
+        {
+            continue;
+        }
+
         // Document-mode scenario (all cases carry `input`): slice 3 — run
         // through the wrapper's checkDocument surface, asserting allowed +
         // the exact violation set per case. No deploy needed (check parses

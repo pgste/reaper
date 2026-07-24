@@ -4,8 +4,22 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 
-// Top-level policy
-policy = { SOI ~ "policy" ~ ident ~ "{" ~ policy_body ~ "}" ~ EOI }
+// Top-level policy. Imports come first: import "path/lib.reap" as ns
+policy = { SOI ~ import_stmt* ~ "policy" ~ ident ~ "{" ~ policy_body ~ "}" ~ EOI }
+
+// Top-level library file: reusable helper predicates, imported by policies.
+// Libraries cannot themselves import (single-level resolution, by design).
+library = { SOI ~ "library" ~ ident ~ "{" ~ library_item* ~ "}" ~ EOI }
+
+library_item = _{
+    func_def |
+    metadata_field
+}
+
+// Load-time import of a .reap library: import "path" as ns
+import_stmt = {
+    "import" ~ string ~ "as" ~ ident
+}
 
 policy_body = {
     policy_item*
@@ -14,7 +28,17 @@ policy_body = {
 policy_item = _{
     default_field |
     rule |
+    func_def |
     metadata_field
+}
+
+// Helper predicate: func is_admin(role) := role == "admin"
+func_def = {
+    "func" ~ ident ~ "(" ~ func_params? ~ ")" ~ ":=" ~ condition ~ ","?
+}
+
+func_params = {
+    ident ~ ("," ~ ident)*
 }
 
 // Metadata fields (version, description, etc.)

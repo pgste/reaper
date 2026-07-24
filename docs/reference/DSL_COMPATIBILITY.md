@@ -55,7 +55,7 @@ A policy declares its target version with a metadata field:
 
 ```reap
 policy my_policy {
-    language_version: "2",
+    language_version: "3",
     default: deny,
     // rules...
 }
@@ -65,6 +65,18 @@ A policy that declares **no** version is treated as the current implicit
 version. A policy that declares a version **newer** than the engine implements
 is rejected at parse time and at bundle load — fail-closed, never
 misinterpreted.
+
+Two additions with language v3 (helper predicates + imports):
+
+- A policy that **uses** `func` or `import` is stamped `language_version: "3"`
+  at parse when it declares none, and an explicit OLDER declaration is a hard
+  error. The declaration is what makes older engines refuse the artifact, so
+  it must never understate the constructs in use.
+- The bundle wire format dual-encodes: function-free policies keep the v2
+  encoding (older engines still load them), while policies carrying functions
+  encode as wire v3 — which a v2 engine rejects on the wire version AND on the
+  embedded `language_version`, rather than silently dropping the function
+  definitions (postcard is positional, not self-describing).
 
 ## Deprecation window
 
@@ -84,7 +96,7 @@ version it bumped to, and the frozen cases affected.
 
 | Date | PR | Language version | Frozen cases changed | Reason |
 |------|----|------------------|----------------------|--------|
-| _(none yet — the frozen corpus is at its initial baseline)_ | | | | |
+| 2026-07-23 | R4-01 Phase C | 2 → 3 | **None** — every pre-existing frozen decision unchanged; the `helper-functions` scenario was ADDED to pin the new constructs | Helper predicates (`func`) and load-time imports (`import "path" as ns`). Additive syntax, but versioned so v2 engines fail closed on artifacts that carry function definitions (source metadata stamp + bundle wire v3) instead of silently dropping them. |
 
 ## Policy language tiers
 

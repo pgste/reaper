@@ -1,0 +1,8 @@
+{"entities":[
+  {"id":"root","type":"User","attributes":{"role":"admin","level":9,"team":"platform","status":"active"}},
+  {"id":"alice","type":"User","attributes":{"role":"engineer","level":7,"team":"engineering","status":"active"}},
+  {"id":"bob","type":"User","attributes":{"role":"engineer","level":2,"team":"engineering","status":"active"}},
+  {"id":"carol","type":"User","attributes":{"role":"analyst","level":8,"team":"finance","status":"active"}},
+  {"id":"mallory","type":"User","attributes":{"role":"admin","level":9,"team":"platform","status":"suspended"}},
+  {"id":"server-1","type":"Resource","attributes":{"kind":"server"}}
+]}
