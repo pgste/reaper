@@ -73,20 +73,30 @@ for (const manifestPath of manifests) {
   const dir = dirname(manifestPath);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
+  const policySrc = readFileSync(join(dir, manifest.policy), "utf8");
+
+  // Import-using scenarios (language v3) are out of the wasm wrapper's reach
+  // BY CONTRACT: it deploys policy SOURCE strings and has no filesystem, and
+  // imports resolve at load time (file load / bundle build). Such policies
+  // reach wasm-class consumers as compiled bundles with the imports already
+  // embedded. Covered by the native library + frozen corpus runners; the
+  // native parity leg (parity.rs) skips on the same predicate.
+  if (policySrc.split("\n").some((l) => l.trimStart().startsWith("import "))) {
+    continue;
+  }
+
   const engine = new ReaperEngine();
   if (manifest.data) {
     engine.loadEntitiesJson(readFileSync(join(dir, manifest.data), "utf8"));
   }
 
   if (manifest.cases.every((c) => c.input !== undefined)) {
-    const policySrc = readFileSync(join(dir, manifest.policy), "utf8");
     for (const c of manifest.cases) {
       assertCheckCase(engine, dir, policySrc, `[${manifest.name}] ${c.name}`, c);
     }
     scenarios += 1;
     continue;
   }
-  const policySrc = readFileSync(join(dir, manifest.policy), "utf8");
   const policyId = engine.deployPolicy(manifest.name, policySrc);
   assert.equal(engine.policyCount(), 1, `${manifest.name}: policyCount`);
 
